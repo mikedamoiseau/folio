@@ -82,8 +82,8 @@ jobs:
         with:
           workspaces: src-tauri
 
-      - name: Ensure resources dir exists
-        run: mkdir -p src-tauri/resources
+      - name: Ensure resources dir exists with placeholder
+        run: mkdir -p src-tauri/resources && touch src-tauri/resources/.gitkeep
 
       - name: cargo clippy
         working-directory: src-tauri
