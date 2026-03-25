@@ -79,6 +79,10 @@ pub async fn import_book(
         .map_err(|e| format!("Failed to copy file to library: {e}"))?;
 
     // Steps 5 & 6: Parse using library-internal path; store hash in Book.
+    // cover_dir is set by the EPUB arm if a cover was extracted; the outer
+    // error handler uses it to clean up on DB insert failure.
+    let mut cover_dir: Option<std::path::PathBuf> = None;
+
     let book = match format {
         BookFormat::Epub => {
             let metadata = epub::parse_epub_metadata(&library_path).map_err(|e| {
@@ -86,7 +90,6 @@ pub async fn import_book(
                 e.to_string()
             })?;
 
-            let mut cover_dir: Option<std::path::PathBuf> = None;
             let cover_path = if let Ok(data_dir) = app.path().app_data_dir() {
                 let dir = data_dir.join("covers").join(&book_id);
                 let dest = dir.to_string_lossy().to_string();
@@ -106,7 +109,7 @@ pub async fn import_book(
                 e.to_string()
             })?;
 
-            let book = Book {
+            Book {
                 id: book_id,
                 title: metadata.title,
                 author: metadata.author,
@@ -119,18 +122,7 @@ pub async fn import_book(
                     .as_secs() as i64,
                 format,
                 file_hash: Some(hash),
-            };
-
-            let conn = state.db.get().map_err(|e| e.to_string())?;
-            if let Err(e) = db::insert_book(&conn, &book) {
-                let _ = std::fs::remove_file(&library_path);
-                if let Some(dir) = cover_dir {
-                    let _ = std::fs::remove_dir_all(dir);
-                }
-                return Err(e.to_string());
             }
-
-            return Ok(book);
         }
         BookFormat::Cbz => {
             let meta = cbz::import_cbz(&library_path).map_err(|e| {
@@ -197,6 +189,9 @@ pub async fn import_book(
     let conn = state.db.get().map_err(|e| e.to_string())?;
     if let Err(e) = db::insert_book(&conn, &book) {
         let _ = std::fs::remove_file(&library_path);
+        if let Some(dir) = cover_dir {
+            let _ = std::fs::remove_dir_all(dir);
+        }
         return Err(e.to_string());
     }
 
@@ -503,7 +498,7 @@ pub struct LibraryFolderInfo {
     pub total_size_bytes: u64,
 }
 
-fn default_library_folder() -> Result<String, String> {
+pub fn default_library_folder() -> Result<String, String> {
     let home = dirs::home_dir().ok_or_else(|| "Could not determine home directory".to_string())?;
     Ok(home
         .join("Documents")
@@ -534,9 +529,15 @@ pub async fn get_library_folder_info(
     };
     let books = db::list_books(&conn).map_err(|e| e.to_string())?;
 
+    // Only count books whose path is inside the current library folder — those
+    // are the files that would actually be moved on a folder change.
+    let prefix = if path.ends_with('/') { path.clone() } else { format!("{}/", path) };
     let mut file_count = 0u64;
     let mut total_size_bytes = 0u64;
     for book in &books {
+        if !book.file_path.starts_with(&prefix) {
+            continue;
+        }
         if let Ok(meta) = std::fs::metadata(&book.file_path) {
             if meta.is_file() {
                 file_count += 1;
@@ -590,14 +591,23 @@ pub async fn set_library_folder(
         });
         if let Err(e) = result {
             // Roll back every completed move before returning the error.
+            // Collect rollback failures so the caller has full context if
+            // rollback itself fails (e.g. cross-device copy-back fails).
+            let mut rollback_errors: Vec<String> = Vec::new();
             for (orig_src, orig_dest) in &completed {
-                let _ = std::fs::rename(orig_dest, orig_src).or_else(|_| {
+                if let Err(re) = std::fs::rename(orig_dest, orig_src).or_else(|_| {
                     std::fs::copy(orig_dest, orig_src)
                         .map(|_| ())
                         .and_then(|_| std::fs::remove_file(orig_dest))
-                });
+                }) {
+                    rollback_errors.push(format!("'{}': {}", orig_dest, re));
+                }
             }
-            return Err(format!("Failed to move '{}': {}", src, e));
+            let mut msg = format!("Failed to move '{}': {}", src, e);
+            if !rollback_errors.is_empty() {
+                msg = format!("{}. Rollback also failed: {}", msg, rollback_errors.join("; "));
+            }
+            return Err(msg);
         }
         completed.push((src.clone(), dest.clone()));
     }

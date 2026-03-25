@@ -44,6 +44,7 @@ pub struct Book {
     pub total_chapters: u32,
     pub added_at: i64,
     pub format: BookFormat,
+    pub file_hash: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -78,6 +79,14 @@ pub struct CollectionRule {
     pub collection_id: String,
     pub field: String,    // author | format | date_added | reading_progress
     pub operator: String, // contains | equals | last_n_days
+    pub value: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct NewRuleInput {
+    pub field: String,
+    pub operator: String,
     pub value: String,
 }
 

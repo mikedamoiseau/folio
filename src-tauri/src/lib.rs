@@ -17,6 +17,18 @@ pub fn run() {
         .setup(|app| {
             let db_path = app.path().app_data_dir()?.join("library.db");
             let pool = db::create_pool(&db_path).expect("Failed to initialize database");
+
+            // Ensure the library folder exists on first launch.
+            {
+                let conn = pool.get().expect("Failed to get DB connection on startup");
+                let library_folder = match db::get_setting(&conn, "library_folder") {
+                    Ok(Some(f)) => f,
+                    _ => commands::default_library_folder()
+                        .expect("Cannot determine home directory"),
+                };
+                let _ = std::fs::create_dir_all(&library_folder);
+            }
+
             app.manage(AppState { db: pool });
             Ok(())
         })
@@ -36,6 +48,15 @@ pub fn run() {
             commands::get_comic_page,
             commands::get_pdf_page_count,
             commands::get_pdf_page,
+            commands::create_collection,
+            commands::get_collections,
+            commands::delete_collection,
+            commands::add_book_to_collection,
+            commands::remove_book_from_collection,
+            commands::get_books_in_collection,
+            commands::get_library_folder,
+            commands::get_library_folder_info,
+            commands::set_library_folder,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

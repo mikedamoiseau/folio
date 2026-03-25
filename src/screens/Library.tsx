@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
@@ -6,6 +6,10 @@ import { open } from "@tauri-apps/plugin-dialog";
 import BookCard from "../components/BookCard";
 import EmptyState from "../components/EmptyState";
 import ImportButton from "../components/ImportButton";
+import CollectionsSidebar, {
+  Collection,
+  CreateCollectionData,
+} from "../components/CollectionsSidebar";
 
 interface Book {
   id: string;
@@ -15,6 +19,7 @@ interface Book {
   cover_path: string | null;
   total_chapters: number;
   added_at: number;
+  format: "epub" | "cbz" | "cbr" | "pdf";
 }
 
 interface ReadingProgress {
@@ -34,9 +39,23 @@ export default function Library() {
   const [dragging, setDragging] = useState(false);
   const [loaded, setLoaded] = useState(false);
 
-  const loadLibrary = useCallback(async () => {
+  // Collections state
+  const [collectionsOpen, setCollectionsOpen] = useState(false);
+  const [collections, setCollections] = useState<Collection[]>([]);
+  const [activeCollectionId, setActiveCollectionId] = useState<string | null>(null);
+
+  // Keep a stable ref to activeCollectionId for use in callbacks
+  const activeCollectionIdRef = useRef(activeCollectionId);
+  activeCollectionIdRef.current = activeCollectionId;
+
+  const loadBooks = useCallback(async (collectionId: string | null = activeCollectionIdRef.current) => {
     try {
-      const library: Book[] = await invoke("get_library");
+      let library: Book[];
+      if (collectionId) {
+        library = await invoke<Book[]>("get_books_in_collection", { collectionId });
+      } else {
+        library = await invoke<Book[]>("get_library");
+      }
       setBooks(library);
 
       const progEntries = await Promise.all(
@@ -67,27 +86,45 @@ export default function Library() {
     }
   }, []);
 
+  const loadCollections = useCallback(async () => {
+    try {
+      const result = await invoke<Collection[]>("get_collections");
+      setCollections(result);
+    } catch {
+      // collections load failure is non-fatal
+    }
+  }, []);
+
   useEffect(() => {
-    loadLibrary();
-  }, [loadLibrary]);
+    loadCollections();
+    loadBooks(null);
+  }, [loadCollections, loadBooks]);
+
+  // Reload books when active collection changes
+  useEffect(() => {
+    if (loaded) {
+      loadBooks(activeCollectionId);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeCollectionId]);
 
   const handleRemoveBook = useCallback(
     async (bookId: string) => {
       try {
         await invoke("remove_book", { bookId });
-        await loadLibrary();
+        await loadBooks(activeCollectionIdRef.current);
       } catch (err) {
         setError(String(err));
       }
     },
-    [loadLibrary]
+    [loadBooks]
   );
 
   const handleImport = useCallback(async () => {
     try {
       const selected = await open({
         multiple: false,
-        filters: [{ name: "EPUB", extensions: ["epub"] }],
+        filters: [{ name: "Books", extensions: ["epub", "cbz", "cbr", "pdf"] }],
       });
 
       if (!selected) return;
@@ -96,13 +133,13 @@ export default function Library() {
       setError(null);
 
       await invoke("import_book", { filePath: selected });
-      await loadLibrary();
+      await loadBooks(activeCollectionIdRef.current);
     } catch (err) {
       setError(String(err));
     } finally {
       setImporting(false);
     }
-  }, [loadLibrary]);
+  }, [loadBooks]);
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
@@ -117,7 +154,10 @@ export default function Library() {
         } else if (type === "drop") {
           setDragging(false);
           const paths = event.payload.paths;
-          const epubPaths = paths.filter((p) => p.toLowerCase().endsWith(".epub"));
+          const supportedExtensions = [".epub", ".cbz", ".cbr", ".pdf"];
+          const epubPaths = paths.filter((p) =>
+            supportedExtensions.some((ext) => p.toLowerCase().endsWith(ext))
+          );
           if (epubPaths.length === 0) return;
           setImporting(true);
           setError(null);
@@ -125,7 +165,7 @@ export default function Library() {
             for (const filePath of epubPaths) {
               await invoke("import_book", { filePath });
             }
-            await loadLibrary();
+            await loadBooks(activeCollectionIdRef.current);
           } catch (err) {
             setError(String(err));
           } finally {
@@ -140,7 +180,7 @@ export default function Library() {
     return () => {
       unlisten?.();
     };
-  }, [loadLibrary]);
+  }, [loadBooks]);
 
   const filtered = books.filter((book) => {
     if (!search) return true;
@@ -153,6 +193,10 @@ export default function Library() {
 
   const hasBooks = books.length > 0;
   const hasResults = filtered.length > 0;
+
+  // Determine if we're in a manual collection view (enables remove-from-collection)
+  const activeCollection = collections.find((c) => c.id === activeCollectionId) ?? null;
+  const isManualCollectionView = activeCollection?.type === "manual";
 
   if (!loaded) {
     return (
@@ -167,6 +211,28 @@ export default function Library() {
       {/* Toolbar */}
       {hasBooks && (
         <div className="shrink-0 h-14 px-6 flex items-center gap-3 border-b border-warm-border bg-surface">
+          {/* Collections toggle */}
+          <button
+            type="button"
+            onClick={() => setCollectionsOpen(true)}
+            title="Collections"
+            className={`shrink-0 p-2 rounded-lg transition-colors ${
+              activeCollectionId
+                ? "text-accent bg-accent-light"
+                : "text-ink-muted hover:text-ink hover:bg-warm-subtle"
+            }`}
+            aria-label="Open collections"
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+              <path
+                d="M2 6a2 2 0 012-2h4l2 2h8a2 2 0 012 2v10a2 2 0 01-2 2H4a2 2 0 01-2-2V6z"
+                stroke="currentColor"
+                strokeWidth="1.75"
+                strokeLinejoin="round"
+              />
+            </svg>
+          </button>
+
           {/* Search input */}
           <div className="flex-1 relative">
             <svg
@@ -213,17 +279,34 @@ export default function Library() {
         ) : hasResults ? (
           <div className="grid grid-cols-[repeat(auto-fill,minmax(148px,1fr))] gap-5">
             {filtered.map((book) => (
-              <BookCard
+              <div
                 key={book.id}
-                id={book.id}
-                title={book.title}
-                author={book.author}
-                coverPath={book.cover_path}
-                totalChapters={book.total_chapters}
-                progress={progressMap[book.id] ?? 0}
-                onClick={() => navigate(`/reader/${book.id}`)}
-                onDelete={handleRemoveBook}
-              />
+                draggable
+                onDragStart={(e) => e.dataTransfer.setData("bookId", book.id)}
+              >
+                <BookCard
+                  id={book.id}
+                  title={book.title}
+                  author={book.author}
+                  coverPath={book.cover_path}
+                  totalChapters={book.total_chapters}
+                  format={book.format}
+                  progress={progressMap[book.id] ?? 0}
+                  onClick={() => navigate(`/reader/${book.id}`)}
+                  onDelete={handleRemoveBook}
+                  onRemoveFromCollection={
+                    isManualCollectionView && activeCollectionId
+                      ? async () => {
+                          await invoke("remove_book_from_collection", {
+                            bookId: book.id,
+                            collectionId: activeCollectionId,
+                          });
+                          await loadBooks(activeCollectionId);
+                        }
+                      : undefined
+                  }
+                />
+              </div>
             ))}
           </div>
         ) : (
@@ -257,6 +340,53 @@ export default function Library() {
           </div>
         </div>
       )}
+
+      {/* Collections sidebar */}
+      <CollectionsSidebar
+        open={collectionsOpen}
+        collections={collections}
+        activeCollectionId={activeCollectionId}
+        onClose={() => setCollectionsOpen(false)}
+        onSelect={(id) => {
+          setActiveCollectionId(id);
+          setCollectionsOpen(false);
+        }}
+        onCreate={async (data: CreateCollectionData) => {
+          try {
+            await invoke("create_collection", {
+              name: data.name,
+              collType: data.type,
+              icon: data.icon,
+              color: data.color,
+              rules: data.rules,
+            });
+            const updated = await invoke<Collection[]>("get_collections");
+            setCollections(updated);
+          } catch (err) {
+            setError(String(err));
+          }
+        }}
+        onDelete={async (id: string) => {
+          try {
+            await invoke("delete_collection", { id });
+            const updated = await invoke<Collection[]>("get_collections");
+            setCollections(updated);
+            if (activeCollectionIdRef.current === id) setActiveCollectionId(null);
+          } catch (err) {
+            setError(String(err));
+          }
+        }}
+        onDropBook={async (bookId: string, collectionId: string) => {
+          try {
+            await invoke("add_book_to_collection", { bookId, collectionId });
+            if (activeCollectionIdRef.current === collectionId) {
+              await loadBooks(collectionId);
+            }
+          } catch (err) {
+            setError(String(err));
+          }
+        }}
+      />
     </div>
   );
 }
