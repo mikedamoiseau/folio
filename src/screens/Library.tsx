@@ -71,6 +71,18 @@ export default function Library() {
     loadLibrary();
   }, [loadLibrary]);
 
+  const handleRemoveBook = useCallback(
+    async (bookId: string) => {
+      try {
+        await invoke("remove_book", { bookId });
+        await loadLibrary();
+      } catch (err) {
+        setError(String(err));
+      }
+    },
+    [loadLibrary]
+  );
+
   const handleImport = useCallback(async () => {
     try {
       const selected = await open({
@@ -237,6 +249,7 @@ export default function Library() {
                 totalChapters={book.total_chapters}
                 progress={progressMap[book.id] ?? 0}
                 onClick={() => navigate(`/reader/${book.id}`)}
+                onDelete={handleRemoveBook}
               />
             ))}
           </div>
