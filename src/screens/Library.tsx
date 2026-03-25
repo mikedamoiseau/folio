@@ -119,12 +119,14 @@ export default function Library() {
         } else if (type === "drop") {
           setDragging(false);
           const paths = event.payload.paths;
-          const epubPath = paths.find((p) => p.toLowerCase().endsWith(".epub"));
-          if (!epubPath) return;
+          const epubPaths = paths.filter((p) => p.toLowerCase().endsWith(".epub"));
+          if (epubPaths.length === 0) return;
           setImporting(true);
           setError(null);
           try {
-            await invoke("import_book", { filePath: epubPath });
+            for (const filePath of epubPaths) {
+              await invoke("import_book", { filePath });
+            }
             await loadLibrary();
           } catch (err) {
             setError(String(err));
