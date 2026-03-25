@@ -319,8 +319,16 @@ pub fn extract_cover(file_path: &str, dest_dir: &str) -> Result<Option<String>, 
 
     let bytes = read_zip_entry_bytes(&mut archive, &entry_name)?;
 
-    // Derive extension from href
-    let ext = cover_href.rsplit('.').next().unwrap_or("jpg");
+    // Derive extension from href, validated against an allowlist to prevent path traversal.
+    // cover_href may contain path components like `../../etc/cron.d/evil` — only the
+    // final token after the last '.' is used, and only if it is a known image extension.
+    const ALLOWED_EXTS: &[&str] = &["jpg", "jpeg", "png", "gif", "webp"];
+    let raw_ext = cover_href.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
+    let ext = if ALLOWED_EXTS.contains(&raw_ext.as_str()) {
+        raw_ext
+    } else {
+        "jpg".to_string()
+    };
     let dest = Path::new(dest_dir).join(format!("cover.{ext}"));
 
     std::fs::create_dir_all(dest_dir).map_err(EpubError::Io)?;
@@ -603,6 +611,34 @@ mod tests {
         assert!(!sanitized.contains("onmouseover"), "event handler should be stripped");
         assert!(!sanitized.contains("onerror"), "event handler should be stripped");
         assert!(sanitized.contains("Text"), "normal content should be preserved");
+    }
+
+    #[test]
+    fn test_cover_ext_allowlist_rejects_traversal() {
+        // A crafted cover_href with path traversal should produce "jpg" not an unsafe extension.
+        let crafted = "images/cover.jpg/../../../etc/cron.d/evil";
+        const ALLOWED_EXTS: &[&str] = &["jpg", "jpeg", "png", "gif", "webp"];
+        let raw_ext = crafted.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
+        let ext = if ALLOWED_EXTS.contains(&raw_ext.as_str()) {
+            raw_ext
+        } else {
+            "jpg".to_string()
+        };
+        assert_eq!(ext, "jpg", "traversal extension should fall back to jpg");
+    }
+
+    #[test]
+    fn test_cover_ext_allowlist_accepts_valid() {
+        const ALLOWED_EXTS: &[&str] = &["jpg", "jpeg", "png", "gif", "webp"];
+        for valid in ["cover.jpg", "cover.JPEG", "cover.png", "cover.gif", "cover.webp"] {
+            let raw_ext = valid.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
+            let ext = if ALLOWED_EXTS.contains(&raw_ext.as_str()) {
+                raw_ext
+            } else {
+                "jpg".to_string()
+            };
+            assert!(ALLOWED_EXTS.contains(&ext.as_str()), "{valid} should be accepted");
+        }
     }
 
     #[test]
