@@ -31,7 +31,7 @@ pub async fn import_book(
 
     // Track the cover directory so it can be cleaned up if the DB insert fails.
     let mut cover_dir: Option<std::path::PathBuf> = None;
-    let cover_path = if let Some(data_dir) = app.path().app_data_dir().ok() {
+    let cover_path = if let Ok(data_dir) = app.path().app_data_dir() {
         let dir = data_dir.join("covers").join(&book_id);
         let dest = dir.to_string_lossy().to_string();
         match epub::extract_cover(&file_path, &dest) {
