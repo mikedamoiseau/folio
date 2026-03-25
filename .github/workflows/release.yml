@@ -5,6 +5,11 @@ on:
     tags:
       - 'v*'
 
+env:
+  # Pin to a specific chromium build. Update to latest from:
+  # https://github.com/bblanchon/pdfium-binaries/releases
+  PDFIUM_VERSION: "6954"
+
 jobs:
   publish-tauri:
     name: Build & Release (${{ matrix.platform }})
@@ -16,12 +21,20 @@ jobs:
         include:
           - platform: ubuntu-latest
             args: ''
+            pdfium_archive: pdfium-linux-x64.tgz
+            pdfium_lib: libpdfium.so
           - platform: macos-latest
             args: '--target aarch64-apple-darwin'
+            pdfium_archive: pdfium-mac-arm64.tgz
+            pdfium_lib: libpdfium.dylib
           - platform: macos-latest
             args: '--target x86_64-apple-darwin'
+            pdfium_archive: pdfium-mac-x64.tgz
+            pdfium_lib: libpdfium.dylib
           - platform: windows-latest
             args: ''
+            pdfium_archive: pdfium-win-x64.tgz
+            pdfium_lib: pdfium.dll
 
     runs-on: ${{ matrix.platform }}
 
@@ -54,6 +67,36 @@ jobs:
         uses: swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
+
+      - name: Cache pdfium
+        id: cache-pdfium
+        uses: actions/cache@v4
+        with:
+          path: src-tauri/resources
+          key: pdfium-${{ env.PDFIUM_VERSION }}-${{ matrix.pdfium_archive }}
+
+      - name: Download pdfium (Unix)
+        if: steps.cache-pdfium.outputs.cache-hit != 'true' && matrix.platform != 'windows-latest'
+        shell: bash
+        run: |
+          mkdir -p src-tauri/resources /tmp/pdfium-extracted
+          curl -L -o /tmp/pdfium.tgz \
+            "https://github.com/bblanchon/pdfium-binaries/releases/download/chromium%2F${{ env.PDFIUM_VERSION }}/${{ matrix.pdfium_archive }}"
+          tar xzf /tmp/pdfium.tgz -C /tmp/pdfium-extracted
+          cp /tmp/pdfium-extracted/lib/${{ matrix.pdfium_lib }} src-tauri/resources/
+
+      - name: Download pdfium (Windows)
+        if: steps.cache-pdfium.outputs.cache-hit != 'true' && matrix.platform == 'windows-latest'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path src-tauri/resources
+          $tmp = "$env:TEMP\pdfium-extracted"
+          New-Item -ItemType Directory -Force -Path $tmp
+          Invoke-WebRequest `
+            -Uri "https://github.com/bblanchon/pdfium-binaries/releases/download/chromium%2F${{ env.PDFIUM_VERSION }}/${{ matrix.pdfium_archive }}" `
+            -OutFile "$env:TEMP\pdfium.tgz"
+          tar xzf "$env:TEMP\pdfium.tgz" -C $tmp
+          Copy-Item "$tmp\lib\${{ matrix.pdfium_lib }}" src-tauri/resources/
 
       - name: Install frontend dependencies
         run: npm ci

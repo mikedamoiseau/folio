@@ -2,6 +2,8 @@ use base64::Engine;
 use image::ImageFormat;
 use pdfium_render::prelude::*;
 use std::io::Cursor;
+use std::path::PathBuf;
+use std::sync::OnceLock;
 
 // ---- Data structures ----
 
@@ -11,15 +13,32 @@ pub struct PdfMeta {
     pub page_count: u32,
 }
 
+// ---- Library path ----
+
+static PDFIUM_LIBRARY_PATH: OnceLock<Option<PathBuf>> = OnceLock::new();
+
+/// Called once during app setup to point pdfium at the bundled library.
+/// Pass `None` to fall back to the system library search path.
+pub fn set_pdfium_library_path(path: Option<PathBuf>) {
+    let _ = PDFIUM_LIBRARY_PATH.set(path);
+}
+
 // ---- Internal helpers ----
 
 fn bind_pdfium() -> Result<Pdfium, String> {
-    let bindings = Pdfium::bind_to_system_library().map_err(|e| {
-        format!(
-            "pdfium library not found: {e}. Install the pdfium shared library and ensure it \
-             is on your library path (e.g. DYLD_LIBRARY_PATH on macOS)."
-        )
-    })?;
+    let bindings = match PDFIUM_LIBRARY_PATH.get().and_then(|p| p.as_deref()) {
+        Some(path) => {
+            let path_str = path.to_str().ok_or("pdfium path is not valid UTF-8")?;
+            Pdfium::bind_to_library(path_str)
+                .map_err(|e| format!("failed to load bundled pdfium from {path_str}: {e}"))?
+        }
+        None => Pdfium::bind_to_system_library().map_err(|e| {
+            format!(
+                "pdfium library not found: {e}. Install the pdfium shared library and ensure it \
+                 is on your library path (e.g. DYLD_LIBRARY_PATH on macOS)."
+            )
+        })?,
+    };
     Ok(Pdfium::new(bindings))
 }
 

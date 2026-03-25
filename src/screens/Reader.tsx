@@ -70,17 +70,18 @@ export default function Reader({ onOpenSettings }: ReaderProps) {
 
     async function init() {
       try {
-        const [bookInfo, tocEntries] = await Promise.all([
-          invoke<BookInfo>("get_book", { bookId }),
-          invoke<TocEntry[]>("get_toc", { bookId }),
-        ]);
+        const bookInfo = await invoke<BookInfo>("get_book", { bookId });
 
         if (cancelled) return;
 
         setBookTitle(bookInfo.title);
         setBookFormat(bookInfo.format);
-        setToc(tocEntries);
         setTotalChapters(bookInfo.total_chapters);
+
+        if (bookInfo.format === "epub") {
+          const tocEntries = await invoke<TocEntry[]>("get_toc", { bookId });
+          if (!cancelled) setToc(tocEntries);
+        }
 
         if (bookInfo.format !== "epub") {
           try {

@@ -29,6 +29,23 @@ pub fn run() {
                 let _ = std::fs::create_dir_all(&library_folder);
             }
 
+            // Resolve bundled pdfium library path.
+            #[cfg(target_os = "macos")]
+            let pdfium_lib_name = "libpdfium.dylib";
+            #[cfg(target_os = "linux")]
+            let pdfium_lib_name = "libpdfium.so";
+            #[cfg(target_os = "windows")]
+            let pdfium_lib_name = "pdfium.dll";
+
+            let pdfium_path = app
+                .path()
+                .resource_dir()
+                .ok()
+                .map(|d| d.join(pdfium_lib_name))
+                .filter(|p| p.exists());
+
+            pdf::set_pdfium_library_path(pdfium_path);
+
             app.manage(AppState { db: pool });
             Ok(())
         })

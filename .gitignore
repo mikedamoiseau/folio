@@ -29,6 +29,11 @@ Thumbs.db
 # Tauri
 src-tauri/target/
 
+# Pdfium binaries (downloaded via scripts/download-pdfium.sh)
+src-tauri/resources/*.dylib
+src-tauri/resources/*.so
+src-tauri/resources/*.dll
+
 # Logs
 *.log
 npm-debug.log*
