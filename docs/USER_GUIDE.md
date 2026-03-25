@@ -49,7 +49,7 @@ Go to the [GitHub Releases page](https://github.com/mikedamoiseau/ebook-reader/r
 
 The first time you open the app, you'll see an empty library with a prompt to import your first book. Your data stays on your machine.
 
-![Screenshot](screenshots/empty-library.png)
+> **Note:** The library starts empty on first launch — you'll see a prompt to import your first book.
 
 ---
 
@@ -59,11 +59,11 @@ The first time you open the app, you'll see an empty library with a prompt to im
 
 **File picker:** Click the Import button in the top-right corner of the library screen. A file dialog opens; pick any `.epub` file and confirm. The book appears in your library within a few seconds.
 
-![Screenshot](screenshots/import-button.png)
+> **Note:** The Import button is in the top-right corner of the library screen.
 
 **Drag and drop:** Drag one or more `.epub` files from Finder or File Explorer directly onto the library window. A blue "Drop to import" overlay appears. Release to import them.
 
-![Screenshot](screenshots/drag-drop.png)
+> **Note:** Dragging files onto the window shows a blue "Drop to import" overlay.
 
 > **Note:** Only `.epub` files are accepted. Dragging other formats does nothing.
 
@@ -75,13 +75,13 @@ Books are shown as a cover grid. Each card shows the cover image (when the EPUB 
 
 Type in the search bar at the top to filter by title or author. Results update as you type. If nothing matches, you'll see a "No results" message.
 
-![Screenshot](screenshots/search.png)
+> **Note:** The search bar filters your library as you type.
 
 ### Removing a book
 
 Hover over a book card and click the trash icon. The book is removed from your library, but the original file on disk stays untouched. Only the library entry and saved progress are deleted.
 
-![Screenshot](screenshots/remove-book.png)
+> **Note:** Hover over a book card to see the trash icon.
 
 ---
 
@@ -101,7 +101,7 @@ Click any book card to open it. If you've read it before, the app picks up where
 
 Click the list icon (☰) in the top-left of the reader header. The TOC sidebar slides open with all chapters listed; the current one is highlighted. Click any entry to jump there. Press Escape or click outside the sidebar to close it.
 
-![Screenshot](screenshots/toc-sidebar.png)
+> **Note:** The TOC sidebar opens on the left; the current chapter is highlighted.
 
 ### Reading progress
 
@@ -117,7 +117,7 @@ Click the back arrow (←) in the top-left corner. Your progress is saved when y
 
 Click the gear icon (⚙) in the top-right of the reader header to open Settings.
 
-![Screenshot](screenshots/settings-panel.png)
+> **Note:** The Settings panel opens in the top-right, with controls for theme, font size, and font family.
 
 ### Theme
 
