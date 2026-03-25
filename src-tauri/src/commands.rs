@@ -65,6 +65,12 @@ pub async fn remove_book(book_id: String, state: State<'_, AppState>) -> Result<
     db::delete_book(&conn, &book_id).map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+pub async fn get_book(book_id: String, state: State<'_, AppState>) -> Result<Option<Book>, String> {
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    db::get_book(&conn, &book_id).map_err(|e| e.to_string())
+}
+
 // --- Reading ---
 
 #[tauri::command]
