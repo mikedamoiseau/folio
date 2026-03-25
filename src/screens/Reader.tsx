@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { invoke } from "@tauri-apps/api/core";
+import DOMPurify from "dompurify";
 import { useTheme, MIN_FONT_SIZE, MAX_FONT_SIZE } from "../context/ThemeContext";
 
 // ---- Types matching Rust backend ----
@@ -432,7 +433,7 @@ export default function Reader({ onOpenSettings }: ReaderProps) {
               lineHeight: 1.7,
               fontFamily: fontFamilyCss,
             }}
-            dangerouslySetInnerHTML={{ __html: chapterHtml }}
+            dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(chapterHtml) }}
           />
 
           {/* Chapter navigation at bottom of content */}
