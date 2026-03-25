@@ -3,6 +3,7 @@ import { useParams, useNavigate } from "react-router-dom";
 import { invoke } from "@tauri-apps/api/core";
 import DOMPurify from "dompurify";
 import { useTheme, MIN_FONT_SIZE, MAX_FONT_SIZE } from "../context/ThemeContext";
+import PageViewer from "../components/PageViewer";
 
 // ---- Types matching Rust backend ----
 
@@ -27,6 +28,7 @@ interface BookInfo {
   cover_path: string | null;
   total_chapters: number;
   added_at: number;
+  format: "epub" | "cbz" | "cbr" | "pdf";
 }
 
 // ---- Component ----
@@ -41,9 +43,11 @@ export default function Reader({ onOpenSettings }: ReaderProps) {
   const { fontSize, setFontSize, fontFamily } = useTheme();
 
   const [bookTitle, setBookTitle] = useState("");
+  const [bookFormat, setBookFormat] = useState<"epub" | "cbz" | "cbr" | "pdf">("epub");
   const [toc, setToc] = useState<TocEntry[]>([]);
   const [chapterIndex, setChapterIndex] = useState(0);
   const [totalChapters, setTotalChapters] = useState(0);
+  const [pageCount, setPageCount] = useState(0);
   const [chapterHtml, setChapterHtml] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -74,8 +78,22 @@ export default function Reader({ onOpenSettings }: ReaderProps) {
         if (cancelled) return;
 
         setBookTitle(bookInfo.title);
+        setBookFormat(bookInfo.format);
         setToc(tocEntries);
         setTotalChapters(bookInfo.total_chapters);
+
+        if (bookInfo.format !== "epub") {
+          try {
+            const command =
+              bookInfo.format === "pdf"
+                ? "get_pdf_page_count"
+                : "get_comic_page_count";
+            const count = await invoke<number>(command, { bookId });
+            if (!cancelled) setPageCount(count);
+          } catch {
+            // page count unavailable
+          }
+        }
 
         try {
           const progress = await invoke<ReadingProgress | null>(
@@ -405,71 +423,89 @@ export default function Reader({ onOpenSettings }: ReaderProps) {
           </button>
         </header>
 
-        {/* Chapter content */}
-        <div
-          ref={scrollContainerRef}
-          className="flex-1 overflow-y-auto"
-        >
-          {chapterError ? (
-            <div className="max-w-[680px] mx-auto px-8 py-10">
-              <p className="text-red-500 text-sm">Failed to load chapter: {chapterError}</p>
-            </div>
+        {/* Content area — epub chapter reader or page-based viewer */}
+        {bookFormat !== "epub" ? (
+          pageCount > 0 ? (
+            <PageViewer
+              bookId={bookId!}
+              format={bookFormat}
+              totalPages={pageCount}
+              initialPage={chapterIndex}
+              onPageChange={(index) => setChapterIndex(index)}
+            />
           ) : (
+            <div className="flex-1 flex items-center justify-center">
+              <p className="text-sm text-ink-muted">Loading pages…</p>
+            </div>
+          )
+        ) : (
+          <>
             <div
-              ref={contentRef}
-              className="reader-content max-w-[680px] mx-auto px-8 py-10"
-              style={{
-                fontSize: `${fontSize}px`,
-                lineHeight: 1.8,
-                fontFamily: fontFamilyCss,
-              }}
-              dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(chapterHtml) }}
-            />
-          )}
-
-          {/* Chapter navigation */}
-          <div className="max-w-[680px] mx-auto px-8 pb-12 flex items-center justify-between gap-4">
-            <button
-              onClick={prevChapter}
-              disabled={chapterIndex <= 0}
-              className="flex items-center gap-1.5 px-4 py-2 text-sm text-ink-muted bg-warm-subtle hover:bg-warm-border rounded-xl transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+              ref={scrollContainerRef}
+              className="flex-1 overflow-y-auto"
             >
-              <svg width="14" height="14" viewBox="0 0 20 20" fill="none">
-                <path d="M12 4l-6 6 6 6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-              </svg>
-              Previous
-            </button>
-            <span className="text-xs text-ink-muted tabular-nums">
-              {chapterIndex + 1} / {totalChapters}
-            </span>
-            <button
-              onClick={nextChapter}
-              disabled={chapterIndex >= totalChapters - 1}
-              className="flex items-center gap-1.5 px-4 py-2 text-sm text-ink-muted bg-warm-subtle hover:bg-warm-border rounded-xl transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
-            >
-              Next
-              <svg width="14" height="14" viewBox="0 0 20 20" fill="none">
-                <path d="M8 4l6 6-6 6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-              </svg>
-            </button>
-          </div>
-        </div>
+              {chapterError ? (
+                <div className="max-w-[680px] mx-auto px-8 py-10">
+                  <p className="text-red-500 text-sm">Failed to load chapter: {chapterError}</p>
+                </div>
+              ) : (
+                <div
+                  ref={contentRef}
+                  className="reader-content max-w-[680px] mx-auto px-8 py-10"
+                  style={{
+                    fontSize: `${fontSize}px`,
+                    lineHeight: 1.8,
+                    fontFamily: fontFamilyCss,
+                  }}
+                  dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(chapterHtml) }}
+                />
+              )}
 
-        {/* Progress bar */}
-        <footer className="shrink-0 border-t border-warm-border bg-surface px-5 py-2 flex items-center gap-3">
-          <span className="text-[11px] text-ink-muted tabular-nums whitespace-nowrap">
-            Ch. {chapterIndex + 1} / {totalChapters}
-          </span>
-          <div className="flex-1 h-[3px] bg-warm-subtle rounded-full overflow-hidden">
-            <div
-              className="h-full bg-accent rounded-full transition-all duration-200"
-              style={{ width: `${scrollProgress * 100}%` }}
-            />
-          </div>
-          <span className="text-[11px] text-ink-muted tabular-nums w-8 text-right">
-            {Math.round(scrollProgress * 100)}%
-          </span>
-        </footer>
+              {/* Chapter navigation */}
+              <div className="max-w-[680px] mx-auto px-8 pb-12 flex items-center justify-between gap-4">
+                <button
+                  onClick={prevChapter}
+                  disabled={chapterIndex <= 0}
+                  className="flex items-center gap-1.5 px-4 py-2 text-sm text-ink-muted bg-warm-subtle hover:bg-warm-border rounded-xl transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                >
+                  <svg width="14" height="14" viewBox="0 0 20 20" fill="none">
+                    <path d="M12 4l-6 6 6 6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                  Previous
+                </button>
+                <span className="text-xs text-ink-muted tabular-nums">
+                  {chapterIndex + 1} / {totalChapters}
+                </span>
+                <button
+                  onClick={nextChapter}
+                  disabled={chapterIndex >= totalChapters - 1}
+                  className="flex items-center gap-1.5 px-4 py-2 text-sm text-ink-muted bg-warm-subtle hover:bg-warm-border rounded-xl transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                >
+                  Next
+                  <svg width="14" height="14" viewBox="0 0 20 20" fill="none">
+                    <path d="M8 4l6 6-6 6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                </button>
+              </div>
+            </div>
+
+            {/* Progress bar */}
+            <footer className="shrink-0 border-t border-warm-border bg-surface px-5 py-2 flex items-center gap-3">
+              <span className="text-[11px] text-ink-muted tabular-nums whitespace-nowrap">
+                Ch. {chapterIndex + 1} / {totalChapters}
+              </span>
+              <div className="flex-1 h-[3px] bg-warm-subtle rounded-full overflow-hidden">
+                <div
+                  className="h-full bg-accent rounded-full transition-all duration-200"
+                  style={{ width: `${scrollProgress * 100}%` }}
+                />
+              </div>
+              <span className="text-[11px] text-ink-muted tabular-nums w-8 text-right">
+                {Math.round(scrollProgress * 100)}%
+              </span>
+            </footer>
+          </>
+        )}
       </div>
     </div>
   );

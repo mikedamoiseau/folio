@@ -7,9 +7,11 @@ interface BookCardProps {
   author: string;
   coverPath: string | null;
   totalChapters: number;
+  format?: "epub" | "cbz" | "cbr" | "pdf";
   progress?: number; // 0-100
   onClick: () => void;
   onDelete?: (id: string) => void;
+  onRemoveFromCollection?: () => void;
 }
 
 export default function BookCard({
@@ -17,9 +19,11 @@ export default function BookCard({
   title,
   author,
   coverPath,
+  format,
   progress,
   onClick,
   onDelete,
+  onRemoveFromCollection,
 }: BookCardProps) {
   const coverSrc = coverPath ? convertFileSrc(coverPath) : null;
   const [confirming, setConfirming] = useState(false);
@@ -83,6 +87,13 @@ export default function BookCard({
         {/* Subtle gradient overlay at bottom for text legibility */}
         <div className="absolute inset-x-0 bottom-0 h-1/3 bg-gradient-to-t from-black/30 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none" />
 
+        {/* Format badge — shown for non-epub */}
+        {format && format !== "epub" && !confirming && (
+          <span className="absolute bottom-2 left-2 bg-ink/70 text-paper text-[9px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded backdrop-blur-sm">
+            {format}
+          </span>
+        )}
+
         {/* Progress badge */}
         {progress != null && progress > 0 && !confirming && (
           <span className="absolute top-2 right-2 bg-ink/70 text-paper text-[10px] font-medium px-2 py-0.5 rounded-full backdrop-blur-sm">
@@ -105,6 +116,22 @@ export default function BookCard({
                 strokeWidth="2.5"
                 strokeLinecap="round"
               />
+            </svg>
+          </button>
+        )}
+
+        {/* Remove from collection button — bottom-right, only when in a manual collection */}
+        {onRemoveFromCollection && !confirming && (
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); onRemoveFromCollection(); }}
+            aria-label="Remove from collection"
+            title="Remove from collection"
+            className="absolute bottom-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity duration-150 w-6 h-6 flex items-center justify-center rounded-full bg-ink/60 text-paper hover:bg-accent focus:opacity-100 focus:outline-none"
+          >
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none">
+              <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="2.5" />
+              <path d="M8 12h8" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" />
             </svg>
           </button>
         )}
