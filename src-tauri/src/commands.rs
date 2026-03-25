@@ -1,10 +1,12 @@
 use tauri::{AppHandle, Manager, State};
 use uuid::Uuid;
 
+use crate::cbr;
 use crate::cbz;
 use crate::db::{self, DbPool};
 use crate::epub;
 use crate::models::{Book, BookFormat, Bookmark, ReadingProgress};
+use crate::pdf;
 
 pub struct AppState {
     pub db: DbPool,
@@ -105,7 +107,38 @@ pub async fn import_book(
                 format,
             }
         }
-        _ => return Err(format!("{extension} import is not yet supported")),
+        BookFormat::Cbr => {
+            let meta = cbr::import_cbr(&file_path)?;
+            Book {
+                id: book_id,
+                title: meta.title,
+                author: String::new(),
+                file_path,
+                cover_path: None,
+                total_chapters: meta.page_count,
+                added_at: std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs() as i64,
+                format,
+            }
+        }
+        BookFormat::Pdf => {
+            let meta = pdf::import_pdf(&file_path)?;
+            Book {
+                id: book_id,
+                title: meta.title,
+                author: meta.author,
+                file_path,
+                cover_path: None,
+                total_chapters: meta.page_count,
+                added_at: std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs() as i64,
+                format,
+            }
+        }
     };
 
     let conn = state.db.get().map_err(|e| e.to_string())?;
@@ -245,10 +278,51 @@ pub async fn remove_bookmark(
     db::delete_bookmark(&conn, &bookmark_id).map_err(|e| e.to_string())
 }
 
-// --- Comic (CBZ) ---
+// --- Comic (CBZ / CBR) ---
 
 #[tauri::command]
 pub async fn get_comic_page_count(
+    book_id: String,
+    state: State<'_, AppState>,
+) -> Result<u32, String> {
+    let book = {
+        let conn = state.db.get().map_err(|e| e.to_string())?;
+        db::get_book(&conn, &book_id)
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| format!("Book '{book_id}' not found"))?
+    };
+
+    match book.format {
+        BookFormat::Cbz => cbz::get_page_count(&book.file_path),
+        BookFormat::Cbr => cbr::get_page_count(&book.file_path),
+        _ => Err(format!("get_comic_page_count is not supported for {:?}", book.format)),
+    }
+}
+
+#[tauri::command]
+pub async fn get_comic_page(
+    book_id: String,
+    page_index: u32,
+    state: State<'_, AppState>,
+) -> Result<String, String> {
+    let book = {
+        let conn = state.db.get().map_err(|e| e.to_string())?;
+        db::get_book(&conn, &book_id)
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| format!("Book '{book_id}' not found"))?
+    };
+
+    match book.format {
+        BookFormat::Cbz => cbz::get_page_image(&book.file_path, page_index),
+        BookFormat::Cbr => cbr::get_page_image(&book.file_path, page_index),
+        _ => Err(format!("get_comic_page is not supported for {:?}", book.format)),
+    }
+}
+
+// --- PDF ---
+
+#[tauri::command]
+pub async fn get_pdf_page_count(
     book_id: String,
     state: State<'_, AppState>,
 ) -> Result<u32, String> {
@@ -259,12 +333,11 @@ pub async fn get_comic_page_count(
             .ok_or_else(|| format!("Book '{book_id}' not found"))?
             .file_path
     };
-
-    cbz::get_page_count(&file_path)
+    pdf::get_page_count(&file_path)
 }
 
 #[tauri::command]
-pub async fn get_comic_page(
+pub async fn get_pdf_page(
     book_id: String,
     page_index: u32,
     state: State<'_, AppState>,
@@ -276,6 +349,5 @@ pub async fn get_comic_page(
             .ok_or_else(|| format!("Book '{book_id}' not found"))?
             .file_path
     };
-
-    cbz::get_page_image(&file_path, page_index)
+    pdf::get_page_image(&file_path, page_index, 1200)
 }

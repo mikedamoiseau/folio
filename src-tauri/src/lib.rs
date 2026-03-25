@@ -1,8 +1,10 @@
+pub mod cbr;
 pub mod cbz;
 pub mod commands;
 pub mod db;
 pub mod epub;
 pub mod models;
+pub mod pdf;
 
 use commands::AppState;
 use tauri::Manager;
@@ -32,6 +34,8 @@ pub fn run() {
             commands::remove_bookmark,
             commands::get_comic_page_count,
             commands::get_comic_page,
+            commands::get_pdf_page_count,
+            commands::get_pdf_page,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
