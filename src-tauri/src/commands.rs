@@ -18,6 +18,14 @@ pub async fn import_book(
     state: State<'_, AppState>,
     app: AppHandle,
 ) -> Result<Book, String> {
+    // Return the existing book if this file has already been imported.
+    {
+        let conn = state.db.lock().map_err(|e| e.to_string())?;
+        if let Some(existing) = db::get_book_by_file_path(&conn, &file_path).map_err(|e| e.to_string())? {
+            return Ok(existing);
+        }
+    }
+
     let metadata = epub::parse_epub_metadata(&file_path).map_err(|e| e.to_string())?;
 
     let book_id = Uuid::new_v4().to_string();
