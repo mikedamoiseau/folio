@@ -1,9 +1,16 @@
 interface ImportButtonProps {
   onClick: () => void;
   loading?: boolean;
+  progress?: { current: number; total: number } | null;
 }
 
-export default function ImportButton({ onClick, loading }: ImportButtonProps) {
+export default function ImportButton({ onClick, loading, progress }: ImportButtonProps) {
+  const label = loading && progress && progress.total > 1
+    ? `Importing ${progress.current} of ${progress.total}…`
+    : loading
+    ? "Importing…"
+    : "+ Add books";
+
   return (
     <button
       type="button"
@@ -34,10 +41,10 @@ export default function ImportButton({ onClick, loading }: ImportButtonProps) {
               className="opacity-75"
             />
           </svg>
-          Importing…
+          {label}
         </span>
       ) : (
-        "+ Add book"
+        label
       )}
     </button>
   );

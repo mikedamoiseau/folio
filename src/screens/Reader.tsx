@@ -4,6 +4,8 @@ import { invoke } from "@tauri-apps/api/core";
 import DOMPurify from "dompurify";
 import { useTheme, MIN_FONT_SIZE, MAX_FONT_SIZE } from "../context/ThemeContext";
 import PageViewer from "../components/PageViewer";
+import KeyboardShortcutsHelp from "../components/KeyboardShortcutsHelp";
+import HighlightsPanel, { HIGHLIGHT_COLORS } from "../components/HighlightsPanel";
 
 // ---- Types matching Rust backend ----
 
@@ -53,11 +55,24 @@ export default function Reader({ onOpenSettings }: ReaderProps) {
   const [error, setError] = useState<string | null>(null);
   const [tocOpen, setTocOpen] = useState(false);
   const [scrollProgress, setScrollProgress] = useState(0);
+  const [showShortcuts, setShowShortcuts] = useState(false);
+  const [highlightsOpen, setHighlightsOpen] = useState(false);
+  const [selectionPopup, setSelectionPopup] = useState<{ x: number; y: number; text: string; startOffset: number; endOffset: number } | null>(null);
+
+  // Do Not Disturb mode
+  const [dndMode, setDndMode] = useState(false);
+  const [dndShowControls, setDndShowControls] = useState(false);
+  const [dndCursorHidden, setDndCursorHidden] = useState(false);
+  const dndTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const [chapterError, setChapterError] = useState<string | null>(null);
 
   const contentRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const chapterNavRef = useRef<HTMLDivElement>(null);
+  const [bottomNavVisible, setBottomNavVisible] = useState(true);
+  const sessionStartRef = useRef<number>(Math.floor(Date.now() / 1000));
+  const startChapterRef = useRef<number>(0);
   const restoringScroll = useRef(false);
   const savedScrollPosition = useRef<number | null>(null);
 
@@ -220,10 +235,92 @@ export default function Reader({ onOpenSettings }: ReaderProps) {
   }, [chapterHtml]);
 
   useEffect(() => {
+    startChapterRef.current = chapterIndex;
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
     return () => {
       saveProgress();
+      // Record reading session on unmount
+      const now = Math.floor(Date.now() / 1000);
+      const duration = now - sessionStartRef.current;
+      if (bookId && duration >= 10) {
+        invoke("record_reading_session", {
+          bookId,
+          startedAt: sessionStartRef.current,
+          durationSecs: duration,
+          pagesRead: Math.abs(chapterIndex - startChapterRef.current) + 1,
+        }).catch(() => {});
+      }
     };
-  }, [saveProgress]);
+  }, [saveProgress, bookId, chapterIndex]);
+
+  // Text selection handler for highlights
+  useEffect(() => {
+    function handleMouseUp() {
+      const selection = window.getSelection();
+      if (!selection || selection.isCollapsed || !contentRef.current) {
+        return;
+      }
+      const text = selection.toString().trim();
+      if (!text || text.length < 3) return;
+
+      const range = selection.getRangeAt(0);
+      if (!contentRef.current.contains(range.commonAncestorContainer)) return;
+
+      const rect = range.getBoundingClientRect();
+      const containerRect = scrollContainerRef.current?.getBoundingClientRect();
+      if (!containerRect) return;
+
+      // Compute text offset relative to the reader-content div
+      const preRange = document.createRange();
+      preRange.selectNodeContents(contentRef.current);
+      preRange.setEnd(range.startContainer, range.startOffset);
+      const startOffset = preRange.toString().length;
+      const endOffset = startOffset + text.length;
+
+      setSelectionPopup({
+        x: rect.left + rect.width / 2 - containerRect.left,
+        y: rect.top - containerRect.top - 8,
+        text,
+        startOffset,
+        endOffset,
+      });
+    }
+
+    function handleMouseDown(e: MouseEvent) {
+      // Dismiss popup when clicking outside it
+      const target = e.target as HTMLElement;
+      if (!target.closest('[data-highlight-popup]')) {
+        setSelectionPopup(null);
+      }
+    }
+
+    document.addEventListener("mouseup", handleMouseUp);
+    document.addEventListener("mousedown", handleMouseDown);
+    return () => {
+      document.removeEventListener("mouseup", handleMouseUp);
+      document.removeEventListener("mousedown", handleMouseDown);
+    };
+  }, [chapterHtml]);
+
+  const handleCreateHighlight = useCallback(async (color: string) => {
+    if (!bookId || !selectionPopup) return;
+    try {
+      await invoke("add_highlight", {
+        bookId,
+        chapterIndex,
+        text: selectionPopup.text,
+        color,
+        startOffset: selectionPopup.startOffset,
+        endOffset: selectionPopup.endOffset,
+      });
+      setSelectionPopup(null);
+      window.getSelection()?.removeAllRanges();
+    } catch {
+      // ignore
+    }
+  }, [bookId, chapterIndex, selectionPopup]);
 
   // ---- Navigation ----
 
@@ -247,20 +344,97 @@ export default function Reader({ onOpenSettings }: ReaderProps) {
 
   // ---- Keyboard shortcuts ----
 
+  const addBookmarkAtCurrentPosition = useCallback(async () => {
+    if (!bookId) return;
+    try {
+      await invoke("add_bookmark", {
+        bookId,
+        chapterIndex,
+        scrollPosition: scrollProgress,
+      });
+    } catch {
+      // silently fail
+    }
+  }, [bookId, chapterIndex, scrollProgress]);
+
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
+      const tag = (e.target as HTMLElement)?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA") return;
+
       if (e.key === "ArrowLeft") {
         prevChapter();
       } else if (e.key === "ArrowRight") {
         nextChapter();
+      } else if (e.key === "t" && !e.metaKey && !e.ctrlKey) {
+        setTocOpen((prev) => !prev);
+      } else if (e.key === "b" && !e.metaKey && !e.ctrlKey) {
+        addBookmarkAtCurrentPosition();
+      } else if (e.key === "d" && !e.metaKey && !e.ctrlKey) {
+        setDndMode((prev) => !prev);
+      } else if (e.key === "?" || (e.key === "/" && e.shiftKey)) {
+        setShowShortcuts((prev) => !prev);
       } else if (e.key === "Escape") {
-        setTocOpen(false);
+        if (dndMode) { setDndMode(false); return; }
+        if (showShortcuts) setShowShortcuts(false);
+        else if (tocOpen) setTocOpen(false);
+        else navigate("/");
       }
     }
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [prevChapter, nextChapter]);
+  }, [prevChapter, nextChapter, addBookmarkAtCurrentPosition, showShortcuts, tocOpen, navigate]);
+
+  // ---- Track bottom nav visibility for floating arrows ----
+
+  useEffect(() => {
+    const el = chapterNavRef.current;
+    const container = scrollContainerRef.current;
+    if (!el || !container) return;
+
+    const observer = new IntersectionObserver(
+      ([entry]) => setBottomNavVisible(entry.isIntersecting),
+      { root: container, threshold: 0.1 }
+    );
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [chapterHtml]);
+
+  // ---- DND mode: auto-hide cursor & reveal controls on edge hover ----
+
+  useEffect(() => {
+    if (!dndMode) {
+      setDndCursorHidden(false);
+      setDndShowControls(false);
+      if (dndTimerRef.current) clearTimeout(dndTimerRef.current);
+      return;
+    }
+
+    function handleMouseMove(e: MouseEvent) {
+      setDndCursorHidden(false);
+      // Show controls when mouse is near top or bottom edge (48px)
+      const nearEdge = e.clientY < 48 || e.clientY > window.innerHeight - 48;
+      setDndShowControls(nearEdge);
+
+      if (dndTimerRef.current) clearTimeout(dndTimerRef.current);
+      dndTimerRef.current = setTimeout(() => {
+        setDndCursorHidden(true);
+        setDndShowControls(false);
+      }, 2000);
+    }
+
+    document.addEventListener("mousemove", handleMouseMove);
+    // Start the hide timer immediately
+    dndTimerRef.current = setTimeout(() => {
+      setDndCursorHidden(true);
+    }, 2000);
+
+    return () => {
+      document.removeEventListener("mousemove", handleMouseMove);
+      if (dndTimerRef.current) clearTimeout(dndTimerRef.current);
+    };
+  }, [dndMode]);
 
   // ---- Current chapter title ----
 
@@ -300,8 +474,25 @@ export default function Reader({ onOpenSettings }: ReaderProps) {
     );
   }
 
+  const showHeader = !dndMode || dndShowControls;
+  const showFooter = !dndMode || dndShowControls;
+
   return (
-    <div className="flex h-full relative bg-paper">
+    <div className={`flex h-full relative bg-paper ${dndCursorHidden ? "cursor-none" : ""}`}>
+      {/* Keyboard shortcuts help */}
+      {showShortcuts && (
+        <KeyboardShortcutsHelp context="reader" onClose={() => setShowShortcuts(false)} />
+      )}
+
+      {/* Highlights Panel */}
+      {highlightsOpen && (
+        <HighlightsPanel
+          bookId={bookId!}
+          onClose={() => setHighlightsOpen(false)}
+          onGoToChapter={(index) => { goToChapter(index); setHighlightsOpen(false); }}
+        />
+      )}
+
       {/* TOC Sidebar — slide-in animation */}
       {tocOpen && (
         <>
@@ -355,7 +546,7 @@ export default function Reader({ onOpenSettings }: ReaderProps) {
       {/* Main reading area */}
       <div className="flex flex-col flex-1 min-w-0">
         {/* Header */}
-        <header className="flex items-center gap-2 px-4 py-2.5 border-b border-warm-border bg-surface shrink-0">
+        <header className={`flex items-center gap-2 px-4 py-2.5 border-b border-warm-border bg-surface shrink-0 transition-all duration-300 ${showHeader ? "opacity-100 max-h-20" : "opacity-0 max-h-0 overflow-hidden py-0 border-b-0"}`}>
           <button
             onClick={() => navigate("/")}
             className="p-1.5 text-ink-muted hover:text-ink transition-colors rounded-lg hover:bg-warm-subtle"
@@ -380,6 +571,17 @@ export default function Reader({ onOpenSettings }: ReaderProps) {
             {currentChapterTitle}
           </h1>
 
+          {/* Highlights button */}
+          <button
+            onClick={() => setHighlightsOpen((prev) => !prev)}
+            className={`p-1.5 transition-colors rounded-lg ${highlightsOpen ? "text-accent bg-accent-light" : "text-ink-muted hover:text-ink hover:bg-warm-subtle"}`}
+            aria-label="Highlights"
+          >
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none">
+              <path d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </button>
+
           {/* Font size controls */}
           <div className="flex items-center gap-0.5 mr-1">
             <button
@@ -402,6 +604,19 @@ export default function Reader({ onOpenSettings }: ReaderProps) {
               A+
             </button>
           </div>
+
+          {/* DND toggle */}
+          <button
+            onClick={() => setDndMode((prev) => !prev)}
+            className={`p-1.5 transition-colors rounded-lg ${dndMode ? "text-accent bg-accent-light" : "text-ink-muted hover:text-ink hover:bg-warm-subtle"}`}
+            aria-label="Toggle focus mode"
+            title="Focus mode (d)"
+          >
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none">
+              <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="1.5" />
+              <path d="M12 8v4l2.5 2.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </button>
 
           {/* Settings button */}
           <button
@@ -443,8 +658,58 @@ export default function Reader({ onOpenSettings }: ReaderProps) {
           <>
             <div
               ref={scrollContainerRef}
-              className="flex-1 overflow-y-auto"
+              className="flex-1 overflow-y-auto relative"
             >
+              {/* Floating prev/next arrows — visible when bottom nav is scrolled out of view */}
+              {!bottomNavVisible && bookFormat === "epub" && !dndMode && (
+                <>
+                  {chapterIndex > 0 && (
+                    <button
+                      onClick={prevChapter}
+                      className="fixed left-3 top-1/2 -translate-y-1/2 z-20 w-9 h-9 flex items-center justify-center rounded-full bg-surface/90 border border-warm-border shadow-md text-ink-muted hover:text-ink hover:bg-surface transition-all opacity-60 hover:opacity-100"
+                      aria-label="Previous chapter"
+                    >
+                      <svg width="16" height="16" viewBox="0 0 20 20" fill="none">
+                        <path d="M12 4l-6 6 6 6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                      </svg>
+                    </button>
+                  )}
+                  {chapterIndex < totalChapters - 1 && (
+                    <button
+                      onClick={nextChapter}
+                      className="fixed right-3 top-1/2 -translate-y-1/2 z-20 w-9 h-9 flex items-center justify-center rounded-full bg-surface/90 border border-warm-border shadow-md text-ink-muted hover:text-ink hover:bg-surface transition-all opacity-60 hover:opacity-100"
+                      aria-label="Next chapter"
+                    >
+                      <svg width="16" height="16" viewBox="0 0 20 20" fill="none">
+                        <path d="M8 4l6 6-6 6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                      </svg>
+                    </button>
+                  )}
+                </>
+              )}
+              {/* Highlight color popup */}
+              {selectionPopup && (
+                <div
+                  data-highlight-popup
+                  className="absolute z-30 flex items-center gap-1 px-2 py-1.5 bg-ink/90 backdrop-blur-sm rounded-lg shadow-lg"
+                  style={{
+                    left: `${selectionPopup.x}px`,
+                    top: `${selectionPopup.y}px`,
+                    transform: "translate(-50%, -100%)",
+                  }}
+                >
+                  {HIGHLIGHT_COLORS.map((c) => (
+                    <button
+                      key={c.value}
+                      onClick={() => handleCreateHighlight(c.value)}
+                      className="w-5 h-5 rounded-full hover:scale-125 transition-transform"
+                      style={{ backgroundColor: c.value }}
+                      aria-label={`Highlight ${c.name}`}
+                    />
+                  ))}
+                </div>
+              )}
+
               {chapterError ? (
                 <div className="max-w-[680px] mx-auto px-8 py-10">
                   <p className="text-red-500 text-sm">Failed to load chapter: {chapterError}</p>
@@ -463,7 +728,7 @@ export default function Reader({ onOpenSettings }: ReaderProps) {
               )}
 
               {/* Chapter navigation */}
-              <div className="max-w-[680px] mx-auto px-8 pb-12 flex items-center justify-between gap-4">
+              <div ref={chapterNavRef} className={`max-w-[680px] mx-auto px-8 pb-12 flex items-center justify-between gap-4 transition-opacity duration-300 ${dndMode && !dndShowControls ? "opacity-0 pointer-events-none" : "opacity-100"}`}>
                 <button
                   onClick={prevChapter}
                   disabled={chapterIndex <= 0}
@@ -491,7 +756,7 @@ export default function Reader({ onOpenSettings }: ReaderProps) {
             </div>
 
             {/* Progress bar */}
-            <footer className="shrink-0 border-t border-warm-border bg-surface px-5 py-2 flex items-center gap-3">
+            <footer className={`shrink-0 border-t border-warm-border bg-surface px-5 py-2 flex items-center gap-3 transition-all duration-300 ${showFooter ? "opacity-100 max-h-20" : "opacity-0 max-h-0 overflow-hidden py-0 border-t-0"}`}>
               <span className="text-[11px] text-ink-muted tabular-nums whitespace-nowrap">
                 Ch. {chapterIndex + 1} / {totalChapters}
               </span>

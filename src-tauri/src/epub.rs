@@ -1,10 +1,10 @@
+use ammonia::clean;
+use quick_xml::events::Event;
+use quick_xml::Reader;
 use std::collections::HashMap;
 use std::io::Read;
 use std::path::Path;
 use zip::ZipArchive;
-use ammonia::clean;
-use quick_xml::Reader;
-use quick_xml::events::Event;
 
 // ---- Error type ----
 
@@ -74,7 +74,10 @@ struct ManifestItem {
 // ---- Internal helpers ----
 
 /// Read a file from a zip archive by name (case-insensitive path matching).
-fn read_zip_entry(archive: &mut ZipArchive<std::fs::File>, name: &str) -> Result<String, EpubError> {
+fn read_zip_entry(
+    archive: &mut ZipArchive<std::fs::File>,
+    name: &str,
+) -> Result<String, EpubError> {
     // Try exact match first
     if let Ok(mut entry) = archive.by_name(name) {
         let mut buf = String::new();
@@ -95,7 +98,10 @@ fn read_zip_entry(archive: &mut ZipArchive<std::fs::File>, name: &str) -> Result
 }
 
 /// Read a file from a zip archive by name as raw bytes.
-fn read_zip_entry_bytes(archive: &mut ZipArchive<std::fs::File>, name: &str) -> Result<Vec<u8>, EpubError> {
+fn read_zip_entry_bytes(
+    archive: &mut ZipArchive<std::fs::File>,
+    name: &str,
+) -> Result<Vec<u8>, EpubError> {
     if let Ok(mut entry) = archive.by_name(name) {
         let mut buf = Vec::new();
         entry.read_to_end(&mut buf).map_err(EpubError::Io)?;
@@ -136,7 +142,9 @@ fn find_opf_path(archive: &mut ZipArchive<std::fs::File>) -> Result<String, Epub
         }
         buf.clear();
     }
-    Err(EpubError::InvalidFormat("Cannot find OPF path in container.xml".to_string()))
+    Err(EpubError::InvalidFormat(
+        "Cannot find OPF path in container.xml".to_string(),
+    ))
 }
 
 /// Given OPF path, return the base directory (for resolving relative hrefs).
@@ -204,7 +212,9 @@ fn parse_manifest(opf: &str) -> HashMap<String, ManifestItem> {
                     for attr in e.attributes().flatten() {
                         match attr.key.as_ref() {
                             b"id" => id = Some(String::from_utf8_lossy(&attr.value).into_owned()),
-                            b"href" => href = Some(String::from_utf8_lossy(&attr.value).into_owned()),
+                            b"href" => {
+                                href = Some(String::from_utf8_lossy(&attr.value).into_owned())
+                            }
                             b"properties" => {
                                 properties = Some(String::from_utf8_lossy(&attr.value).into_owned())
                             }
@@ -277,7 +287,9 @@ fn find_cover_meta_id(opf: &str) -> Option<String> {
                     let mut content: Option<String> = None;
                     for attr in e.attributes().flatten() {
                         match attr.key.as_ref() {
-                            b"name" => name = Some(String::from_utf8_lossy(&attr.value).into_owned()),
+                            b"name" => {
+                                name = Some(String::from_utf8_lossy(&attr.value).into_owned())
+                            }
                             b"content" => {
                                 content = Some(String::from_utf8_lossy(&attr.value).into_owned())
                             }
@@ -317,7 +329,11 @@ fn find_cover_href(opf: &str) -> Option<String> {
 }
 
 /// Find all zip entry names that match a given href prefix (handles path normalization).
-fn find_zip_entry_name(archive: &mut ZipArchive<std::fs::File>, base_dir: &str, href: &str) -> Option<String> {
+fn find_zip_entry_name(
+    archive: &mut ZipArchive<std::fs::File>,
+    base_dir: &str,
+    href: &str,
+) -> Option<String> {
     let candidate = format!("{base_dir}{href}");
     // Strip query/fragment from href
     let clean_href = href.split('#').next().unwrap_or(href);
@@ -325,7 +341,8 @@ fn find_zip_entry_name(archive: &mut ZipArchive<std::fs::File>, base_dir: &str, 
     for i in 0..archive.len() {
         if let Ok(entry) = archive.by_index_raw(i) {
             let name = entry.name().to_string();
-            if name == candidate || name == clean_candidate
+            if name == candidate
+                || name == clean_candidate
                 || name.to_lowercase() == clean_candidate.to_lowercase()
             {
                 return Some(name);
@@ -365,7 +382,12 @@ pub fn parse_epub_metadata(file_path: &str) -> Result<BookMetadata, EpubError> {
         .or_else(|| extract_tag_text(&opf, "description"))
         .map(|s| s.to_string());
 
-    Ok(BookMetadata { title, author, language, description })
+    Ok(BookMetadata {
+        title,
+        author,
+        language,
+        description,
+    })
 }
 
 /// Extract cover image to dest_dir, return the destination path if found.
@@ -441,9 +463,9 @@ pub fn get_chapter_content(file_path: &str, chapter_index: usize) -> Result<Stri
     let manifest = parse_manifest(&opf);
     let spine = parse_spine_idrefs(&opf);
 
-    let idref = spine
-        .get(chapter_index)
-        .ok_or_else(|| EpubError::InvalidFormat(format!("Chapter index {chapter_index} out of range")))?;
+    let idref = spine.get(chapter_index).ok_or_else(|| {
+        EpubError::InvalidFormat(format!("Chapter index {chapter_index} out of range"))
+    })?;
 
     let href = manifest
         .get(idref)
@@ -467,7 +489,11 @@ pub fn get_chapter_content(file_path: &str, chapter_index: usize) -> Result<Stri
         }
     };
 
-    Ok(rewrite_img_srcs_to_data_uris(&cleaned, &mut archive, &chapter_dir))
+    Ok(rewrite_img_srcs_to_data_uris(
+        &cleaned,
+        &mut archive,
+        &chapter_dir,
+    ))
 }
 
 // ---- Inline-image helpers ----
@@ -493,7 +519,9 @@ fn resolve_zip_path(base_dir: &str, relative: &str) -> String {
     for segment in relative.split('/') {
         match segment {
             "" | "." => {}
-            ".." => { parts.pop(); }
+            ".." => {
+                parts.pop();
+            }
             other => parts.push(other),
         }
     }
@@ -540,7 +568,7 @@ fn rewrite_img_srcs_to_data_uris(
     archive: &mut ZipArchive<std::fs::File>,
     chapter_dir: &str,
 ) -> String {
-    use base64::{Engine, engine::general_purpose::STANDARD};
+    use base64::{engine::general_purpose::STANDARD, Engine};
 
     let mut result = String::with_capacity(html.len());
     let mut rest = html;
@@ -549,8 +577,13 @@ fn rewrite_img_srcs_to_data_uris(
         // Confirm the match is really an <img tag (not e.g. <imgfoo).
         let after_tag = &rest[tag_start + 4..];
         match after_tag.bytes().next() {
-            Some(b) if b == b' ' || b == b'\t' || b == b'\n' || b == b'\r'
-                     || b == b'>' || b == b'/' => {}
+            Some(b)
+                if b == b' '
+                    || b == b'\t'
+                    || b == b'\n'
+                    || b == b'\r'
+                    || b == b'>'
+                    || b == b'/' => {}
             _ => {
                 // Not an img tag — advance past the false match.
                 result.push_str(&rest[..tag_start + 1]);
@@ -580,8 +613,12 @@ fn rewrite_img_srcs_to_data_uris(
                 } else {
                     // Strip fragment / query before resolving.
                     let clean_src = src
-                        .split('#').next().unwrap_or(&src)
-                        .split('?').next().unwrap_or(&src);
+                        .split('#')
+                        .next()
+                        .unwrap_or(&src)
+                        .split('?')
+                        .next()
+                        .unwrap_or(&src);
                     let ext = clean_src.rsplit('.').next().unwrap_or("").to_lowercase();
 
                     // DOMPurify strips SVG data URIs by default — skip them.
@@ -651,7 +688,11 @@ pub fn get_toc(file_path: &str) -> Result<Vec<TocEntry>, EpubError> {
 
     // Fall back to EPUB 2 NCX
     let ncx_href = manifest.iter().find_map(|(_, item)| {
-        if item.href.ends_with(".ncx") { Some(item.href.clone()) } else { None }
+        if item.href.ends_with(".ncx") {
+            Some(item.href.clone())
+        } else {
+            None
+        }
     });
 
     if let Some(ncx_href) = ncx_href {
@@ -700,8 +741,7 @@ fn parse_nav_toc(nav: &str, href_to_index: &HashMap<String, usize>) -> Vec<TocEn
                         // Check for epub:type="toc" — strip namespace prefix from attribute key
                         let is_toc = e.attributes().flatten().any(|attr| {
                             let key = attr.key.as_ref();
-                            let local_key =
-                                key.splitn(2, |&b| b == b':').last().unwrap_or(key);
+                            let local_key = key.splitn(2, |&b| b == b':').last().unwrap_or(key);
                             local_key == b"type" && attr.value.as_ref() == b"toc"
                         });
                         if is_toc {
@@ -720,8 +760,7 @@ fn parse_nav_toc(nav: &str, href_to_index: &HashMap<String, usize>) -> Vec<TocEn
                     current_href = None;
                     for attr in e.attributes().flatten() {
                         if attr.key.as_ref() == b"href" {
-                            current_href =
-                                Some(String::from_utf8_lossy(&attr.value).into_owned());
+                            current_href = Some(String::from_utf8_lossy(&attr.value).into_owned());
                         }
                     }
                 }
@@ -754,7 +793,11 @@ fn parse_nav_toc(nav: &str, href_to_index: &HashMap<String, usize>) -> Vec<TocEn
                                 } else {
                                     current_label.clone()
                                 };
-                                entries.push(TocEntry { label, chapter_index, children: vec![] });
+                                entries.push(TocEntry {
+                                    label,
+                                    chapter_index,
+                                    children: vec![],
+                                });
                             }
                             in_anchor = false;
                         }
@@ -805,8 +848,7 @@ fn parse_ncx_toc(ncx: &str, href_to_index: &HashMap<String, usize>) -> Vec<TocEn
                         if let Some(state) = stack.last_mut() {
                             for attr in e.attributes().flatten() {
                                 if attr.key.as_ref() == b"src" {
-                                    state.src =
-                                        String::from_utf8_lossy(&attr.value).into_owned();
+                                    state.src = String::from_utf8_lossy(&attr.value).into_owned();
                                 }
                             }
                         }
@@ -814,22 +856,19 @@ fn parse_ncx_toc(ncx: &str, href_to_index: &HashMap<String, usize>) -> Vec<TocEn
                     _ => {}
                 }
             }
-            Ok(Event::Empty(ref e)) => {
-                match e.local_name().as_ref() {
-                    b"content" => {
-                        if let Some(state) = stack.last_mut() {
-                            for attr in e.attributes().flatten() {
-                                if attr.key.as_ref() == b"src" {
-                                    state.src =
-                                        String::from_utf8_lossy(&attr.value).into_owned();
-                                }
+            Ok(Event::Empty(ref e)) => match e.local_name().as_ref() {
+                b"content" => {
+                    if let Some(state) = stack.last_mut() {
+                        for attr in e.attributes().flatten() {
+                            if attr.key.as_ref() == b"src" {
+                                state.src = String::from_utf8_lossy(&attr.value).into_owned();
                             }
                         }
                     }
-                    b"navPoint" => stack.push(NavState::default()),
-                    _ => {}
                 }
-            }
+                b"navPoint" => stack.push(NavState::default()),
+                _ => {}
+            },
             Ok(Event::Text(ref e)) => {
                 if let Some(state) = stack.last_mut() {
                     if state.in_text {
@@ -842,31 +881,32 @@ fn parse_ncx_toc(ncx: &str, href_to_index: &HashMap<String, usize>) -> Vec<TocEn
                     }
                 }
             }
-            Ok(Event::End(ref e)) => {
-                match e.local_name().as_ref() {
-                    b"text" => {
-                        if let Some(state) = stack.last_mut() {
-                            state.in_text = false;
-                        }
+            Ok(Event::End(ref e)) => match e.local_name().as_ref() {
+                b"text" => {
+                    if let Some(state) = stack.last_mut() {
+                        state.in_text = false;
                     }
-                    b"navPoint" => {
-                        if let Some(state) = stack.pop() {
-                            if !state.label.is_empty() {
-                                let clean_src =
-                                    state.src.split('#').next().unwrap_or(&state.src).to_string();
-                                let chapter_index =
-                                    href_to_index.get(&clean_src).copied().unwrap_or(0);
-                                entries.push(TocEntry {
-                                    label: state.label,
-                                    chapter_index,
-                                    children: vec![],
-                                });
-                            }
-                        }
-                    }
-                    _ => {}
                 }
-            }
+                b"navPoint" => {
+                    if let Some(state) = stack.pop() {
+                        if !state.label.is_empty() {
+                            let clean_src = state
+                                .src
+                                .split('#')
+                                .next()
+                                .unwrap_or(&state.src)
+                                .to_string();
+                            let chapter_index = href_to_index.get(&clean_src).copied().unwrap_or(0);
+                            entries.push(TocEntry {
+                                label: state.label,
+                                chapter_index,
+                                children: vec![],
+                            });
+                        }
+                    }
+                }
+                _ => {}
+            },
             Ok(Event::Eof) => break,
             Err(_) => break,
             _ => {}
@@ -932,8 +972,14 @@ mod tests {
             <item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>
         </manifest>"#;
         let manifest = parse_manifest(opf);
-        assert_eq!(manifest.get("chapter1").map(|i| i.href.as_str()), Some("ch01.xhtml"));
-        assert_eq!(manifest.get("ncx").map(|i| i.href.as_str()), Some("toc.ncx"));
+        assert_eq!(
+            manifest.get("chapter1").map(|i| i.href.as_str()),
+            Some("ch01.xhtml")
+        );
+        assert_eq!(
+            manifest.get("ncx").map(|i| i.href.as_str()),
+            Some("toc.ncx")
+        );
     }
 
     #[test]
@@ -947,7 +993,10 @@ mod tests {
                 media-type="application/xhtml+xml"/>
         </manifest>"#;
         let manifest = parse_manifest(opf);
-        assert_eq!(manifest.get("chapter1").map(|i| i.href.as_str()), Some("ch01.xhtml"));
+        assert_eq!(
+            manifest.get("chapter1").map(|i| i.href.as_str()),
+            Some("ch01.xhtml")
+        );
     }
 
     #[test]
@@ -981,19 +1030,40 @@ mod tests {
     fn test_sanitize_strips_script_tags() {
         let dangerous = r#"<p>Hello world</p><script>alert(1)</script><p>More text</p>"#;
         let sanitized = clean(dangerous);
-        assert!(!sanitized.contains("<script>"), "script tag should be stripped");
-        assert!(!sanitized.contains("alert(1)"), "script content should be stripped");
-        assert!(sanitized.contains("Hello world"), "normal content should be preserved");
-        assert!(sanitized.contains("More text"), "normal content should be preserved");
+        assert!(
+            !sanitized.contains("<script>"),
+            "script tag should be stripped"
+        );
+        assert!(
+            !sanitized.contains("alert(1)"),
+            "script content should be stripped"
+        );
+        assert!(
+            sanitized.contains("Hello world"),
+            "normal content should be preserved"
+        );
+        assert!(
+            sanitized.contains("More text"),
+            "normal content should be preserved"
+        );
     }
 
     #[test]
     fn test_sanitize_strips_inline_event_handlers() {
         let dangerous = r#"<p onmouseover="alert(1)">Text</p><img src="x" onerror="alert(2)"/>"#;
         let sanitized = clean(dangerous);
-        assert!(!sanitized.contains("onmouseover"), "event handler should be stripped");
-        assert!(!sanitized.contains("onerror"), "event handler should be stripped");
-        assert!(sanitized.contains("Text"), "normal content should be preserved");
+        assert!(
+            !sanitized.contains("onmouseover"),
+            "event handler should be stripped"
+        );
+        assert!(
+            !sanitized.contains("onerror"),
+            "event handler should be stripped"
+        );
+        assert!(
+            sanitized.contains("Text"),
+            "normal content should be preserved"
+        );
     }
 
     #[test]

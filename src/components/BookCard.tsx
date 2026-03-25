@@ -11,6 +11,7 @@ interface BookCardProps {
   progress?: number; // 0-100
   onClick: () => void;
   onDelete?: (id: string) => void;
+  onEdit?: (id: string) => void;
   onRemoveFromCollection?: () => void;
 }
 
@@ -23,6 +24,7 @@ export default function BookCard({
   progress,
   onClick,
   onDelete,
+  onEdit,
   onRemoveFromCollection,
 }: BookCardProps) {
   const coverSrc = coverPath ? convertFileSrc(coverPath) : null;
@@ -48,7 +50,7 @@ export default function BookCard({
     <button
       type="button"
       onClick={onClick}
-      className="group text-left rounded-xl bg-surface border border-warm-border overflow-hidden cursor-pointer transition-all duration-200 ease-out shadow-sm hover:shadow-[0_8px_24px_-4px_rgba(44,34,24,0.18)] hover:-translate-y-1 focus:outline-2 focus:outline-accent focus:outline-offset-2"
+      className="w-full h-full group text-left rounded-xl bg-surface border border-warm-border overflow-hidden cursor-pointer transition-all duration-200 ease-out shadow-sm hover:shadow-[0_8px_24px_-4px_rgba(44,34,24,0.18)] hover:-translate-y-1 focus:outline-2 focus:outline-accent focus:outline-offset-2"
     >
       {/* Cover — 2:3 aspect ratio */}
       <div className="relative aspect-[2/3] bg-warm-subtle overflow-hidden">
@@ -101,23 +103,34 @@ export default function BookCard({
           </span>
         )}
 
-        {/* Delete button — hover reveal */}
-        {onDelete && !confirming && (
-          <button
-            type="button"
-            onClick={handleDeleteClick}
-            aria-label={`Remove ${title}`}
-            className="absolute top-2 left-2 opacity-0 group-hover:opacity-100 transition-opacity duration-150 w-6 h-6 flex items-center justify-center rounded-full bg-ink/60 text-paper hover:bg-red-600 focus:opacity-100 focus:outline-none"
-          >
-            <svg width="10" height="10" viewBox="0 0 24 24" fill="none">
-              <path
-                d="M18 6L6 18M6 6l12 12"
-                stroke="currentColor"
-                strokeWidth="2.5"
-                strokeLinecap="round"
-              />
-            </svg>
-          </button>
+        {/* Action buttons — hover reveal */}
+        {!confirming && (
+          <div className="absolute top-2 left-2 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity duration-150">
+            {onDelete && (
+              <button
+                type="button"
+                onClick={handleDeleteClick}
+                aria-label={`Remove ${title}`}
+                className="w-6 h-6 flex items-center justify-center rounded-full bg-ink/60 text-paper hover:bg-red-600 focus:opacity-100 focus:outline-none"
+              >
+                <svg width="10" height="10" viewBox="0 0 24 24" fill="none">
+                  <path d="M18 6L6 18M6 6l12 12" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" />
+                </svg>
+              </button>
+            )}
+            {onEdit && (
+              <button
+                type="button"
+                onClick={(e) => { e.stopPropagation(); onEdit(id); }}
+                aria-label={`Edit ${title}`}
+                className="w-6 h-6 flex items-center justify-center rounded-full bg-ink/60 text-paper hover:bg-accent focus:opacity-100 focus:outline-none"
+              >
+                <svg width="10" height="10" viewBox="0 0 24 24" fill="none">
+                  <path d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+              </button>
+            )}
+          </div>
         )}
 
         {/* Remove from collection button — bottom-right, only when in a manual collection */}

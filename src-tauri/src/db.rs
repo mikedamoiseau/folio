@@ -1,6 +1,6 @@
 use r2d2::Pool;
 use r2d2_sqlite::SqliteConnectionManager;
-use rusqlite::{Connection, Result, params};
+use rusqlite::{params, Connection, Result};
 use std::path::Path;
 
 use crate::models::{Book, Bookmark, Collection, CollectionRule, CollectionType, ReadingProgress};
@@ -8,7 +8,8 @@ use crate::models::{Book, Bookmark, Collection, CollectionRule, CollectionType, 
 pub type DbPool = Pool<SqliteConnectionManager>;
 
 fn run_schema(conn: &Connection) -> Result<()> {
-    conn.execute_batch("
+    conn.execute_batch(
+        "
         CREATE TABLE IF NOT EXISTS books (
             id TEXT PRIMARY KEY,
             title TEXT NOT NULL,
@@ -71,15 +72,43 @@ fn run_schema(conn: &Connection) -> Result<()> {
             key TEXT PRIMARY KEY,
             value TEXT NOT NULL
         );
-    ")?;
+
+        CREATE TABLE IF NOT EXISTS highlights (
+            id TEXT PRIMARY KEY,
+            book_id TEXT NOT NULL REFERENCES books(id) ON DELETE CASCADE,
+            chapter_index INTEGER NOT NULL,
+            text TEXT NOT NULL,
+            color TEXT NOT NULL DEFAULT '#f6c445',
+            note TEXT,
+            start_offset INTEGER NOT NULL,
+            end_offset INTEGER NOT NULL,
+            created_at INTEGER NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS reading_sessions (
+            id TEXT PRIMARY KEY,
+            book_id TEXT NOT NULL REFERENCES books(id) ON DELETE CASCADE,
+            started_at INTEGER NOT NULL,
+            duration_secs INTEGER NOT NULL,
+            pages_read INTEGER NOT NULL DEFAULT 0
+        );
+
+        CREATE TABLE IF NOT EXISTS tags (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL UNIQUE
+        );
+
+        CREATE TABLE IF NOT EXISTS book_tags (
+            book_id TEXT NOT NULL REFERENCES books(id) ON DELETE CASCADE,
+            tag_id TEXT NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
+            PRIMARY KEY (book_id, tag_id)
+        );
+    ",
+    )?;
 
     // Additive migrations: ALTER TABLE ADD COLUMN fails silently if already exists.
-    let _ = conn.execute_batch(
-        "ALTER TABLE books ADD COLUMN format TEXT NOT NULL DEFAULT 'epub';",
-    );
-    let _ = conn.execute_batch(
-        "ALTER TABLE books ADD COLUMN file_hash TEXT;",
-    );
+    let _ = conn.execute_batch("ALTER TABLE books ADD COLUMN format TEXT NOT NULL DEFAULT 'epub';");
+    let _ = conn.execute_batch("ALTER TABLE books ADD COLUMN file_hash TEXT;");
     let _ = conn.execute_batch(
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_books_file_hash ON books(file_hash);",
     );
@@ -153,7 +182,9 @@ pub fn get_book(conn: &Connection, id: &str) -> Result<Option<Book>> {
             cover_path: row.get(4)?,
             total_chapters: row.get(5)?,
             added_at: row.get(6)?,
-            format: format_str.parse().map_err(|e: String| rusqlite::Error::InvalidParameterName(e))?,
+            format: format_str
+                .parse()
+                .map_err(|e: String| rusqlite::Error::InvalidParameterName(e))?,
             file_hash: row.get(8)?,
         }))
     } else {
@@ -177,7 +208,9 @@ pub fn get_book_by_file_path(conn: &Connection, file_path: &str) -> Result<Optio
             cover_path: row.get(4)?,
             total_chapters: row.get(5)?,
             added_at: row.get(6)?,
-            format: format_str.parse().map_err(|e: String| rusqlite::Error::InvalidParameterName(e))?,
+            format: format_str
+                .parse()
+                .map_err(|e: String| rusqlite::Error::InvalidParameterName(e))?,
             file_hash: row.get(8)?,
         }))
     } else {
@@ -201,7 +234,9 @@ pub fn get_book_by_file_hash(conn: &Connection, hash: &str) -> Result<Option<Boo
             cover_path: row.get(4)?,
             total_chapters: row.get(5)?,
             added_at: row.get(6)?,
-            format: format_str.parse().map_err(|e: String| rusqlite::Error::InvalidParameterName(e))?,
+            format: format_str
+                .parse()
+                .map_err(|e: String| rusqlite::Error::InvalidParameterName(e))?,
             file_hash: row.get(8)?,
         }))
     } else {
@@ -224,7 +259,9 @@ pub fn list_books(conn: &Connection) -> Result<Vec<Book>> {
             cover_path: row.get(4)?,
             total_chapters: row.get(5)?,
             added_at: row.get(6)?,
-            format: format_str.parse().map_err(|e: String| rusqlite::Error::InvalidParameterName(e))?,
+            format: format_str
+                .parse()
+                .map_err(|e: String| rusqlite::Error::InvalidParameterName(e))?,
             file_hash: row.get(8)?,
         })
     })?;
@@ -322,6 +359,18 @@ pub fn get_reading_progress(conn: &Connection, book_id: &str) -> Result<Option<R
     }
 }
 
+pub fn get_recently_read_books(conn: &Connection, limit: u32) -> Result<Vec<Book>> {
+    let mut stmt = conn.prepare(
+        "SELECT b.id, b.title, b.author, b.file_path, b.cover_path, b.total_chapters, b.added_at, b.format, b.file_hash
+         FROM books b
+         JOIN reading_progress rp ON rp.book_id = b.id
+         ORDER BY rp.last_read_at DESC
+         LIMIT ?1",
+    )?;
+    let rows = stmt.query_map(params![limit], row_to_book)?;
+    rows.collect()
+}
+
 // --- Bookmark CRUD ---
 
 pub fn insert_bookmark(conn: &Connection, bookmark: &Bookmark) -> Result<()> {
@@ -404,7 +453,13 @@ pub fn insert_collection(conn: &Connection, collection: &Collection) -> Result<(
         conn.execute(
             "INSERT INTO collection_rules (id, collection_id, field, operator, value)
              VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![rule.id, rule.collection_id, rule.field, rule.operator, rule.value],
+            params![
+                rule.id,
+                rule.collection_id,
+                rule.field,
+                rule.operator,
+                rule.value
+            ],
         )?;
     }
     Ok(())
@@ -465,11 +520,7 @@ pub fn delete_collection(conn: &Connection, id: &str) -> Result<()> {
     Ok(())
 }
 
-pub fn add_book_to_collection(
-    conn: &Connection,
-    book_id: &str,
-    collection_id: &str,
-) -> Result<()> {
+pub fn add_book_to_collection(conn: &Connection, book_id: &str, collection_id: &str) -> Result<()> {
     conn.execute(
         "INSERT OR IGNORE INTO book_collections (book_id, collection_id, added_at)
          VALUES (?1, ?2, unixepoch())",
@@ -490,11 +541,261 @@ pub fn remove_book_from_collection(
     Ok(())
 }
 
+// --- Reading Sessions ---
+
+pub fn insert_reading_session(
+    conn: &Connection,
+    id: &str,
+    book_id: &str,
+    started_at: i64,
+    duration_secs: i64,
+    pages_read: i32,
+) -> Result<()> {
+    conn.execute(
+        "INSERT INTO reading_sessions (id, book_id, started_at, duration_secs, pages_read)
+         VALUES (?1, ?2, ?3, ?4, ?5)",
+        params![id, book_id, started_at, duration_secs, pages_read],
+    )?;
+    Ok(())
+}
+
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReadingStats {
+    pub total_reading_time_secs: i64,
+    pub total_sessions: i64,
+    pub total_pages_read: i64,
+    pub books_finished: i64,
+    pub current_streak_days: i64,
+    pub longest_streak_days: i64,
+    pub daily_reading: Vec<(String, i64)>, // (date_str, seconds)
+}
+
+pub fn get_reading_stats(conn: &Connection) -> Result<ReadingStats> {
+    let total_reading_time_secs: i64 = conn.query_row(
+        "SELECT COALESCE(SUM(duration_secs), 0) FROM reading_sessions",
+        [],
+        |row| row.get(0),
+    )?;
+    let total_sessions: i64 =
+        conn.query_row("SELECT COUNT(*) FROM reading_sessions", [], |row| {
+            row.get(0)
+        })?;
+    let total_pages_read: i64 = conn.query_row(
+        "SELECT COALESCE(SUM(pages_read), 0) FROM reading_sessions",
+        [],
+        |row| row.get(0),
+    )?;
+    let books_finished: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM reading_progress rp JOIN books b ON rp.book_id = b.id WHERE rp.chapter_index >= b.total_chapters - 1",
+        [],
+        |row| row.get(0),
+    )?;
+
+    // Daily reading for last 30 days
+    let mut stmt = conn.prepare(
+        "SELECT date(started_at, 'unixepoch', 'localtime') as day, SUM(duration_secs)
+         FROM reading_sessions
+         WHERE started_at > strftime('%s', 'now', '-30 days')
+         GROUP BY day ORDER BY day ASC",
+    )?;
+    let daily_reading: Vec<(String, i64)> = stmt
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+        })?
+        .filter_map(|r| r.ok())
+        .collect();
+
+    // Calculate streaks from daily data
+    let streak_days: Vec<String> = conn.prepare(
+        "SELECT DISTINCT date(started_at, 'unixepoch', 'localtime') as day FROM reading_sessions ORDER BY day DESC",
+    )?.query_map([], |row| row.get::<_, String>(0))?.filter_map(|r| r.ok()).collect();
+
+    let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+    let mut current_streak = 0i64;
+    let mut longest_streak = 0i64;
+    let mut running_streak = 0i64;
+    let mut expected_date = today.clone();
+
+    for day in &streak_days {
+        if *day == expected_date {
+            running_streak += 1;
+            // Move expected_date back one day
+            if let Ok(d) = chrono::NaiveDate::parse_from_str(&expected_date, "%Y-%m-%d") {
+                expected_date = (d - chrono::Duration::days(1))
+                    .format("%Y-%m-%d")
+                    .to_string();
+            }
+        } else {
+            if current_streak == 0 {
+                current_streak = running_streak;
+            }
+            if running_streak > longest_streak {
+                longest_streak = running_streak;
+            }
+            running_streak = 0;
+            // Reset: check if this day starts a new streak
+            if let Ok(d) = chrono::NaiveDate::parse_from_str(day, "%Y-%m-%d") {
+                expected_date = (d - chrono::Duration::days(1))
+                    .format("%Y-%m-%d")
+                    .to_string();
+                running_streak = 1;
+            }
+        }
+    }
+    if current_streak == 0 {
+        current_streak = running_streak;
+    }
+    if running_streak > longest_streak {
+        longest_streak = running_streak;
+    }
+
+    Ok(ReadingStats {
+        total_reading_time_secs,
+        total_sessions,
+        total_pages_read,
+        books_finished,
+        current_streak_days: current_streak,
+        longest_streak_days: longest_streak,
+        daily_reading,
+    })
+}
+
+// --- Highlights CRUD ---
+
+pub fn insert_highlight(conn: &Connection, h: &crate::models::Highlight) -> Result<()> {
+    conn.execute(
+        "INSERT INTO highlights (id, book_id, chapter_index, text, color, note, start_offset, end_offset, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        params![h.id, h.book_id, h.chapter_index, h.text, h.color, h.note, h.start_offset, h.end_offset, h.created_at],
+    )?;
+    Ok(())
+}
+
+pub fn list_highlights(conn: &Connection, book_id: &str) -> Result<Vec<crate::models::Highlight>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, book_id, chapter_index, text, color, note, start_offset, end_offset, created_at
+         FROM highlights WHERE book_id = ?1 ORDER BY chapter_index ASC, start_offset ASC",
+    )?;
+    let rows = stmt.query_map(params![book_id], |row| {
+        Ok(crate::models::Highlight {
+            id: row.get(0)?,
+            book_id: row.get(1)?,
+            chapter_index: row.get(2)?,
+            text: row.get(3)?,
+            color: row.get(4)?,
+            note: row.get(5)?,
+            start_offset: row.get(6)?,
+            end_offset: row.get(7)?,
+            created_at: row.get(8)?,
+        })
+    })?;
+    rows.collect()
+}
+
+pub fn get_chapter_highlights(
+    conn: &Connection,
+    book_id: &str,
+    chapter_index: u32,
+) -> Result<Vec<crate::models::Highlight>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, book_id, chapter_index, text, color, note, start_offset, end_offset, created_at
+         FROM highlights WHERE book_id = ?1 AND chapter_index = ?2 ORDER BY start_offset ASC",
+    )?;
+    let rows = stmt.query_map(params![book_id, chapter_index], |row| {
+        Ok(crate::models::Highlight {
+            id: row.get(0)?,
+            book_id: row.get(1)?,
+            chapter_index: row.get(2)?,
+            text: row.get(3)?,
+            color: row.get(4)?,
+            note: row.get(5)?,
+            start_offset: row.get(6)?,
+            end_offset: row.get(7)?,
+            created_at: row.get(8)?,
+        })
+    })?;
+    rows.collect()
+}
+
+pub fn update_highlight_note(conn: &Connection, id: &str, note: Option<&str>) -> Result<()> {
+    conn.execute(
+        "UPDATE highlights SET note = ?2 WHERE id = ?1",
+        params![id, note],
+    )?;
+    Ok(())
+}
+
+pub fn delete_highlight(conn: &Connection, id: &str) -> Result<()> {
+    conn.execute("DELETE FROM highlights WHERE id = ?1", params![id])?;
+    Ok(())
+}
+
+// --- Tags CRUD ---
+
+pub fn list_tags(conn: &Connection) -> Result<Vec<(String, String)>> {
+    let mut stmt = conn.prepare("SELECT id, name FROM tags ORDER BY name ASC")?;
+    let rows = stmt.query_map([], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    })?;
+    rows.collect()
+}
+
+pub fn get_or_create_tag(conn: &Connection, tag_id: &str, name: &str) -> Result<()> {
+    conn.execute(
+        "INSERT OR IGNORE INTO tags (id, name) VALUES (?1, ?2)",
+        params![tag_id, name],
+    )?;
+    Ok(())
+}
+
+pub fn get_tag_by_name(conn: &Connection, name: &str) -> Result<Option<String>> {
+    let mut stmt = conn.prepare("SELECT id FROM tags WHERE name = ?1")?;
+    let mut rows = stmt.query(params![name])?;
+    if let Some(row) = rows.next()? {
+        Ok(Some(row.get(0)?))
+    } else {
+        Ok(None)
+    }
+}
+
+pub fn add_tag_to_book(conn: &Connection, book_id: &str, tag_id: &str) -> Result<()> {
+    conn.execute(
+        "INSERT OR IGNORE INTO book_tags (book_id, tag_id) VALUES (?1, ?2)",
+        params![book_id, tag_id],
+    )?;
+    Ok(())
+}
+
+pub fn remove_tag_from_book(conn: &Connection, book_id: &str, tag_id: &str) -> Result<()> {
+    conn.execute(
+        "DELETE FROM book_tags WHERE book_id = ?1 AND tag_id = ?2",
+        params![book_id, tag_id],
+    )?;
+    Ok(())
+}
+
+pub fn get_book_tags(conn: &Connection, book_id: &str) -> Result<Vec<(String, String)>> {
+    let mut stmt = conn.prepare(
+        "SELECT t.id, t.name FROM tags t
+         JOIN book_tags bt ON bt.tag_id = t.id
+         WHERE bt.book_id = ?1
+         ORDER BY t.name ASC",
+    )?;
+    let rows = stmt.query_map(params![book_id], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    })?;
+    rows.collect()
+}
+
+pub fn delete_tag(conn: &Connection, tag_id: &str) -> Result<()> {
+    conn.execute("DELETE FROM tags WHERE id = ?1", params![tag_id])?;
+    Ok(())
+}
+
 pub fn get_books_in_collection(conn: &Connection, collection_id: &str) -> Result<Vec<Book>> {
-    let mut type_stmt =
-        conn.prepare("SELECT type FROM collections WHERE id = ?1")?;
-    let coll_type: String =
-        type_stmt.query_row(params![collection_id], |row| row.get(0))?;
+    let mut type_stmt = conn.prepare("SELECT type FROM collections WHERE id = ?1")?;
+    let coll_type: String = type_stmt.query_row(params![collection_id], |row| row.get(0))?;
 
     if coll_type == "manual" {
         let mut stmt = conn.prepare(
@@ -528,8 +829,7 @@ pub fn get_books_in_collection(conn: &Connection, collection_id: &str) -> Result
             }
             ("date_added", "last_n_days") => {
                 where_clauses.push(
-                    "b.added_at > (strftime('%s', 'now') - CAST(? AS INTEGER) * 86400)"
-                        .to_string(),
+                    "b.added_at > (strftime('%s', 'now') - CAST(? AS INTEGER) * 86400)".to_string(),
                 );
                 param_values.push(rule.value.clone());
             }
@@ -547,17 +847,14 @@ pub fn get_books_in_collection(conn: &Connection, collection_id: &str) -> Result
                         join_clauses.push(format!(
                             "JOIN reading_progress {alias} ON {alias}.book_id = b.id"
                         ));
-                        where_clauses.push(format!(
-                            "{alias}.chapter_index < b.total_chapters - 1"
-                        ));
+                        where_clauses.push(format!("{alias}.chapter_index < b.total_chapters - 1"));
                     }
                     "finished" => {
                         join_clauses.push(format!(
                             "JOIN reading_progress {alias} ON {alias}.book_id = b.id"
                         ));
-                        where_clauses.push(format!(
-                            "{alias}.chapter_index >= b.total_chapters - 1"
-                        ));
+                        where_clauses
+                            .push(format!("{alias}.chapter_index >= b.total_chapters - 1"));
                     }
                     _ => {}
                 }
@@ -627,7 +924,10 @@ mod tests {
         let books = list_books(&conn).unwrap();
         assert_eq!(books.len(), 1);
 
-        let updated = Book { title: "Updated Title".to_string(), ..book };
+        let updated = Book {
+            title: "Updated Title".to_string(),
+            ..book
+        };
         update_book(&conn, &updated).unwrap();
         let fetched2 = get_book(&conn, "book-1").unwrap().unwrap();
         assert_eq!(fetched2.title, "Updated Title");
@@ -654,7 +954,11 @@ mod tests {
         assert_eq!(fetched.chapter_index, 3);
         assert!((fetched.scroll_position - 0.5).abs() < f64::EPSILON);
 
-        let updated = ReadingProgress { chapter_index: 5, scroll_position: 0.8, ..progress };
+        let updated = ReadingProgress {
+            chapter_index: 5,
+            scroll_position: 0.8,
+            ..progress
+        };
         upsert_reading_progress(&conn, &updated).unwrap();
         let fetched2 = get_reading_progress(&conn, "book-2").unwrap().unwrap();
         assert_eq!(fetched2.chapter_index, 5);
@@ -667,7 +971,10 @@ mod tests {
         insert_book(&conn, &book).unwrap();
 
         // Second insert with same file_path must fail.
-        let duplicate = Book { id: "book-dup-2".to_string(), ..book };
+        let duplicate = Book {
+            id: "book-dup-2".to_string(),
+            ..book
+        };
         assert!(insert_book(&conn, &duplicate).is_err());
     }
 
@@ -738,10 +1045,16 @@ mod tests {
         delete_book(&conn, "book-cascade").unwrap();
 
         let bookmarks = list_bookmarks(&conn, "book-cascade").unwrap();
-        assert!(bookmarks.is_empty(), "bookmarks should be deleted via cascade");
+        assert!(
+            bookmarks.is_empty(),
+            "bookmarks should be deleted via cascade"
+        );
 
         let rp = get_reading_progress(&conn, "book-cascade").unwrap();
-        assert!(rp.is_none(), "reading_progress should be deleted via cascade");
+        assert!(
+            rp.is_none(),
+            "reading_progress should be deleted via cascade"
+        );
     }
 
     fn sample_collection(id: &str, coll_type: CollectionType) -> Collection {
@@ -806,7 +1119,11 @@ mod tests {
         // Second insert must succeed silently (INSERT OR IGNORE), not error.
         add_book_to_collection(&conn, "book-dup-coll", "coll-dup").unwrap();
         let books = get_books_in_collection(&conn, "coll-dup").unwrap();
-        assert_eq!(books.len(), 1, "duplicate insert should be ignored, not doubled");
+        assert_eq!(
+            books.len(),
+            1,
+            "duplicate insert should be ignored, not doubled"
+        );
     }
 
     #[test]
@@ -823,6 +1140,9 @@ mod tests {
 
         delete_book(&conn, "book-cas-coll").unwrap();
         let after = get_books_in_collection(&conn, "coll-cas").unwrap();
-        assert!(after.is_empty(), "book_collections row should be deleted via cascade");
+        assert!(
+            after.is_empty(),
+            "book_collections row should be deleted via cascade"
+        );
     }
 }

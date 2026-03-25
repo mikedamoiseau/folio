@@ -1,5 +1,9 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
+
+const MIN_ZOOM = 0.5;
+const MAX_ZOOM = 4;
+const ZOOM_STEP = 0.25;
 
 interface PageViewerProps {
   bookId: string;
@@ -20,6 +24,14 @@ export default function PageViewer({
   const [imageData, setImageData] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  // Zoom & pan state
+  const [zoom, setZoom] = useState(1);
+  const [pan, setPan] = useState({ x: 0, y: 0 });
+  const isPanning = useRef(false);
+  const panStart = useRef({ x: 0, y: 0 });
+  const panOffset = useRef({ x: 0, y: 0 });
+  const containerRef = useRef<HTMLDivElement>(null);
 
   const loadPage = useCallback(
     async (index: number) => {
@@ -50,6 +62,9 @@ export default function PageViewer({
       if (index < 0 || index >= totalPages) return;
       setPageIndex(index);
       onPageChange?.(index);
+      // Reset zoom/pan on page change
+      setZoom(1);
+      setPan({ x: 0, y: 0 });
     },
     [totalPages, onPageChange]
   );
@@ -57,19 +72,106 @@ export default function PageViewer({
   const prevPage = useCallback(() => goTo(pageIndex - 1), [pageIndex, goTo]);
   const nextPage = useCallback(() => goTo(pageIndex + 1), [pageIndex, goTo]);
 
+  const zoomIn = useCallback(() => {
+    setZoom((z) => Math.min(MAX_ZOOM, Math.round((z + ZOOM_STEP) * 100) / 100));
+  }, []);
+  const zoomOut = useCallback(() => {
+    setZoom((z) => {
+      const next = Math.max(MIN_ZOOM, Math.round((z - ZOOM_STEP) * 100) / 100);
+      if (next <= 1) setPan({ x: 0, y: 0 });
+      return next;
+    });
+  }, []);
+  const zoomReset = useCallback(() => {
+    setZoom(1);
+    setPan({ x: 0, y: 0 });
+  }, []);
+
+  // Keyboard: arrows for pages, +/- for zoom
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
       if (e.key === "ArrowLeft") prevPage();
       else if (e.key === "ArrowRight") nextPage();
+      else if ((e.key === "=" || e.key === "+") && (e.metaKey || e.ctrlKey)) {
+        e.preventDefault();
+        zoomIn();
+      } else if (e.key === "-" && (e.metaKey || e.ctrlKey)) {
+        e.preventDefault();
+        zoomOut();
+      } else if (e.key === "0" && (e.metaKey || e.ctrlKey)) {
+        e.preventDefault();
+        zoomReset();
+      }
     }
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [prevPage, nextPage]);
+  }, [prevPage, nextPage, zoomIn, zoomOut, zoomReset]);
+
+  // Mouse wheel: Ctrl+scroll = zoom, plain scroll = page nav
+  const wheelCooldown = useRef(false);
+  const handleWheel = useCallback(
+    (e: React.WheelEvent) => {
+      if (e.ctrlKey || e.metaKey) {
+        e.preventDefault();
+        if (e.deltaY < 0) zoomIn();
+        else zoomOut();
+        return;
+      }
+      // When zoomed in, let native scroll handle panning
+      if (zoom > 1) return;
+      if (wheelCooldown.current || loading) return;
+      if (Math.abs(e.deltaY) < 10) return;
+      wheelCooldown.current = true;
+      if (e.deltaY > 0) nextPage();
+      else prevPage();
+      setTimeout(() => { wheelCooldown.current = false; }, 300);
+    },
+    [nextPage, prevPage, loading, zoomIn, zoomOut, zoom]
+  );
+
+  // Pan with mouse drag when zoomed in
+  const handleMouseDown = useCallback(
+    (e: React.MouseEvent) => {
+      if (zoom <= 1) return;
+      e.preventDefault();
+      isPanning.current = true;
+      panStart.current = { x: e.clientX, y: e.clientY };
+      panOffset.current = { ...pan };
+    },
+    [zoom, pan]
+  );
+
+  const handleMouseMove = useCallback(
+    (e: React.MouseEvent) => {
+      if (!isPanning.current) return;
+      const dx = e.clientX - panStart.current.x;
+      const dy = e.clientY - panStart.current.y;
+      setPan({
+        x: panOffset.current.x + dx,
+        y: panOffset.current.y + dy,
+      });
+    },
+    []
+  );
+
+  const handleMouseUp = useCallback(() => {
+    isPanning.current = false;
+  }, []);
+
+  const isZoomed = zoom !== 1;
 
   return (
     <div className="flex flex-col flex-1 min-h-0 bg-paper">
       {/* Page image area */}
-      <div className="flex-1 flex items-center justify-center overflow-hidden px-4 py-4">
+      <div
+        ref={containerRef}
+        className={`flex-1 flex items-center justify-center overflow-hidden px-4 py-4 ${isZoomed ? "cursor-grab active:cursor-grabbing" : ""}`}
+        onWheel={handleWheel}
+        onMouseDown={handleMouseDown}
+        onMouseMove={handleMouseMove}
+        onMouseUp={handleMouseUp}
+        onMouseLeave={handleMouseUp}
+      >
         {loading ? (
           <div className="text-sm text-ink-muted">Loading page…</div>
         ) : error ? (
@@ -80,7 +182,10 @@ export default function PageViewer({
           <img
             src={imageData}
             alt={`Page ${pageIndex + 1} of ${totalPages}`}
-            className="max-h-full max-w-full object-contain rounded-sm shadow-[0_4px_24px_-4px_rgba(44,34,24,0.18)]"
+            className="max-h-full max-w-full object-contain rounded-sm shadow-[0_4px_24px_-4px_rgba(44,34,24,0.18)] transition-transform duration-150"
+            style={{
+              transform: `scale(${zoom}) translate(${pan.x / zoom}px, ${pan.y / zoom}px)`,
+            }}
             draggable={false}
           />
         ) : null}
@@ -95,13 +200,7 @@ export default function PageViewer({
           aria-label="Previous page"
         >
           <svg width="14" height="14" viewBox="0 0 20 20" fill="none">
-            <path
-              d="M12 4l-6 6 6 6"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
+            <path d="M12 4l-6 6 6 6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
           </svg>
           Prev
         </button>
@@ -109,6 +208,33 @@ export default function PageViewer({
         <span className="flex-1 text-center text-xs text-ink-muted tabular-nums">
           Page {pageIndex + 1} / {totalPages}
         </span>
+
+        {/* Zoom controls */}
+        <div className="flex items-center gap-1">
+          <button
+            onClick={zoomOut}
+            disabled={zoom <= MIN_ZOOM}
+            className="w-7 h-7 flex items-center justify-center text-xs text-ink-muted hover:text-ink bg-warm-subtle hover:bg-warm-border rounded-lg transition-colors disabled:opacity-30"
+            aria-label="Zoom out"
+          >
+            −
+          </button>
+          <button
+            onClick={zoomReset}
+            className={`px-2 h-7 text-[11px] tabular-nums rounded-lg transition-colors ${isZoomed ? "text-accent bg-accent-light hover:bg-accent-light/80 font-medium" : "text-ink-muted bg-warm-subtle"}`}
+            title="Reset zoom"
+          >
+            {Math.round(zoom * 100)}%
+          </button>
+          <button
+            onClick={zoomIn}
+            disabled={zoom >= MAX_ZOOM}
+            className="w-7 h-7 flex items-center justify-center text-xs text-ink-muted hover:text-ink bg-warm-subtle hover:bg-warm-border rounded-lg transition-colors disabled:opacity-30"
+            aria-label="Zoom in"
+          >
+            +
+          </button>
+        </div>
 
         <button
           onClick={nextPage}
@@ -118,13 +244,7 @@ export default function PageViewer({
         >
           Next
           <svg width="14" height="14" viewBox="0 0 20 20" fill="none">
-            <path
-              d="M8 4l6 6-6 6"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
+            <path d="M8 4l6 6-6 6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
           </svg>
         </button>
       </div>

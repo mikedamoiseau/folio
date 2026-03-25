@@ -65,6 +65,20 @@ pub struct Bookmark {
     pub created_at: i64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Highlight {
+    pub id: String,
+    pub book_id: String,
+    pub chapter_index: u32,
+    pub text: String,
+    pub color: String,
+    pub note: Option<String>,
+    pub start_offset: u32,
+    pub end_offset: u32,
+    pub created_at: i64,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub enum CollectionType {

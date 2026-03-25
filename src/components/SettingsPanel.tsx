@@ -36,15 +36,21 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
 
   // Library folder state
   const [libraryFolder, setLibraryFolder] = useState<string | null>(null);
+  const [libraryInfo, setLibraryInfo] = useState<LibraryFolderInfo | null>(null);
   const [migrationDialog, setMigrationDialog] = useState<MigrationDialogState | null>(null);
   const [dontMoveFiles, setDontMoveFiles] = useState(false);
   const [migrating, setMigrating] = useState(false);
   const [migrationError, setMigrationError] = useState<string | null>(null);
+  const [exporting, setExporting] = useState(false);
+  const [backupMessage, setBackupMessage] = useState<string | null>(null);
+  const [includeFiles, setIncludeFiles] = useState(false);
 
   const loadLibraryFolder = useCallback(async () => {
     try {
       const folder = await invoke<string>("get_library_folder");
       setLibraryFolder(folder);
+      const info = await invoke<LibraryFolderInfo>("get_library_folder_info");
+      setLibraryInfo(info);
     } catch (e) {
       console.error('Failed to load library folder:', e);
     }
@@ -143,6 +149,44 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
     if (migrating) return;
     setMigrationDialog(null);
     setMigrationError(null);
+  };
+
+  const handleExport = async () => {
+    try {
+      const dest = await openFolderPicker({
+        directory: true,
+      });
+      if (!dest) return;
+      setExporting(true);
+      setBackupMessage(null);
+      const folder = typeof dest === "string" ? dest : dest[0];
+      const path = `${folder}/folio-backup-${new Date().toISOString().slice(0, 10)}.zip`;
+      await invoke("export_library", { destPath: path, includeFiles });
+      setBackupMessage(`Exported to ${path}`);
+    } catch (err) {
+      setBackupMessage(`Export failed: ${err}`);
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  const handleImportBackup = async () => {
+    try {
+      const selected = await openFolderPicker({
+        multiple: false,
+        filters: [{ name: "Backup", extensions: ["zip"] }],
+      } as Parameters<typeof openFolderPicker>[0]);
+      if (!selected) return;
+      setExporting(true);
+      setBackupMessage(null);
+      const path = typeof selected === "string" ? selected : selected[0];
+      const count = await invoke<number>("import_library_backup", { archivePath: path });
+      setBackupMessage(`Imported ${count} books from backup.`);
+    } catch (err) {
+      setBackupMessage(`Import failed: ${err}`);
+    } finally {
+      setExporting(false);
+    }
   };
 
   if (!open) return null;
@@ -294,6 +338,11 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                 <p className="text-sm text-ink break-all leading-snug font-mono">
                   {libraryFolder ?? "—"}
                 </p>
+                {libraryInfo && (
+                  <p className="text-xs text-ink-muted mt-1.5">
+                    {libraryInfo.file_count} {libraryInfo.file_count === 1 ? "book" : "books"} · {formatBytes(libraryInfo.total_size_bytes)}
+                  </p>
+                )}
               </div>
               <button
                 onClick={handleChangeFolder}
@@ -301,6 +350,49 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
               >
                 Change folder…
               </button>
+            </div>
+          </section>
+
+          {/* Backup & Restore */}
+          <section>
+            <h3 className="text-xs font-semibold uppercase tracking-wider text-ink-muted mb-3">
+              Backup & Restore
+            </h3>
+            <div className="space-y-2">
+              <label className="flex items-start gap-2.5 cursor-pointer px-1">
+                <input
+                  type="checkbox"
+                  checked={includeFiles}
+                  onChange={(e) => setIncludeFiles(e.target.checked)}
+                  disabled={exporting}
+                  className="mt-0.5 accent-accent"
+                />
+                <span className="text-sm text-ink leading-snug">
+                  Include book files
+                  <span className="block text-xs text-ink-muted mt-0.5">
+                    {includeFiles
+                      ? "Full backup — metadata + all book files (can be large)"
+                      : "Metadata only — progress, collections, tags, highlights (small)"}
+                  </span>
+                </span>
+              </label>
+              <button
+                onClick={handleExport}
+                disabled={exporting}
+                className="w-full px-3 py-2 text-sm text-ink-muted hover:text-ink bg-warm-subtle hover:bg-warm-border rounded-xl transition-colors text-left disabled:opacity-40"
+              >
+                {exporting ? "Working…" : "Export library backup…"}
+              </button>
+              <button
+                onClick={handleImportBackup}
+                disabled={exporting}
+                className="w-full px-3 py-2 text-sm text-ink-muted hover:text-ink bg-warm-subtle hover:bg-warm-border rounded-xl transition-colors text-left disabled:opacity-40"
+              >
+                Import from backup…
+              </button>
+              {backupMessage && (
+                <p className="text-xs text-ink-muted px-1">{backupMessage}</p>
+              )}
             </div>
           </section>
         </div>

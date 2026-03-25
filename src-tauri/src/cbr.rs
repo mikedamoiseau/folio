@@ -1,72 +1,113 @@
-// CBR (Comic Book RAR) format support
-//
-// CBR files are RAR archives containing sequentially-named image files
-// (JPEG, PNG, WebP, etc.).  Extracting them requires a native RAR library.
-//
-// # Enabling full CBR support
-//
-// Two crates can provide RAR extraction; both need a system library:
-//
-//   Option A — `compress-tools` (recommended)
-//     Wraps libarchive, which supports RAR + many other formats.
-//     Install the system library:
-//       macOS:  brew install libarchive
-//               export PKG_CONFIG_PATH="$(brew --prefix libarchive)/lib/pkgconfig"
-//       Linux:  sudo apt install libarchive-dev   (Debian/Ubuntu)
-//               sudo dnf install libarchive-devel (Fedora)
-//       Windows: download the pre-built binaries from https://libarchive.org/
-//     Then add to Cargo.toml:
-//       compress-tools = "0.14"
-//     And replace the stub functions below with real extraction code.
-//
-//   Option B — `unrar`
-//     Bindings to the official UnRAR library.
-//       macOS:  brew install unrar
-//       Linux:  sudo apt install libunrar-dev
-//     Then add to Cargo.toml:
-//       unrar = "0.5"
-//
-// Until a native library is available, every function returns a descriptive
-// Err so the frontend can surface a helpful message to the user.
+use base64::{engine::general_purpose, Engine as _};
+use std::path::Path;
 
-/// Metadata extracted during CBR import.
+fn is_image(name: &str) -> bool {
+    let lower = name.to_lowercase();
+    lower.ends_with(".jpg")
+        || lower.ends_with(".jpeg")
+        || lower.ends_with(".png")
+        || lower.ends_with(".webp")
+        || lower.ends_with(".gif")
+}
+
+fn mime_for(name: &str) -> &'static str {
+    let lower = name.to_lowercase();
+    if lower.ends_with(".png") {
+        "image/png"
+    } else if lower.ends_with(".webp") {
+        "image/webp"
+    } else if lower.ends_with(".gif") {
+        "image/gif"
+    } else {
+        "image/jpeg"
+    }
+}
+
+/// Collect sorted image entry names from a RAR archive.
+fn collect_image_names(path: &str) -> Result<Vec<String>, String> {
+    let archive = unrar::Archive::new(path)
+        .open_for_listing()
+        .map_err(|e| format!("Cannot open RAR archive: {e}"))?;
+
+    let mut names: Vec<String> = archive
+        .filter_map(|entry| {
+            let entry = entry.ok()?;
+            let name = entry.filename.to_string_lossy().to_string();
+            if entry.is_directory() || name.starts_with("__MACOSX/") || !is_image(&name) {
+                return None;
+            }
+            Some(name)
+        })
+        .collect();
+
+    names.sort();
+    Ok(names)
+}
+
 pub struct CbrMeta {
     pub title: String,
     pub page_count: u32,
 }
 
-/// Try to import a CBR file and return its metadata.
-///
-/// Returns `Err` until a native RAR library is configured — see the module
-/// documentation above for setup instructions.
 pub fn import_cbr(path: &str) -> Result<CbrMeta, String> {
-    let _ = path;
-    Err(
-        "CBR support requires libarchive (macOS: brew install libarchive). \
-         See src-tauri/src/cbr.rs for full setup instructions."
-            .to_string(),
-    )
+    let images = collect_image_names(path)?;
+    if images.is_empty() {
+        return Err("CBR archive contains no supported image files".to_string());
+    }
+    let title = Path::new(path)
+        .file_stem()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_else(|| "Unknown".to_string());
+    Ok(CbrMeta {
+        title,
+        page_count: images.len() as u32,
+    })
 }
 
-/// Return the number of pages in a CBR file.
 pub fn get_page_count(path: &str) -> Result<u32, String> {
-    let _ = path;
-    Err(
-        "CBR support requires libarchive (macOS: brew install libarchive). \
-         See src-tauri/src/cbr.rs for full setup instructions."
-            .to_string(),
-    )
+    let images = collect_image_names(path)?;
+    Ok(images.len() as u32)
 }
 
-/// Return the base64-encoded image for the given page index.
-///
-/// The returned string includes a `data:image/<mime>;base64,` prefix suitable
-/// for use directly as an HTML `<img src>` value.
 pub fn get_page_image(path: &str, page_index: u32) -> Result<String, String> {
-    let _ = (path, page_index);
-    Err(
-        "CBR support requires libarchive (macOS: brew install libarchive). \
-         See src-tauri/src/cbr.rs for full setup instructions."
-            .to_string(),
-    )
+    let images = collect_image_names(path)?;
+    let target_name = images
+        .get(page_index as usize)
+        .ok_or_else(|| {
+            format!(
+                "Page index {page_index} out of range (total pages: {})",
+                images.len()
+            )
+        })?
+        .clone();
+
+    // Open for processing — walk entries until we find the target, then .read() it
+    let archive = unrar::Archive::new(path)
+        .open_for_processing()
+        .map_err(|e| format!("Cannot open RAR archive: {e}"))?;
+
+    let mut cursor = archive;
+    loop {
+        let header = cursor
+            .read_header()
+            .map_err(|e| format!("Error reading RAR entry: {e}"))?;
+        match header {
+            None => return Err(format!("Page '{}' not found in archive", target_name)),
+            Some(entry) => {
+                let name = entry.entry().filename.to_string_lossy().to_string();
+                if name == target_name {
+                    let (data, _) = entry
+                        .read()
+                        .map_err(|e| format!("Cannot extract page: {e}"))?;
+                    let mime = mime_for(&target_name);
+                    let encoded = general_purpose::STANDARD.encode(&data);
+                    return Ok(format!("data:{mime};base64,{encoded}"));
+                } else {
+                    cursor = entry
+                        .skip()
+                        .map_err(|e| format!("Error skipping RAR entry: {e}"))?;
+                }
+            }
+        }
+    }
 }

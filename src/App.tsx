@@ -1,14 +1,26 @@
-import { useState } from "react";
-import { BrowserRouter, Routes, Route, Link, useLocation } from "react-router-dom";
+import { useState, useCallback } from "react";
+import { BrowserRouter, Routes, Route, Link, useLocation, useNavigate } from "react-router-dom";
 import { ThemeProvider } from "./context/ThemeContext";
 import SettingsPanel from "./components/SettingsPanel";
+import ReadingStats from "./components/ReadingStats";
+import ProfileSwitcher from "./components/ProfileSwitcher";
+import CatalogBrowser from "./components/CatalogBrowser";
 import Library from "./screens/Library";
 import Reader from "./screens/Reader";
 
 function AppShell() {
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [statsOpen, setStatsOpen] = useState(false);
+  const [profileKey, setProfileKey] = useState(0);
+  const [catalogOpen, setCatalogOpen] = useState(false);
   const location = useLocation();
+  const navigate = useNavigate();
   const inReader = location.pathname.startsWith("/reader/");
+
+  const handleProfileSwitch = useCallback(() => {
+    navigate("/");
+    setProfileKey((k) => k + 1); // force Library remount
+  }, [navigate]);
 
   return (
     <div className="flex flex-col h-screen bg-paper text-ink">
@@ -21,7 +33,27 @@ function AppShell() {
           >
             Folio
           </Link>
+          <ProfileSwitcher onSwitch={handleProfileSwitch} />
           <div className="flex-1" />
+          <button
+            onClick={() => setStatsOpen(true)}
+            className="p-2 text-ink-muted hover:text-ink transition-colors duration-150 rounded-lg hover:bg-warm-subtle"
+            aria-label="Reading stats"
+          >
+            <svg width="18" height="18" viewBox="0 0 20 20" fill="none">
+              <path d="M3 17V9h3v8H3zM8.5 17V5h3v12h-3zM14 17V1h3v16h-3z" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" />
+            </svg>
+          </button>
+          <button
+            onClick={() => setCatalogOpen(true)}
+            className="p-2 text-ink-muted hover:text-ink transition-colors duration-150 rounded-lg hover:bg-warm-subtle"
+            aria-label="Browse catalogs"
+            title="Browse book catalogs"
+          >
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+              <path d="M12 6.042A8.967 8.967 0 006 3.75c-1.052 0-2.062.18-3 .512v14.25A8.987 8.987 0 016 18c2.305 0 4.408.867 6 2.292m0-14.25a8.966 8.966 0 016-2.292c1.052 0 2.062.18 3 .512v14.25A8.987 8.987 0 0018 18a8.967 8.967 0 00-6 2.292m0-14.25v14.25" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </button>
           <button
             onClick={() => setSettingsOpen(true)}
             className="p-2 text-ink-muted hover:text-ink transition-colors duration-150 rounded-lg hover:bg-warm-subtle"
@@ -45,7 +77,7 @@ function AppShell() {
 
       <main className="flex-1 overflow-auto min-h-0">
         <Routes>
-          <Route path="/" element={<Library />} />
+          <Route path="/" element={<Library key={profileKey} />} />
           <Route
             path="/reader/:bookId"
             element={
@@ -56,6 +88,14 @@ function AppShell() {
           />
         </Routes>
       </main>
+
+      {statsOpen && <ReadingStats onClose={() => setStatsOpen(false)} />}
+      {catalogOpen && (
+        <CatalogBrowser
+          onClose={() => setCatalogOpen(false)}
+          onBookImported={() => setProfileKey((k) => k + 1)}
+        />
+      )}
 
       <SettingsPanel
         open={settingsOpen}

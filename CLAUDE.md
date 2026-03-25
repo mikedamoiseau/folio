@@ -1,0 +1,100 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## Build & Development Commands
+
+```bash
+npm install                  # Install frontend dependencies
+npm run tauri dev            # Full dev environment (Rust + React with HMR on port 1420)
+npm run tauri build          # Production build for current platform
+npm run type-check           # TypeScript type checking only
+npm run build                # Frontend build (type-check + Vite)
+```
+
+Rust-only commands (run from `src-tauri/`):
+```bash
+cargo test                   # Run Rust unit tests
+cargo clippy -- -D warnings  # Lint Rust code (CI-enforced)
+cargo fmt --check            # Check Rust formatting (CI-enforced)
+```
+
+**Note:** No frontend test framework is configured yet. Rust tests use `tempfile` for DB fixtures.
+
+## Architecture
+
+**Tauri v2 desktop app** (branded "Folio") — Rust backend + React 19 frontend communicating via IPC. Frontend uses Tailwind CSS v4, react-router-dom for routing, and DOMPurify for HTML sanitization.
+
+### Frontend → Backend Communication
+
+All data flows through Tauri's `invoke()` IPC bridge:
+
+```typescript
+// Frontend
+const books = await invoke<Book[]>("get_library");
+```
+
+```rust
+// Backend (src-tauri/src/commands.rs)
+#[tauri::command]
+pub async fn get_library(state: State<'_, AppState>) -> Result<Vec<Book>, String>
+```
+
+Commands are registered in `src-tauri/src/lib.rs` via `invoke_handler`. Every new command must be added there.
+
+### Backend Layers
+
+- **commands.rs** — Tauri command handlers (the API surface). Route to format-specific parsers and DB functions.
+- **db.rs** — All SQLite CRUD operations. Functions receive `&Connection` from an r2d2 pool, never manage connection lifecycle.
+- **models.rs** — Shared structs: `Book`, `ReadingProgress`, `Bookmark`, `Collection`, etc.
+- **epub.rs / pdf.rs / cbz.rs / cbr.rs** — Format-specific parsing. Each extracts metadata, content, and cover images.
+
+### Frontend Layers
+
+- **screens/** — `Library.tsx` (book grid, collections, import) and `Reader.tsx` (reading view for all formats).
+- **components/** — Reusable UI: `BookCard`, `CollectionsSidebar`, `SettingsPanel`, `ImportButton`, etc.
+- **context/ThemeContext.tsx** — Light/dark mode, font size, font family. Persisted to localStorage.
+
+### State Management
+
+- **Frontend:** React hooks + Context (ThemeContext). No external state library.
+- **Backend:** `AppState` holds a `DbPool` (r2d2 connection pool to SQLite).
+- **Database:** SQLite at the platform app data directory (`library.db`). Schema auto-migrates on startup via `db.rs::run_schema()`.
+
+### Book Storage
+
+Books are copied into an app-managed library folder (default `~/Documents/ebook-reader/`). The `file_path` in the DB points to the library-internal copy. Covers are extracted to `{app_data_dir}/covers/{book_id}/`.
+
+## Adding Common Things
+
+**New Tauri command:** Define in `commands.rs` → register in `lib.rs` `invoke_handler` → call via `invoke()` in React.
+
+**New book format:** Create module (e.g., `mobi.rs`) → add `BookFormat` enum variant in `models.rs` → add match arm in `import_book` in `commands.rs`.
+
+**Database schema change:** Add migration SQL to `db.rs::run_schema()` (additive — use `CREATE TABLE IF NOT EXISTS` / `ALTER TABLE` patterns).
+
+## Format Support
+
+| Format | Parser | Content Type |
+|--------|--------|-------------|
+| EPUB | zip + quick-xml + ammonia | Sanitized HTML chapters |
+| PDF | pdfium-render | Base64-encoded page images |
+| CBZ | zip | Sorted image files |
+| CBR | *(stub — needs libarchive)* | Sorted image files |
+
+PDF support requires pdfium binaries bundled in `src-tauri/resources/`. The `scripts/download-pdfium.sh` script fetches them. Run `./scripts/download-pdfium.sh` before first `npm run tauri dev` — PDF import/rendering won't work without it.
+
+## Security
+
+- EPUB HTML is sanitized server-side (ammonia) and client-side (DOMPurify)
+- CSP configured in `tauri.conf.json`
+- Asset protocol scoped to `$APPDATA/**`
+- File deduplication uses SHA-256 hash (`file_hash` column in `books` table)
+
+## CI
+
+GitHub Actions runs on push to main and PRs:
+- `cargo clippy -- -D warnings`, `cargo fmt --check`, `cargo test` (Ubuntu)
+- `npm run type-check`
+- Pdfium binaries downloaded from `bblanchon/pdfium-binaries` in CI
+- Release workflow (`release.yml`) builds platform binaries on tag push

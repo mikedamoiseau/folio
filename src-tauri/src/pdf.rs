@@ -50,13 +50,14 @@ fn filename_stem(path: &str) -> String {
         .to_string()
 }
 
-fn read_metadata_tag(
-    document: &PdfDocument,
-    tag: PdfDocumentMetadataTagType,
-) -> Option<String> {
+fn read_metadata_tag(document: &PdfDocument, tag: PdfDocumentMetadataTagType) -> Option<String> {
     let entry: PdfDocumentMetadataTag = document.metadata().get(tag)?;
     let s = entry.value().to_string();
-    if s.trim().is_empty() { None } else { Some(s) }
+    if s.trim().is_empty() {
+        None
+    } else {
+        Some(s)
+    }
 }
 
 // ---- Public API ----
@@ -73,8 +74,8 @@ pub fn import_pdf(path: &str) -> Result<PdfMeta, String> {
     let title = read_metadata_tag(&document, PdfDocumentMetadataTagType::Title)
         .unwrap_or_else(|| filename_stem(path));
 
-    let author = read_metadata_tag(&document, PdfDocumentMetadataTagType::Author)
-        .unwrap_or_default();
+    let author =
+        read_metadata_tag(&document, PdfDocumentMetadataTagType::Author).unwrap_or_default();
 
     Ok(PdfMeta {
         title,

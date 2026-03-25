@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 
 // ---- Types ----
 
@@ -165,6 +166,24 @@ function CollectionRow({
       {collection.type === "automated" && (
         <span className="text-[10px] text-ink-muted opacity-60 mr-1">auto</span>
       )}
+      {/* Share button */}
+      <button
+        className="opacity-0 group-hover:opacity-100 p-0.5 text-ink-muted hover:text-accent transition-all"
+        aria-label={`Share ${collection.name}`}
+        onClick={async (e) => {
+          e.stopPropagation();
+          try {
+            const md = await invoke<string>("export_collection_markdown", { collectionId: collection.id });
+            await navigator.clipboard.writeText(md);
+          } catch { /* ignore */ }
+        }}
+        title="Copy as Markdown"
+      >
+        <svg width="13" height="13" viewBox="0 0 20 20" fill="none">
+          <path d="M13 3H7a2 2 0 00-2 2v10a2 2 0 002 2h6a2 2 0 002-2V5a2 2 0 00-2-2z" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" />
+          <path d="M9 1h4a2 2 0 012 2v10" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      </button>
       {/* Delete button */}
       <button
         className="opacity-0 group-hover:opacity-100 p-0.5 text-ink-muted hover:text-accent transition-all"
@@ -461,12 +480,6 @@ export default function CollectionsSidebar({
 
   return (
     <>
-      {/* Backdrop */}
-      <div
-        className="fixed inset-0 bg-ink/20 z-10 animate-fade-in"
-        onClick={onClose}
-      />
-
       {/* Sidebar */}
       <aside className="fixed left-0 top-0 bottom-0 w-64 bg-surface border-r border-warm-border z-20 flex flex-col shadow-[4px_0_24px_-4px_rgba(44,34,24,0.12)] animate-slide-in-left">
         {showCreateForm ? (

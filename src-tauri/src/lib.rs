@@ -4,6 +4,7 @@ pub mod commands;
 pub mod db;
 pub mod epub;
 pub mod models;
+pub mod opds;
 pub mod pdf;
 
 use commands::AppState;
@@ -23,8 +24,9 @@ pub fn run() {
                 let conn = pool.get().expect("Failed to get DB connection on startup");
                 let library_folder = match db::get_setting(&conn, "library_folder") {
                     Ok(Some(f)) => f,
-                    _ => commands::default_library_folder()
-                        .expect("Cannot determine home directory"),
+                    _ => {
+                        commands::default_library_folder().expect("Cannot determine home directory")
+                    }
                 };
                 let _ = std::fs::create_dir_all(&library_folder);
             }
@@ -37,21 +39,69 @@ pub fn run() {
             #[cfg(target_os = "windows")]
             let pdfium_lib_name = "pdfium.dll";
 
-            let pdfium_path = app
-                .path()
-                .resource_dir()
-                .ok()
-                .map(|d| d.join(pdfium_lib_name))
-                .filter(|p| p.exists());
+            let pdfium_path = app.path().resource_dir().ok().and_then(|d| {
+                // Bundled resources preserve their relative path from tauri.conf.json
+                let nested = d.join("resources").join(pdfium_lib_name);
+                if nested.exists() {
+                    return Some(nested);
+                }
+                // Fallback: flat layout (e.g. custom bundling)
+                let flat = d.join(pdfium_lib_name);
+                if flat.exists() {
+                    return Some(flat);
+                }
+                None
+            });
 
             pdf::set_pdfium_library_path(pdfium_path);
 
-            app.manage(AppState { db: pool });
+            // Load existing profile databases
+            let data_dir = app.path().app_data_dir()?;
+            let mut profiles = std::collections::HashMap::new();
+            if let Ok(entries) = std::fs::read_dir(&data_dir) {
+                for entry in entries.flatten() {
+                    let fname = entry.file_name().to_string_lossy().to_string();
+                    if let Some(name) = fname
+                        .strip_prefix("library-")
+                        .and_then(|s| s.strip_suffix(".db"))
+                    {
+                        if let Ok(p) = db::create_pool(&entry.path()) {
+                            profiles.insert(name.to_string(), p);
+                        }
+                    }
+                }
+            }
+
+            app.manage(AppState {
+                db: pool,
+                profiles: std::sync::Mutex::new(profiles),
+                active_profile: std::sync::Mutex::new("default".to_string()),
+                data_dir,
+            });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             commands::import_book,
             commands::get_library,
+            commands::get_recently_read,
+            commands::update_book_metadata,
+            commands::get_all_tags,
+            commands::get_book_tags,
+            commands::add_tag_to_book,
+            commands::remove_tag_from_book,
+            commands::scan_folder_for_books,
+            commands::add_highlight,
+            commands::get_highlights,
+            commands::get_chapter_highlights,
+            commands::update_highlight_note,
+            commands::remove_highlight,
+            commands::export_highlights_markdown,
+            commands::record_reading_session,
+            commands::get_reading_stats,
+            commands::export_collection_markdown,
+            commands::export_collection_json,
+            commands::export_library,
+            commands::import_library_backup,
             commands::get_book,
             commands::remove_book,
             commands::get_chapter_content,
@@ -74,6 +124,15 @@ pub fn run() {
             commands::get_library_folder,
             commands::get_library_folder_info,
             commands::set_library_folder,
+            commands::get_profiles,
+            commands::create_profile,
+            commands::switch_profile,
+            commands::delete_profile,
+            commands::get_opds_catalogs,
+            commands::add_opds_catalog,
+            commands::remove_opds_catalog,
+            commands::browse_opds,
+            commands::download_opds_book,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

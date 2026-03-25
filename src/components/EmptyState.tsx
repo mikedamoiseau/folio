@@ -1,8 +1,9 @@
 interface EmptyStateProps {
   onImport: () => void;
+  onImportFolder: () => void;
 }
 
-export default function EmptyState({ onImport }: EmptyStateProps) {
+export default function EmptyState({ onImport, onImportFolder }: EmptyStateProps) {
   return (
     <div className="flex flex-col items-center justify-center h-full max-w-xs mx-auto text-center gap-0">
       {/* Book stack illustration */}
@@ -37,20 +38,29 @@ export default function EmptyState({ onImport }: EmptyStateProps) {
       <h2 className="font-serif text-2xl font-semibold text-ink mb-2">
         Your shelf awaits
       </h2>
-      <p className="text-sm text-ink-muted mb-7 leading-relaxed">
-        Add your first EPUB and begin your reading journey.
+      <p className="text-sm text-ink-muted mb-7 leading-relaxed whitespace-nowrap">
+        Add your first book and begin your reading journey.
       </p>
 
-      <button
-        type="button"
-        onClick={onImport}
-        className="px-5 py-2.5 bg-accent text-white text-sm font-medium rounded-xl hover:bg-accent-hover focus:outline-2 focus:outline-accent focus:outline-offset-2 active:scale-[0.97] transition-all duration-150 shadow-sm"
-      >
-        Add a book
-      </button>
+      <div className="flex items-center gap-3">
+        <button
+          type="button"
+          onClick={onImport}
+          className="px-5 py-2.5 bg-accent text-white text-sm font-medium rounded-xl hover:bg-accent-hover focus:outline-2 focus:outline-accent focus:outline-offset-2 active:scale-[0.97] transition-all duration-150 shadow-sm"
+        >
+          Add books
+        </button>
+        <button
+          type="button"
+          onClick={onImportFolder}
+          className="px-5 py-2.5 text-sm font-medium text-ink-muted bg-warm-subtle hover:bg-warm-border rounded-xl transition-colors"
+        >
+          Import folder
+        </button>
+      </div>
 
       <p className="mt-5 text-xs text-ink-muted">
-        or drag &amp; drop an .epub file anywhere
+        or drag &amp; drop files anywhere
       </p>
     </div>
   );
