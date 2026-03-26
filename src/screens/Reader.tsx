@@ -5,6 +5,7 @@ import { useTheme, MIN_FONT_SIZE, MAX_FONT_SIZE } from "../context/ThemeContext"
 import PageViewer from "../components/PageViewer";
 import KeyboardShortcutsHelp from "../components/KeyboardShortcutsHelp";
 import HighlightsPanel, { HIGHLIGHT_COLORS } from "../components/HighlightsPanel";
+import { friendlyError } from "../lib/errors";
 
 // ---- Types matching Rust backend ----
 
@@ -126,7 +127,7 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
         }
       } catch (err) {
         if (!cancelled) {
-          setError(String(err));
+          setError(friendlyError(String(err)));
         }
       } finally {
         if (!cancelled) {
@@ -163,7 +164,7 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
         }
       } catch (err) {
         if (!cancelled) {
-          setChapterError(String(err));
+          setChapterError(friendlyError(String(err)));
         }
       }
     }

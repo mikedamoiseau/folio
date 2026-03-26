@@ -14,6 +14,7 @@ import CollectionsSidebar, {
 import EditBookDialog from "../components/EditBookDialog";
 import KeyboardShortcutsHelp from "../components/KeyboardShortcutsHelp";
 import { startDrag, endDrag, isDragging, getDraggedCoverSrc, subscribe } from "../lib/dragState";
+import { friendlyError } from "../lib/errors";
 
 interface Book {
   id: string;
@@ -109,7 +110,7 @@ export default function Library() {
       setProgressMap(Object.fromEntries(progData.map((d) => [d.id, d.pct])));
       setLastReadMap(Object.fromEntries(progData.map((d) => [d.id, d.lastRead])));
     } catch (err) {
-      setError(String(err));
+      setError(friendlyError(String(err)));
     } finally {
       setLoaded(true);
     }
@@ -165,7 +166,7 @@ export default function Library() {
         await invoke("remove_book", { bookId });
         await loadBooks(activeCollectionIdRef.current);
       } catch (err) {
-        setError(String(err));
+        setError(friendlyError(String(err)));
       }
     },
     [loadBooks]
@@ -189,7 +190,7 @@ export default function Library() {
           if (msg.includes("duplicate") || msg.includes("already")) {
             results.duplicates++;
           } else {
-            results.errors.push(`${paths[i].split("/").pop()}: ${msg}`);
+            results.errors.push(`${paths[i].split("/").pop()}: ${friendlyError(msg)}`);
           }
         }
       }
@@ -229,7 +230,7 @@ export default function Library() {
       }
       await importFiles(files);
     } catch (err) {
-      setError(String(err));
+      setError(friendlyError(String(err)));
       setImporting(false);
     }
   }, [importFiles]);
@@ -252,7 +253,7 @@ export default function Library() {
       const paths = Array.isArray(selected) ? selected : [selected];
       await importFiles(paths);
     } catch (err) {
-      setError(String(err));
+      setError(friendlyError(String(err)));
     }
   }, [importFiles]);
 
@@ -263,7 +264,7 @@ export default function Library() {
       await invoke("download_opds_book", { downloadUrl: url });
       await loadBooks(activeCollectionIdRef.current);
     } catch (err) {
-      setError(String(err));
+      setError(friendlyError(String(err)));
     } finally {
       setImporting(false);
     }
@@ -390,7 +391,7 @@ export default function Library() {
   }, [loadBooks]);
 
   const handleStartScan = useCallback(async () => {
-    try { await invoke("start_scan"); } catch (err) { setError(String(err)); }
+    try { await invoke("start_scan"); } catch (err) { setError(friendlyError(String(err))); }
   }, []);
   const handleCancelScan = useCallback(async () => {
     try { await invoke("cancel_scan"); } catch {}
@@ -694,7 +695,7 @@ export default function Library() {
                                 await loadBooks(activeCollectionIdRef.current);
                                 setDiscoverBooks((prev) => prev.filter((e) => e.id !== entry.id));
                               } catch (err) {
-                                setError(String(err));
+                                setError(friendlyError(String(err)));
                               }
                             }}
                             className="mt-1 text-[10px] font-medium text-accent hover:text-accent-hover transition-colors"
@@ -895,7 +896,7 @@ export default function Library() {
             const updated = await invoke<Collection[]>("get_collections");
             setCollections(updated);
           } catch (err) {
-            setError(String(err));
+            setError(friendlyError(String(err)));
           }
         }}
         onDelete={async (id: string) => {
@@ -905,7 +906,7 @@ export default function Library() {
             setCollections(updated);
             if (activeCollectionIdRef.current === id) setActiveCollectionId(null);
           } catch (err) {
-            setError(String(err));
+            setError(friendlyError(String(err)));
           }
         }}
         onDropBook={async (bookId: string, collectionId: string) => {
@@ -915,7 +916,7 @@ export default function Library() {
               await loadBooks(collectionId);
             }
           } catch (err) {
-            setError(String(err));
+            setError(friendlyError(String(err)));
           }
         }}
       />
