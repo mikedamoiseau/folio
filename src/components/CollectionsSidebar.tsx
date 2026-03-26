@@ -1,4 +1,5 @@
 import { useState, useRef } from "react";
+import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 
 // ---- Types ----
@@ -496,10 +497,8 @@ export default function CollectionsSidebar({
     setShowCreateForm(false);
   };
 
-  return (
-    <>
-      {/* Sidebar */}
-      <aside className="fixed left-0 top-0 bottom-0 w-64 bg-surface border-r border-warm-border z-20 flex flex-col shadow-[4px_0_24px_-4px_rgba(44,34,24,0.12)] animate-slide-in-left">
+  return createPortal(
+    <aside className="fixed left-0 top-0 bottom-0 w-64 bg-surface border-r border-warm-border z-20 flex flex-col shadow-[4px_0_24px_-4px_rgba(44,34,24,0.12)] animate-slide-in-left">
         {showCreateForm ? (
           <CreateForm
             onSave={handleCreate}
@@ -576,7 +575,7 @@ export default function CollectionsSidebar({
             </div>
           </>
         )}
-      </aside>
-    </>
+    </aside>,
+    document.body,
   );
 }
