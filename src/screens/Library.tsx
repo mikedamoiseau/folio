@@ -61,6 +61,8 @@ export default function Library() {
   const [importProgress, setImportProgress] = useState<{ current: number; total: number } | null>(null);
   const importCancelledRef = useRef(false);
   const [editingBook, setEditingBook] = useState<Book | null>(null);
+  const [scanningBookId, setScanningBookId] = useState<string | null>(null);
+  const [scanToast, setScanToast] = useState<{ message: string; isError: boolean } | null>(null);
   const [showShortcuts, setShowShortcuts] = useState(false);
   const searchRef = useRef<HTMLInputElement>(null);
   const [scanProgress, setScanProgress] = useState<{ current: number; total: number; bookTitle: string; status: string } | null>(null);
@@ -756,11 +758,21 @@ export default function Library() {
                         }
                       : undefined
                   }
+                  isScanning={scanningBookId === book.id}
                   onScanForMetadata={async (id) => {
+                    setScanningBookId(id);
+                    setScanToast(null);
                     try {
                       await invoke("scan_single_book", { bookId: id });
                       await loadBooks(activeCollectionIdRef.current);
-                    } catch {}
+                      setScanToast({ message: "Metadata updated", isError: false });
+                    } catch (err) {
+                      const msg = String(err);
+                      setScanToast({ message: msg.includes("No match") ? "No metadata found" : "Scan failed", isError: true });
+                    } finally {
+                      setScanningBookId(null);
+                      setTimeout(() => setScanToast(null), 2500);
+                    }
                   }}
                 />
               </div>
@@ -943,6 +955,13 @@ export default function Library() {
             <div className="animate-spin h-8 w-8 border-2 border-blue-500 border-t-transparent rounded-full" />
             <p className="text-sm text-gray-600 dark:text-gray-300">Importing books...</p>
           </div>
+        </div>
+      )}
+
+      {/* Scan toast */}
+      {scanToast && (
+        <div className={`fixed bottom-4 right-4 z-50 px-3 py-2 rounded-lg text-xs shadow-lg ${scanToast.isError ? "bg-red-50 text-red-700 dark:bg-red-900/30 dark:text-red-300" : "bg-green-50 text-green-700 dark:bg-green-900/30 dark:text-green-300"}`}>
+          {scanToast.message}
         </div>
       )}
     </div>
