@@ -114,6 +114,20 @@ pub async fn import_book(
         }
     }
 
+    // Step 2b: File size guard — reject files over 500 MB to prevent indefinite hangs
+    // caused by corrupted or pathologically large archives.
+    {
+        const MAX_IMPORT_SIZE_BYTES: u64 = 500 * 1024 * 1024;
+        let metadata =
+            std::fs::metadata(&file_path).map_err(|e| format!("Cannot stat file: {e}"))?;
+        if metadata.len() > MAX_IMPORT_SIZE_BYTES {
+            let size_mb = metadata.len() / (1024 * 1024);
+            return Err(format!(
+                "File is too large ({size_mb} MB). Maximum supported import size is 500 MB."
+            ));
+        }
+    }
+
     // Detect format from file extension and route to the appropriate parser.
     let extension = std::path::Path::new(&file_path)
         .extension()
