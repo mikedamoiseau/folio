@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef, useSyncExternalStore } from "
 import { useNavigate } from "react-router-dom";
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
+import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import BookCard from "../components/BookCard";
 import EmptyState from "../components/EmptyState";
@@ -56,6 +57,7 @@ export default function Library() {
   const [editingBook, setEditingBook] = useState<Book | null>(null);
   const [showShortcuts, setShowShortcuts] = useState(false);
   const searchRef = useRef<HTMLInputElement>(null);
+  const [scanProgress, setScanProgress] = useState<{ current: number; total: number; bookTitle: string; status: string } | null>(null);
 
   // Recently read
   const [recentlyRead, setRecentlyRead] = useState<Book[]>([]);
@@ -369,6 +371,31 @@ export default function Library() {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [showShortcuts, collectionsOpen, editingBook]);
 
+  useEffect(() => {
+    let unlistenProgress: (() => void) | undefined;
+    let unlistenAutoStart: (() => void) | undefined;
+    listen<{ current: number; total: number; bookTitle: string; status: string }>("scan-progress", (event) => {
+      const p = event.payload;
+      if (p.status === "done" || p.status === "cancelled") {
+        setScanProgress(null);
+        loadBooks(activeCollectionIdRef.current);
+      } else {
+        setScanProgress(p);
+      }
+    }).then((fn) => { unlistenProgress = fn; });
+    listen<number>("scan-auto-start", () => {
+      invoke("start_scan").catch(() => {});
+    }).then((fn) => { unlistenAutoStart = fn; });
+    return () => { unlistenProgress?.(); unlistenAutoStart?.(); };
+  }, [loadBooks]);
+
+  const handleStartScan = useCallback(async () => {
+    try { await invoke("start_scan"); } catch (err) { setError(String(err)); }
+  }, []);
+  const handleCancelScan = useCallback(async () => {
+    try { await invoke("cancel_scan"); } catch {}
+  }, []);
+
   const hasBooks = books.length > 0;
   const hasResults = filtered.length > 0;
 
@@ -457,6 +484,29 @@ export default function Library() {
             <option value="finished">Finished</option>
           </select>
 
+          {scanProgress ? (
+            <div className="flex items-center gap-2 text-xs text-ink-muted">
+              <svg className="animate-spin w-3.5 h-3.5 text-accent" viewBox="0 0 24 24" fill="none">
+                <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" className="opacity-25" />
+                <path d="M4 12a8 8 0 018-8" stroke="currentColor" strokeWidth="3" strokeLinecap="round" className="opacity-75" />
+              </svg>
+              <span className="truncate max-w-[200px]">
+                Enriching {scanProgress.current}/{scanProgress.total}: {scanProgress.bookTitle}
+              </span>
+              <button onClick={handleCancelScan} className="shrink-0 text-ink-muted hover:text-ink transition-colors" title="Cancel scan">
+                <svg width="14" height="14" viewBox="0 0 20 20" fill="none">
+                  <path d="M15 5L5 15M5 5l10 10" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                </svg>
+              </button>
+            </div>
+          ) : (
+            <button type="button" onClick={handleStartScan} title="Scan library for metadata"
+              className="shrink-0 p-2 rounded-lg text-ink-muted hover:text-ink hover:bg-warm-subtle transition-colors" aria-label="Scan library">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+                <path d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+            </button>
+          )}
           <ImportButton
             onImportFiles={handleImport}
             onImportFolder={handleImportFolder}
@@ -693,6 +743,12 @@ export default function Library() {
                         }
                       : undefined
                   }
+                  onScanForMetadata={async (id) => {
+                    try {
+                      await invoke("scan_single_book", { bookId: id });
+                      await loadBooks(activeCollectionIdRef.current);
+                    } catch {}
+                  }}
                 />
               </div>
             ))}

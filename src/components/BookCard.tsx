@@ -13,6 +13,7 @@ interface BookCardProps {
   onDelete?: (id: string) => void;
   onEdit?: (id: string) => void;
   onRemoveFromCollection?: () => void;
+  onScanForMetadata?: (id: string) => void;
 }
 
 export default function BookCard({
@@ -26,6 +27,7 @@ export default function BookCard({
   onDelete,
   onEdit,
   onRemoveFromCollection,
+  onScanForMetadata,
 }: BookCardProps) {
   const coverSrc = coverPath ? convertFileSrc(coverPath) : null;
   const [confirming, setConfirming] = useState(false);
@@ -127,6 +129,17 @@ export default function BookCard({
               >
                 <svg width="10" height="10" viewBox="0 0 24 24" fill="none">
                   <path d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+              </button>
+            )}
+            {onScanForMetadata && (
+              <button
+                onClick={(e) => { e.stopPropagation(); onScanForMetadata(id); }}
+                className="w-7 h-7 rounded-full bg-ink/60 hover:bg-accent text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-all"
+                title="Scan for metadata"
+              >
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none">
+                  <path d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" />
                 </svg>
               </button>
             )}
