@@ -5,6 +5,7 @@ import { useTheme, MIN_FONT_SIZE, MAX_FONT_SIZE } from "../context/ThemeContext"
 import PageViewer from "../components/PageViewer";
 import KeyboardShortcutsHelp from "../components/KeyboardShortcutsHelp";
 import HighlightsPanel, { HIGHLIGHT_COLORS } from "../components/HighlightsPanel";
+import BookmarksPanel from "../components/BookmarksPanel";
 import { friendlyError } from "../lib/errors";
 
 // ---- Types matching Rust backend ----
@@ -58,6 +59,8 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
   const [scrollProgress, setScrollProgress] = useState(0);
   const [showShortcuts, setShowShortcuts] = useState(false);
   const [highlightsOpen, setHighlightsOpen] = useState(false);
+  const [bookmarksOpen, setBookmarksOpen] = useState(false);
+  const [bookmarkToast, setBookmarkToast] = useState(false);
   const [selectionPopup, setSelectionPopup] = useState<{ x: number; y: number; text: string; startOffset: number; endOffset: number } | null>(null);
 
   // Do Not Disturb mode
@@ -427,6 +430,21 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
     [totalChapters]
   );
 
+  const navigateToBookmark = useCallback(
+    (targetChapter: number, targetScrollPosition: number) => {
+      setBookmarksOpen(false);
+      if (targetChapter !== chapterIndex) {
+        setChapterIndex(targetChapter);
+        savedScrollPosition.current = targetScrollPosition;
+        restoringScroll.current = targetChapter;
+      } else if (scrollContainerRef.current) {
+        const container = scrollContainerRef.current;
+        container.scrollTop = targetScrollPosition * container.scrollHeight;
+      }
+    },
+    [chapterIndex]
+  );
+
   const prevChapter = useCallback(() => {
     goToChapter(chapterIndex - 1);
   }, [chapterIndex, goToChapter]);
@@ -445,6 +463,8 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
         chapterIndex,
         scrollPosition: scrollProgress,
       });
+      setBookmarkToast(true);
+      setTimeout(() => setBookmarkToast(false), 1500);
     } catch {
       // silently fail
     }
@@ -459,7 +479,7 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
       if (settingsOpen && (e.key === "Escape" || e.key === "Tab")) return;
 
       // Don't navigate chapters when any panel is open
-      if ((settingsOpen || tocOpen) && (e.key === "ArrowLeft" || e.key === "ArrowRight")) return;
+      if ((settingsOpen || tocOpen || bookmarksOpen) && (e.key === "ArrowLeft" || e.key === "ArrowRight")) return;
 
       if (e.key === "ArrowLeft") {
         prevChapter();
@@ -476,6 +496,7 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
       } else if (e.key === "Escape") {
         if (dndMode) { setDndMode(false); return; }
         if (showShortcuts) setShowShortcuts(false);
+        else if (bookmarksOpen) setBookmarksOpen(false);
         else if (tocOpen) setTocOpen(false);
         else navigate("/");
       }
@@ -483,7 +504,7 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [prevChapter, nextChapter, addBookmarkAtCurrentPosition, showShortcuts, tocOpen, dndMode, settingsOpen, navigate]);
+  }, [prevChapter, nextChapter, addBookmarkAtCurrentPosition, showShortcuts, tocOpen, bookmarksOpen, dndMode, settingsOpen, navigate]);
 
   // ---- TOC focus trap ----
 
@@ -625,6 +646,27 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
         />
       )}
 
+      {/* Bookmarks Panel */}
+      {bookmarksOpen && (
+        <BookmarksPanel
+          bookId={bookId!}
+          currentChapterIndex={chapterIndex}
+          toc={toc}
+          onClose={() => setBookmarksOpen(false)}
+          onNavigate={navigateToBookmark}
+        />
+      )}
+
+      {/* Bookmark toast */}
+      {bookmarkToast && (
+        <div className="fixed top-16 left-1/2 -translate-x-1/2 z-50 px-4 py-2 bg-ink/90 text-white text-sm rounded-lg shadow-lg flex items-center gap-2 animate-fade-in">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z" />
+          </svg>
+          Bookmark saved
+        </div>
+      )}
+
       {/* TOC Sidebar — slide-in animation */}
       {tocOpen && (
         <>
@@ -711,6 +753,18 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
           >
             <svg width="17" height="17" viewBox="0 0 24 24" fill="none">
               <path d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </button>
+
+          {/* Bookmarks button */}
+          <button
+            onClick={() => setBookmarksOpen((prev) => !prev)}
+            className={`p-1.5 transition-colors rounded-lg focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 ${bookmarksOpen ? "text-accent bg-accent-light" : "text-ink-muted hover:text-ink hover:bg-warm-subtle"}`}
+            aria-label="Bookmarks"
+            title="Bookmarks"
+          >
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M19 21l-7-3.5L5 21V5a2 2 0 012-2h10a2 2 0 012 2z" />
             </svg>
           </button>
 
