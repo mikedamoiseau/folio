@@ -120,6 +120,8 @@ fn run_schema(conn: &Connection) -> Result<()> {
     let _ = conn.execute_batch("ALTER TABLE books ADD COLUMN isbn TEXT;");
     let _ = conn.execute_batch("ALTER TABLE books ADD COLUMN openlibrary_key TEXT;");
 
+    let _ = conn.execute_batch("ALTER TABLE books ADD COLUMN enrichment_status TEXT;");
+
     // Incremental backup: ensure updated_at columns exist
     let _ =
         conn.execute_batch("ALTER TABLE books ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0;");
@@ -170,8 +172,8 @@ pub fn init_db(db_path: &Path) -> Result<Connection> {
 
 pub fn insert_book(conn: &Connection, book: &Book) -> Result<()> {
     conn.execute(
-        "INSERT INTO books (id, title, author, file_path, cover_path, total_chapters, added_at, format, file_hash, description, genres, rating, isbn, openlibrary_key, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+        "INSERT INTO books (id, title, author, file_path, cover_path, total_chapters, added_at, format, file_hash, description, genres, rating, isbn, openlibrary_key, updated_at, enrichment_status)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
         params![
             book.id,
             book.title,
@@ -188,6 +190,7 @@ pub fn insert_book(conn: &Connection, book: &Book) -> Result<()> {
             book.isbn,
             book.openlibrary_key,
             book.added_at,
+            book.enrichment_status,
         ],
     )?;
     Ok(())
@@ -288,6 +291,24 @@ pub fn update_book_enrichment(
         params![book_id, description, genres, rating, isbn, openlibrary_key, now],
     )?;
     Ok(())
+}
+
+pub fn set_enrichment_status(conn: &Connection, book_id: &str, status: &str) -> Result<()> {
+    conn.execute(
+        "UPDATE books SET enrichment_status = ?2 WHERE id = ?1",
+        params![book_id, status],
+    )?;
+    Ok(())
+}
+
+pub fn list_unenriched_books(conn: &Connection) -> Result<Vec<Book>> {
+    let sql = format!(
+        "SELECT {} FROM books WHERE enrichment_status IS NULL OR enrichment_status = 'queued' ORDER BY added_at DESC",
+        BOOK_COLUMNS
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map([], row_to_book)?;
+    rows.collect()
 }
 
 pub fn update_book_file_path(conn: &Connection, book_id: &str, new_path: &str) -> Result<()> {
@@ -416,10 +437,10 @@ pub fn delete_bookmark(conn: &Connection, id: &str) -> Result<()> {
 // --- Collections CRUD ---
 
 /// Standard column list for SELECT queries on books.
-const BOOK_COLUMNS: &str = "id, title, author, file_path, cover_path, total_chapters, added_at, format, file_hash, description, genres, rating, isbn, openlibrary_key";
+const BOOK_COLUMNS: &str = "id, title, author, file_path, cover_path, total_chapters, added_at, format, file_hash, description, genres, rating, isbn, openlibrary_key, enrichment_status";
 
 /// Standard column list prefixed with table alias `b.`.
-const BOOK_COLUMNS_B: &str = "b.id, b.title, b.author, b.file_path, b.cover_path, b.total_chapters, b.added_at, b.format, b.file_hash, b.description, b.genres, b.rating, b.isbn, b.openlibrary_key";
+const BOOK_COLUMNS_B: &str = "b.id, b.title, b.author, b.file_path, b.cover_path, b.total_chapters, b.added_at, b.format, b.file_hash, b.description, b.genres, b.rating, b.isbn, b.openlibrary_key, b.enrichment_status";
 
 fn row_to_book(row: &rusqlite::Row) -> rusqlite::Result<Book> {
     let format_str: String = row.get(7)?;
@@ -440,6 +461,7 @@ fn row_to_book(row: &rusqlite::Row) -> rusqlite::Result<Book> {
         rating: row.get(11)?,
         isbn: row.get(12)?,
         openlibrary_key: row.get(13)?,
+        enrichment_status: row.get(14)?,
     })
 }
 
@@ -927,6 +949,7 @@ mod tests {
             rating: None,
             isbn: None,
             openlibrary_key: None,
+            enrichment_status: None,
         }
     }
 
@@ -1224,5 +1247,23 @@ mod tests {
             )
             .unwrap();
         assert_eq!(val, 100);
+    }
+
+    #[test]
+    fn test_books_have_enrichment_status() {
+        let dir = tempfile::tempdir().unwrap();
+        let conn = init_db(dir.path().join("test.db").as_path()).unwrap();
+        conn.execute(
+            "INSERT INTO books (id, title, author, file_path, total_chapters, added_at, format, updated_at) VALUES ('t1', 'T', 'A', '/t', 0, 100, 'epub', 100)",
+            [],
+        ).unwrap();
+        let val: Option<String> = conn
+            .query_row(
+                "SELECT enrichment_status FROM books WHERE id = 't1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(val.is_none());
     }
 }
