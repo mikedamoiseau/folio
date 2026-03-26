@@ -119,21 +119,9 @@ export default function BookCard({
           </span>
         )}
 
-        {/* Action buttons — hover reveal */}
+        {/* Metadata action buttons — top-left, vertical stack */}
         {!confirming && (
-          <div className="absolute top-2 left-2 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity duration-150">
-            {onDelete && (
-              <button
-                type="button"
-                onClick={handleDeleteClick}
-                aria-label={`Remove ${title}`}
-                className="w-6 h-6 flex items-center justify-center rounded-full bg-ink/60 text-paper hover:bg-red-600 focus:opacity-100 focus:outline-none"
-              >
-                <svg width="10" height="10" viewBox="0 0 24 24" fill="none">
-                  <path d="M18 6L6 18M6 6l12 12" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" />
-                </svg>
-              </button>
-            )}
+          <div className="absolute top-2 left-2 flex flex-col gap-1 opacity-0 group-hover:opacity-100 transition-opacity duration-150">
             {onEdit && (
               <button
                 type="button"
@@ -148,8 +136,9 @@ export default function BookCard({
             )}
             {onScanForMetadata && (
               <button
+                type="button"
                 onClick={(e) => { e.stopPropagation(); if (!isScanning) onScanForMetadata(id); }}
-                className={`w-7 h-7 rounded-full bg-ink/60 hover:bg-accent text-white flex items-center justify-center transition-all ${isScanning ? "opacity-100" : "opacity-0 group-hover:opacity-100"}`}
+                className={`w-6 h-6 rounded-full bg-ink/60 hover:bg-accent text-white flex items-center justify-center transition-all ${isScanning ? "opacity-100" : "opacity-0 group-hover:opacity-100"}`}
                 title="Scan for metadata"
                 disabled={isScanning}
               >
@@ -178,14 +167,28 @@ export default function BookCard({
           </div>
         )}
 
-        {/* Remove from collection button — bottom-right, only when in a manual collection */}
+        {/* Delete button — bottom-right, separate */}
+        {onDelete && !confirming && (
+          <button
+            type="button"
+            onClick={handleDeleteClick}
+            aria-label={`Remove ${title}`}
+            className="absolute bottom-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity duration-150 w-6 h-6 flex items-center justify-center rounded-full bg-ink/60 text-paper hover:bg-red-600 focus:opacity-100 focus:outline-none"
+          >
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="none">
+              <path d="M18 6L6 18M6 6l12 12" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" />
+            </svg>
+          </button>
+        )}
+
+        {/* Remove from collection button — bottom-left, only when in a manual collection */}
         {onRemoveFromCollection && !confirming && (
           <button
             type="button"
             onClick={(e) => { e.stopPropagation(); onRemoveFromCollection(); }}
             aria-label="Remove from collection"
             title="Remove from collection"
-            className="absolute bottom-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity duration-150 w-6 h-6 flex items-center justify-center rounded-full bg-ink/60 text-paper hover:bg-accent focus:opacity-100 focus:outline-none"
+            className="absolute bottom-2 left-2 opacity-0 group-hover:opacity-100 transition-opacity duration-150 w-6 h-6 flex items-center justify-center rounded-full bg-ink/60 text-paper hover:bg-accent focus:opacity-100 focus:outline-none"
           >
             <svg width="11" height="11" viewBox="0 0 24 24" fill="none">
               <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="2.5" />
