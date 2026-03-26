@@ -61,6 +61,8 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
   const [highlightsOpen, setHighlightsOpen] = useState(false);
   const [bookmarksOpen, setBookmarksOpen] = useState(false);
   const [bookmarkToast, setBookmarkToast] = useState(false);
+  const [saveIndicator, setSaveIndicator] = useState(false);
+  const [saveError, setSaveError] = useState(false);
   const [selectionPopup, setSelectionPopup] = useState<{ x: number; y: number; text: string; startOffset: number; endOffset: number } | null>(null);
 
   // Do Not Disturb mode
@@ -208,8 +210,12 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
           chapterIndex,
           scrollPosition: scrollPos ?? scrollProgress,
         });
+        setSaveIndicator(true);
+        setTimeout(() => setSaveIndicator(false), 1500);
       } catch {
-        // Silently fail — don't interrupt reading
+        // Show brief error indicator — don't interrupt reading
+        setSaveError(true);
+        setTimeout(() => setSaveError(false), 2000);
       }
     },
     [bookId, chapterIndex, scrollProgress]
@@ -664,6 +670,20 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
             <path d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z" />
           </svg>
           Bookmark saved
+        </div>
+      )}
+
+      {/* Progress saved indicator */}
+      {saveIndicator && (
+        <div className="fixed bottom-4 right-4 z-50 text-xs text-gray-400 dark:text-gray-500 transition-opacity">
+          Progress saved
+        </div>
+      )}
+
+      {/* Progress save error indicator */}
+      {saveError && (
+        <div className="fixed bottom-4 right-4 z-50 text-xs text-amber-500 dark:text-amber-400 transition-opacity">
+          Progress not saved
         </div>
       )}
 
