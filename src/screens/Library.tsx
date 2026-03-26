@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useSyncExternalStore } from "react";
 import { useNavigate } from "react-router-dom";
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
@@ -12,7 +12,7 @@ import CollectionsSidebar, {
 } from "../components/CollectionsSidebar";
 import EditBookDialog from "../components/EditBookDialog";
 import KeyboardShortcutsHelp from "../components/KeyboardShortcutsHelp";
-import { startDrag, endDrag } from "../lib/dragState";
+import { startDrag, endDrag, isDragging, getDraggedCoverSrc, subscribe } from "../lib/dragState";
 
 interface Book {
   id: string;
@@ -295,11 +295,19 @@ export default function Library() {
       }
     });
 
-  // Clean up drag state on any mouseup (in case user releases outside a collection)
+  // Drag ghost: track mouse position and drag state
+  const bookDragging = useSyncExternalStore(subscribe, isDragging);
+  const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
+
   useEffect(() => {
     const handleGlobalMouseUp = () => endDrag();
+    const handleMouseMove = (e: MouseEvent) => setMousePos({ x: e.clientX, y: e.clientY });
     window.addEventListener("mouseup", handleGlobalMouseUp);
-    return () => window.removeEventListener("mouseup", handleGlobalMouseUp);
+    window.addEventListener("mousemove", handleMouseMove);
+    return () => {
+      window.removeEventListener("mouseup", handleGlobalMouseUp);
+      window.removeEventListener("mousemove", handleMouseMove);
+    };
   }, []);
 
   // Keyboard shortcuts
@@ -563,8 +571,9 @@ export default function Library() {
             {filtered.map((book) => (
               <div
                 key={book.id}
-                onMouseDown={() => startDrag(book.id)}
+                onMouseDown={() => startDrag(book.id, book.cover_path ? convertFileSrc(book.cover_path) : undefined)}
                 onMouseUp={() => endDrag()}
+                onDragStart={(e) => e.preventDefault()}
               >
                 <BookCard
                   id={book.id}
@@ -667,6 +676,29 @@ export default function Library() {
               Drop to add books
             </span>
           </div>
+        </div>
+      )}
+
+      {/* Drag ghost thumbnail */}
+      {bookDragging && (
+        <div
+          className="fixed z-50 pointer-events-none opacity-75"
+          style={{ left: mousePos.x - 40, top: mousePos.y - 55 }}
+        >
+          {getDraggedCoverSrc() ? (
+            <img
+              src={getDraggedCoverSrc()!}
+              alt=""
+              className="w-20 h-[110px] object-cover rounded shadow-lg"
+            />
+          ) : (
+            <div className="w-20 h-[110px] rounded shadow-lg bg-warm-subtle flex items-center justify-center">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" className="text-ink-muted">
+                <path d="M4 19.5A2.5 2.5 0 016.5 17H20" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                <path d="M6.5 2H20v20H6.5A2.5 2.5 0 014 19.5v-15A2.5 2.5 0 016.5 2z" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+            </div>
+          )}
         </div>
       )}
 

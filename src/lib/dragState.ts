@@ -4,20 +4,27 @@
  * can access it without React context overhead.
  */
 let draggedBookId: string | null = null;
+let draggedCoverSrc: string | null = null;
 let listeners: Array<() => void> = [];
 
-export function startDrag(bookId: string) {
+export function startDrag(bookId: string, coverSrc?: string) {
   draggedBookId = bookId;
+  draggedCoverSrc = coverSrc ?? null;
   listeners.forEach((fn) => fn());
 }
 
 export function endDrag() {
   draggedBookId = null;
+  draggedCoverSrc = null;
   listeners.forEach((fn) => fn());
 }
 
 export function getDraggedBookId(): string | null {
   return draggedBookId;
+}
+
+export function getDraggedCoverSrc(): string | null {
+  return draggedCoverSrc;
 }
 
 export function isDragging(): boolean {
