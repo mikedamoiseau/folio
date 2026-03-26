@@ -406,6 +406,7 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                   onChange={(e) => setFontSize(Number(e.target.value))}
                   className="w-full accent-accent"
                   aria-label="Font size"
+                  aria-valuetext={`${fontSize} pixels`}
                 />
                 <span className="text-xs text-ink-muted tabular-nums">
                   {fontSize}px
