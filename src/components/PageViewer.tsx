@@ -27,11 +27,19 @@ export default function PageViewer({
 
   // Zoom & pan state
   const [zoom, setZoom] = useState(1);
-  const [pan, setPan] = useState({ x: 0, y: 0 });
+  const panRef = useRef({ x: 0, y: 0 });
   const isPanning = useRef(false);
   const panStart = useRef({ x: 0, y: 0 });
   const panOffset = useRef({ x: 0, y: 0 });
   const containerRef = useRef<HTMLDivElement>(null);
+  const imgRef = useRef<HTMLImageElement>(null);
+
+  // Apply transform directly to the DOM (no React re-render)
+  const applyTransform = useCallback((z: number, p: { x: number; y: number }) => {
+    if (imgRef.current) {
+      imgRef.current.style.transform = `scale(${z}) translate(${p.x / z}px, ${p.y / z}px)`;
+    }
+  }, []);
 
   const loadPage = useCallback(
     async (index: number) => {
@@ -64,7 +72,7 @@ export default function PageViewer({
       onPageChange?.(index);
       // Reset zoom/pan on page change
       setZoom(1);
-      setPan({ x: 0, y: 0 });
+      panRef.current = { x: 0, y: 0 };
     },
     [totalPages, onPageChange]
   );
@@ -78,14 +86,18 @@ export default function PageViewer({
   const zoomOut = useCallback(() => {
     setZoom((z) => {
       const next = Math.max(MIN_ZOOM, Math.round((z - ZOOM_STEP) * 100) / 100);
-      if (next <= 1) setPan({ x: 0, y: 0 });
+      if (next <= 1) {
+        panRef.current = { x: 0, y: 0 };
+        applyTransform(next, panRef.current);
+      }
       return next;
     });
-  }, []);
+  }, [applyTransform]);
   const zoomReset = useCallback(() => {
+    panRef.current = { x: 0, y: 0 };
     setZoom(1);
-    setPan({ x: 0, y: 0 });
-  }, []);
+    applyTransform(1, panRef.current);
+  }, [applyTransform]);
 
   // Keyboard: arrows for pages, +/- for zoom
   useEffect(() => {
@@ -136,9 +148,9 @@ export default function PageViewer({
       e.preventDefault();
       isPanning.current = true;
       panStart.current = { x: e.clientX, y: e.clientY };
-      panOffset.current = { ...pan };
+      panOffset.current = { ...panRef.current };
     },
-    [zoom, pan]
+    [zoom]
   );
 
   const handleMouseMove = useCallback(
@@ -146,12 +158,13 @@ export default function PageViewer({
       if (!isPanning.current) return;
       const dx = e.clientX - panStart.current.x;
       const dy = e.clientY - panStart.current.y;
-      setPan({
+      panRef.current = {
         x: panOffset.current.x + dx,
         y: panOffset.current.y + dy,
-      });
+      };
+      applyTransform(zoom, panRef.current);
     },
-    []
+    [zoom, applyTransform]
   );
 
   const handleMouseUp = useCallback(() => {
@@ -180,11 +193,12 @@ export default function PageViewer({
           </div>
         ) : imageData ? (
           <img
+            ref={imgRef}
             src={imageData}
             alt={`Page ${pageIndex + 1} of ${totalPages}`}
-            className="max-h-full max-w-full object-contain rounded-sm shadow-[0_4px_24px_-4px_rgba(44,34,24,0.18)] transition-transform duration-150"
+            className="max-h-full max-w-full object-contain rounded-sm shadow-[0_4px_24px_-4px_rgba(44,34,24,0.18)] will-change-transform"
             style={{
-              transform: `scale(${zoom}) translate(${pan.x / zoom}px, ${pan.y / zoom}px)`,
+              transform: `scale(${zoom}) translate(${panRef.current.x / zoom}px, ${panRef.current.y / zoom}px)`,
             }}
             draggable={false}
           />

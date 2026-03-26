@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { invoke } from "@tauri-apps/api/core";
 import DOMPurify from "dompurify";
@@ -279,9 +279,10 @@ export default function Reader({ onOpenSettings }: ReaderProps) {
       const startOffset = preRange.toString().length;
       const endOffset = startOffset + text.length;
 
+      const scrollTop = scrollContainerRef.current?.scrollTop ?? 0;
       setSelectionPopup({
         x: rect.left + rect.width / 2 - containerRect.left,
-        y: rect.top - containerRect.top - 8,
+        y: rect.top - containerRect.top + scrollTop - 8,
         text,
         startOffset,
         endOffset,
@@ -304,6 +305,77 @@ export default function Reader({ onOpenSettings }: ReaderProps) {
     };
   }, [chapterHtml]);
 
+  // ---- Highlights ----
+  interface ChapterHighlight { id: string; startOffset: number; endOffset: number; color: string }
+  const [highlights, setHighlights] = useState<ChapterHighlight[]>([]);
+
+  const loadHighlights = useCallback(async () => {
+    if (!bookId) return;
+    try {
+      const all = await invoke<Array<{ id: string; chapterIndex: number; startOffset: number; endOffset: number; color: string }>>("get_highlights", { bookId });
+      setHighlights(all.filter((h) => h.chapterIndex === chapterIndex));
+    } catch {
+      // ignore
+    }
+  }, [bookId, chapterIndex]);
+
+  useEffect(() => {
+    loadHighlights();
+  }, [loadHighlights]);
+
+  // Inject highlight <mark> tags into the sanitized HTML string.
+  // This survives React re-renders (unlike DOM manipulation).
+  const highlightedHtml = useMemo(() => {
+    const html = DOMPurify.sanitize(chapterHtml);
+    if (highlights.length === 0) return html;
+
+    // Walk the HTML string, tracking text offset (skip inside tags).
+    // Build a map: textOffset -> htmlIndex for insertion points.
+    const textToHtml: number[] = []; // textToHtml[textOffset] = htmlIndex
+    let inTag = false;
+    let textOffset = 0;
+    for (let i = 0; i < html.length; i++) {
+      if (html[i] === "<") { inTag = true; continue; }
+      if (html[i] === ">") { inTag = false; continue; }
+      if (!inTag) {
+        textToHtml[textOffset] = i;
+        textOffset++;
+      }
+    }
+    textToHtml[textOffset] = html.length; // sentinel
+
+    // Sort highlights by startOffset (stable for insertion)
+    const sorted = [...highlights].sort((a, b) => a.startOffset - b.startOffset);
+
+    // Build result by inserting <mark> and </mark> at the right HTML positions
+    type Insertion = { htmlIdx: number; tag: string; priority: number };
+    const insertions: Insertion[] = [];
+    for (const hl of sorted) {
+      const startIdx = textToHtml[hl.startOffset];
+      const endIdx = textToHtml[hl.endOffset];
+      if (startIdx == null || endIdx == null) continue;
+      insertions.push({
+        htmlIdx: startIdx,
+        tag: `<mark style="background-color:${hl.color}44;border-radius:2px;padding:1px 0">`,
+        priority: 0,
+      });
+      insertions.push({
+        htmlIdx: endIdx,
+        tag: "</mark>",
+        priority: 1,
+      });
+    }
+
+    // Sort by position (descending) so we insert from end to start without shifting indices
+    insertions.sort((a, b) => b.htmlIdx - a.htmlIdx || b.priority - a.priority);
+
+    let result = html;
+    for (const ins of insertions) {
+      result = result.slice(0, ins.htmlIdx) + ins.tag + result.slice(ins.htmlIdx);
+    }
+    return result;
+  }, [chapterHtml, highlights]);
+
   const handleCreateHighlight = useCallback(async (color: string) => {
     if (!bookId || !selectionPopup) return;
     try {
@@ -312,15 +384,35 @@ export default function Reader({ onOpenSettings }: ReaderProps) {
         chapterIndex,
         text: selectionPopup.text,
         color,
+        note: null,
         startOffset: selectionPopup.startOffset,
         endOffset: selectionPopup.endOffset,
       });
       setSelectionPopup(null);
       window.getSelection()?.removeAllRanges();
-    } catch {
-      // ignore
+      await loadHighlights();
+    } catch (err) {
+      console.error("Failed to create highlight:", err);
     }
-  }, [bookId, chapterIndex, selectionPopup]);
+  }, [bookId, chapterIndex, selectionPopup, loadHighlights]);
+
+  const handleClearHighlight = useCallback(async () => {
+    if (!bookId || !selectionPopup) return;
+    // Find highlights that overlap the selected range
+    const overlapping = highlights.filter(
+      (h) => h.startOffset < selectionPopup.endOffset && h.endOffset > selectionPopup.startOffset
+    );
+    try {
+      for (const h of overlapping) {
+        await invoke("remove_highlight", { highlightId: h.id });
+      }
+      setSelectionPopup(null);
+      window.getSelection()?.removeAllRanges();
+      await loadHighlights();
+    } catch (err) {
+      console.error("Failed to clear highlight:", err);
+    }
+  }, [bookId, selectionPopup, highlights, loadHighlights]);
 
   // ---- Navigation ----
 
@@ -707,6 +799,26 @@ export default function Reader({ onOpenSettings }: ReaderProps) {
                       aria-label={`Highlight ${c.name}`}
                     />
                   ))}
+                  {/* Clear highlight — only show if selection overlaps existing highlights */}
+                  {selectionPopup && highlights.some((h) => h.startOffset < selectionPopup.endOffset && h.endOffset > selectionPopup.startOffset) && (
+                    <button
+                      onClick={handleClearHighlight}
+                      className="w-5 h-5 rounded-full hover:scale-125 transition-transform border border-white/40 flex items-center justify-center"
+                      style={{ background: "repeating-conic-gradient(#ccc 0% 25%, transparent 0% 50%) 50% / 6px 6px" }}
+                      aria-label="Clear highlight"
+                      title="Remove highlight"
+                    />
+                  )}
+                  <div className="w-px h-4 bg-white/20 mx-0.5" />
+                  <button
+                    onClick={() => { setSelectionPopup(null); window.getSelection()?.removeAllRanges(); }}
+                    className="w-5 h-5 rounded-full hover:scale-125 transition-transform flex items-center justify-center text-white/60 hover:text-white"
+                    aria-label="Dismiss"
+                  >
+                    <svg width="12" height="12" viewBox="0 0 16 16" fill="none">
+                      <path d="M12 4L4 12M4 4l8 8" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                    </svg>
+                  </button>
                 </div>
               )}
 
@@ -723,7 +835,7 @@ export default function Reader({ onOpenSettings }: ReaderProps) {
                     lineHeight: 1.8,
                     fontFamily: fontFamilyCss,
                   }}
-                  dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(chapterHtml) }}
+                  dangerouslySetInnerHTML={{ __html: highlightedHtml }}
                 />
               )}
 

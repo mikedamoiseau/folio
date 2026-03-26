@@ -237,6 +237,19 @@ export default function Library() {
     }
   }, [importFiles]);
 
+  const handleImportUrl = useCallback(async (url: string) => {
+    try {
+      setImporting(true);
+      setError(null);
+      await invoke("download_opds_book", { downloadUrl: url });
+      await loadBooks(activeCollectionIdRef.current);
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setImporting(false);
+    }
+  }, [loadBooks]);
+
   useEffect(() => {
     let unlisten: (() => void) | undefined;
 
@@ -427,20 +440,13 @@ export default function Library() {
             <option value="finished">Finished</option>
           </select>
 
-          <button
-            type="button"
-            onClick={handleImportFolder}
-            disabled={importing}
-            title="Import folder"
-            className="shrink-0 p-2 rounded-lg text-ink-muted hover:text-ink hover:bg-warm-subtle transition-colors disabled:opacity-40"
-            aria-label="Import folder"
-          >
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
-              <path d="M2 6a2 2 0 012-2h4l2 2h8a2 2 0 012 2v10a2 2 0 01-2 2H4a2 2 0 01-2-2V6z" stroke="currentColor" strokeWidth="1.75" strokeLinejoin="round" />
-              <path d="M12 10v6m-3-3l3-3 3 3" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" />
-            </svg>
-          </button>
-          <ImportButton onClick={handleImport} loading={importing} progress={importProgress} />
+          <ImportButton
+            onImportFiles={handleImport}
+            onImportFolder={handleImportFolder}
+            onImportUrl={handleImportUrl}
+            loading={importing}
+            progress={importProgress}
+          />
         </div>
       )}
 

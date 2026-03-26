@@ -95,9 +95,9 @@ Expand where books come from and how they persist.
 
 ### 11. Remote Files — **Partial** *(OPDS done)*
 - Google Drive, Dropbox integration (OAuth flows)
-- Direct URL import (paste a link, app downloads the file)
+- ~~Direct URL import (paste a link, app downloads the file)~~
 - ~~OPDS catalog browsing (many free ebook sources use this protocol)~~
-  - ~~Built-in catalogs: Project Gutenberg, Standard Ebooks, ManyBooks, Feedbooks~~
+  - ~~Built-in catalogs: Project Gutenberg, Standard Ebooks~~
   - ~~Add custom OPDS catalog URLs (self-hosted Calibre servers, etc.)~~
   - ~~Browse, search, navigate sub-catalogs, pagination~~
   - ~~One-click download & import into library~~
