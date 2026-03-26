@@ -1,7 +1,7 @@
-import { useState } from "react";
+import { useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
-import { getDraggedBookId, endDrag } from "../lib/dragState";
+import { getDraggedBookId, endDrag, isDragging, subscribe } from "../lib/dragState";
 
 // ---- Types ----
 
@@ -101,6 +101,8 @@ function CollectionRow({
   isManual: boolean;
 }) {
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [isHovered, setIsHovered] = useState(false);
+  const dragging = useSyncExternalStore(subscribe, isDragging);
 
   const handleMouseUp = () => {
     if (!isManual) return;
@@ -110,6 +112,8 @@ function CollectionRow({
       onDropBook(bookId, collection.id);
     }
   };
+
+  const showDropHighlight = isManual && dragging && isHovered;
 
   if (confirmDelete) {
     return (
@@ -136,10 +140,14 @@ function CollectionRow({
       className={`group relative flex items-center gap-2 px-3 py-2 cursor-pointer transition-colors ${
         isActive
           ? "bg-accent-light text-accent"
+          : showDropHighlight
+          ? "bg-accent-light ring-1 ring-inset ring-accent text-accent"
           : "text-ink-muted hover:text-ink hover:bg-warm-subtle"
       }`}
       onClick={onSelect}
       onMouseUp={handleMouseUp}
+      onMouseEnter={() => setIsHovered(true)}
+      onMouseLeave={() => setIsHovered(false)}
     >
       {/* Color swatch */}
       <span

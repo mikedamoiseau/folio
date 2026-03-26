@@ -295,6 +295,13 @@ export default function Library() {
       }
     });
 
+  // Clean up drag state on any mouseup (in case user releases outside a collection)
+  useEffect(() => {
+    const handleGlobalMouseUp = () => endDrag();
+    window.addEventListener("mouseup", handleGlobalMouseUp);
+    return () => window.removeEventListener("mouseup", handleGlobalMouseUp);
+  }, []);
+
   // Keyboard shortcuts
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
