@@ -30,6 +30,11 @@ interface Book {
   rating: number | null;
   isbn: string | null;
   openlibrary_key: string | null;
+  series: string | null;
+  volume: number | null;
+  language: string | null;
+  publisher: string | null;
+  publish_year: number | null;
 }
 
 interface ReadingProgress {
@@ -875,6 +880,11 @@ export default function Library() {
           genres={editingBook.genres}
           rating={editingBook.rating}
           openlibraryKey={editingBook.openlibrary_key}
+          initialSeries={editingBook.series}
+          initialVolume={editingBook.volume}
+          initialLanguage={editingBook.language}
+          initialPublisher={editingBook.publisher}
+          initialPublishYear={editingBook.publish_year}
           onClose={() => setEditingBook(null)}
           onSaved={() => {
             setEditingBook(null);

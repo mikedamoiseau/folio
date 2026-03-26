@@ -26,6 +26,11 @@ interface EditBookDialogProps {
   genres?: string | null;
   rating?: number | null;
   openlibraryKey?: string | null;
+  initialSeries?: string | null;
+  initialVolume?: number | null;
+  initialLanguage?: string | null;
+  initialPublisher?: string | null;
+  initialPublishYear?: number | null;
   onClose: () => void;
   onSaved: () => void;
 }
@@ -38,11 +43,21 @@ export default function EditBookDialog({
   genres: initialGenres,
   rating: initialRating,
   openlibraryKey: initialOlKey,
+  initialSeries,
+  initialVolume,
+  initialLanguage,
+  initialPublisher,
+  initialPublishYear,
   onClose,
   onSaved,
 }: EditBookDialogProps) {
   const [title, setTitle] = useState(initialTitle);
   const [author, setAuthor] = useState(initialAuthor);
+  const [series, setSeries] = useState(initialSeries ?? "");
+  const [volume, setVolume] = useState<string>(initialVolume != null ? String(initialVolume) : "");
+  const [language, setLanguage] = useState(initialLanguage ?? "");
+  const [publisher, setPublisher] = useState(initialPublisher ?? "");
+  const [publishYear, setPublishYear] = useState<string>(initialPublishYear != null ? String(initialPublishYear) : "");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -111,6 +126,11 @@ export default function EditBookDialog({
         bookId,
         title: title !== initialTitle ? title : null,
         author: author !== initialAuthor ? author : null,
+        series: series !== (initialSeries ?? "") ? (series || null) : null,
+        volume: volume !== String(initialVolume ?? "") ? (volume ? parseInt(volume) : null) : null,
+        language: language !== (initialLanguage ?? "") ? (language || null) : null,
+        publisher: publisher !== (initialPublisher ?? "") ? (publisher || null) : null,
+        publishYear: publishYear !== String(initialPublishYear ?? "") ? (publishYear ? parseInt(publishYear) : null) : null,
       });
       onSaved();
     } catch (err) {
@@ -210,6 +230,67 @@ export default function EditBookDialog({
                 value={author}
                 onChange={(e) => setAuthor(e.target.value)}
                 className="w-full text-sm bg-warm-subtle border border-warm-border rounded-lg px-3 py-2 text-ink focus:outline-none focus:border-accent"
+              />
+            </div>
+
+            {/* Series & Volume - inline row */}
+            <div className="flex gap-2">
+              <div className="flex-1">
+                <label className="block text-xs font-medium text-ink-muted mb-1">Series</label>
+                <input
+                  type="text"
+                  value={series}
+                  onChange={(e) => setSeries(e.target.value)}
+                  placeholder="e.g. Aria"
+                  className="w-full text-sm bg-warm-subtle border border-warm-border rounded-lg px-3 py-2 text-ink placeholder-ink-muted/50 focus:outline-none focus:border-accent"
+                />
+              </div>
+              <div className="w-20">
+                <label className="block text-xs font-medium text-ink-muted mb-1">Vol.</label>
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  value={volume}
+                  onChange={(e) => setVolume(e.target.value.replace(/\D/g, ""))}
+                  placeholder="#"
+                  className="w-full text-sm bg-warm-subtle border border-warm-border rounded-lg px-3 py-2 text-ink placeholder-ink-muted/50 focus:outline-none focus:border-accent"
+                />
+              </div>
+            </div>
+
+            {/* Language & Year - inline row */}
+            <div className="flex gap-2">
+              <div className="flex-1">
+                <label className="block text-xs font-medium text-ink-muted mb-1">Language</label>
+                <input
+                  type="text"
+                  value={language}
+                  onChange={(e) => setLanguage(e.target.value)}
+                  placeholder="e.g. fr, en"
+                  className="w-full text-sm bg-warm-subtle border border-warm-border rounded-lg px-3 py-2 text-ink placeholder-ink-muted/50 focus:outline-none focus:border-accent"
+                />
+              </div>
+              <div className="w-24">
+                <label className="block text-xs font-medium text-ink-muted mb-1">Year</label>
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  value={publishYear}
+                  onChange={(e) => setPublishYear(e.target.value.replace(/\D/g, ""))}
+                  placeholder="2024"
+                  className="w-full text-sm bg-warm-subtle border border-warm-border rounded-lg px-3 py-2 text-ink placeholder-ink-muted/50 focus:outline-none focus:border-accent"
+                />
+              </div>
+            </div>
+
+            {/* Publisher */}
+            <div>
+              <label className="block text-xs font-medium text-ink-muted mb-1">Publisher</label>
+              <input
+                type="text"
+                value={publisher}
+                onChange={(e) => setPublisher(e.target.value)}
+                className="w-full text-sm bg-warm-subtle border border-warm-border rounded-lg px-3 py-2 text-ink placeholder-ink-muted/50 focus:outline-none focus:border-accent"
               />
             </div>
 
