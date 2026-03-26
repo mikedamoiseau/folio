@@ -1,4 +1,4 @@
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 use uuid::Uuid;
 
 use crate::cbr;
@@ -189,6 +189,7 @@ pub async fn import_book(
                 rating: None,
                 isbn: None,
                 openlibrary_key: None,
+                enrichment_status: None,
             }
         }
         BookFormat::Cbz => {
@@ -227,6 +228,7 @@ pub async fn import_book(
                 rating: None,
                 isbn: None,
                 openlibrary_key: None,
+                enrichment_status: None,
             }
         }
         BookFormat::Cbr => {
@@ -265,6 +267,7 @@ pub async fn import_book(
                 rating: None,
                 isbn: None,
                 openlibrary_key: None,
+                enrichment_status: None,
             }
         }
         BookFormat::Pdf => {
@@ -314,6 +317,7 @@ pub async fn import_book(
                 rating: None,
                 isbn: None,
                 openlibrary_key: None,
+                enrichment_status: None,
             }
         }
     };
@@ -1882,6 +1886,217 @@ pub async fn get_backup_status(
     });
     let manifest = rx.recv().map_err(|e| format!("Thread error: {e}"))?;
     Ok(Some(manifest))
+}
+
+use std::sync::atomic::{AtomicBool, Ordering};
+
+static SCAN_CANCEL: AtomicBool = AtomicBool::new(false);
+
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ScanProgress {
+    current: u32,
+    total: u32,
+    book_title: String,
+    status: String,
+}
+
+#[tauri::command]
+pub async fn start_scan(state: State<'_, AppState>, app: AppHandle) -> Result<(), String> {
+    SCAN_CANCEL.store(false, Ordering::SeqCst);
+    let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
+    let books = db::list_unenriched_books(&conn).map_err(|e| e.to_string())?;
+    let total = books.len() as u32;
+    if total == 0 {
+        let _ = app.emit(
+            "scan-progress",
+            ScanProgress {
+                current: 0,
+                total: 0,
+                book_title: String::new(),
+                status: "done".into(),
+            },
+        );
+        return Ok(());
+    }
+    let app_clone = app.clone();
+    std::thread::spawn(move || {
+        for (i, book) in books.iter().enumerate() {
+            if SCAN_CANCEL.load(Ordering::SeqCst) {
+                let _ = app_clone.emit(
+                    "scan-progress",
+                    ScanProgress {
+                        current: (i + 1) as u32,
+                        total,
+                        book_title: book.title.clone(),
+                        status: "cancelled".into(),
+                    },
+                );
+                return;
+            }
+            let _ = app_clone.emit(
+                "scan-progress",
+                ScanProgress {
+                    current: (i + 1) as u32,
+                    total,
+                    book_title: book.title.clone(),
+                    status: "running".into(),
+                },
+            );
+            let parsed = crate::enrichment::parse_filename(
+                std::path::Path::new(&book.file_path)
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or(""),
+            );
+            let lookup_title = if book.title == "Unknown Title" || book.title == "Unknown" {
+                parsed.title.as_deref().unwrap_or(&book.title)
+            } else {
+                &book.title
+            };
+            let lookup_author = if book.author.is_empty() || book.author == "Unknown Author" {
+                parsed.author.as_deref().unwrap_or(&book.author)
+            } else {
+                &book.author
+            };
+            let lookup_isbn = book.isbn.as_deref().or(parsed.isbn.as_deref());
+            match crate::enrichment::enrich_book(lookup_title, lookup_author, lookup_isbn) {
+                Some(result) if result.auto_apply => {
+                    let genres_json = if !result.data.genres.is_empty() {
+                        Some(serde_json::to_string(&result.data.genres).unwrap_or_default())
+                    } else {
+                        None
+                    };
+                    let _ = db::update_book_enrichment(
+                        &conn,
+                        &book.id,
+                        result.data.description.as_deref(),
+                        genres_json.as_deref(),
+                        result.data.rating,
+                        result.data.isbn.as_deref().or(lookup_isbn),
+                        if result.data.key.is_empty() {
+                            None
+                        } else {
+                            Some(&result.data.key)
+                        },
+                    );
+                    let _ = db::set_enrichment_status(&conn, &book.id, "enriched");
+                }
+                _ => {
+                    let _ = db::set_enrichment_status(&conn, &book.id, "skipped");
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_millis(500));
+        }
+        let _ = app_clone.emit(
+            "scan-progress",
+            ScanProgress {
+                current: total,
+                total,
+                book_title: String::new(),
+                status: "done".into(),
+            },
+        );
+    });
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn cancel_scan() -> Result<(), String> {
+    SCAN_CANCEL.store(true, Ordering::SeqCst);
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn scan_single_book(book_id: String, state: State<'_, AppState>) -> Result<Book, String> {
+    let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
+    let book = db::get_book(&conn, &book_id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("Book '{}' not found", book_id))?;
+    let parsed = crate::enrichment::parse_filename(
+        std::path::Path::new(&book.file_path)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or(""),
+    );
+    let lookup_title = if book.title == "Unknown Title" || book.title == "Unknown" {
+        parsed.title.as_deref().unwrap_or(&book.title)
+    } else {
+        &book.title
+    };
+    let lookup_author = if book.author.is_empty() || book.author == "Unknown Author" {
+        parsed.author.as_deref().unwrap_or(&book.author)
+    } else {
+        &book.author
+    };
+    let lookup_isbn = book.isbn.as_deref().or(parsed.isbn.as_deref());
+    let (tx, rx) = std::sync::mpsc::channel();
+    let t = lookup_title.to_string();
+    let a = lookup_author.to_string();
+    let i = lookup_isbn.map(|s| s.to_string());
+    std::thread::spawn(move || {
+        let _ = tx.send(crate::enrichment::enrich_book(&t, &a, i.as_deref()));
+    });
+    let enrichment = rx.recv().map_err(|e| format!("Thread error: {e}"))?;
+    match enrichment {
+        Some(result) => {
+            let genres_json = if !result.data.genres.is_empty() {
+                Some(serde_json::to_string(&result.data.genres).unwrap_or_default())
+            } else {
+                None
+            };
+            db::update_book_enrichment(
+                &conn,
+                &book_id,
+                result.data.description.as_deref(),
+                genres_json.as_deref(),
+                result.data.rating,
+                result.data.isbn.as_deref().or(lookup_isbn),
+                if result.data.key.is_empty() {
+                    None
+                } else {
+                    Some(&result.data.key)
+                },
+            )
+            .map_err(|e| e.to_string())?;
+            db::set_enrichment_status(&conn, &book_id, "enriched").map_err(|e| e.to_string())?;
+            db::get_book(&conn, &book_id)
+                .map_err(|e| e.to_string())?
+                .ok_or_else(|| "Book not found".to_string())
+        }
+        None => {
+            db::set_enrichment_status(&conn, &book_id, "skipped").map_err(|e| e.to_string())?;
+            Err("No match found".to_string())
+        }
+    }
+}
+
+#[tauri::command]
+pub async fn queue_book_for_scan(
+    book_id: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
+    db::set_enrichment_status(&conn, &book_id, "queued").map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn get_setting_value(
+    key: String,
+    state: State<'_, AppState>,
+) -> Result<Option<String>, String> {
+    let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
+    db::get_setting(&conn, &key).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn set_setting_value(
+    key: String,
+    value: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
+    db::set_setting(&conn, &key, &value).map_err(|e| e.to_string())
 }
 
 #[cfg(test)]

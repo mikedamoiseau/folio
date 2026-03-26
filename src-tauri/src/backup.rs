@@ -442,6 +442,7 @@ pub fn run_incremental_backup(
                     rating: row.get(11)?,
                     isbn: row.get(12)?,
                     openlibrary_key: row.get(13)?,
+                    enrichment_status: None,
                 })
             })
             .map_err(|e| e.to_string())?;

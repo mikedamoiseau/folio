@@ -145,6 +145,12 @@ pub fn run() {
             commands::get_backup_config,
             commands::run_backup,
             commands::get_backup_status,
+            commands::start_scan,
+            commands::cancel_scan,
+            commands::scan_single_book,
+            commands::queue_book_for_scan,
+            commands::get_setting_value,
+            commands::set_setting_value,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
