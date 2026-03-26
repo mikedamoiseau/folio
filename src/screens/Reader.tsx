@@ -485,6 +485,39 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [prevChapter, nextChapter, addBookmarkAtCurrentPosition, showShortcuts, tocOpen, dndMode, settingsOpen, navigate]);
 
+  // ---- TOC focus trap ----
+
+  useEffect(() => {
+    if (!tocOpen) return;
+    const sidebar = document.getElementById("toc-sidebar");
+    if (!sidebar) return;
+
+    const focusable = sidebar.querySelectorAll<HTMLElement>(
+      'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+    );
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+
+    function trapFocus(e: KeyboardEvent) {
+      if (e.key !== "Tab") return;
+      if (e.shiftKey) {
+        if (document.activeElement === first) {
+          e.preventDefault();
+          last?.focus();
+        }
+      } else {
+        if (document.activeElement === last) {
+          e.preventDefault();
+          first?.focus();
+        }
+      }
+    }
+
+    first?.focus();
+    document.addEventListener("keydown", trapFocus);
+    return () => document.removeEventListener("keydown", trapFocus);
+  }, [tocOpen]);
+
   // ---- Track bottom nav visibility for floating arrows ----
 
   useEffect(() => {
@@ -601,7 +634,7 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
             onClick={() => setTocOpen(false)}
           />
           {/* Sidebar */}
-          <aside className="fixed left-0 top-0 bottom-0 w-72 bg-surface border-r border-warm-border z-20 flex flex-col shadow-[4px_0_24px_-4px_rgba(44,34,24,0.12)] animate-slide-in-left">
+          <aside id="toc-sidebar" role="dialog" aria-modal="true" aria-label="Table of Contents" className="fixed left-0 top-0 bottom-0 w-72 bg-surface border-r border-warm-border z-20 flex flex-col shadow-[4px_0_24px_-4px_rgba(44,34,24,0.12)] animate-slide-in-left">
             <div className="px-5 py-4 border-b border-warm-border flex items-center justify-between">
               <h2 className="font-serif text-base font-semibold text-ink">
                 Contents
