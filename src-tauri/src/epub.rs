@@ -447,6 +447,21 @@ fn sanitize_cover_href(href: &str) -> Option<String> {
     Some(href.to_string())
 }
 
+/// Validate a cover image file extension against an allowlist.
+/// Returns the extension (lowercase) if it is a recognized image type,
+/// or `"jpg"` as a safe default otherwise.
+fn sanitize_cover_ext(ext: &str) -> &'static str {
+    match ext.to_ascii_lowercase().as_str() {
+        "jpg" => "jpg",
+        "jpeg" => "jpeg",
+        "png" => "png",
+        "gif" => "gif",
+        "webp" => "webp",
+        "svg" => "svg",
+        _ => "jpg",
+    }
+}
+
 /// Extract cover image to dest_dir, return the destination path if found.
 pub fn extract_cover(file_path: &str, dest_dir: &str) -> Result<Option<String>, EpubError> {
     let file = std::fs::File::open(file_path).map_err(EpubError::Io)?;
@@ -475,8 +490,9 @@ pub fn extract_cover(file_path: &str, dest_dir: &str) -> Result<Option<String>, 
 
     let bytes = read_zip_entry_bytes(&mut archive, &entry_name)?;
 
-    // Derive extension from href
-    let ext = cover_href.rsplit('.').next().unwrap_or("jpg");
+    // Derive extension from href, restricted to known image types
+    let raw_ext = cover_href.rsplit('.').next().unwrap_or("jpg");
+    let ext = sanitize_cover_ext(raw_ext);
     let dest = Path::new(dest_dir).join(format!("cover.{ext}"));
 
     std::fs::create_dir_all(dest_dir).map_err(EpubError::Io)?;
@@ -1193,5 +1209,40 @@ mod tests {
         assert_eq!(sanitize_cover_href(""), None);
         assert_eq!(sanitize_cover_href("."), None);
         assert_eq!(sanitize_cover_href("a/.."), None);
+    }
+
+    #[test]
+    fn test_sanitize_cover_ext_valid_extensions() {
+        assert_eq!(sanitize_cover_ext("jpg"), "jpg");
+        assert_eq!(sanitize_cover_ext("jpeg"), "jpeg");
+        assert_eq!(sanitize_cover_ext("png"), "png");
+        assert_eq!(sanitize_cover_ext("gif"), "gif");
+        assert_eq!(sanitize_cover_ext("webp"), "webp");
+        assert_eq!(sanitize_cover_ext("svg"), "svg");
+    }
+
+    #[test]
+    fn test_sanitize_cover_ext_case_insensitive() {
+        assert_eq!(sanitize_cover_ext("JPG"), "jpg");
+        assert_eq!(sanitize_cover_ext("Png"), "png");
+        assert_eq!(sanitize_cover_ext("JPEG"), "jpeg");
+        assert_eq!(sanitize_cover_ext("WebP"), "webp");
+    }
+
+    #[test]
+    fn test_sanitize_cover_ext_rejects_dangerous_extensions() {
+        assert_eq!(sanitize_cover_ext("exe"), "jpg");
+        assert_eq!(sanitize_cover_ext("sh"), "jpg");
+        assert_eq!(sanitize_cover_ext("bat"), "jpg");
+        assert_eq!(sanitize_cover_ext("js"), "jpg");
+        assert_eq!(sanitize_cover_ext("html"), "jpg");
+        assert_eq!(sanitize_cover_ext("php"), "jpg");
+    }
+
+    #[test]
+    fn test_sanitize_cover_ext_rejects_empty_and_unusual() {
+        assert_eq!(sanitize_cover_ext(""), "jpg");
+        assert_eq!(sanitize_cover_ext(".."), "jpg");
+        assert_eq!(sanitize_cover_ext("jpg.exe"), "jpg");
     }
 }
