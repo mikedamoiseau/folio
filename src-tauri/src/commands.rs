@@ -161,7 +161,18 @@ pub async fn import_book(
 
     let book = match format {
         BookFormat::Epub => {
-            let metadata = epub::parse_epub_metadata(&library_path).map_err(|e| {
+            // Open the EPUB zip archive once and reuse it for all operations
+            // (metadata, cover extraction, chapter list) instead of reopening 3 times.
+            let epub_file = std::fs::File::open(&library_path).map_err(|e| {
+                let _ = std::fs::remove_file(&library_path);
+                e.to_string()
+            })?;
+            let mut archive = zip::ZipArchive::new(epub_file).map_err(|e| {
+                let _ = std::fs::remove_file(&library_path);
+                e.to_string()
+            })?;
+
+            let metadata = epub::parse_epub_metadata_from_archive(&mut archive).map_err(|e| {
                 let _ = std::fs::remove_file(&library_path);
                 e.to_string()
             })?;
@@ -169,7 +180,7 @@ pub async fn import_book(
             let cover_path = if let Ok(data_dir) = app.path().app_data_dir() {
                 let dir = data_dir.join("covers").join(&book_id);
                 let dest = dir.to_string_lossy().to_string();
-                match epub::extract_cover(&library_path, &dest) {
+                match epub::extract_cover_from_archive(&mut archive, &dest) {
                     Ok(Some(path)) => {
                         cover_dir = Some(dir);
                         Some(path)
@@ -184,7 +195,7 @@ pub async fn import_book(
                 None
             };
 
-            let chapters = epub::get_chapter_list(&library_path).map_err(|e| {
+            let chapters = epub::get_chapter_list_from_archive(&mut archive).map_err(|e| {
                 let _ = std::fs::remove_file(&library_path);
                 e.to_string()
             })?;

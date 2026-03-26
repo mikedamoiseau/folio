@@ -356,13 +356,12 @@ fn find_zip_entry_name(
 
 // ---- Public API ----
 
-/// Parse metadata from the OPF file inside the EPUB.
-pub fn parse_epub_metadata(file_path: &str) -> Result<BookMetadata, EpubError> {
-    let file = std::fs::File::open(file_path).map_err(EpubError::Io)?;
-    let mut archive = ZipArchive::new(file)?;
-
-    let opf_path = find_opf_path(&mut archive)?;
-    let opf = read_zip_entry(&mut archive, &opf_path)?;
+/// Parse metadata from an already-opened EPUB zip archive.
+pub fn parse_epub_metadata_from_archive(
+    archive: &mut ZipArchive<std::fs::File>,
+) -> Result<BookMetadata, EpubError> {
+    let opf_path = find_opf_path(archive)?;
+    let opf = read_zip_entry(archive, &opf_path)?;
 
     let title = extract_tag_text(&opf, "dc:title")
         .or_else(|| extract_tag_text(&opf, "title"))
@@ -403,6 +402,13 @@ pub fn parse_epub_metadata(file_path: &str) -> Result<BookMetadata, EpubError> {
         isbn,
         genres,
     })
+}
+
+/// Parse metadata from the OPF file inside the EPUB.
+pub fn parse_epub_metadata(file_path: &str) -> Result<BookMetadata, EpubError> {
+    let file = std::fs::File::open(file_path).map_err(EpubError::Io)?;
+    let mut archive = ZipArchive::new(file)?;
+    parse_epub_metadata_from_archive(&mut archive)
 }
 
 /// Sanitize a cover href from OPF metadata to prevent path traversal attacks.
@@ -460,13 +466,13 @@ fn sanitize_cover_ext(ext: &str) -> &'static str {
     }
 }
 
-/// Extract cover image to dest_dir, return the destination path if found.
-pub fn extract_cover(file_path: &str, dest_dir: &str) -> Result<Option<String>, EpubError> {
-    let file = std::fs::File::open(file_path).map_err(EpubError::Io)?;
-    let mut archive = ZipArchive::new(file)?;
-
-    let opf_path = find_opf_path(&mut archive)?;
-    let opf = read_zip_entry(&mut archive, &opf_path)?;
+/// Extract cover image from an already-opened EPUB zip archive to dest_dir.
+pub fn extract_cover_from_archive(
+    archive: &mut ZipArchive<std::fs::File>,
+    dest_dir: &str,
+) -> Result<Option<String>, EpubError> {
+    let opf_path = find_opf_path(archive)?;
+    let opf = read_zip_entry(archive, &opf_path)?;
     let base_dir = opf_base_dir(&opf_path).to_string();
 
     let cover_href = match find_cover_href(&opf) {
@@ -481,12 +487,12 @@ pub fn extract_cover(file_path: &str, dest_dir: &str) -> Result<Option<String>, 
     };
 
     // Determine the entry name in the zip
-    let entry_name = match find_zip_entry_name(&mut archive, &base_dir, &cover_href) {
+    let entry_name = match find_zip_entry_name(archive, &base_dir, &cover_href) {
         Some(n) => n,
         None => return Ok(None),
     };
 
-    let bytes = read_zip_entry_bytes(&mut archive, &entry_name)?;
+    let bytes = read_zip_entry_bytes(archive, &entry_name)?;
 
     // Derive extension from href, restricted to known image types
     let raw_ext = cover_href.rsplit('.').next().unwrap_or("jpg");
@@ -499,13 +505,19 @@ pub fn extract_cover(file_path: &str, dest_dir: &str) -> Result<Option<String>, 
     Ok(Some(dest.to_string_lossy().to_string()))
 }
 
-/// Get ordered list of chapters (spine order).
-pub fn get_chapter_list(file_path: &str) -> Result<Vec<ChapterInfo>, EpubError> {
+/// Extract cover image to dest_dir, return the destination path if found.
+pub fn extract_cover(file_path: &str, dest_dir: &str) -> Result<Option<String>, EpubError> {
     let file = std::fs::File::open(file_path).map_err(EpubError::Io)?;
     let mut archive = ZipArchive::new(file)?;
+    extract_cover_from_archive(&mut archive, dest_dir)
+}
 
-    let opf_path = find_opf_path(&mut archive)?;
-    let opf = read_zip_entry(&mut archive, &opf_path)?;
+/// Get ordered list of chapters (spine order) from an already-opened archive.
+pub fn get_chapter_list_from_archive(
+    archive: &mut ZipArchive<std::fs::File>,
+) -> Result<Vec<ChapterInfo>, EpubError> {
+    let opf_path = find_opf_path(archive)?;
+    let opf = read_zip_entry(archive, &opf_path)?;
 
     let manifest = parse_manifest(&opf);
     let spine = parse_spine_idrefs(&opf);
@@ -523,6 +535,13 @@ pub fn get_chapter_list(file_path: &str) -> Result<Vec<ChapterInfo>, EpubError> 
         .collect();
 
     Ok(chapters)
+}
+
+/// Get ordered list of chapters (spine order).
+pub fn get_chapter_list(file_path: &str) -> Result<Vec<ChapterInfo>, EpubError> {
+    let file = std::fs::File::open(file_path).map_err(EpubError::Io)?;
+    let mut archive = ZipArchive::new(file)?;
+    get_chapter_list_from_archive(&mut archive)
 }
 
 /// Get HTML content of a specific chapter by index.
