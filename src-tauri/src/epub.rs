@@ -405,6 +405,48 @@ pub fn parse_epub_metadata(file_path: &str) -> Result<BookMetadata, EpubError> {
     })
 }
 
+/// Sanitize a cover href from OPF metadata to prevent path traversal attacks.
+/// Returns `None` if the href is malicious or would resolve to an empty path.
+fn sanitize_cover_href(href: &str) -> Option<String> {
+    // Reject null bytes
+    if href.contains('\0') {
+        return None;
+    }
+
+    // Reject absolute paths (Unix and Windows)
+    if href.starts_with('/') || href.starts_with('\\') {
+        return None;
+    }
+
+    // Reject Windows drive letters (e.g., "C:", "D:\")
+    if href.len() >= 2 && href.as_bytes()[0].is_ascii_alphabetic() && href.as_bytes()[1] == b':' {
+        return None;
+    }
+
+    // Resolve the path and reject if it escapes the base directory.
+    // We simulate resolving from an empty base — any ".." that would go above
+    // the root means the path is trying to escape.
+    let mut parts: Vec<&str> = Vec::new();
+    for segment in href.split(['/', '\\']) {
+        match segment {
+            "" | "." => {}
+            ".." => {
+                if parts.pop().is_none() {
+                    // Tried to go above root — path traversal
+                    return None;
+                }
+            }
+            other => parts.push(other),
+        }
+    }
+
+    if parts.is_empty() {
+        return None;
+    }
+
+    Some(href.to_string())
+}
+
 /// Extract cover image to dest_dir, return the destination path if found.
 pub fn extract_cover(file_path: &str, dest_dir: &str) -> Result<Option<String>, EpubError> {
     let file = std::fs::File::open(file_path).map_err(EpubError::Io)?;
@@ -415,6 +457,12 @@ pub fn extract_cover(file_path: &str, dest_dir: &str) -> Result<Option<String>, 
     let base_dir = opf_base_dir(&opf_path).to_string();
 
     let cover_href = match find_cover_href(&opf) {
+        Some(h) => h,
+        None => return Ok(None),
+    };
+
+    // Sanitize cover href to prevent path traversal
+    let cover_href = match sanitize_cover_href(&cover_href) {
         Some(h) => h,
         None => return Ok(None),
     };
@@ -1091,5 +1139,59 @@ mod tests {
             <item id="cover-image" href="cover.jpeg" media-type="image/jpeg"/>
         </manifest>"#;
         assert_eq!(find_cover_href(opf), Some("cover.jpeg".to_string()));
+    }
+
+    #[test]
+    fn test_sanitize_cover_href_valid_paths() {
+        assert_eq!(
+            sanitize_cover_href("images/cover.jpg"),
+            Some("images/cover.jpg".to_string())
+        );
+        assert_eq!(
+            sanitize_cover_href("cover.png"),
+            Some("cover.png".to_string())
+        );
+        assert_eq!(
+            sanitize_cover_href("OEBPS/images/cover.jpeg"),
+            Some("OEBPS/images/cover.jpeg".to_string())
+        );
+        // Relative path that stays within bounds
+        assert_eq!(
+            sanitize_cover_href("a/b/../cover.jpg"),
+            Some("a/b/../cover.jpg".to_string())
+        );
+    }
+
+    #[test]
+    fn test_sanitize_cover_href_rejects_null_bytes() {
+        assert_eq!(sanitize_cover_href("cover\0.jpg"), None);
+        assert_eq!(sanitize_cover_href("\0"), None);
+    }
+
+    #[test]
+    fn test_sanitize_cover_href_rejects_absolute_paths() {
+        assert_eq!(sanitize_cover_href("/etc/passwd"), None);
+        assert_eq!(sanitize_cover_href("\\Windows\\system32"), None);
+    }
+
+    #[test]
+    fn test_sanitize_cover_href_rejects_windows_drive() {
+        assert_eq!(sanitize_cover_href("C:\\cover.jpg"), None);
+        assert_eq!(sanitize_cover_href("D:cover.jpg"), None);
+    }
+
+    #[test]
+    fn test_sanitize_cover_href_rejects_traversal() {
+        assert_eq!(sanitize_cover_href("../../etc/passwd"), None);
+        assert_eq!(sanitize_cover_href("../secret"), None);
+        assert_eq!(sanitize_cover_href(".."), None);
+        assert_eq!(sanitize_cover_href("a/../../b"), None);
+    }
+
+    #[test]
+    fn test_sanitize_cover_href_rejects_empty_resolution() {
+        assert_eq!(sanitize_cover_href(""), None);
+        assert_eq!(sanitize_cover_href("."), None);
+        assert_eq!(sanitize_cover_href("a/.."), None);
     }
 }
