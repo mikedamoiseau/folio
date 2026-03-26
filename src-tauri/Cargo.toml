@@ -41,6 +41,7 @@ reqwest = { version = "0.12", features = ["blocking", "json"] }
 opendal = { version = "0.55", features = ["services-s3", "services-fs", "services-ftp", "services-webdav", "blocking"] }
 tokio = { version = "1", features = ["rt", "rt-multi-thread"] }
 keyring = "3"
+regex = "1"
 
 [dev-dependencies]
 tempfile = "3"

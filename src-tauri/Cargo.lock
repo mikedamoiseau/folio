@@ -1357,6 +1357,7 @@ dependencies = [
  "quick-xml 0.36.2",
  "r2d2",
  "r2d2_sqlite",
+ "regex",
  "reqwest 0.12.28",
  "rusqlite",
  "serde",

@@ -3,6 +3,7 @@ pub mod cbr;
 pub mod cbz;
 pub mod commands;
 pub mod db;
+pub mod enrichment;
 pub mod epub;
 pub mod models;
 pub mod opds;
