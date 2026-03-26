@@ -120,6 +120,20 @@ fn run_schema(conn: &Connection) -> Result<()> {
     let _ = conn.execute_batch("ALTER TABLE books ADD COLUMN isbn TEXT;");
     let _ = conn.execute_batch("ALTER TABLE books ADD COLUMN openlibrary_key TEXT;");
 
+    // Incremental backup: ensure updated_at columns exist
+    let _ =
+        conn.execute_batch("ALTER TABLE books ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0;");
+    let _ = conn
+        .execute_batch("ALTER TABLE bookmarks ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0;");
+    let _ = conn
+        .execute_batch("ALTER TABLE highlights ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0;");
+    // Backfill: set updated_at = added_at or created_at for existing rows
+    let _ = conn.execute_batch("UPDATE books SET updated_at = added_at WHERE updated_at = 0;");
+    let _ =
+        conn.execute_batch("UPDATE bookmarks SET updated_at = created_at WHERE updated_at = 0;");
+    let _ =
+        conn.execute_batch("UPDATE highlights SET updated_at = created_at WHERE updated_at = 0;");
+
     Ok(())
 }
 
@@ -156,8 +170,8 @@ pub fn init_db(db_path: &Path) -> Result<Connection> {
 
 pub fn insert_book(conn: &Connection, book: &Book) -> Result<()> {
     conn.execute(
-        "INSERT INTO books (id, title, author, file_path, cover_path, total_chapters, added_at, format, file_hash, description, genres, rating, isbn, openlibrary_key)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+        "INSERT INTO books (id, title, author, file_path, cover_path, total_chapters, added_at, format, file_hash, description, genres, rating, isbn, openlibrary_key, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
         params![
             book.id,
             book.title,
@@ -173,6 +187,7 @@ pub fn insert_book(conn: &Connection, book: &Book) -> Result<()> {
             book.rating,
             book.isbn,
             book.openlibrary_key,
+            book.added_at,
         ],
     )?;
     Ok(())
@@ -219,11 +234,16 @@ pub fn list_books(conn: &Connection) -> Result<Vec<Book>> {
 }
 
 pub fn update_book(conn: &Connection, book: &Book) -> Result<()> {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64;
     // file_hash is immutable after import — not included in update
     conn.execute(
         "UPDATE books SET title=?2, author=?3, file_path=?4, cover_path=?5,
          total_chapters=?6, added_at=?7, format=?8,
-         description=?9, genres=?10, rating=?11, isbn=?12, openlibrary_key=?13
+         description=?9, genres=?10, rating=?11, isbn=?12, openlibrary_key=?13,
+         updated_at=?14
          WHERE id=?1",
         params![
             book.id,
@@ -239,6 +259,7 @@ pub fn update_book(conn: &Connection, book: &Book) -> Result<()> {
             book.rating,
             book.isbn,
             book.openlibrary_key,
+            now,
         ],
     )?;
     Ok(())
@@ -346,14 +367,15 @@ pub fn get_recently_read_books(conn: &Connection, limit: u32) -> Result<Vec<Book
 
 pub fn insert_bookmark(conn: &Connection, bookmark: &Bookmark) -> Result<()> {
     conn.execute(
-        "INSERT INTO bookmarks (id, book_id, chapter_index, scroll_position, note, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        "INSERT INTO bookmarks (id, book_id, chapter_index, scroll_position, note, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
         params![
             bookmark.id,
             bookmark.book_id,
             bookmark.chapter_index,
             bookmark.scroll_position,
             bookmark.note,
+            bookmark.created_at,
             bookmark.created_at,
         ],
     )?;
@@ -647,9 +669,9 @@ pub fn get_reading_stats(conn: &Connection) -> Result<ReadingStats> {
 
 pub fn insert_highlight(conn: &Connection, h: &crate::models::Highlight) -> Result<()> {
     conn.execute(
-        "INSERT INTO highlights (id, book_id, chapter_index, text, color, note, start_offset, end_offset, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-        params![h.id, h.book_id, h.chapter_index, h.text, h.color, h.note, h.start_offset, h.end_offset, h.created_at],
+        "INSERT INTO highlights (id, book_id, chapter_index, text, color, note, start_offset, end_offset, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+        params![h.id, h.book_id, h.chapter_index, h.text, h.color, h.note, h.start_offset, h.end_offset, h.created_at, h.created_at],
     )?;
     Ok(())
 }
@@ -1130,5 +1152,65 @@ mod tests {
             after.is_empty(),
             "book_collections row should be deleted via cascade"
         );
+    }
+
+    #[test]
+    fn test_books_have_updated_at() {
+        let dir = tempfile::tempdir().unwrap();
+        let conn = init_db(dir.path().join("test.db").as_path()).unwrap();
+        conn.execute(
+            "INSERT INTO books (id, title, author, file_path, total_chapters, added_at, format, updated_at) VALUES ('t1', 'T', 'A', '/t', 0, 100, 'epub', 100)",
+            [],
+        ).unwrap();
+        let val: i64 = conn
+            .query_row("SELECT updated_at FROM books WHERE id = 't1'", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(val, 100);
+    }
+
+    #[test]
+    fn test_bookmarks_have_updated_at() {
+        let dir = tempfile::tempdir().unwrap();
+        let conn = init_db(dir.path().join("test.db").as_path()).unwrap();
+        conn.execute(
+            "INSERT INTO books (id, title, author, file_path, total_chapters, added_at, format, updated_at) VALUES ('b1', 'T', 'A', '/t', 0, 100, 'epub', 100)",
+            [],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO bookmarks (id, book_id, chapter_index, scroll_position, created_at, updated_at) VALUES ('bm1', 'b1', 0, 0.0, 100, 100)",
+            [],
+        ).unwrap();
+        let val: i64 = conn
+            .query_row(
+                "SELECT updated_at FROM bookmarks WHERE id = 'bm1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(val, 100);
+    }
+
+    #[test]
+    fn test_highlights_have_updated_at() {
+        let dir = tempfile::tempdir().unwrap();
+        let conn = init_db(dir.path().join("test.db").as_path()).unwrap();
+        conn.execute(
+            "INSERT INTO books (id, title, author, file_path, total_chapters, added_at, format, updated_at) VALUES ('b1', 'T', 'A', '/t', 0, 100, 'epub', 100)",
+            [],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO highlights (id, book_id, chapter_index, text, color, start_offset, end_offset, created_at, updated_at) VALUES ('h1', 'b1', 0, 'hi', '#fff', 0, 2, 100, 100)",
+            [],
+        ).unwrap();
+        let val: i64 = conn
+            .query_row(
+                "SELECT updated_at FROM highlights WHERE id = 'h1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(val, 100);
     }
 }
