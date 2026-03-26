@@ -173,6 +173,7 @@ pub fn run() {
             commands::set_setting_value,
             commands::get_enrichment_providers,
             commands::set_enrichment_provider_config,
+            commands::get_activity_log,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

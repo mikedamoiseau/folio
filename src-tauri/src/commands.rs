@@ -42,6 +42,33 @@ impl AppState {
     }
 }
 
+// --- Activity logging ---
+
+#[allow(dead_code)]
+fn log_activity(
+    conn: &rusqlite::Connection,
+    action: &str,
+    entity_type: &str,
+    entity_id: Option<&str>,
+    entity_name: Option<&str>,
+    detail: Option<&str>,
+) {
+    let entry = crate::models::ActivityEntry {
+        id: Uuid::new_v4().to_string(),
+        timestamp: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64,
+        action: action.to_string(),
+        entity_type: entity_type.to_string(),
+        entity_id: entity_id.map(|s| s.to_string()),
+        entity_name: entity_name.map(|s| s.to_string()),
+        detail: detail.map(|s| s.to_string()),
+    };
+    let _ = db::insert_activity(conn, &entry);
+    let _ = db::prune_activity_log(conn, 1000);
+}
+
 // --- Cover helpers ---
 
 /// Decode a `data:<mime>;base64,<payload>` URI and write it to
@@ -2403,6 +2430,25 @@ pub async fn set_enrichment_provider_config(
     let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
     crate::db::set_setting(&conn, "enrichment_providers", &json).map_err(|e| e.to_string())?;
     Ok(())
+}
+
+// --- Activity log ---
+
+#[tauri::command]
+pub async fn get_activity_log(
+    limit: Option<u32>,
+    offset: Option<u32>,
+    action_filter: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<Vec<crate::models::ActivityEntry>, String> {
+    let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
+    db::get_activity_log(
+        &conn,
+        limit.unwrap_or(100),
+        offset.unwrap_or(0),
+        action_filter.as_deref(),
+    )
+    .map_err(|e| e.to_string())
 }
 
 #[cfg(test)]
