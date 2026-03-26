@@ -83,6 +83,7 @@ function AppShell() {
             element={
               <Reader
                 onOpenSettings={() => setSettingsOpen(true)}
+                settingsOpen={settingsOpen}
               />
             }
           />
