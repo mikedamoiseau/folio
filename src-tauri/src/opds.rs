@@ -39,7 +39,12 @@ pub struct OpdsFeed {
 
 /// Fetch and parse an OPDS feed from a URL.
 pub fn fetch_feed(url: &str) -> Result<OpdsFeed, String> {
-    let response = reqwest::blocking::get(url).map_err(|e| format!("HTTP error: {e}"))?;
+    let client = reqwest::blocking::Client::new();
+    let response = client
+        .get(url)
+        .header("User-Agent", "Folio/1.2 (OPDS reader)")
+        .send()
+        .map_err(|e| format!("HTTP error: {e}"))?;
     if !response.status().is_success() {
         return Err(format!("HTTP {}", response.status()));
     }
@@ -178,6 +183,7 @@ fn parse_feed(xml: &str, base_url: &str) -> Result<OpdsFeed, String> {
                                 }
                                 // Acquisition (download)
                                 if rel.contains("acquisition")
+                                    || rel == "enclosure"
                                     || rel.is_empty()
                                         && (mime.contains("epub")
                                             || mime.contains("pdf")
@@ -447,6 +453,27 @@ mod tests {
         assert_eq!(feed.entries.len(), 3);
         assert_eq!(feed.entries[0].title, "Book One");
         assert_eq!(feed.entries[2].title, "Book Three");
+    }
+
+    #[test]
+    fn parse_feed_enclosure_links_treated_as_acquisition() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <feed xmlns="http://www.w3.org/2005/Atom">
+          <title>Standard Ebooks</title>
+          <entry>
+            <id>1</id>
+            <title>Jenny</title>
+            <link href="https://example.com/jenny.epub" rel="enclosure" type="application/epub+zip"/>
+          </entry>
+        </feed>"#;
+
+        let feed = parse_feed(xml, "https://example.com").unwrap();
+        assert_eq!(feed.entries[0].links.len(), 1);
+        assert_eq!(
+            feed.entries[0].links[0].href,
+            "https://example.com/jenny.epub"
+        );
+        assert_eq!(feed.entries[0].links[0].mime_type, "application/epub+zip");
     }
 }
 

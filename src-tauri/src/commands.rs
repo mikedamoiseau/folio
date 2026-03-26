@@ -1083,11 +1083,9 @@ pub struct OpdsCatalogSource {
 
 const DEFAULT_CATALOGS: &[(&str, &str)] = &[
     ("Project Gutenberg", "https://m.gutenberg.org/ebooks.opds/"),
-    ("Standard Ebooks", "https://standardebooks.org/feeds/opds"),
-    ("ManyBooks", "https://manybooks.net/opds/index.php"),
     (
-        "Feedbooks (Public Domain)",
-        "https://catalog.feedbooks.com/publicdomain/browse/top.atom",
+        "Standard Ebooks (New Releases)",
+        "https://standardebooks.org/feeds/atom/new-releases",
     ),
 ];
 
