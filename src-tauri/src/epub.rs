@@ -526,10 +526,14 @@ pub fn get_chapter_list(file_path: &str) -> Result<Vec<ChapterInfo>, EpubError> 
 }
 
 /// Get HTML content of a specific chapter by index.
-/// Relative `<img src>` attributes are rewritten to base64 data URIs so that
-/// inline illustrations render correctly when the HTML is displayed without a
-/// base URL pointing into the EPUB archive.
-pub fn get_chapter_content(file_path: &str, chapter_index: usize) -> Result<String, EpubError> {
+/// Relative `<img src>` attributes are rewritten to `asset://` URLs pointing to
+/// images extracted from the EPUB to disk, avoiding large base64 strings in memory.
+pub fn get_chapter_content(
+    file_path: &str,
+    chapter_index: usize,
+    data_dir: &str,
+    book_id: &str,
+) -> Result<String, EpubError> {
     let file = std::fs::File::open(file_path).map_err(EpubError::Io)?;
     let mut archive = ZipArchive::new(file)?;
 
@@ -553,7 +557,7 @@ pub fn get_chapter_content(file_path: &str, chapter_index: usize) -> Result<Stri
         .ok_or_else(|| EpubError::MissingFile(format!("{base_dir}{href}")))?;
 
     let raw_html = read_zip_entry(&mut archive, &entry_name)?;
-    // Sanitize first so ammonia never sees the data URIs we are about to inject.
+    // Sanitize first so ammonia never sees the asset URLs we are about to inject.
     let cleaned = clean(&raw_html);
 
     // Compute the directory of the chapter file within the zip so relative
@@ -566,24 +570,17 @@ pub fn get_chapter_content(file_path: &str, chapter_index: usize) -> Result<Stri
         }
     };
 
-    Ok(rewrite_img_srcs_to_data_uris(
+    let image_dir = format!("{}/images/{}/{}", data_dir, book_id, chapter_index);
+
+    Ok(rewrite_img_srcs_to_asset_urls(
         &cleaned,
         &mut archive,
         &chapter_dir,
+        &image_dir,
     ))
 }
 
 // ---- Inline-image helpers ----
-
-/// MIME type from a lowercase file extension.
-fn mime_from_ext(ext: &str) -> &'static str {
-    match ext {
-        "png" => "image/png",
-        "gif" => "image/gif",
-        "webp" => "image/webp",
-        _ => "image/jpeg",
-    }
-}
 
 /// Resolve a relative path against a zip-internal base directory.
 /// e.g. base="OEBPS/Text/", relative="../images/foo.png" → "OEBPS/images/foo.png"
@@ -636,17 +633,20 @@ fn replace_attr_value(tag: &str, attr: &str, old_val: &str, new_val: &str) -> St
 }
 
 /// Walk the sanitized chapter HTML and replace relative `<img src>` values
-/// with `data:<mime>;base64,<...>` URIs extracted directly from the EPUB zip.
-/// External URLs and SVG images are left untouched.
+/// with `asset://localhost/` URLs pointing to images extracted from the EPUB zip
+/// to disk. This avoids base64-encoding large images into the HTML string, which
+/// can cause memory issues with illustrated books.
+///
+/// Images are cached in `{image_dir}/` — if a file already exists on disk it is
+/// not re-extracted. External URLs and SVG images are left untouched.
 /// Missing images fail silently (the tag is left as-is) so a single broken
 /// asset doesn't abort the whole chapter.
-fn rewrite_img_srcs_to_data_uris(
+fn rewrite_img_srcs_to_asset_urls(
     html: &str,
     archive: &mut ZipArchive<std::fs::File>,
     chapter_dir: &str,
+    image_dir: &str,
 ) -> String {
-    use base64::{engine::general_purpose::STANDARD, Engine};
-
     let mut result = String::with_capacity(html.len());
     let mut rest = html;
 
@@ -703,14 +703,30 @@ fn rewrite_img_srcs_to_data_uris(
                         tag.to_string()
                     } else {
                         let resolved = resolve_zip_path(chapter_dir, clean_src);
-                        match read_zip_entry_bytes(archive, &resolved) {
-                            Ok(bytes) => {
-                                let mime = mime_from_ext(&ext);
-                                let b64 = STANDARD.encode(&bytes);
-                                let data_uri = format!("data:{mime};base64,{b64}");
-                                replace_attr_value(tag, "src", &src, &data_uri)
+                        // Derive a safe filename from the image path basename.
+                        let basename = clean_src.rsplit('/').next().unwrap_or(clean_src);
+                        let dest_path = std::path::Path::new(image_dir).join(basename);
+
+                        // Extract to disk if not already cached.
+                        let written = if dest_path.exists() {
+                            true
+                        } else if let Ok(bytes) = read_zip_entry_bytes(archive, &resolved) {
+                            if std::fs::create_dir_all(image_dir).is_ok() {
+                                std::fs::write(&dest_path, bytes).is_ok()
+                            } else {
+                                false
                             }
-                            Err(_) => tag.to_string(),
+                        } else {
+                            false
+                        };
+
+                        if written {
+                            let abs_path = dest_path.to_string_lossy();
+                            let encoded = urlencoding::encode(&abs_path);
+                            let asset_url = format!("asset://localhost/{}", encoded);
+                            replace_attr_value(tag, "src", &src, &asset_url)
+                        } else {
+                            tag.to_string()
                         }
                     }
                 }

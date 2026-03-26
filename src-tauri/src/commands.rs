@@ -524,7 +524,10 @@ pub async fn get_chapter_content(
             .file_path
     };
 
-    epub::get_chapter_content(&file_path, chapter_index as usize).map_err(|e| e.to_string())
+    validate_file_exists(&file_path)?;
+    let data_dir = state.data_dir.to_string_lossy().to_string();
+    epub::get_chapter_content(&file_path, chapter_index as usize, &data_dir, &book_id)
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -540,6 +543,7 @@ pub async fn get_toc(
             .file_path
     };
 
+    validate_file_exists(&file_path)?;
     epub::get_toc(&file_path).map_err(|e| e.to_string())
 }
 
@@ -552,6 +556,16 @@ pub async fn get_reading_progress(
 ) -> Result<Option<ReadingProgress>, String> {
     let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
     db::get_reading_progress(&conn, &book_id).map_err(|e| e.to_string())
+}
+
+fn validate_file_exists(file_path: &str) -> Result<(), String> {
+    if !std::path::Path::new(file_path).exists() {
+        return Err(format!(
+            "Book file not found at '{}'. It may have been moved or deleted.",
+            file_path
+        ));
+    }
+    Ok(())
 }
 
 fn validate_scroll_position(pos: f64) -> Result<f64, String> {
@@ -657,6 +671,7 @@ pub async fn get_comic_page_count(
             .ok_or_else(|| format!("Book '{book_id}' not found"))?
     };
 
+    validate_file_exists(&book.file_path)?;
     match book.format {
         BookFormat::Cbz => cbz::get_page_count(&book.file_path),
         BookFormat::Cbr => cbr::get_page_count(&book.file_path),
@@ -680,6 +695,7 @@ pub async fn get_comic_page(
             .ok_or_else(|| format!("Book '{book_id}' not found"))?
     };
 
+    validate_file_exists(&book.file_path)?;
     match book.format {
         BookFormat::Cbz => cbz::get_page_image(&book.file_path, page_index),
         BookFormat::Cbr => cbr::get_page_image(&book.file_path, page_index),
@@ -1851,6 +1867,7 @@ pub async fn get_pdf_page_count(
             .ok_or_else(|| format!("Book '{book_id}' not found"))?
             .file_path
     };
+    validate_file_exists(&file_path)?;
     pdf::get_page_count(&file_path)
 }
 
@@ -1867,6 +1884,7 @@ pub async fn get_pdf_page(
             .ok_or_else(|| format!("Book '{book_id}' not found"))?
             .file_path
     };
+    validate_file_exists(&file_path)?;
     pdf::get_page_image(&file_path, page_index, 1200)
 }
 
@@ -2246,5 +2264,28 @@ mod tests {
         assert_eq!(validate_scroll_position(0.0).unwrap(), 0.0);
         assert_eq!(validate_scroll_position(0.5).unwrap(), 0.5);
         assert_eq!(validate_scroll_position(1.0).unwrap(), 1.0);
+    }
+
+    #[test]
+    fn validate_file_exists_returns_ok_for_existing_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("book.epub");
+        std::fs::write(&file, b"dummy").unwrap();
+        assert!(validate_file_exists(file.to_str().unwrap()).is_ok());
+    }
+
+    #[test]
+    fn validate_file_exists_returns_clear_error_for_missing_file() {
+        let result = validate_file_exists("/nonexistent/path/book.epub");
+        assert!(result.is_err());
+        let msg = result.unwrap_err();
+        assert!(
+            msg.contains("not found"),
+            "error should mention 'not found': {msg}"
+        );
+        assert!(
+            msg.contains("/nonexistent/path/book.epub"),
+            "error should include the path: {msg}"
+        );
     }
 }
