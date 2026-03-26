@@ -151,7 +151,11 @@ Expand where books come from and how they persist.
 - ~~One-click enrich from search results in edit dialog~~
 - ~~New DB columns: description, genres, rating, isbn, openlibrary_key~~
 - Goodreads sync not implemented (API deprecated/closed)
-- Auto-enrich on import (TBD — currently manual via edit dialog)
+- ~~Auto-enrich on import via scan queue (ISBN lookup, title+author search, filename parsing)~~
+- ~~Background scan queue with progress indicator and cancel~~
+- ~~ComicInfo.xml parsing for CBZ metadata~~
+- ~~Settings: auto-scan on import, auto-scan on startup~~
+- ~~Per-book scan and "queue for next scan" actions~~
 
 ### 18. Recently Opened — **Done**
 - ~~Quick-access section at the top of the library: last 3-5 books read~~

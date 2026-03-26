@@ -209,6 +209,27 @@ Click "Search OpenLibrary" in the edit dialog to look up your book by title and 
 
 This is a one-click operation — select a match and the metadata is applied to your book.
 
+### Automatic metadata scanning
+
+Folio can automatically look up metadata for your books via OpenLibrary. The scan uses multiple strategies in order of confidence:
+
+1. **ISBN lookup** — if the EPUB contains an ISBN in its metadata, Folio does a direct lookup (highest accuracy)
+2. **Title + Author search** — searches OpenLibrary and auto-applies if the match is strong
+3. **Filename parsing** — for CBR/CBZ comics and files with no embedded metadata, Folio parses the filename to extract title, author, and year
+
+**Scan controls:**
+
+- **Scan Library** button in the toolbar (magnifying glass icon) — scans all unenriched books
+- **Per-book scan** — hover over a book card and click the scan icon
+- **Progress indicator** — shows "Enriching 3/12: Book Title" with a cancel button
+
+**Settings** (in Settings > Metadata Scan):
+
+- **Auto-scan on import** (default: on) — newly imported books are automatically queued for metadata lookup
+- **Auto-scan on startup** (default: off) — scan unenriched books when the app launches
+
+Comics with `ComicInfo.xml` inside the CBZ archive will have writer and title extracted automatically.
+
 ---
 
 ## 7. Catalog Browsing (OPDS)
