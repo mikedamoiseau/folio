@@ -137,9 +137,8 @@ fn run_schema(conn: &Connection) -> Result<()> {
         conn.execute_batch("UPDATE highlights SET updated_at = created_at WHERE updated_at = 0;");
 
     // Index on bookmarks.book_id for list_bookmarks() and cascade delete performance
-    let _ = conn.execute_batch(
-        "CREATE INDEX IF NOT EXISTS idx_bookmarks_book_id ON bookmarks(book_id);",
-    );
+    let _ = conn
+        .execute_batch("CREATE INDEX IF NOT EXISTS idx_bookmarks_book_id ON bookmarks(book_id);");
 
     Ok(())
 }

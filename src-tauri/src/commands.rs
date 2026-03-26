@@ -64,7 +64,9 @@ fn save_cover_from_data_uri(
     };
     let dir = data_dir.join("covers").join(book_id);
     if let Err(e) = std::fs::create_dir_all(&dir) {
-        log::warn!("cover extraction failed for book {book_id}: could not create cover directory: {e}");
+        log::warn!(
+            "cover extraction failed for book {book_id}: could not create cover directory: {e}"
+        );
         return None;
     }
     let path = dir.join(format!("cover.{ext}"));
