@@ -524,6 +524,13 @@ pub async fn get_reading_progress(
     db::get_reading_progress(&conn, &book_id).map_err(|e| e.to_string())
 }
 
+fn validate_scroll_position(pos: f64) -> Result<f64, String> {
+    if pos.is_nan() || pos.is_infinite() {
+        return Err("scroll_position must be a finite number".to_string());
+    }
+    Ok(pos.clamp(0.0, 1.0))
+}
+
 #[tauri::command]
 pub async fn save_reading_progress(
     book_id: String,
@@ -531,6 +538,22 @@ pub async fn save_reading_progress(
     scroll_position: f64,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
+    let scroll_position = validate_scroll_position(scroll_position)?;
+
+    let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
+
+    // Validate chapter_index against the book's total chapters
+    let book = db::get_book(&conn, &book_id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("Book not found: {}", book_id))?;
+
+    if book.total_chapters > 0 && chapter_index >= book.total_chapters {
+        return Err(format!(
+            "chapter_index {} is out of range (book has {} chapters)",
+            chapter_index, book.total_chapters
+        ));
+    }
+
     let progress = ReadingProgress {
         book_id,
         chapter_index,
@@ -541,7 +564,6 @@ pub async fn save_reading_progress(
             .as_secs() as i64,
     };
 
-    let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
     db::upsert_reading_progress(&conn, &progress).map_err(|e| e.to_string())
 }
 
@@ -2166,5 +2188,33 @@ mod tests {
         let result = save_cover_from_data_uri(data_uri, dir.path(), "book");
         assert!(result.is_some());
         assert!(result.unwrap().contains("cover.jpg"));
+    }
+
+    #[test]
+    fn validate_scroll_position_rejects_nan() {
+        assert!(validate_scroll_position(f64::NAN).is_err());
+    }
+
+    #[test]
+    fn validate_scroll_position_rejects_infinity() {
+        assert!(validate_scroll_position(f64::INFINITY).is_err());
+        assert!(validate_scroll_position(f64::NEG_INFINITY).is_err());
+    }
+
+    #[test]
+    fn validate_scroll_position_clamps_negative() {
+        assert_eq!(validate_scroll_position(-0.5).unwrap(), 0.0);
+    }
+
+    #[test]
+    fn validate_scroll_position_clamps_above_one() {
+        assert_eq!(validate_scroll_position(1.5).unwrap(), 1.0);
+    }
+
+    #[test]
+    fn validate_scroll_position_accepts_valid_values() {
+        assert_eq!(validate_scroll_position(0.0).unwrap(), 0.0);
+        assert_eq!(validate_scroll_position(0.5).unwrap(), 0.5);
+        assert_eq!(validate_scroll_position(1.0).unwrap(), 1.0);
     }
 }
