@@ -135,7 +135,7 @@ Expand where books come from and how they persist.
 - ~~Reading streaks~~, yearly goal (TBD)
 - ~~Visual dashboard with charts (30-day bar chart)~~
 
-### 17. Goodreads / OpenLibrary Integration — **Done** *(OpenLibrary)*
+### 17. Goodreads / OpenLibrary Integration — **Done** *(Multi-Provider)*
 - ~~Pull richer metadata: descriptions, genres, ratings, cover art~~
 - ~~Auto-match books by title+author via OpenLibrary search~~
 - ~~One-click enrich from search results in edit dialog~~
@@ -146,6 +146,20 @@ Expand where books come from and how they persist.
 - ~~ComicInfo.xml parsing for CBZ metadata~~
 - ~~Settings: auto-scan on import, auto-scan on startup~~
 - ~~Per-book scan and "queue for next scan" actions~~
+- ~~Multi-provider enrichment architecture (EnrichmentProvider trait)~~
+- ~~Google Books API provider (free, good international/French coverage)~~
+- ~~Provider settings: enable/disable, API keys, persisted in settings table~~
+
+#### Future Enrichment Providers
+| Provider | Coverage | API Key | Notes |
+|----------|----------|---------|-------|
+| Comic Vine | Comics (American, some European) | Free key required | comicvine.gamespot.com |
+| Bédéthèque | Franco-Belgian BD (best for French comics) | N/A (scraping) | bedetheque.com — no public API, fragile |
+| ISBNdb | Very comprehensive, all formats | Paid | isbndb.com |
+| MangaUpdates | Manga | Free | mangaupdates.com |
+| AniList | Manga/anime | Free (GraphQL) | anilist.co |
+| WorldCat | Library catalog, international | Free | worldcat.org/webservices |
+| Hardcover | Modern book social network | Free (GraphQL) | hardcover.app |
 
 ### 18. Recently Opened — **Done**
 - ~~Quick-access section at the top of the library: last 3-5 books read~~
