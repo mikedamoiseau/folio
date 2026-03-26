@@ -19,7 +19,13 @@ cargo clippy -- -D warnings  # Lint Rust code (CI-enforced)
 cargo fmt --check            # Check Rust formatting (CI-enforced)
 ```
 
-**Note:** No frontend test framework is configured yet. Rust tests use `tempfile` for DB fixtures.
+Frontend tests (run from project root):
+```bash
+npm run test                 # Run Vitest (once)
+npm run test:watch           # Run Vitest (watch mode)
+```
+
+Rust tests use `tempfile` for DB fixtures. Frontend pure logic lives in `src/lib/utils.ts` for testability.
 
 ## Architecture
 
@@ -80,7 +86,7 @@ Books are copied into an app-managed library folder (default `~/Documents/ebook-
 | EPUB | zip + quick-xml + ammonia | Sanitized HTML chapters |
 | PDF | pdfium-render | Base64-encoded page images |
 | CBZ | zip | Sorted image files |
-| CBR | *(stub — needs libarchive)* | Sorted image files |
+| CBR | unrar | Sorted image files |
 
 PDF support requires pdfium binaries bundled in `src-tauri/resources/`. The `scripts/download-pdfium.sh` script fetches them. Run `./scripts/download-pdfium.sh` before first `npm run tauri dev` — PDF import/rendering won't work without it.
 
@@ -98,3 +104,6 @@ GitHub Actions runs on push to main and PRs:
 - `npm run type-check`
 - Pdfium binaries downloaded from `bblanchon/pdfium-binaries` in CI
 - Release workflow (`release.yml`) builds platform binaries on tag push
+
+**Before pushing:** Always run the full CI check suite locally. A pre-push git hook enforces this:
+`cargo fmt --check && cargo clippy -- -D warnings && cargo test` (in `src-tauri/`) then `npm run type-check && npm run test` (in root).
