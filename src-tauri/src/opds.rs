@@ -251,11 +251,14 @@ fn parse_feed(xml: &str, base_url: &str) -> Result<OpdsFeed, String> {
         buf.clear();
     }
 
+    // Resolve OpenSearch description URLs to direct search templates
+    let resolved_search = search_url.and_then(|u| resolve_search_url(&u));
+
     Ok(OpdsFeed {
         title: feed_title,
         entries,
         next_url,
-        search_url,
+        search_url: resolved_search,
     })
 }
 
@@ -475,6 +478,73 @@ mod tests {
         );
         assert_eq!(feed.entries[0].links[0].mime_type, "application/epub+zip");
     }
+}
+
+/// Resolve a search URL — if it's an OpenSearch description XML, fetch it and
+/// extract the Atom/OPDS template URL. Otherwise return it as-is.
+pub fn resolve_search_url(url: &str) -> Option<String> {
+    // If it already contains {searchTerms}, it's a direct template
+    if url.contains("{searchTerms}") {
+        return Some(url.to_string());
+    }
+    // Try fetching as OpenSearch description
+    let client = reqwest::blocking::Client::new();
+    let response = client
+        .get(url)
+        .header("User-Agent", "Folio/1.2 (OPDS reader)")
+        .send()
+        .ok()?;
+    if !response.status().is_success() {
+        return None;
+    }
+    let xml = response.text().ok()?;
+
+    // Parse and find the Atom/OPDS Url template
+    let mut reader = Reader::from_str(&xml);
+    reader.config_mut().trim_text(true);
+    let mut buf = Vec::new();
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(ref e)) | Ok(Event::Empty(ref e)) => {
+                let ln = e.local_name();
+                let local = std::str::from_utf8(ln.as_ref()).unwrap_or("");
+                if local.eq_ignore_ascii_case("url") {
+                    let mut template = String::new();
+                    let mut url_type = String::new();
+                    for attr in e.attributes().flatten() {
+                        let key = std::str::from_utf8(attr.key.as_ref()).unwrap_or("");
+                        let val = attr.unescape_value().unwrap_or_default().to_string();
+                        match key {
+                            "template" => template = val,
+                            "type" => url_type = val,
+                            _ => {}
+                        }
+                    }
+                    // Prefer atom+xml / opds-catalog type
+                    if !template.is_empty()
+                        && (url_type.contains("atom") || url_type.contains("opds"))
+                    {
+                        return Some(template);
+                    }
+                }
+            }
+            Ok(Event::Eof) => break,
+            Err(_) => break,
+            _ => {}
+        }
+        buf.clear();
+    }
+    None
+}
+
+/// Percent-encode a string for use in URLs.
+pub fn url_encode(s: &str) -> String {
+    s.replace('%', "%25")
+        .replace(' ', "%20")
+        .replace('&', "%26")
+        .replace('=', "%3D")
+        .replace('#', "%23")
+        .replace('+', "%2B")
 }
 
 /// Download a file from a URL to a local path.

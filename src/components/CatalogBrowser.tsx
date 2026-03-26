@@ -48,8 +48,11 @@ export default function CatalogBrowser({ onClose, onBookImported }: CatalogBrows
   const [newCatalogName, setNewCatalogName] = useState("");
   const [newCatalogUrl, setNewCatalogUrl] = useState("");
 
-  // Search
+  // Search (per-catalog and unified)
   const [searchQuery, setSearchQuery] = useState("");
+  const [unifiedQuery, setUnifiedQuery] = useState("");
+  const [unifiedResults, setUnifiedResults] = useState<OpdsEntry[] | null>(null);
+  const [unifiedLoading, setUnifiedLoading] = useState(false);
 
   const loadCatalogs = useCallback(async () => {
     try {
@@ -90,9 +93,22 @@ export default function CatalogBrowser({ onClose, onBookImported }: CatalogBrows
 
   const handleSearch = useCallback(async () => {
     if (!feed?.searchUrl || !searchQuery.trim()) return;
-    const url = feed.searchUrl.replace("{searchTerms}", encodeURIComponent(searchQuery.trim()));
-    await browseTo(url, `Search: ${searchQuery}`);
-  }, [feed, searchQuery, browseTo]);
+    const searchUrl = feed.searchUrl;
+    const url = searchUrl.replace("{searchTerms}", encodeURIComponent(searchQuery.trim()));
+    setLoading(true);
+    setError(null);
+    try {
+      const f = await invoke<OpdsFeed>("browse_opds", { url });
+      // Preserve the parent's searchUrl so the search bar stays visible
+      if (!f.searchUrl) f.searchUrl = searchUrl;
+      setFeed(f);
+      setHistory((prev) => [...prev, { url, title: `Search: ${searchQuery}` }]);
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setLoading(false);
+    }
+  }, [feed, searchQuery]);
 
   const handleDownload = useCallback(async (entry: OpdsEntry) => {
     // Find the best download link (prefer epub)
@@ -135,6 +151,25 @@ export default function CatalogBrowser({ onClose, onBookImported }: CatalogBrows
     }
   };
 
+  const handleUnifiedSearch = useCallback(async () => {
+    if (!unifiedQuery.trim()) return;
+    setUnifiedLoading(true);
+    setError(null);
+    try {
+      const results = await invoke<OpdsEntry[]>("search_all_catalogs", { query: unifiedQuery.trim() });
+      setUnifiedResults(results);
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setUnifiedLoading(false);
+    }
+  }, [unifiedQuery]);
+
+  const clearUnifiedSearch = useCallback(() => {
+    setUnifiedResults(null);
+    setUnifiedQuery("");
+  }, []);
+
   // Catalog list view
   if (!feed) {
     return (
@@ -151,7 +186,91 @@ export default function CatalogBrowser({ onClose, onBookImported }: CatalogBrows
               </button>
             </div>
 
+            {/* Unified search bar */}
+            <div className="px-5 py-3 border-b border-warm-border flex gap-2">
+              <input
+                type="text" value={unifiedQuery} onChange={(e) => setUnifiedQuery(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter") handleUnifiedSearch(); if (e.key === "Escape" && unifiedResults) clearUnifiedSearch(); }}
+                placeholder="Search all catalogs…"
+                className="flex-1 text-sm bg-warm-subtle border border-warm-border rounded-lg px-3 py-1.5 text-ink placeholder-ink-muted/50 focus:outline-none focus:border-accent"
+              />
+              {unifiedResults ? (
+                <button onClick={clearUnifiedSearch}
+                  className="px-3 py-1.5 text-sm text-ink-muted hover:text-ink rounded-lg transition-colors">
+                  Clear
+                </button>
+              ) : (
+                <button onClick={handleUnifiedSearch} disabled={!unifiedQuery.trim() || unifiedLoading}
+                  className="px-3 py-1.5 text-sm font-medium text-white bg-accent hover:bg-accent-hover rounded-lg transition-colors disabled:opacity-40">
+                  Search
+                </button>
+              )}
+            </div>
+
             <div className="flex-1 overflow-y-auto py-2">
+              {/* Unified search results */}
+              {unifiedLoading ? (
+                <div className="flex items-center justify-center py-12">
+                  <p className="text-sm text-ink-muted">Searching all catalogs…</p>
+                </div>
+              ) : unifiedResults ? (
+                unifiedResults.length === 0 ? (
+                  <div className="flex items-center justify-center py-12">
+                    <p className="text-sm text-ink-muted">No results found.</p>
+                  </div>
+                ) : (
+                  unifiedResults.map((entry) => {
+                    const supportedLinks = entry.links.filter((l) => l.mimeType.includes("epub") || l.mimeType.includes("pdf"));
+                    const hasDownloads = supportedLinks.length > 0;
+                    const isDownloaded = downloadedIds.has(entry.id);
+                    const isDownloading = downloading === entry.id;
+
+                    return (
+                      <div key={entry.id} className="flex items-start gap-3 px-5 py-3 border-b border-warm-border/50 transition-colors">
+                        {entry.coverUrl ? (
+                          <img src={entry.coverUrl} alt="" className="w-12 h-16 object-cover rounded shrink-0 bg-warm-subtle"
+                            onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} />
+                        ) : (
+                          <div className="w-12 h-16 rounded bg-warm-subtle shrink-0 flex items-center justify-center">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" className="text-ink-muted/40">
+                              <path d="M4 19.5v-15A2.5 2.5 0 016.5 2H20v20H6.5a2.5 2.5 0 010-5H20" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                            </svg>
+                          </div>
+                        )}
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-medium text-ink leading-snug">{entry.title}</p>
+                          {entry.author && <p className="text-xs text-ink-muted mt-0.5">{entry.author}</p>}
+                          {entry.summary && <p className="text-xs text-ink-muted mt-1 line-clamp-2 leading-relaxed">{entry.summary}</p>}
+                          {hasDownloads && (
+                            <div className="flex items-center gap-2 mt-2">
+                              {isDownloaded ? (
+                                <span className="text-[11px] text-accent font-medium">Added to library</span>
+                              ) : isDownloading ? (
+                                <span className="text-[11px] text-ink-muted flex items-center gap-1">
+                                  <svg className="animate-spin w-3 h-3" viewBox="0 0 24 24" fill="none">
+                                    <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" className="opacity-25" />
+                                    <path d="M4 12a8 8 0 018-8" stroke="currentColor" strokeWidth="3" strokeLinecap="round" className="opacity-75" />
+                                  </svg>
+                                  Downloading…
+                                </span>
+                              ) : (
+                                <button
+                                  onClick={() => handleDownload(entry)}
+                                  className="px-2 py-0.5 text-[11px] font-medium text-accent bg-accent-light hover:bg-accent hover:text-white rounded transition-colors"
+                                >
+                                  + {supportedLinks[0]?.mimeType.includes("epub") ? "EPUB" : "PDF"}
+                                </button>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })
+                )
+              ) : (
+              /* Catalog list (hidden during unified search) */
+              <>
               {catalogs.map((cat) => (
                 <button
                   key={cat.url}
@@ -216,6 +335,8 @@ export default function CatalogBrowser({ onClose, onBookImported }: CatalogBrows
                   </svg>
                   Add custom OPDS catalog
                 </button>
+              )}
+              </>
               )}
             </div>
 

@@ -80,11 +80,13 @@ The first time you open the app, you'll see an empty library with a prompt to im
 
 ### Importing books
 
-**File picker:** Click the Import button in the top-right corner of the library screen. A file dialog opens; pick one or more files in any supported format and confirm.
+Click the **+ Add books** button in the top-right corner to open the import menu:
 
-**Folder scan:** Use the Import button's folder option to scan an entire directory. Folio finds all supported files in the folder and imports them in batch, with a progress indicator.
+- **Add files:** Opens a file picker for one or more files in any supported format.
+- **Import folder:** Scans an entire directory for supported files and imports them in batch, with a progress indicator.
+- **Import from URL:** Paste a direct link to an EPUB, PDF, CBZ, or CBR file. Folio downloads and imports it.
 
-**Drag and drop:** Drag files from Finder or File Explorer directly onto the library window. A "Drop to import" overlay appears. Release to import them.
+**Drag and drop:** You can also drag files from Finder or File Explorer directly onto the library window. A "Drop to import" overlay appears. Release to import them.
 
 When you import a book, Folio copies the file into its own managed library folder (default `~/Documents/ebook-reader/`). The original file is not modified or moved. Duplicate files are detected by content hash and skipped automatically.
 
@@ -211,7 +213,7 @@ This is a one-click operation — select a match and the metadata is applied to 
 
 ## 7. Catalog Browsing (OPDS)
 
-Folio can browse online book catalogs that use the OPDS protocol (Open Publication Distribution System). This includes sources like Project Gutenberg, Standard Ebooks, ManyBooks, Feedbooks, and self-hosted Calibre servers.
+Folio can browse online book catalogs that use the OPDS protocol (Open Publication Distribution System). This includes sources like Project Gutenberg, Standard Ebooks, and self-hosted Calibre servers.
 
 ### Browsing
 
@@ -219,7 +221,9 @@ Open the catalog browser from the library. Pick a catalog to browse its categori
 
 ### Searching
 
-If a catalog supports search, a search bar appears. Results display inline.
+**Unified search:** From the catalog list, type a query in the "Search all catalogs" bar. Folio searches every configured catalog in parallel and shows aggregated results — one search, all sources.
+
+**Per-catalog search:** When browsing inside a catalog that supports search, a "Search this catalog" bar appears at the top.
 
 ### Downloading
 

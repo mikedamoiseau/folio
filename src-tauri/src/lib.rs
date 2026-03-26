@@ -135,6 +135,7 @@ pub fn run() {
             commands::add_opds_catalog,
             commands::remove_opds_catalog,
             commands::browse_opds,
+            commands::search_all_catalogs,
             commands::download_opds_book,
         ])
         .run(tauri::generate_context!())

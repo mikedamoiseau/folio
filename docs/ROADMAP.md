@@ -123,10 +123,10 @@ Expand where books come from and how they persist.
 ### 14. Book Discovery & Catalog Search — **Done** *(via OPDS in #11)*
 - ~~Search free/legal ebook catalogs directly from the app and one-click import into library~~
 - ~~Browse by catalog: select a source, then browse/search within it~~
-- Unified search: search by title/author across all configured catalogs at once (TBD)
+- ~~Unified search: search by title/author across all configured catalogs at once~~
 - ~~One-click download & import: book goes straight into the library folder~~
 - ~~Built on OPDS — the standard protocol used by most free ebook sources~~
-- ~~Known OPDS-compatible sources: Project Gutenberg, Standard Ebooks, ManyBooks, Feedbooks~~
+- ~~Known OPDS-compatible sources: Project Gutenberg, Standard Ebooks~~
 - ~~Allow users to add custom OPDS catalog URLs (for self-hosted Calibre servers, etc.)~~
 - ~~Show available formats per result, prefer EPUB when available~~
 

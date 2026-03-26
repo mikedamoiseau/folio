@@ -1139,6 +1139,80 @@ pub async fn remove_opds_catalog(url: String, state: State<'_, AppState>) -> Res
     db::set_setting(&conn, "opds_custom_catalogs", &json).map_err(|e| e.to_string())
 }
 
+/// Search all configured OPDS catalogs in parallel and return aggregated results.
+#[tauri::command]
+pub async fn search_all_catalogs(
+    query: String,
+    state: State<'_, AppState>,
+) -> Result<Vec<opds::OpdsEntry>, String> {
+    // Collect all catalog URLs
+    let catalogs = get_opds_catalogs(state).await?;
+
+    // Fetch root feeds in parallel to discover search URLs
+    let (result_tx, result_rx) = std::sync::mpsc::channel();
+    let mut thread_count = 0;
+
+    for cat in &catalogs {
+        let url = cat.url.clone();
+        let q = query.clone();
+        let tx = result_tx.clone();
+        let cat_name = cat.name.clone();
+        std::thread::spawn(move || {
+            // 1. Fetch root feed to get searchUrl
+            let root = match opds::fetch_feed(&url) {
+                Ok(f) => f,
+                Err(_) => {
+                    let _ = tx.send(Vec::new());
+                    return;
+                }
+            };
+            let raw_search_url = match root.search_url {
+                Some(u) => u,
+                None => {
+                    let _ = tx.send(Vec::new());
+                    return;
+                }
+            };
+            // 2. Resolve OpenSearch description if needed, then search
+            let template = match opds::resolve_search_url(&raw_search_url) {
+                Some(t) => t,
+                None => {
+                    let _ = tx.send(Vec::new());
+                    return;
+                }
+            };
+            let search_url = template.replace("{searchTerms}", &opds::url_encode(&q));
+            let results = match opds::fetch_feed(&search_url) {
+                Ok(f) => f.entries,
+                Err(_) => Vec::new(),
+            };
+            // Tag entries with catalog source
+            let tagged: Vec<opds::OpdsEntry> = results
+                .into_iter()
+                .map(|mut e| {
+                    if !e.summary.is_empty() {
+                        e.summary = format!("[{}] {}", cat_name, e.summary);
+                    } else {
+                        e.summary = format!("[{}]", cat_name);
+                    }
+                    e
+                })
+                .collect();
+            let _ = tx.send(tagged);
+        });
+        thread_count += 1;
+    }
+    drop(result_tx);
+
+    let mut all_entries = Vec::new();
+    for _ in 0..thread_count {
+        if let Ok(entries) = result_rx.recv() {
+            all_entries.extend(entries);
+        }
+    }
+    Ok(all_entries)
+}
+
 #[tauri::command]
 pub async fn browse_opds(url: String) -> Result<opds::OpdsFeed, String> {
     let (tx, rx) = std::sync::mpsc::channel();
