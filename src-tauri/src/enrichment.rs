@@ -126,6 +126,8 @@ pub struct EnrichmentResult {
     pub data: EnrichmentData,
     pub confidence: f64,
     pub auto_apply: bool,
+    /// Names of providers that were queried during this enrichment (e.g. ["Google Books", "OpenLibrary"]).
+    pub providers_tried: Vec<String>,
 }
 
 pub fn title_similarity(a: &str, b: &str) -> f64 {
@@ -159,15 +161,19 @@ pub fn enrich_book(
     isbn: Option<&str>,
     registry: &crate::providers::ProviderRegistry,
 ) -> Option<EnrichmentResult> {
+    let mut all_tried = Vec::new();
+
     // Tier 1: ISBN lookup
     if let Some(isbn) = isbn {
-        let results = registry.search_by_isbn(isbn);
-        if let Some(first) = results.into_iter().next() {
+        let outcome = registry.search_by_isbn(isbn);
+        all_tried.extend(outcome.providers_tried);
+        if let Some(first) = outcome.results.into_iter().next() {
             if !first.title.is_empty() {
                 return Some(EnrichmentResult {
                     data: first,
                     confidence: 0.95,
                     auto_apply: true,
+                    providers_tried: all_tried,
                 });
             }
         }
@@ -178,20 +184,23 @@ pub fn enrich_book(
     } else {
         Some(author)
     };
-    let results = registry.search_by_title(title, author_opt);
-    let first = results.into_iter().next()?;
+    let outcome = registry.search_by_title(title, author_opt);
+    all_tried.extend(outcome.providers_tried);
+    let first = outcome.results.into_iter().next()?;
     let sim = title_similarity(title, &first.title);
     if sim >= 0.85 {
         Some(EnrichmentResult {
             data: first,
             confidence: sim,
             auto_apply: true,
+            providers_tried: all_tried,
         })
     } else if sim >= 0.5 {
         Some(EnrichmentResult {
             data: first,
             confidence: sim,
             auto_apply: false,
+            providers_tried: all_tried,
         })
     } else {
         None

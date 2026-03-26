@@ -114,33 +114,63 @@ impl ProviderRegistry {
         }
     }
 
-    /// Search by ISBN across enabled providers. Returns first non-empty result.
-    pub fn search_by_isbn(&self, isbn: &str) -> Vec<EnrichmentData> {
+    /// Search by ISBN across enabled providers. Returns first non-empty result
+    /// along with the list of providers that were tried.
+    pub fn search_by_isbn(&self, isbn: &str) -> SearchOutcome {
+        let mut tried = Vec::new();
         for provider in &self.providers {
             if !provider.config().enabled {
                 continue;
             }
+            tried.push(provider.name().to_string());
             match provider.search_by_isbn(isbn) {
-                Ok(results) if !results.is_empty() => return results,
+                Ok(results) if !results.is_empty() => {
+                    return SearchOutcome {
+                        results,
+                        providers_tried: tried,
+                    };
+                }
                 _ => continue,
             }
         }
-        Vec::new()
+        SearchOutcome {
+            results: Vec::new(),
+            providers_tried: tried,
+        }
     }
 
-    /// Search by title across enabled providers. Returns first non-empty result.
-    pub fn search_by_title(&self, title: &str, author: Option<&str>) -> Vec<EnrichmentData> {
+    /// Search by title across enabled providers. Returns first non-empty result
+    /// along with the list of providers that were tried.
+    pub fn search_by_title(&self, title: &str, author: Option<&str>) -> SearchOutcome {
+        let mut tried = Vec::new();
         for provider in &self.providers {
             if !provider.config().enabled {
                 continue;
             }
+            tried.push(provider.name().to_string());
             match provider.search_by_title(title, author) {
-                Ok(results) if !results.is_empty() => return results,
+                Ok(results) if !results.is_empty() => {
+                    return SearchOutcome {
+                        results,
+                        providers_tried: tried,
+                    };
+                }
                 _ => continue,
             }
         }
-        Vec::new()
+        SearchOutcome {
+            results: Vec::new(),
+            providers_tried: tried,
+        }
     }
+}
+
+/// Result of a multi-provider search, including which providers were queried.
+#[derive(Debug, Clone)]
+pub struct SearchOutcome {
+    pub results: Vec<EnrichmentData>,
+    /// Names of providers that were tried, in order (e.g. ["Google Books", "OpenLibrary"]).
+    pub providers_tried: Vec<String>,
 }
 
 #[cfg(test)]

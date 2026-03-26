@@ -2451,6 +2451,12 @@ pub async fn scan_single_book(book_id: String, state: State<'_, AppState>) -> Re
         }
         new_reg
     };
+    let enabled_provider_names: Vec<String> = registry
+        .list_providers()
+        .iter()
+        .filter(|p| p.config.enabled)
+        .map(|p| p.name.clone())
+        .collect();
     let (tx, rx) = std::sync::mpsc::channel();
     let t = lookup_title.to_string();
     let a = lookup_author.to_string();
@@ -2514,25 +2520,30 @@ pub async fn scan_single_book(book_id: String, state: State<'_, AppState>) -> Re
             let updated_book = db::get_book(&conn, &book_id)
                 .map_err(|e| e.to_string())?
                 .ok_or_else(|| "Book not found".to_string())?;
+            let tried = result.providers_tried.join(", ");
             log_activity(
                 &conn,
                 "book_scanned",
                 "book",
                 Some(&book_id),
                 Some(&updated_book.title),
-                Some(&format!("Matched via {}", result.data.source)),
+                Some(&format!(
+                    "Matched via {} (searched: {})",
+                    result.data.source, tried
+                )),
             );
             Ok(updated_book)
         }
         None => {
             db::set_enrichment_status(&conn, &book_id, "skipped").map_err(|e| e.to_string())?;
+            let tried = enabled_provider_names.join(", ");
             log_activity(
                 &conn,
                 "book_scanned",
                 "book",
                 Some(&book_id),
                 Some(&book.title),
-                Some("No match found"),
+                Some(&format!("No match found (searched: {})", tried)),
             );
             Err("No match found".to_string())
         }
