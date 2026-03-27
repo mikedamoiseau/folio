@@ -31,10 +31,11 @@ export default function Library() {
   const [progressMap, setProgressMap] = useState<Record<string, number>>({});
   const [lastReadMap, setLastReadMap] = useState<Record<string, number>>({});
   const [search, setSearch] = useState("");
-  const [sortBy, setSortBy] = useState<"date_added" | "last_read" | "title" | "author" | "progress">("date_added");
+  const [sortBy, setSortBy] = useState<"date_added" | "last_read" | "title" | "author" | "progress" | "rating">("date_added");
   const [sortAsc, setSortAsc] = useState(false);
   const [filterFormat, setFilterFormat] = useState<string>("all");
   const [filterStatus, setFilterStatus] = useState<string>("all");
+  const [filterRating, setFilterRating] = useState<string>("all");
   const [importing, setImporting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
@@ -304,6 +305,10 @@ export default function Library() {
         if (filterStatus === "in_progress" && (pct === 0 || pct >= 100)) return false;
         if (filterStatus === "finished" && pct < 100) return false;
       }
+      if (filterRating !== "all") {
+        const minRating = parseInt(filterRating);
+        if (Math.round(book.rating ?? 0) < minRating) return false;
+      }
       return true;
     })
     .sort((a, b) => {
@@ -313,6 +318,7 @@ export default function Library() {
         case "author": return dir * a.author.localeCompare(b.author);
         case "last_read": return dir * ((lastReadMap[a.id] ?? 0) - (lastReadMap[b.id] ?? 0));
         case "progress": return dir * ((progressMap[a.id] ?? 0) - (progressMap[b.id] ?? 0));
+        case "rating": return dir * ((a.rating ?? 0) - (b.rating ?? 0));
         case "date_added":
         default: return dir * (a.added_at - b.added_at);
       }
@@ -482,6 +488,21 @@ export default function Library() {
             <option value="finished">Finished</option>
           </select>
 
+          {/* Filter: rating */}
+          <select
+            value={filterRating}
+            onChange={(e) => setFilterRating(e.target.value)}
+            className="shrink-0 h-9 px-2 bg-warm-subtle rounded-lg text-xs text-ink border border-transparent focus:border-accent/40 focus:outline-none"
+            aria-label="Filter by rating"
+          >
+            <option value="all">All ratings</option>
+            <option value="1">1+ stars</option>
+            <option value="2">2+ stars</option>
+            <option value="3">3+ stars</option>
+            <option value="4">4+ stars</option>
+            <option value="5">5 stars</option>
+          </select>
+
           {scanProgress ? (
             <div className="flex items-center gap-2 text-xs text-ink-muted">
               <svg className="animate-spin w-3.5 h-3.5 text-accent" viewBox="0 0 24 24" fill="none">
@@ -518,13 +539,14 @@ export default function Library() {
       {/* Sort bar */}
       {(hasBooks || activeCollectionId) && (
         <div className="shrink-0 px-6 py-1.5 flex items-center gap-1 border-b border-warm-border/50 bg-paper">
-          {(["date_added", "title", "author", "last_read", "progress"] as const).map((key) => {
+          {(["date_added", "title", "author", "last_read", "progress", "rating"] as const).map((key) => {
             const labels: Record<string, string> = {
               date_added: "Date added",
               title: "Title",
               author: "Author",
               last_read: "Last read",
               progress: "Progress",
+              rating: "Rating",
             };
             const isActive = sortBy === key;
             return (
@@ -765,6 +787,7 @@ export default function Library() {
                   publishYear={book.publish_year}
                   series={book.series}
                   volume={book.volume}
+                  rating={book.rating}
                   onClick={() => navigate(`/reader/${book.id}`)}
                   onDelete={handleRemoveBook}
                   onInfo={(id) => {

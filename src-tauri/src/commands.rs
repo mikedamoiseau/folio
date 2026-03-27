@@ -582,6 +582,7 @@ pub async fn update_book_metadata(
     language: Option<String>,
     publisher: Option<String>,
     publish_year: Option<u16>,
+    rating: Option<f64>,
     state: State<'_, AppState>,
     app: AppHandle,
 ) -> Result<Book, String> {
@@ -598,6 +599,7 @@ pub async fn update_book_metadata(
     let has_publisher = publisher.is_some();
     let has_publish_year = publish_year.is_some();
     let has_cover = cover_image_path.is_some();
+    let has_rating = rating.is_some();
 
     if let Some(t) = title {
         book.title = t;
@@ -619,6 +621,9 @@ pub async fn update_book_metadata(
     }
     if let Some(y) = publish_year {
         book.publish_year = Some(y);
+    }
+    if let Some(r) = rating {
+        book.rating = if r <= 0.0 { None } else { Some(r) };
     }
     if let Some(image_path) = cover_image_path {
         // Copy new cover image into the covers directory
@@ -662,6 +667,9 @@ pub async fn update_book_metadata(
     }
     if has_cover {
         changes.push("cover");
+    }
+    if has_rating {
+        changes.push("rating");
     }
     if !changes.is_empty() {
         let detail = format!("Changed: {}", changes.join(", "));
@@ -720,6 +728,42 @@ pub async fn get_chapter_content(
     let cached = cache.get_mut(&file_path).unwrap();
     epub::get_chapter_content_from_cache(cached, chapter_index as usize, &data_dir, &book_id)
         .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn get_all_chapters(
+    book_id: String,
+    state: State<'_, AppState>,
+) -> Result<Vec<String>, String> {
+    let (file_path, total_chapters) = {
+        let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
+        let book = db::get_book(&conn, &book_id)
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| format!("Book '{book_id}' not found"))?;
+        (book.file_path, book.total_chapters)
+    };
+
+    validate_file_exists(&file_path)?;
+    let data_dir = state.data_dir.to_string_lossy().to_string();
+
+    let mut cache = state.epub_cache.lock().map_err(|e| e.to_string())?;
+    if !cache.contains_key(&file_path) {
+        if cache.len() >= EPUB_CACHE_MAX {
+            cache.clear();
+        }
+        let c = epub::CachedEpubArchive::open(&file_path).map_err(|e| e.to_string())?;
+        cache.insert(file_path.clone(), c);
+    }
+    let cached = cache.get_mut(&file_path).unwrap();
+
+    let mut chapters = Vec::with_capacity(total_chapters as usize);
+    for i in 0..total_chapters as usize {
+        let html =
+            epub::get_chapter_content_from_cache(cached, i, &data_dir, &book_id)
+                .map_err(|e| e.to_string())?;
+        chapters.push(html);
+    }
+    Ok(chapters)
 }
 
 #[tauri::command]

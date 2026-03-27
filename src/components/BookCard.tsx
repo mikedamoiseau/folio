@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { formatMetadataPills } from "../lib/utils";
+import StarRating from "./StarRating";
 
 interface BookCardProps {
   id: string;
@@ -14,6 +15,7 @@ interface BookCardProps {
   publishYear?: number | null;
   series?: string | null;
   volume?: number | null;
+  rating?: number | null;
   onClick: () => void;
   onDelete?: (id: string) => void;
   onEdit?: (id: string) => void;
@@ -34,6 +36,7 @@ export default function BookCard({
   publishYear,
   series,
   volume,
+  rating,
   onClick,
   onDelete,
   onEdit,
@@ -238,6 +241,11 @@ export default function BookCard({
         <p className="text-xs text-ink-muted truncate mt-0.5" title={author}>
           {author}
         </p>
+        {rating != null && rating > 0 && (
+          <div className="mt-1">
+            <StarRating value={Math.round(rating)} size="sm" />
+          </div>
+        )}
         {pills.length > 0 && (
           <div className="flex flex-wrap gap-1 mt-1.5">
             {pills.map((pill) => (

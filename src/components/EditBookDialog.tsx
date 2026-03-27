@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
+import StarRating from "./StarRating";
 
 interface Tag {
   id: string;
@@ -131,6 +132,7 @@ export default function EditBookDialog({
         language: language !== (initialLanguage ?? "") ? (language || null) : null,
         publisher: publisher !== (initialPublisher ?? "") ? (publisher || null) : null,
         publishYear: publishYear !== String(initialPublishYear ?? "") ? (publishYear ? parseInt(publishYear) : null) : null,
+        rating: bookRating !== initialRating ? (bookRating ?? 0) : null,
       });
       onSaved();
     } catch (err) {
@@ -292,6 +294,12 @@ export default function EditBookDialog({
                 onChange={(e) => setPublisher(e.target.value)}
                 className="w-full text-sm bg-warm-subtle border border-warm-border rounded-lg px-3 py-2 text-ink placeholder-ink-muted/50 focus:outline-none focus:border-accent"
               />
+            </div>
+
+            {/* Rating */}
+            <div>
+              <label className="block text-xs font-medium text-ink-muted mb-1">Rating</label>
+              <StarRating value={bookRating ?? 0} onChange={(v) => setBookRating(v === bookRating ? null : v)} />
             </div>
 
             {/* Tags */}
