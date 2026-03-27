@@ -7,7 +7,7 @@ import { getDraggedBookId, endDrag, isDragging, subscribe } from "../lib/dragSta
 
 export interface CollectionRule {
   id: string;
-  field: "author" | "filename" | "series" | "language" | "publisher" | "description" | "format" | "date_added" | "reading_progress";
+  field: "author" | "filename" | "series" | "language" | "publisher" | "description" | "format" | "tag" | "date_added" | "reading_progress";
   operator: string;
   value: string;
 }
@@ -64,6 +64,7 @@ const FIELD_OPTIONS: { value: CollectionRule["field"]; label: string }[] = [
   { value: "publisher", label: "Publisher" },
   { value: "description", label: "Description" },
   { value: "format", label: "Format" },
+  { value: "tag", label: "Tag" },
   { value: "date_added", label: "Date Added" },
   { value: "reading_progress", label: "Reading Progress" },
 ];
@@ -91,6 +92,10 @@ const OPERATOR_OPTIONS: Record<CollectionRule["field"], { value: string; label: 
   ],
   format: [
     { value: "equals", label: "is" },
+  ],
+  tag: [
+    { value: "equals", label: "is" },
+    { value: "contains", label: "contains" },
   ],
   date_added: [
     { value: "last_n_days", label: "within last (days)" },

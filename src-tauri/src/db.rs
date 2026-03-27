@@ -961,6 +961,7 @@ pub fn get_books_in_collection(conn: &Connection, collection_id: &str) -> Result
     let mut where_clauses: Vec<String> = Vec::new();
     let mut param_values: Vec<String> = Vec::new();
     let mut rp_idx: u32 = 0;
+    let mut tag_idx: u32 = 0;
 
     for rule in &rules {
         match (rule.field.as_str(), rule.operator.as_str()) {
@@ -1006,6 +1007,26 @@ pub fn get_books_in_collection(conn: &Connection, collection_id: &str) -> Result
                 );
                 param_values.push(rule.value.clone());
             }
+            ("tag", "contains") => {
+                tag_idx += 1;
+                let bt = format!("bt{tag_idx}");
+                let tt = format!("tt{tag_idx}");
+                join_clauses.push(format!(
+                    "JOIN book_tags {bt} ON {bt}.book_id = b.id \
+                     JOIN tags {tt} ON {tt}.id = {bt}.tag_id AND {tt}.name LIKE ?"
+                ));
+                param_values.push(format!("%{}%", rule.value));
+            }
+            ("tag", "equals") => {
+                tag_idx += 1;
+                let bt = format!("bt{tag_idx}");
+                let tt = format!("tt{tag_idx}");
+                join_clauses.push(format!(
+                    "JOIN book_tags {bt} ON {bt}.book_id = b.id \
+                     JOIN tags {tt} ON {tt}.id = {bt}.tag_id AND {tt}.name = ?"
+                ));
+                param_values.push(rule.value.clone());
+            }
             ("reading_progress", "equals") => {
                 rp_idx += 1;
                 let alias = format!("rp{rp_idx}");
@@ -1044,7 +1065,7 @@ pub fn get_books_in_collection(conn: &Connection, collection_id: &str) -> Result
     };
 
     let sql = format!(
-        "SELECT {cols}
+        "SELECT DISTINCT {cols}
          FROM books b
          {joins}
          {where_str}
