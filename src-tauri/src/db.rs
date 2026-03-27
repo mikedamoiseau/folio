@@ -595,7 +595,13 @@ pub fn update_collection(conn: &Connection, collection: &Collection) -> Result<(
         tx.execute(
             "INSERT INTO collection_rules (id, collection_id, field, operator, value)
              VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![rule.id, rule.collection_id, rule.field, rule.operator, rule.value],
+            params![
+                rule.id,
+                rule.collection_id,
+                rule.field,
+                rule.operator,
+                rule.value
+            ],
         )?;
     }
     tx.commit()?;

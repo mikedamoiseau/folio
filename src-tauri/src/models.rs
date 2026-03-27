@@ -102,7 +102,7 @@ pub enum CollectionType {
 pub struct CollectionRule {
     pub id: String,
     pub collection_id: String,
-    pub field: String,    // author | filename | series | language | publisher | description | format | date_added | reading_progress
+    pub field: String, // author | filename | series | language | publisher | description | format | date_added | reading_progress
     pub operator: String, // contains | equals | last_n_days
     pub value: String,
 }
