@@ -309,33 +309,42 @@ Tauri v2 supports mobile targets. The React frontend renders in a mobile WebView
 - Display series books in order within the library
 - Lightweight extension of existing collections + OpenLibrary integration
 
-#### 33. MOBI/AZW Support
+#### 33. Activity Log
+- Persistent log of data-changing operations: book imports, deletions, metadata enrichments, cover changes, backup/restore, collection edits, profile switches
+- NOT reading activity (opening a book, turning pages, scroll position) — that's covered by reading stats
+- Stored in a dedicated DB table: `activity_log (id, action, detail, book_id?, timestamp)`
+- Viewable in a "Recent Activity" panel or page accessible from settings or library
+- Filterable by action type and date range
+- Useful for debugging ("why did my metadata change?") and auditing ("what did the auto-scan do?")
+- Capped or rotated (e.g., keep last 1000 entries or 90 days)
+
+#### 34. MOBI/AZW Support
 - Add MOBI/AZW/AZW3 format parsing (common for older Kindle libraries)
 - New `BookFormat` enum variant, new parser module
 - Extract metadata, cover, and chapter content
 
 ### Power User & Reader Enhancements
 
-#### 34. Navigation History (Back/Forward)
+#### 35. Navigation History (Back/Forward)
 - Browser-like back/forward buttons after following TOC links or internal references in EPUBs
 - Maintain a navigation stack per reading session
 
-#### 35. Custom CSS Override
+#### 36. Custom CSS Override
 - Let users inject custom CSS into EPUB rendering
 - Per-book or global stylesheet override
 - Power user feature for fixing poorly-styled EPUBs
 
-#### 36. Dual-Page Spread / Manga Mode
+#### 37. Dual-Page Spread / Manga Mode
 - Side-by-side two-page view for comics (CBZ/CBR) and PDFs
 - Right-to-left page order option for manga
 - Toggle in reader settings
 
-#### 37. Page Turn Animations
+#### 38. Page Turn Animations
 - Optional visual effects when turning pages (curl, slide, fade)
 - Configurable or disableable in settings
 - Pure polish feature
 
-#### 38. Split View / Side-by-Side Reading
+#### 39. Split View / Side-by-Side Reading
 - Open two books simultaneously in a split pane
 - Useful for reference material alongside primary reading
 - Niche but valuable for academic use
@@ -344,45 +353,45 @@ Tauri v2 supports mobile targets. The React frontend renders in a mobile WebView
 
 Lower priority features — high effort, niche audience, or dependent on other work.
 
-### 39. Dictionary / Word Lookup
+### 40. Dictionary / Word Lookup
 - Select a word in the reader to get a definition
 - Hybrid approach: bundle lightweight offline dictionary (WordNet) + online API fallback (Wiktionary, Free Dictionary API)
 - Optional: let users load StarDict dictionary files for full multilingual offline support
 - Cross-platform — no dependency on OS-specific dictionary APIs
 
-### 40. Vocabulary Builder
+### 41. Vocabulary Builder
 - Log every word looked up via the dictionary into a personal word list
 - Record the word, definition, and source sentence/book
 - Review screen with flashcard-style quizzing
-- *Depends on: Dictionary (#39)*
+- *Depends on: Dictionary (#40)*
 
-### 41. Text-to-Speech
+### 42. Text-to-Speech
 - Read current chapter aloud using system TTS
 - Play/pause, skip forward/back, speed control
 - Highlight current sentence as it's read
 
-### 42. PDF Text Reflow
+### 43. PDF Text Reflow
 - Extract text from PDF pages and re-render as flowing text (like EPUB)
 - Respects font size and screen width settings
 - Imperfect for complex layouts (tables, columns, images) but major readability win for text-heavy PDFs
 
-### 43. Library-Wide Full-Text Search
+### 44. Library-Wide Full-Text Search
 - Search inside the content of all books in the library, not just metadata
 - Requires building a full-text index (SQLite FTS or similar)
 - Results show matching books with context snippets
 
-### 44. Annotation Export Integrations
+### 45. Annotation Export Integrations
 - Export highlights and notes to Readwise, Notion, Obsidian via their APIs
 - Extends existing Markdown/plain text export with direct service integration
 - Readwise is a popular highlight aggregation service used by serious readers
 
-### 45. Plugin / Hook System
+### 46. Plugin / Hook System
 - Fire events at key points: `on_import`, `on_book_open`, `on_book_close`, `on_annotation_created`, etc.
 - Let user scripts react to events (similar to WordPress/Drupal hooks)
 - Lightweight alternative to a full plugin SDK — extensible without modifying core code
 - Enables custom automation: auto-tagging, post-import scripts, external sync
 
-### 46. User-Created Themes
+### 47. User-Created Themes
 - Custom color schemes beyond built-in presets (light, dark, sepia)
 - Define background, text, accent, and UI colors
 - Import/export themes for sharing
@@ -398,5 +407,5 @@ Lower priority features — high effort, niche audience, or dependent on other w
 | 5 | Multiple Profiles | Done | Multi-user |
 | 6 | Remote Library Access, OPDS Server | Not started | Remote access |
 | 7 | Android & iOS App | Not started | Mobile |
-| 8 | Sepia Theme, OpenDyslexic, Star Ratings, In-Book Search, Typography, Custom Fonts, Continuous Scroll, Time-to-Finish, Series, MOBI, Nav History, Custom CSS, Dual-Page/Manga, Animations, Split View | Not started | Reader & library enhancements |
+| 8 | Sepia Theme, OpenDyslexic, Star Ratings, In-Book Search, Typography, Custom Fonts, Continuous Scroll, Time-to-Finish, Series, Activity Log, MOBI, Nav History, Custom CSS, Dual-Page/Manga, Animations, Split View | Not started | Reader & library enhancements |
 | N/H | Dictionary, Vocabulary Builder, TTS, PDF Reflow, Library-Wide Search, Annotation Exports, Plugins/Hooks, Custom Themes | Not started | Nice to have |
