@@ -1,8 +1,35 @@
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useEffect, useRef, useState, useCallback, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open as openFolderPicker } from "@tauri-apps/plugin-dialog";
 import { useTheme, MIN_FONT_SIZE, MAX_FONT_SIZE } from "../context/ThemeContext";
 import ActivityLog from "./ActivityLog";
+
+function Accordion({ title, children, defaultOpen = false }: { title: string; children: ReactNode; defaultOpen?: boolean }) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <section>
+      <button
+        type="button"
+        onClick={() => setOpen(!open)}
+        className="w-full flex items-center justify-between py-1 group"
+      >
+        <h3 className="text-xs font-semibold uppercase tracking-wider text-ink-muted">
+          {title}
+        </h3>
+        <svg
+          width="12"
+          height="12"
+          viewBox="0 0 20 20"
+          fill="none"
+          className={`text-ink-muted/50 group-hover:text-ink-muted transition-transform duration-200 ${open ? "rotate-180" : ""}`}
+        >
+          <path d="M5 7.5L10 12.5L15 7.5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      </button>
+      {open && <div className="mt-3">{children}</div>}
+    </section>
+  );
+}
 
 interface SettingsPanelProps {
   open: boolean;
@@ -388,10 +415,7 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
         {/* Settings content */}
         <div className="flex-1 overflow-y-auto p-5 space-y-7">
           {/* Theme */}
-          <section>
-            <h3 className="text-xs font-semibold uppercase tracking-wider text-ink-muted mb-3">
-              Appearance
-            </h3>
+          <Accordion title="Appearance" defaultOpen>
             <div className="flex gap-1 bg-warm-subtle rounded-xl p-1">
               {(["light", "dark", "system"] as const).map((option) => (
                 <button
@@ -407,13 +431,10 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                 </button>
               ))}
             </div>
-          </section>
+          </Accordion>
 
           {/* Font size */}
-          <section>
-            <h3 className="text-xs font-semibold uppercase tracking-wider text-ink-muted mb-3">
-              Font Size
-            </h3>
+          <Accordion title="Font Size" defaultOpen>
             <div className="flex items-center gap-3">
               <button
                 onClick={() => setFontSize(fontSize - 1)}
@@ -447,13 +468,10 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                 +
               </button>
             </div>
-          </section>
+          </Accordion>
 
           {/* Font family */}
-          <section>
-            <h3 className="text-xs font-semibold uppercase tracking-wider text-ink-muted mb-3">
-              Reading Font
-            </h3>
+          <Accordion title="Reading Font" defaultOpen>
             <div className="flex gap-1 bg-warm-subtle rounded-xl p-1">
               {(["serif", "sans-serif"] as const).map((option) => (
                 <button
@@ -486,13 +504,10 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
             >
               The quick brown fox jumps over the lazy dog.
             </p>
-          </section>
+          </Accordion>
 
           {/* Library */}
-          <section>
-            <h3 className="text-xs font-semibold uppercase tracking-wider text-ink-muted mb-3">
-              Library
-            </h3>
+          <Accordion title="Library">
             <div className="space-y-2">
               <div className="bg-warm-subtle rounded-xl px-3 py-2.5">
                 <p className="text-xs text-ink-muted mb-0.5">Storage folder</p>
@@ -512,13 +527,10 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                 Change folder…
               </button>
             </div>
-          </section>
+          </Accordion>
 
           {/* Backup & Restore */}
-          <section>
-            <h3 className="text-xs font-semibold uppercase tracking-wider text-ink-muted mb-3">
-              Backup & Restore
-            </h3>
+          <Accordion title="Backup & Restore">
             <div className="space-y-2">
               <label className="flex items-start gap-2.5 cursor-pointer px-1">
                 <input
@@ -555,13 +567,10 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                 <p className="text-xs text-ink-muted px-1">{backupMessage}</p>
               )}
             </div>
-          </section>
+          </Accordion>
 
-          {/* Remote Backup */}
-          <section>
-            <h3 className="text-xs font-semibold uppercase tracking-wider text-ink-muted mb-3">
-              Metadata Scan
-            </h3>
+          {/* Metadata Scan */}
+          <Accordion title="Metadata Scan">
             <div className="space-y-2">
               <label className="flex items-start gap-2.5 cursor-pointer px-1">
                 <input type="checkbox" checked={autoScanImport}
@@ -642,21 +651,17 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                 </div>
               )}
             </div>
-          </section>
+          </Accordion>
 
-          <section>
-            <h3 className="text-xs font-semibold uppercase tracking-wider text-ink-muted mb-3">Activity</h3>
+          <Accordion title="Activity">
             <button type="button" onClick={() => setShowActivityLog(true)}
               className="w-full px-3 py-2 text-sm text-ink-muted hover:text-ink bg-warm-subtle hover:bg-warm-border rounded-xl transition-colors text-left">
               View activity log
             </button>
-          </section>
+          </Accordion>
 
           {backupProviders.length > 0 && (
-            <section>
-              <h3 className="text-xs font-semibold uppercase tracking-wider text-ink-muted mb-3">
-                Remote Backup
-              </h3>
+            <Accordion title="Remote Backup">
               <div className="space-y-2">
                 {/* Provider selector */}
                 <div className="bg-warm-subtle rounded-xl px-3 py-2.5">
@@ -772,7 +777,7 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                   <p className="text-xs text-ink-muted px-1">{remoteBackupMessage}</p>
                 )}
               </div>
-            </section>
+            </Accordion>
           )}
         </div>
       </div>
