@@ -988,7 +988,11 @@ pub async fn update_bookmark(
     name: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    let name_ref = name.as_deref().filter(|s| !s.trim().is_empty());
+    let truncated_name: Option<String> = name
+        .as_deref()
+        .filter(|s| !s.trim().is_empty())
+        .map(|s| s.chars().take(100).collect::<String>());
+    let name_ref = truncated_name.as_deref();
     let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
     db::update_bookmark_name(&conn, &bookmark_id, name_ref).map_err(|e| e.to_string())
 }

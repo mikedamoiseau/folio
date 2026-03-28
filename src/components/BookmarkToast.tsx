@@ -82,6 +82,7 @@ export default function BookmarkToast({
             onChange={(e) => setName(e.target.value)}
             onKeyDown={handleKeyDown}
             onBlur={saveName}
+            maxLength={100}
             placeholder="Bookmark name..."
             className="bg-white/10 border border-white/20 text-white placeholder-white/40 px-2 py-0.5 rounded text-sm w-44 outline-none focus:border-blue-400"
           />

@@ -195,6 +195,7 @@ export default function BookmarksPanel({
                                 }
                               }}
                               onBlur={() => saveEdit(bm.id)}
+                              maxLength={100}
                               placeholder="Bookmark name..."
                               className="text-sm text-ink bg-transparent border-b border-accent outline-none w-full py-0.5"
                               onClick={(e) => e.stopPropagation()}
