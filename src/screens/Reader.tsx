@@ -45,7 +45,7 @@ interface ReaderProps {
 export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderProps) {
   const { bookId } = useParams<{ bookId: string }>();
   const navigate = useNavigate();
-  const { fontSize, setFontSize, fontFamily, scrollMode, typography, customCss } = useTheme();
+  const { fontSize, setFontSize, fontFamily, scrollMode, typography, customCss, dualPage, setDualPage, mangaMode, setMangaMode } = useTheme();
 
   const [bookTitle, setBookTitle] = useState("");
   const [bookFormat, setBookFormat] = useState<"epub" | "cbz" | "cbr" | "pdf">("epub");
@@ -1082,6 +1082,36 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
             </button>
           </div>
 
+          {/* Dual-page toggle — hidden in continuous scroll mode */}
+          {!(isContinuous && bookFormat === "epub") && (
+            <div className="flex items-center">
+              <button
+                onClick={() => setDualPage(!dualPage)}
+                className={`p-1.5 transition-colors rounded-lg focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 ${dualPage ? "text-accent bg-accent-light" : "text-ink-muted hover:text-ink hover:bg-warm-subtle"}`}
+                aria-label="Toggle dual-page spread"
+                title="Dual-page spread"
+              >
+                <svg width="17" height="17" viewBox="0 0 24 24" fill="none">
+                  <rect x="2" y="4" width="8" height="16" rx="1" stroke="currentColor" strokeWidth="1.5" />
+                  <rect x="14" y="4" width="8" height="16" rx="1" stroke="currentColor" strokeWidth="1.5" />
+                </svg>
+              </button>
+              {dualPage && (
+                <button
+                  onClick={() => setMangaMode(!mangaMode)}
+                  className={`p-1.5 transition-colors rounded-lg focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 ${mangaMode ? "text-accent bg-accent-light" : "text-ink-muted hover:text-ink hover:bg-warm-subtle"}`}
+                  aria-label="Toggle manga mode (right-to-left)"
+                  title="Manga mode (RTL)"
+                >
+                  <svg width="17" height="17" viewBox="0 0 24 24" fill="none">
+                    <path d="M19 12H5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+                    <path d="M10 7l-5 5 5 5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                </button>
+              )}
+            </div>
+          )}
+
           {/* DND toggle */}
           <button
             onClick={() => setDndMode((prev) => !prev)}
@@ -1207,6 +1237,8 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
               totalPages={pageCount}
               initialPage={chapterIndex}
               onPageChange={(index) => setChapterIndex(index)}
+              dualPage={dualPage}
+              mangaMode={mangaMode}
             />
           ) : (
             <div className="flex-1 flex items-center justify-center">
@@ -1224,6 +1256,19 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
                 -webkit-hyphens: ${typography.hyphenation ? "auto" : "manual"};
               }
             `}</style>
+            {dualPage && !isContinuous && (
+              <style>{`
+                .reader-content {
+                  columns: 2;
+                  column-gap: 48px;
+                  column-rule: 1px solid var(--warm-border, #e5e0d8);
+                  ${mangaMode ? "direction: rtl;" : ""}
+                }
+                .reader-content > * {
+                  ${mangaMode ? "direction: ltr;" : ""}
+                }
+              `}</style>
+            )}
             {customCss && <style>{customCss}</style>}
 
             <div
