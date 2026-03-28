@@ -820,7 +820,9 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
       ? '"Lora Variable", Georgia, serif'
       : fontFamily === "dyslexic"
         ? '"OpenDyslexic", sans-serif'
-        : '"DM Sans Variable", system-ui, sans-serif';
+        : fontFamily.startsWith("custom:")
+          ? `"CustomFont-${fontFamily.slice(7)}", serif`
+          : '"DM Sans Variable", system-ui, sans-serif';
 
   const readerContentStyle: React.CSSProperties = {
     fontSize: `${fontSize}px`,
