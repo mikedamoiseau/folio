@@ -17,6 +17,7 @@ interface BookmarksPanelProps {
   toc: Array<{ label: string; chapter_index: number }>;
   onClose: () => void;
   onNavigate: (chapterIndex: number, scrollPosition: number) => void;
+  refreshKey?: number;
 }
 
 export type { Bookmark };
@@ -27,6 +28,7 @@ export default function BookmarksPanel({
   toc,
   onClose,
   onNavigate,
+  refreshKey,
 }: BookmarksPanelProps) {
   const [bookmarks, setBookmarks] = useState<Bookmark[]>([]);
 
@@ -41,7 +43,7 @@ export default function BookmarksPanel({
 
   useEffect(() => {
     loadBookmarks();
-  }, [loadBookmarks]);
+  }, [loadBookmarks, refreshKey]);
 
   const handleDelete = async (bookmarkId: string) => {
     try {

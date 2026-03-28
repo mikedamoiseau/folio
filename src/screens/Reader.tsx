@@ -62,6 +62,7 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
   const [highlightsOpen, setHighlightsOpen] = useState(false);
   const [bookmarksOpen, setBookmarksOpen] = useState(false);
   const [toastBookmarkId, setToastBookmarkId] = useState<string | null>(null);
+  const [bookmarkRefreshKey, setBookmarkRefreshKey] = useState(0);
   const [saveIndicator, setSaveIndicator] = useState(false);
   const [saveError, setSaveError] = useState(false);
   const [selectionPopup, setSelectionPopup] = useState<{ x: number; y: number; text: string; startOffset: number; endOffset: number } | null>(null);
@@ -906,6 +907,7 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
           toc={toc}
           onClose={() => setBookmarksOpen(false)}
           onNavigate={navigateToBookmark}
+          refreshKey={bookmarkRefreshKey}
         />
       )}
 
@@ -913,7 +915,10 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
       {toastBookmarkId && (
         <BookmarkToast
           bookmarkId={toastBookmarkId}
-          onDismiss={() => setToastBookmarkId(null)}
+          onDismiss={() => {
+            setToastBookmarkId(null);
+            setBookmarkRefreshKey((k) => k + 1);
+          }}
         />
       )}
 
