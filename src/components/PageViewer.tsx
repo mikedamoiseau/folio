@@ -182,7 +182,7 @@ export default function PageViewer({
         else zoomOut();
         return;
       }
-      if (zoom > 1) return;
+      if (canPan()) return;
       if (wheelCooldown.current || loading) return;
       if (Math.abs(e.deltaY) < 10) return;
       wheelCooldown.current = true;
@@ -193,15 +193,43 @@ export default function PageViewer({
     [nextSpread, prevSpread, loading, zoomIn, zoomOut, zoom]
   );
 
+  // Check if scaled content overflows the container (pan should only work when it does)
+  const canPan = useCallback(() => {
+    if (!spreadRef.current || !containerRef.current) return false;
+    const spread = spreadRef.current.getBoundingClientRect();
+    const container = containerRef.current.getBoundingClientRect();
+    // Compare unscaled content size * zoom to container
+    // getBoundingClientRect already includes transforms, so divide out current zoom
+    const contentW = (spread.width / zoom) * zoom;
+    const contentH = (spread.height / zoom) * zoom;
+    return contentW > container.width || contentH > container.height;
+  }, [zoom]);
+
+  // Clamp pan so content edge can't go past the container center
+  const clampPan = useCallback((p: { x: number; y: number }): { x: number; y: number } => {
+    if (!spreadRef.current || !containerRef.current) return p;
+    const spreadRect = spreadRef.current.getBoundingClientRect();
+    const containerRect = containerRef.current.getBoundingClientRect();
+    // Content dimensions without current pan (divide out zoom for the translate portion)
+    const contentW = spreadRect.width;
+    const contentH = spreadRect.height;
+    const maxPanX = Math.max(0, (contentW - containerRect.width) / 2 / zoom + 40 / zoom);
+    const maxPanY = Math.max(0, (contentH - containerRect.height) / 2 / zoom + 40 / zoom);
+    return {
+      x: Math.max(-maxPanX, Math.min(maxPanX, p.x)),
+      y: Math.max(-maxPanY, Math.min(maxPanY, p.y)),
+    };
+  }, [zoom]);
+
   const handleMouseDown = useCallback(
     (e: React.MouseEvent) => {
-      if (zoom <= 1) return;
+      if (!canPan()) return;
       e.preventDefault();
       isPanning.current = true;
       panStart.current = { x: e.clientX, y: e.clientY };
       panOffset.current = { ...panRef.current };
     },
-    [zoom]
+    [canPan]
   );
 
   const handleMouseMove = useCallback(
@@ -209,13 +237,14 @@ export default function PageViewer({
       if (!isPanning.current) return;
       const dx = e.clientX - panStart.current.x;
       const dy = e.clientY - panStart.current.y;
-      panRef.current = {
+      const raw = {
         x: panOffset.current.x + dx,
         y: panOffset.current.y + dy,
       };
+      panRef.current = clampPan(raw);
       applyTransform(zoom, panRef.current);
     },
-    [zoom, applyTransform]
+    [zoom, applyTransform, clampPan]
   );
 
   const handleMouseUp = useCallback(() => {
