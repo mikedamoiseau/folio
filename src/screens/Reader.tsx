@@ -6,6 +6,7 @@ import PageViewer from "../components/PageViewer";
 import KeyboardShortcutsHelp from "../components/KeyboardShortcutsHelp";
 import HighlightsPanel, { HIGHLIGHT_COLORS } from "../components/HighlightsPanel";
 import BookmarksPanel from "../components/BookmarksPanel";
+import BookmarkToast from "../components/BookmarkToast";
 import { friendlyError } from "../lib/errors";
 
 // ---- Types matching Rust backend ----
@@ -60,7 +61,7 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
   const [showShortcuts, setShowShortcuts] = useState(false);
   const [highlightsOpen, setHighlightsOpen] = useState(false);
   const [bookmarksOpen, setBookmarksOpen] = useState(false);
-  const [bookmarkToast, setBookmarkToast] = useState(false);
+  const [toastBookmarkId, setToastBookmarkId] = useState<string | null>(null);
   const [saveIndicator, setSaveIndicator] = useState(false);
   const [saveError, setSaveError] = useState(false);
   const [selectionPopup, setSelectionPopup] = useState<{ x: number; y: number; text: string; startOffset: number; endOffset: number } | null>(null);
@@ -654,13 +655,12 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
   const addBookmarkAtCurrentPosition = useCallback(async () => {
     if (!bookId) return;
     try {
-      await invoke("add_bookmark", {
+      const bookmark = await invoke<{ id: string }>("add_bookmark", {
         bookId,
         chapterIndex,
         scrollPosition: scrollProgress,
       });
-      setBookmarkToast(true);
-      setTimeout(() => setBookmarkToast(false), 1500);
+      setToastBookmarkId(bookmark.id);
     } catch {
       // silently fail
     }
@@ -910,13 +910,11 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
       )}
 
       {/* Bookmark toast */}
-      {bookmarkToast && (
-        <div className="fixed top-16 left-1/2 -translate-x-1/2 z-50 px-4 py-2 bg-ink/90 text-white text-sm rounded-lg shadow-lg flex items-center gap-2 animate-fade-in">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
-            <path d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z" />
-          </svg>
-          Bookmark saved
-        </div>
+      {toastBookmarkId && (
+        <BookmarkToast
+          bookmarkId={toastBookmarkId}
+          onDismiss={() => setToastBookmarkId(null)}
+        />
       )}
 
       {/* Progress saved indicator */}
