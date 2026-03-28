@@ -50,6 +50,10 @@ interface ThemeContextValue {
   setTypography: (t: TypographySettings) => void;
   customCss: string;
   setCustomCss: (css: string) => void;
+  dualPage: boolean;
+  setDualPage: (enabled: boolean) => void;
+  mangaMode: boolean;
+  setMangaMode: (enabled: boolean) => void;
 }
 
 const STORAGE_KEYS = {
@@ -60,6 +64,8 @@ const STORAGE_KEYS = {
   scrollMode: "ebook-reader-scroll-mode",
   typography: "ebook-reader-typography",
   customCss: "ebook-reader-custom-css",
+  dualPage: "ebook-reader-dual-page",
+  mangaMode: "ebook-reader-manga-mode",
 } as const;
 
 export const MIN_FONT_SIZE = 14;
@@ -162,6 +168,8 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   const [scrollMode, setScrollModeState] = useState<ScrollMode>(loadStoredScrollMode);
   const [typography, setTypographyState] = useState<TypographySettings>(loadStoredTypography);
   const [customCss, setCustomCssState] = useState(() => localStorage.getItem(STORAGE_KEYS.customCss) ?? "");
+  const [dualPage, setDualPageState] = useState(() => localStorage.getItem(STORAGE_KEYS.dualPage) === "true");
+  const [mangaMode, setMangaModeState] = useState(() => localStorage.getItem(STORAGE_KEYS.mangaMode) === "true");
 
   // For dark: variant purposes, sepia and custom resolve to "light"
   const resolved: ResolvedTheme =
@@ -231,6 +239,16 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     localStorage.setItem(STORAGE_KEYS.typography, JSON.stringify(t));
   }, []);
 
+  const setDualPage = useCallback((enabled: boolean) => {
+    setDualPageState(enabled);
+    localStorage.setItem(STORAGE_KEYS.dualPage, String(enabled));
+  }, []);
+
+  const setMangaMode = useCallback((enabled: boolean) => {
+    setMangaModeState(enabled);
+    localStorage.setItem(STORAGE_KEYS.mangaMode, String(enabled));
+  }, []);
+
   const MAX_CUSTOM_CSS_LENGTH = 10000;
   const cssPersistTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
   const setCustomCss = useCallback((css: string) => {
@@ -250,7 +268,9 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     scrollMode, setScrollMode,
     typography, setTypography,
     customCss, setCustomCss,
-  }), [mode, resolved, setMode, customColors, setCustomColors, fontSize, setFontSize, fontFamily, setFontFamily, scrollMode, setScrollMode, typography, setTypography, customCss, setCustomCss]);
+    dualPage, setDualPage,
+    mangaMode, setMangaMode,
+  }), [mode, resolved, setMode, customColors, setCustomColors, fontSize, setFontSize, fontFamily, setFontFamily, scrollMode, setScrollMode, typography, setTypography, customCss, setCustomCss, dualPage, setDualPage, mangaMode, setMangaMode]);
 
   return (
     <ThemeContext.Provider value={value}>
