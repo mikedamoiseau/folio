@@ -293,10 +293,11 @@ Tauri v2 supports mobile targets. The React frontend renders in a mobile WebView
 - ~~Paragraph spacing (0-2em)~~
 - ~~Hyphenation toggle~~
 
-#### 29. Custom User Fonts
-- Load user-provided TTF/OTF font files
-- Font picker shows both built-in and user-added fonts
-- Fonts stored per-profile in the app data directory
+#### 29. Custom User Fonts — **Done**
+- ~~Load user-provided TTF/OTF/WOFF2 font files via file picker~~
+- ~~Font picker shows both built-in and user-added fonts in a single list~~
+- ~~Fonts copied into app data directory; custom @font-face rules injected dynamically~~
+- ~~Add and delete custom fonts from settings~~
 
 #### 30. Continuous Scroll Mode (EPUB) — **Done**
 - ~~Alternative to paginated chapter view — scroll through content continuously~~
@@ -423,5 +424,5 @@ Lower priority features — high effort, niche audience, or dependent on other w
 | 5 | Multiple Profiles | Done | Multi-user |
 | 6 | Remote Library Access, OPDS Server | Not started | Remote access |
 | 7 | Android & iOS App | Not started | Mobile |
-| 8 | Sepia Theme, OpenDyslexic, Star Ratings, In-Book Search, Typography, Custom Fonts, Continuous Scroll, Time-to-Finish, Bookmark Naming, Series, Activity Log, MOBI, Nav History, Custom CSS, Dual-Page/Manga, Animations, Split View | 10 done | Reader & library enhancements |
+| 8 | Sepia Theme, OpenDyslexic, Star Ratings, In-Book Search, Typography, Custom Fonts, Continuous Scroll, Time-to-Finish, Bookmark Naming, Series, Activity Log, MOBI, Nav History, Custom CSS, Dual-Page/Manga, Animations, Split View | 11 done | Reader & library enhancements |
 | N/H | Dictionary, Vocabulary Builder, TTS, PDF Reflow, Library-Wide Search, Annotation Exports, Plugins/Hooks, User Themes | Not started | Nice to have |
