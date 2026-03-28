@@ -96,8 +96,9 @@ export default function PageViewer({
       // Reset zoom/pan on page change
       setZoom(1);
       panRef.current = { x: 0, y: 0 };
+      applyTransform(1, panRef.current);
     },
-    [totalPages, onPageChange]
+    [totalPages, onPageChange, applyTransform]
   );
 
   // Navigate by spread: advance to next/prev spread's left page
@@ -150,8 +151,8 @@ export default function PageViewer({
       const tag = (e.target as HTMLElement)?.tagName;
       if (tag === "INPUT" || tag === "TEXTAREA") return;
 
-      if (e.key === "ArrowLeft") prevSpread();
-      else if (e.key === "ArrowRight") nextSpread();
+      if (e.key === "ArrowLeft") mangaMode ? nextSpread() : prevSpread();
+      else if (e.key === "ArrowRight") mangaMode ? prevSpread() : nextSpread();
       else if ((e.key === "=" || e.key === "+") && (e.metaKey || e.ctrlKey)) {
         e.preventDefault();
         zoomIn();
@@ -165,7 +166,7 @@ export default function PageViewer({
     }
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [prevSpread, nextSpread, zoomIn, zoomOut, zoomReset]);
+  }, [prevSpread, nextSpread, zoomIn, zoomOut, zoomReset, mangaMode]);
 
   const wheelCooldown = useRef(false);
   const handleWheel = useCallback(
