@@ -278,17 +278,19 @@ Tauri v2 supports mobile targets. The React frontend renders in a mobile WebView
 
 ### Core Reading Gaps
 
-#### 27. Full-Text Search Within a Book
-- Cmd/Ctrl+F to search text content of the current book
-- Show results with context snippets, click to navigate to match
-- Works for EPUB (search chapter HTML) and PDF (search extracted text)
+#### 27. Full-Text Search Within a Book — **Done**
+- ~~Cmd/Ctrl+F to search text content of the current book~~
+- ~~Show results with context snippets, click to navigate to match~~
+- ~~Works for EPUB (search chapter HTML); case-insensitive, 200 result cap~~
+- ~~Search term highlighted in chapter content~~
+- PDF text search not yet implemented (TBD)
 
-#### 28. Advanced Typography Controls
-- Line height / line spacing
-- Page margins / padding
-- Text alignment (left, justify)
-- Paragraph spacing
-- Hyphenation toggle
+#### 28. Advanced Typography Controls — **Done**
+- ~~Line height / line spacing (1.2-2.4)~~
+- ~~Page margins / padding (0-80px)~~
+- ~~Text alignment (left, justify)~~
+- ~~Paragraph spacing (0-2em)~~
+- ~~Hyphenation toggle~~
 
 #### 29. Custom User Fonts
 - Load user-provided TTF/OTF font files
@@ -303,10 +305,12 @@ Tauri v2 supports mobile targets. The React frontend renders in a mobile WebView
 - ~~Progress tracking: detects visible chapter via scroll position, saves chapter-level progress~~
 - Future: lazy-load chapters on scroll instead of loading all upfront (optimization for large books)
 
-#### 31. Estimated Time to Finish
-- Track reading speed (words or pages per minute) per session
-- Display "X min left in chapter" and "X hours left in book" in the reader
-- Builds on existing reading stats infrastructure
+#### 31. Estimated Time to Finish — **Done**
+- ~~Display "X min left" / "X hrs left" in the reader footer~~
+- ~~Word counts computed per chapter (stripped HTML via ammonia + tag stripping)~~
+- ~~Uses 250 WPM default reading speed~~
+- ~~Correctly handles continuous scroll mode (chapter-local progress)~~
+- Future: compute personalized WPM from user's reading session history
 
 ### Organization & Format
 
@@ -315,14 +319,12 @@ Tauri v2 supports mobile targets. The React frontend renders in a mobile WebView
 - Display series books in order within the library
 - Lightweight extension of existing collections + OpenLibrary integration
 
-#### 33. Activity Log
-- Persistent log of data-changing operations: book imports, deletions, metadata enrichments, cover changes, backup/restore, collection edits, profile switches
-- NOT reading activity (opening a book, turning pages, scroll position) — that's covered by reading stats
-- Stored in a dedicated DB table: `activity_log (id, action, detail, book_id?, timestamp)`
-- Viewable in a "Recent Activity" panel or page accessible from settings or library
-- Filterable by action type and date range
-- Useful for debugging ("why did my metadata change?") and auditing ("what did the auto-scan do?")
-- Capped or rotated (e.g., keep last 1000 entries or 90 days)
+#### 33. Activity Log — **Done**
+- ~~Persistent log of data-changing operations: book imports, deletions, metadata enrichments, cover changes, backup/restore, collection edits, profile switches~~
+- ~~Stored in a dedicated DB table: `activity_log (id, action, detail, book_id?, timestamp)`~~
+- ~~Viewable in a modal panel accessible from settings~~
+- ~~Filterable by action type with pagination (load more)~~
+- ~~14 data-changing commands instrumented with activity logging~~
 
 #### 34. MOBI/AZW Support
 - Add MOBI/AZW/AZW3 format parsing (common for older Kindle libraries)
@@ -335,10 +337,11 @@ Tauri v2 supports mobile targets. The React frontend renders in a mobile WebView
 - Browser-like back/forward buttons after following TOC links or internal references in EPUBs
 - Maintain a navigation stack per reading session
 
-#### 36. Custom CSS Override
-- Let users inject custom CSS into EPUB rendering
-- Per-book or global stylesheet override
-- Power user feature for fixing poorly-styled EPUBs
+#### 36. Custom CSS Override — **Done**
+- ~~Let users inject custom CSS into EPUB rendering~~
+- ~~Global stylesheet override via textarea in settings~~
+- ~~Applied as a `<style>` tag while reading EPUBs~~
+- Per-book CSS override (TBD)
 
 #### 37. Dual-Page Spread / Manga Mode
 - Side-by-side two-page view for comics (CBZ/CBR) and PDFs
@@ -413,5 +416,5 @@ Lower priority features — high effort, niche audience, or dependent on other w
 | 5 | Multiple Profiles | Done | Multi-user |
 | 6 | Remote Library Access, OPDS Server | Not started | Remote access |
 | 7 | Android & iOS App | Not started | Mobile |
-| 8 | Sepia Theme, OpenDyslexic, Star Ratings, In-Book Search, Typography, Custom Fonts, Continuous Scroll, Time-to-Finish, Series, Activity Log, MOBI, Nav History, Custom CSS, Dual-Page/Manga, Animations, Split View | 4 done | Reader & library enhancements |
+| 8 | Sepia Theme, OpenDyslexic, Star Ratings, In-Book Search, Typography, Custom Fonts, Continuous Scroll, Time-to-Finish, Series, Activity Log, MOBI, Nav History, Custom CSS, Dual-Page/Manga, Animations, Split View | 9 done | Reader & library enhancements |
 | N/H | Dictionary, Vocabulary Builder, TTS, PDF Reflow, Library-Wide Search, Annotation Exports, Plugins/Hooks | Not started | Nice to have |
