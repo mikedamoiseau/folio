@@ -656,16 +656,19 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
   const addBookmarkAtCurrentPosition = useCallback(async () => {
     if (!bookId) return;
     try {
+      const isPageBased = bookFormat !== "epub";
       const bookmark = await invoke<{ id: string }>("add_bookmark", {
         bookId,
         chapterIndex,
-        scrollPosition: scrollProgress,
+        scrollPosition: isPageBased
+          ? pageCount > 0 ? chapterIndex / pageCount : 0
+          : scrollProgress,
       });
       setToastBookmarkId(bookmark.id);
     } catch {
       // silently fail
     }
-  }, [bookId, chapterIndex, scrollProgress]);
+  }, [bookId, chapterIndex, scrollProgress, bookFormat, pageCount]);
 
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
