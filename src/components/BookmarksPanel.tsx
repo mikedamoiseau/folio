@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 
 interface Bookmark {
@@ -6,6 +6,7 @@ interface Bookmark {
   book_id: string;
   chapter_index: number;
   scroll_position: number;
+  name: string | null;
   note: string | null;
   created_at: number;
 }
@@ -50,6 +51,40 @@ export default function BookmarksPanel({
       // ignore
     }
   };
+
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editValue, setEditValue] = useState("");
+  const editInputRef = useRef<HTMLInputElement>(null);
+
+  const startEditing = (bookmark: Bookmark) => {
+    setEditingId(bookmark.id);
+    setEditValue(bookmark.name ?? "");
+  };
+
+  const saveEdit = async (bookmarkId: string) => {
+    const trimmed = editValue.trim();
+    try {
+      await invoke("update_bookmark", {
+        bookmarkId,
+        name: trimmed || null,
+      });
+      await loadBookmarks();
+    } catch {
+      // non-fatal
+    }
+    setEditingId(null);
+  };
+
+  const cancelEdit = () => {
+    setEditingId(null);
+  };
+
+  useEffect(() => {
+    if (editingId) {
+      editInputRef.current?.focus();
+      editInputRef.current?.select();
+    }
+  }, [editingId]);
 
   const chapterLabel = (chapterIndex: number) => {
     const entry = toc.find((e) => e.chapter_index === chapterIndex);
@@ -127,6 +162,7 @@ export default function BookmarksPanel({
                       key={bm.id}
                       className="group px-5 py-2.5 hover:bg-warm-subtle transition-colors cursor-pointer"
                       onClick={() =>
+                        editingId !== bm.id &&
                         onNavigate(bm.chapter_index, bm.scroll_position)
                       }
                     >
@@ -141,13 +177,49 @@ export default function BookmarksPanel({
                           <path d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z" />
                         </svg>
                         <div className="flex-1 min-w-0">
-                          <p className="text-sm text-ink leading-snug">
-                            {Math.round(bm.scroll_position * 100)}% through
-                          </p>
-                          {bm.note && (
-                            <p className="text-xs text-ink-muted mt-0.5 italic truncate">
-                              {bm.note}
-                            </p>
+                          {editingId === bm.id ? (
+                            <input
+                              ref={editInputRef}
+                              type="text"
+                              value={editValue}
+                              onChange={(e) => setEditValue(e.target.value)}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter") {
+                                  e.preventDefault();
+                                  saveEdit(bm.id);
+                                } else if (e.key === "Escape") {
+                                  e.preventDefault();
+                                  cancelEdit();
+                                }
+                              }}
+                              onBlur={() => saveEdit(bm.id)}
+                              placeholder="Bookmark name..."
+                              className="text-sm text-ink bg-transparent border-b border-accent outline-none w-full py-0.5"
+                              onClick={(e) => e.stopPropagation()}
+                            />
+                          ) : (
+                            <>
+                              <p
+                                className="text-sm text-ink leading-snug hover:text-accent transition-colors cursor-text"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  startEditing(bm);
+                                }}
+                                title="Click to edit name"
+                              >
+                                {bm.name || `${Math.round(bm.scroll_position * 100)}% through`}
+                              </p>
+                              {bm.name && (
+                                <p className="text-xs text-ink-muted mt-0.5">
+                                  {Math.round(bm.scroll_position * 100)}% through
+                                </p>
+                              )}
+                              {bm.note && (
+                                <p className="text-xs text-ink-muted mt-0.5 italic truncate">
+                                  {bm.note}
+                                </p>
+                              )}
+                            </>
                           )}
                           <p className="text-[10px] text-ink-muted/60 mt-0.5">
                             {formatDate(bm.created_at)}
