@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useCallback, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { open as openFolderPicker } from "@tauri-apps/plugin-dialog";
+import { open as openFilePicker } from "@tauri-apps/plugin-dialog";
 import { useTheme, MIN_FONT_SIZE, MAX_FONT_SIZE, type ColorTokens } from "../context/ThemeContext";
 import {
   SEPIA_TOKENS,
@@ -295,6 +295,78 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
   const [backupStatus, setBackupStatus] = useState<SyncManifest | null>(null);
   const [remoteBackupMessage, setRemoteBackupMessage] = useState<string | null>(null);
 
+  // Custom fonts
+  interface CustomFont {
+    id: string;
+    name: string;
+    fileName: string;
+    filePath: string;
+    createdAt: number;
+  }
+
+  const [customFonts, setCustomFonts] = useState<CustomFont[]>([]);
+  const [deletingFontId, setDeletingFontId] = useState<string | null>(null);
+
+  const loadCustomFonts = useCallback(async () => {
+    try {
+      const fonts = await invoke<CustomFont[]>("get_custom_fonts");
+      setCustomFonts(fonts);
+    } catch {
+      // non-fatal
+    }
+  }, []);
+
+  useEffect(() => {
+    loadCustomFonts();
+  }, [loadCustomFonts]);
+
+  // Inject @font-face rules for custom fonts
+  useEffect(() => {
+    const styleId = "custom-fonts-style";
+    let style = document.getElementById(styleId) as HTMLStyleElement | null;
+    if (!style) {
+      style = document.createElement("style");
+      style.id = styleId;
+      document.head.appendChild(style);
+    }
+    style.textContent = customFonts
+      .map(
+        (f) =>
+          `@font-face { font-family: "CustomFont-${f.id}"; src: url("https://asset.localhost/${f.filePath}"); font-display: swap; }`,
+      )
+      .join("\n");
+  }, [customFonts]);
+
+  const handleImportFont = async () => {
+    try {
+      const selected = await openFilePicker({
+        multiple: false,
+        filters: [
+          { name: "Font Files", extensions: ["ttf", "otf", "woff2"] },
+        ],
+      });
+      if (!selected) return;
+      const filePath = typeof selected === "string" ? selected : selected[0];
+      await invoke("import_custom_font", { filePath });
+      await loadCustomFonts();
+    } catch {
+      // non-fatal
+    }
+  };
+
+  const handleDeleteFont = async (fontId: string) => {
+    try {
+      if (fontFamily === `custom:${fontId}`) {
+        setFontFamily("serif");
+      }
+      await invoke("remove_custom_font", { fontId });
+      await loadCustomFonts();
+    } catch {
+      // non-fatal
+    }
+    setDeletingFontId(null);
+  };
+
   const loadLibraryFolder = useCallback(async () => {
     try {
       const folder = await invoke<string>("get_library_folder");
@@ -391,7 +463,7 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
 
   const handleChangeFolder = async () => {
     try {
-      const picked = await openFolderPicker({ directory: true });
+      const picked = await openFilePicker({ directory: true });
       if (!picked) return;
 
       const newFolder = typeof picked === "string" ? picked : picked[0];
@@ -437,7 +509,7 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
 
   const handleExport = async () => {
     try {
-      const dest = await openFolderPicker({
+      const dest = await openFilePicker({
         directory: true,
       });
       if (!dest) return;
@@ -456,10 +528,10 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
 
   const handleImportBackup = async () => {
     try {
-      const selected = await openFolderPicker({
+      const selected = await openFilePicker({
         multiple: false,
         filters: [{ name: "Backup", extensions: ["zip"] }],
-      } as Parameters<typeof openFolderPicker>[0]);
+      } as Parameters<typeof openFilePicker>[0]);
       if (!selected) return;
       setExporting(true);
       setBackupMessage(null);
@@ -655,35 +727,91 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
 
           {/* Font family */}
           <Accordion title="Reading Font" defaultOpen>
-            <div className="flex gap-1 bg-warm-subtle rounded-xl p-1">
-              {(["serif", "sans-serif", "dyslexic"] as const).map((option) => {
-                const fontCss =
-                  option === "serif"
-                    ? '"Lora Variable", Georgia, serif'
-                    : option === "dyslexic"
-                      ? '"OpenDyslexic", sans-serif'
-                      : '"DM Sans Variable", system-ui, sans-serif';
-                const label =
-                  option === "serif" ? "Lora"
-                  : option === "dyslexic" ? "OpenDyslexic"
-                  : "DM Sans";
-                return (
-                  <button
-                    type="button"
-                    key={option}
-                    onClick={() => setFontFamily(option)}
-                    className={`flex-1 px-2 py-2.5 text-sm rounded-lg transition-all duration-150 ${
-                      fontFamily === option
-                        ? "bg-surface text-ink shadow-sm font-medium"
-                        : "text-ink-muted hover:text-ink"
-                    }`}
-                    style={{ fontFamily: fontCss }}
+            <div className="flex flex-col gap-1">
+              {/* Built-in fonts */}
+              {([
+                { key: "serif", label: "Lora", css: '"Lora Variable", Georgia, serif' },
+                { key: "sans-serif", label: "DM Sans", css: '"DM Sans Variable", system-ui, sans-serif' },
+                { key: "dyslexic", label: "OpenDyslexic", css: '"OpenDyslexic", sans-serif' },
+              ] as const).map((option) => (
+                <button
+                  type="button"
+                  key={option.key}
+                  onClick={() => setFontFamily(option.key)}
+                  className={`w-full text-left px-3 py-2 text-sm rounded-lg transition-all duration-150 ${
+                    fontFamily === option.key
+                      ? "bg-accent-light text-accent font-medium"
+                      : "text-ink-muted hover:text-ink hover:bg-warm-subtle"
+                  }`}
+                  style={{ fontFamily: option.css }}
+                >
+                  {option.label}
+                </button>
+              ))}
+
+              {/* Custom fonts */}
+              {customFonts.map((font) => (
+                <div
+                  key={font.id}
+                  className={`group flex items-center gap-2 px-3 py-2 rounded-lg transition-all duration-150 cursor-pointer ${
+                    fontFamily === `custom:${font.id}`
+                      ? "bg-accent-light text-accent font-medium"
+                      : "text-ink-muted hover:text-ink hover:bg-warm-subtle"
+                  }`}
+                  onClick={() => setFontFamily(`custom:${font.id}`)}
+                >
+                  <span
+                    className="flex-1 text-sm truncate"
+                    style={{ fontFamily: `"CustomFont-${font.id}", serif` }}
                   >
-                    {label}
-                  </button>
-                );
-              })}
+                    {font.name}
+                  </span>
+                  {deletingFontId === font.id ? (
+                    <span className="flex items-center gap-1 shrink-0">
+                      <button
+                        onClick={(e) => { e.stopPropagation(); handleDeleteFont(font.id); }}
+                        className="text-[10px] px-1.5 py-0.5 bg-accent text-white rounded hover:bg-accent-hover transition-colors"
+                      >
+                        Delete
+                      </button>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); setDeletingFontId(null); }}
+                        className="text-[10px] px-1.5 py-0.5 text-ink-muted hover:text-ink transition-colors"
+                      >
+                        Cancel
+                      </button>
+                    </span>
+                  ) : (
+                    <button
+                      onClick={(e) => { e.stopPropagation(); setDeletingFontId(font.id); }}
+                      className="opacity-0 group-hover:opacity-100 p-0.5 text-ink-muted hover:text-red-500 transition-all shrink-0"
+                      aria-label={`Remove ${font.name}`}
+                    >
+                      <svg width="12" height="12" viewBox="0 0 20 20" fill="none">
+                        <path d="M15 5L5 15M5 5l10 10" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                      </svg>
+                    </button>
+                  )}
+                </div>
+              ))}
+
+              {/* Add font button */}
+              <button
+                type="button"
+                onClick={handleImportFont}
+                className="w-full text-left px-3 py-2 text-sm text-accent hover:bg-warm-subtle rounded-lg transition-colors flex items-center gap-2"
+              >
+                <svg width="14" height="14" viewBox="0 0 20 20" fill="none">
+                  <path d="M10 4v12M4 10h12" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                </svg>
+                Add font...
+              </button>
+              <p className="px-3 text-[10px] text-ink-muted/60">
+                Adding many fonts may slow down the app
+              </p>
             </div>
+
+            {/* Font preview */}
             <p
               className="mt-3 text-sm text-ink-muted leading-relaxed"
               style={{
@@ -692,7 +820,9 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                     ? '"Lora Variable", Georgia, serif'
                     : fontFamily === "dyslexic"
                       ? '"OpenDyslexic", sans-serif'
-                      : '"DM Sans Variable", system-ui, sans-serif',
+                      : fontFamily.startsWith("custom:")
+                        ? `"CustomFont-${fontFamily.slice(7)}", serif`
+                        : '"DM Sans Variable", system-ui, sans-serif',
               }}
             >
               The quick brown fox jumps over the lazy dog.
