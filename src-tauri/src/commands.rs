@@ -731,6 +731,38 @@ pub async fn get_chapter_content(
 }
 
 #[tauri::command]
+pub async fn search_book_content(
+    book_id: String,
+    query: String,
+    state: State<'_, AppState>,
+) -> Result<Vec<epub::SearchResult>, String> {
+    if query.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let file_path = {
+        let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
+        db::get_book(&conn, &book_id)
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| format!("Book '{book_id}' not found"))?
+            .file_path
+    };
+
+    validate_file_exists(&file_path)?;
+
+    let mut cache = state.epub_cache.lock().map_err(|e| e.to_string())?;
+    if !cache.contains_key(&file_path) {
+        if cache.len() >= EPUB_CACHE_MAX {
+            cache.clear();
+        }
+        let c = epub::CachedEpubArchive::open(&file_path).map_err(|e| e.to_string())?;
+        cache.insert(file_path.clone(), c);
+    }
+    let cached = cache.get_mut(&file_path).unwrap();
+    epub::search_book(cached, &query).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 pub async fn get_chapter_word_counts(
     book_id: String,
     state: State<'_, AppState>,

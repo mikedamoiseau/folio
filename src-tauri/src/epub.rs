@@ -678,6 +678,122 @@ pub fn get_chapter_content_from_cache(
     ))
 }
 
+// ---- Full-text search ----
+
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchResult {
+    pub chapter_index: usize,
+    pub snippet: String,
+    pub match_offset: usize,
+}
+
+/// Clamp a byte index to the nearest valid UTF-8 char boundary (floor).
+fn floor_char_boundary(s: &str, idx: usize) -> usize {
+    let mut i = idx.min(s.len());
+    while i > 0 && !s.is_char_boundary(i) {
+        i -= 1;
+    }
+    i
+}
+
+/// Clamp a byte index to the nearest valid UTF-8 char boundary (ceil).
+fn ceil_char_boundary(s: &str, idx: usize) -> usize {
+    let mut i = idx.min(s.len());
+    while i < s.len() && !s.is_char_boundary(i) {
+        i += 1;
+    }
+    i
+}
+
+/// Extract a context snippet around a match position in plain text.
+/// All byte offsets are clamped to valid UTF-8 char boundaries.
+pub fn extract_snippet(
+    text: &str,
+    match_start: usize,
+    match_len: usize,
+    context_chars: usize,
+) -> String {
+    let start = floor_char_boundary(text, match_start.saturating_sub(context_chars));
+    let end = ceil_char_boundary(
+        text,
+        (match_start + match_len + context_chars).min(text.len()),
+    );
+
+    // Align to word boundaries
+    let snippet_start = if start > 0 {
+        text[start..]
+            .find(' ')
+            .map(|p| start + p + 1)
+            .unwrap_or(start)
+    } else {
+        0
+    };
+    let snippet_end = if end < text.len() {
+        text[..end].rfind(' ').unwrap_or(end)
+    } else {
+        text.len()
+    };
+
+    let snippet_start = floor_char_boundary(text, snippet_start);
+    let snippet_end = ceil_char_boundary(text, snippet_end);
+
+    let mut snippet = String::new();
+    if snippet_start > 0 {
+        snippet.push_str("...");
+    }
+    snippet.push_str(text[snippet_start..snippet_end].trim());
+    if snippet_end < text.len() {
+        snippet.push_str("...");
+    }
+    snippet
+}
+
+const MAX_SEARCH_RESULTS: usize = 200;
+
+/// Search all chapters of an EPUB for a query string (case-insensitive).
+pub fn search_book(
+    cached: &mut CachedEpubArchive,
+    query: &str,
+) -> Result<Vec<SearchResult>, EpubError> {
+    let query_lower = query.to_lowercase();
+    let mut results = Vec::new();
+
+    for i in 0..cached.spine.len() {
+        let idref = &cached.spine[i];
+        let href = cached
+            .manifest
+            .get(idref)
+            .map(|item| item.href.clone())
+            .ok_or_else(|| EpubError::MissingFile(format!("Manifest item '{idref}' not found")))?;
+
+        let base_dir = &cached.base_dir;
+        let entry_name = find_zip_entry_name(&mut cached.archive, base_dir, &href)
+            .ok_or_else(|| EpubError::MissingFile(format!("{base_dir}{href}")))?;
+
+        let raw_html = read_zip_entry(&mut cached.archive, &entry_name)?;
+        let body_only = clean(&raw_html);
+        let text = strip_html_tags(&body_only);
+        let text_lower = text.to_lowercase();
+
+        let mut search_from = 0;
+        while let Some(pos) = text_lower[search_from..].find(&query_lower) {
+            let match_start = search_from + pos;
+            results.push(SearchResult {
+                chapter_index: i,
+                snippet: extract_snippet(&text, match_start, query_lower.len(), 40),
+                match_offset: match_start,
+            });
+            if results.len() >= MAX_SEARCH_RESULTS {
+                return Ok(results);
+            }
+            search_from = match_start + query_lower.len();
+        }
+    }
+
+    Ok(results)
+}
+
 // ---- Word counting ----
 
 /// Strip HTML tags from a string and return plain text.
@@ -704,9 +820,7 @@ pub fn count_words(text: &str) -> usize {
 }
 
 /// Get word counts for all chapters from a cached EPUB archive.
-pub fn get_chapter_word_counts(
-    cached: &mut CachedEpubArchive,
-) -> Result<Vec<usize>, EpubError> {
+pub fn get_chapter_word_counts(cached: &mut CachedEpubArchive) -> Result<Vec<usize>, EpubError> {
     let mut counts = Vec::with_capacity(cached.spine.len());
     for i in 0..cached.spine.len() {
         let idref = &cached.spine[i];
@@ -1652,5 +1766,61 @@ mod tests {
         let html = "<p>The quick brown fox jumps over the lazy dog.</p>";
         let text = strip_html_tags(html);
         assert_eq!(count_words(&text), 9);
+    }
+
+    // ---- Search tests ----
+
+    #[test]
+    fn test_extract_snippet_middle() {
+        let text = "The quick brown fox jumps over the lazy dog and runs away fast.";
+        let snippet = extract_snippet(text, 16, 3, 15);
+        assert!(snippet.contains("fox"));
+        assert!(snippet.starts_with("..."));
+    }
+
+    #[test]
+    fn test_extract_snippet_at_start() {
+        let text = "Fox jumps over the lazy dog.";
+        let snippet = extract_snippet(text, 0, 3, 15);
+        assert!(snippet.contains("Fox"));
+        assert!(!snippet.starts_with("..."));
+    }
+
+    #[test]
+    fn test_extract_snippet_at_end() {
+        let text = "The quick brown fox.";
+        let snippet = extract_snippet(text, 16, 3, 15);
+        assert!(snippet.contains("fox"));
+        assert!(!snippet.ends_with("..."));
+    }
+
+    #[test]
+    fn test_extract_snippet_short_text() {
+        let text = "Hello world";
+        let snippet = extract_snippet(text, 0, 5, 100);
+        assert_eq!(snippet, "Hello world");
+    }
+
+    #[test]
+    fn test_extract_snippet_multibyte_chars() {
+        let text = "Le café est très bon et délicieux.";
+        // "café" starts at byte 3 and is 5 bytes (é = 2 bytes)
+        let pos = text.find("café").unwrap();
+        let snippet = extract_snippet(text, pos, "café".len(), 10);
+        assert!(
+            snippet.contains("café"),
+            "snippet should contain the match: {snippet}"
+        );
+    }
+
+    #[test]
+    fn test_extract_snippet_cjk() {
+        let text = "这是一个中文测试句子。";
+        let pos = text.find("中文").unwrap();
+        let snippet = extract_snippet(text, pos, "中文".len(), 10);
+        assert!(
+            snippet.contains("中文"),
+            "snippet should contain CJK match: {snippet}"
+        );
     }
 }

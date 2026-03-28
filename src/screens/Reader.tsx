@@ -65,6 +65,13 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
   const [saveError, setSaveError] = useState(false);
   const [selectionPopup, setSelectionPopup] = useState<{ x: number; y: number; text: string; startOffset: number; endOffset: number } | null>(null);
 
+  // Book search
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchResults, setSearchResults] = useState<{ chapterIndex: number; snippet: string; matchOffset: number }[]>([]);
+  const [searching, setSearching] = useState(false);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+
   // Do Not Disturb mode
   const [dndMode, setDndMode] = useState(false);
   const [dndShowControls, setDndShowControls] = useState(false);
@@ -497,6 +504,38 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
     return result;
   }, [chapterHtml, highlights]);
 
+  // Apply search term highlighting on top of existing highlights
+  const searchHighlightedHtml = useMemo(() => {
+    if (!searchOpen || !searchQuery.trim() || !highlightedHtml) return highlightedHtml;
+    const q = searchQuery.trim();
+    // Escape regex special characters
+    const escaped = q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const regex = new RegExp(`(${escaped})`, "gi");
+    // Only replace text outside of HTML tags
+    let result = "";
+    let inTag = false;
+    let textRun = "";
+    for (const ch of highlightedHtml) {
+      if (ch === "<") {
+        // Flush text run with replacements
+        result += textRun.replace(regex, '<mark style="background-color:#fbbf2488;border-radius:2px;padding:1px 0">$1</mark>');
+        textRun = "";
+        inTag = true;
+        result += ch;
+      } else if (ch === ">") {
+        inTag = false;
+        result += ch;
+      } else if (inTag) {
+        result += ch;
+      } else {
+        textRun += ch;
+      }
+    }
+    // Flush remaining text
+    result += textRun.replace(regex, '<mark style="background-color:#fbbf2488;border-radius:2px;padding:1px 0">$1</mark>');
+    return result;
+  }, [highlightedHtml, searchOpen, searchQuery]);
+
   const handleCreateHighlight = useCallback(async (color: string) => {
     if (!bookId || !selectionPopup) return;
     try {
@@ -579,6 +618,26 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
     goToChapter(chapterIndex + 1);
   }, [chapterIndex, goToChapter]);
 
+  // ---- Book search ----
+
+  const executeSearch = useCallback(async (query: string) => {
+    if (!bookId || !query.trim()) {
+      setSearchResults([]);
+      return;
+    }
+    setSearching(true);
+    try {
+      const results = await invoke<{ chapterIndex: number; snippet: string; matchOffset: number }[]>(
+        "search_book_content", { bookId, query: query.trim() }
+      );
+      setSearchResults(results);
+    } catch {
+      setSearchResults([]);
+    } finally {
+      setSearching(false);
+    }
+  }, [bookId]);
+
   // ---- Keyboard shortcuts ----
 
   const addBookmarkAtCurrentPosition = useCallback(async () => {
@@ -598,6 +657,22 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
 
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
+      // Cmd/Ctrl+F — open book search (EPUB only)
+      if ((e.metaKey || e.ctrlKey) && e.key === "f" && bookFormat === "epub") {
+        e.preventDefault();
+        setSearchOpen(true);
+        setSearchQuery("");
+        setSearchResults([]);
+        setTimeout(() => searchInputRef.current?.focus(), 50);
+        return;
+      }
+
+      // Close search panel from any context (including when input is focused)
+      if (e.key === "Escape" && searchOpen) {
+        setSearchOpen(false); setSearchQuery(""); setSearchResults([]);
+        return;
+      }
+
       const tag = (e.target as HTMLElement)?.tagName;
       if (tag === "INPUT" || tag === "TEXTAREA") return;
 
@@ -633,7 +708,7 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [prevChapter, nextChapter, addBookmarkAtCurrentPosition, showShortcuts, tocOpen, bookmarksOpen, dndMode, settingsOpen, navigate, bookFormat]);
+  }, [prevChapter, nextChapter, addBookmarkAtCurrentPosition, showShortcuts, tocOpen, bookmarksOpen, dndMode, settingsOpen, navigate, bookFormat, searchOpen]);
 
   // ---- TOC focus trap ----
 
@@ -1006,6 +1081,78 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
           </button>
         </header>
 
+        {/* Book search panel */}
+        {searchOpen && bookFormat === "epub" && (
+          <div className="shrink-0 border-b border-warm-border bg-surface px-4 py-2 flex items-center gap-2">
+            <svg width="14" height="14" viewBox="0 0 20 20" fill="none" className="text-ink-muted shrink-0">
+              <circle cx="9" cy="9" r="6" stroke="currentColor" strokeWidth="2" />
+              <path d="M13.5 13.5L17 17" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+            </svg>
+            <input
+              ref={searchInputRef}
+              type="text"
+              value={searchQuery}
+              onChange={(e) => {
+                setSearchQuery(e.target.value);
+                if (e.target.value.trim().length >= 2) {
+                  executeSearch(e.target.value);
+                } else {
+                  setSearchResults([]);
+                }
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Escape") {
+                  setSearchOpen(false);
+                  setSearchQuery("");
+                  setSearchResults([]);
+                } else if (e.key === "Enter") {
+                  executeSearch(searchQuery);
+                }
+              }}
+              placeholder="Search in book..."
+              className="flex-1 text-sm bg-transparent text-ink placeholder-ink-muted/50 focus:outline-none"
+              autoFocus
+            />
+            {searching && <span className="text-xs text-ink-muted">Searching...</span>}
+            {!searching && searchResults.length > 0 && (
+              <span className="text-xs text-ink-muted tabular-nums">{searchResults.length} {searchResults.length === 1 ? "match" : "matches"}</span>
+            )}
+            <button
+              type="button"
+              onClick={() => { setSearchOpen(false); setSearchQuery(""); setSearchResults([]); }}
+              className="p-1 text-ink-muted hover:text-ink transition-colors"
+              aria-label="Close search"
+            >
+              <svg width="14" height="14" viewBox="0 0 20 20" fill="none">
+                <path d="M15 5L5 15M5 5l10 10" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+              </svg>
+            </button>
+          </div>
+        )}
+
+        {/* Search results dropdown */}
+        {searchOpen && searchResults.length > 0 && (
+          <div className="shrink-0 max-h-48 overflow-y-auto border-b border-warm-border bg-surface/95">
+            {searchResults.map((result, i) => {
+              const chapterTitle = toc.find((t) => t.chapter_index === result.chapterIndex)?.label ?? `Chapter ${result.chapterIndex + 1}`;
+              return (
+                <button
+                  key={`${result.chapterIndex}-${result.matchOffset}-${i}`}
+                  type="button"
+                  onClick={() => {
+                    goToChapter(result.chapterIndex);
+                    setSearchOpen(false);
+                  }}
+                  className="w-full text-left px-4 py-2 hover:bg-warm-subtle transition-colors border-b border-warm-border/50 last:border-b-0"
+                >
+                  <span className="text-[11px] text-accent font-medium">{chapterTitle}</span>
+                  <p className="text-xs text-ink-muted mt-0.5 line-clamp-2">{result.snippet}</p>
+                </button>
+              );
+            })}
+          </div>
+        )}
+
         {/* Content area — epub chapter reader or page-based viewer */}
         {bookFormat !== "epub" ? (
           pageCount > 0 ? (
@@ -1153,7 +1300,7 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
                   ref={contentRef}
                   className="reader-content max-w-[680px] mx-auto py-10"
                   style={{ ...readerContentStyle, paddingLeft: `${typography.pageMargins}px`, paddingRight: `${typography.pageMargins}px` }}
-                  dangerouslySetInnerHTML={{ __html: highlightedHtml }}
+                  dangerouslySetInnerHTML={{ __html: searchHighlightedHtml }}
                 />
               )}
 

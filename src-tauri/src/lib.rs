@@ -138,6 +138,7 @@ pub fn run() {
             commands::get_chapter_content,
             commands::get_all_chapters,
             commands::get_chapter_word_counts,
+            commands::search_book_content,
             commands::get_toc,
             commands::get_reading_progress,
             commands::save_reading_progress,
