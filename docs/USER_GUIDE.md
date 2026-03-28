@@ -343,6 +343,23 @@ Toggle between two modes for how EPUB content is displayed:
 
 This is a global preference that applies to all EPUB books.
 
+### Dual-page spread
+
+Show two pages side by side, like an open book. Works for all formats: comics (CBZ/CBR), PDFs, and EPUBs in paginated mode.
+
+**Toggling on/off:**
+
+- **Reader header:** Click the dual-page icon (two rectangles) in the header bar. When active, the icon highlights.
+- **Settings > Reading Layout:** Toggle "Dual-page spread" on or off.
+
+**Page pairing:** The cover page (page 1) always displays solo. Subsequent pages are paired: 2-3, 4-5, 6-7, etc. If the last page has no partner, it displays solo.
+
+**Manga mode (right-to-left):** When dual-page is active, a second button appears in the header bar (left arrow icon). Toggle it to swap the page order within each spread — the right page displays on the left and vice versa. This also reverses the arrow key direction so that left-arrow advances forward, matching the RTL reading direction. For EPUBs, manga mode flows the text columns right-to-left.
+
+**Zoom and pan:** In dual-page mode, zoom and pan apply to both pages as a unit. Pan is bounded so you can't drag the content off-screen.
+
+Both settings are global (apply to all books) and persist between sessions. Dual-page is automatically hidden when EPUB is in continuous scroll mode.
+
 ### Full-text search (EPUB)
 
 Search the full text of any EPUB book:

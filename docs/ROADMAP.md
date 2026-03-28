@@ -356,13 +356,14 @@ Tauri v2 supports mobile targets. The React frontend renders in a mobile WebView
 - ~~Applied as a `<style>` tag while reading EPUBs~~
 - Per-book CSS override (TBD)
 
-#### 38. Dual-Page Spread / Manga Mode
-- Side-by-side two-page view for all formats (CBZ/CBR, PDF, EPUB in paginated mode)
-- Right-to-left page order option for manga (swaps spread order, not navigation direction)
-- Cover page always displayed solo; subsequent pages paired (2-3, 4-5, etc.)
-- Quick toggle in reader bar + persistent setting in SettingsPanel
-- Global setting (applies to all books)
-- EPUB: CSS columns approach; page-based formats: two images side by side
+#### 38. Dual-Page Spread / Manga Mode — **Done**
+- ~~Side-by-side two-page view for all formats (CBZ/CBR, PDF, EPUB in paginated mode)~~
+- ~~Right-to-left page order option for manga (swaps spread order and arrow key direction)~~
+- ~~Cover page always displayed solo; subsequent pages paired (2-3, 4-5, etc.)~~
+- ~~Quick toggle in reader header bar + persistent setting in SettingsPanel~~
+- ~~Global setting (applies to all books)~~
+- ~~EPUB: CSS columns approach; page-based formats: two images side by side~~
+- ~~Zoom and pan work on the spread as a unit with proper bounds clamping~~
 - Future: preload next spread in background for smoother page turns
 - Future: auto-detect landscape/wide images and display solo at full width
 
@@ -434,5 +435,5 @@ Lower priority features — high effort, niche audience, or dependent on other w
 | 5 | Multiple Profiles | Done | Multi-user |
 | 6 | Remote Library Access, OPDS Server | Not started | Remote access |
 | 7 | Android & iOS App | Not started | Mobile |
-| 8 | Sepia Theme, OpenDyslexic, Star Ratings, In-Book Search, Typography, Custom Fonts, Continuous Scroll, Time-to-Finish, Bookmark Naming, Series, Activity Log, MOBI, Nav History, Custom CSS, Dual-Page/Manga, Animations, Split View | 12 done | Reader & library enhancements |
+| 8 | Sepia Theme, OpenDyslexic, Star Ratings, In-Book Search, Typography, Custom Fonts, Continuous Scroll, Time-to-Finish, Bookmark Naming, Series, Activity Log, MOBI, Nav History, Custom CSS, Dual-Page/Manga, Animations, Split View | 13 done | Reader & library enhancements |
 | N/H | Dictionary, Vocabulary Builder, TTS, PDF Reflow, Library-Wide Search, Annotation Exports, Plugins/Hooks, User Themes | Not started | Nice to have |
