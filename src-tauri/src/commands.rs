@@ -7,7 +7,7 @@ use crate::db::{self, DbPool};
 use crate::epub;
 use crate::models::{
     Book, BookFormat, Bookmark, Collection, CollectionRule, CollectionType, CustomFont, Highlight,
-    NewRuleInput, ReadingProgress,
+    NewRuleInput, ReadingProgress, SeriesInfo,
 };
 use crate::opds;
 use crate::openlibrary;
@@ -2947,6 +2947,14 @@ pub async fn remove_custom_font(font_id: String, state: State<'_, AppState>) -> 
     }
 
     db::delete_custom_font(&conn, &font_id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn get_series(
+    state: State<'_, AppState>,
+) -> Result<Vec<SeriesInfo>, String> {
+    let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
+    db::list_series(&conn).map_err(|e| e.to_string())
 }
 
 #[cfg(test)]

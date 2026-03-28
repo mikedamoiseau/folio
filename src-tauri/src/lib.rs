@@ -193,6 +193,7 @@ pub fn run() {
             commands::import_custom_font,
             commands::get_custom_fonts,
             commands::remove_custom_font,
+            commands::get_series,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
