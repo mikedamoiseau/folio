@@ -132,6 +132,8 @@ function CollectionRow({
 }) {
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [isHovered, setIsHovered] = useState(false);
+  const [shareMenu, setShareMenu] = useState(false);
+  const [copied, setCopied] = useState(false);
   const dragging = useSyncExternalStore(subscribe, isDragging);
 
   const handleMouseUp = () => {
@@ -195,23 +197,64 @@ function CollectionRow({
         <span className="text-[10px] text-ink-muted opacity-60 mr-1">auto</span>
       )}
       {/* Share button */}
-      <button
-        className="opacity-0 group-hover:opacity-100 p-0.5 text-ink-muted hover:text-accent transition-all"
-        aria-label={`Share ${collection.name}`}
-        onClick={async (e) => {
-          e.stopPropagation();
-          try {
-            const md = await invoke<string>("export_collection_markdown", { collectionId: collection.id });
-            await navigator.clipboard.writeText(md);
-          } catch { /* ignore */ }
-        }}
-        title="Copy as Markdown"
-      >
-        <svg width="13" height="13" viewBox="0 0 20 20" fill="none">
-          <path d="M13 3H7a2 2 0 00-2 2v10a2 2 0 002 2h6a2 2 0 002-2V5a2 2 0 00-2-2z" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" />
-          <path d="M9 1h4a2 2 0 012 2v10" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-        </svg>
-      </button>
+      <div className="relative">
+        <button
+          className="opacity-0 group-hover:opacity-100 p-0.5 text-ink-muted hover:text-accent transition-all"
+          aria-label={`Share ${collection.name}`}
+          onClick={(e) => {
+            e.stopPropagation();
+            setShareMenu((v) => !v);
+          }}
+          title="Export collection"
+        >
+          <svg width="13" height="13" viewBox="0 0 20 20" fill="none">
+            <path d="M13 3H7a2 2 0 00-2 2v10a2 2 0 002 2h6a2 2 0 002-2V5a2 2 0 00-2-2z" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" />
+            <path d="M9 1h4a2 2 0 012 2v10" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        </button>
+        {shareMenu && (
+          <>
+            <div className="fixed inset-0 z-30" onClick={(e) => { e.stopPropagation(); setShareMenu(false); }} />
+            <div className="absolute right-0 top-6 z-40 bg-surface border border-warm-border rounded-lg shadow-lg py-1 w-40 animate-fade-in">
+              <button
+                className="w-full text-left px-3 py-1.5 text-xs text-ink hover:bg-warm-subtle transition-colors"
+                onClick={async (e) => {
+                  e.stopPropagation();
+                  try {
+                    const md = await invoke<string>("export_collection_markdown", { collectionId: collection.id });
+                    await navigator.clipboard.writeText(md);
+                    setCopied(true);
+                    setTimeout(() => setCopied(false), 1500);
+                  } catch { /* ignore */ }
+                  setShareMenu(false);
+                }}
+              >
+                Copy as Markdown
+              </button>
+              <button
+                className="w-full text-left px-3 py-1.5 text-xs text-ink hover:bg-warm-subtle transition-colors"
+                onClick={async (e) => {
+                  e.stopPropagation();
+                  try {
+                    const json = await invoke<string>("export_collection_json", { collectionId: collection.id });
+                    await navigator.clipboard.writeText(json);
+                    setCopied(true);
+                    setTimeout(() => setCopied(false), 1500);
+                  } catch { /* ignore */ }
+                  setShareMenu(false);
+                }}
+              >
+                Copy as JSON
+              </button>
+            </div>
+          </>
+        )}
+        {copied && (
+          <div className="absolute right-0 top-6 z-50 px-2 py-1 bg-ink/90 text-white text-[10px] rounded shadow-lg whitespace-nowrap animate-fade-in">
+            Copied!
+          </div>
+        )}
+      </div>
       {/* Edit button */}
       <button
         className="opacity-0 group-hover:opacity-100 p-0.5 text-ink-muted hover:text-accent transition-all"
