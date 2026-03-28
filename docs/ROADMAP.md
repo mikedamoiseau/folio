@@ -333,11 +333,11 @@ Tauri v2 supports mobile targets. The React frontend renders in a mobile WebView
 
 ### Power User & Reader Enhancements
 
-#### 35. Bookmark Naming & Editing
-- Edit an existing bookmark to change its name (currently bookmarks are unnamed positional markers)
-- Optionally prompt for a name when pressing `b` — or use a two-step flow (quick-create unnamed, then edit inline)
-- Research how other readers handle this: Kindle names by highlight/page, Apple Books uses page number, Calibre uses typed labels, browser-style bookmarks prompt for a name on creation
-- UX question: should `b` stay instant (name later) or show an inline input? Consider both power users (speed) and casual users (discoverability)
+#### 35. Bookmark Naming & Editing — **Done**
+- ~~Edit an existing bookmark to change its name (inline editing in bookmarks panel)~~
+- ~~Two-step toast flow: quick-create unnamed via `b`, then optionally name from expanding toast~~
+- ~~Inline editing in bookmarks panel: click name to edit, Enter/blur saves, Escape cancels~~
+- ~~New `name` column in bookmarks table; `note` field preserved for future use~~
 
 #### 36. Navigation History (Back/Forward)
 - Browser-like back/forward buttons after following TOC links or internal references in EPUBs
@@ -422,5 +422,5 @@ Lower priority features — high effort, niche audience, or dependent on other w
 | 5 | Multiple Profiles | Done | Multi-user |
 | 6 | Remote Library Access, OPDS Server | Not started | Remote access |
 | 7 | Android & iOS App | Not started | Mobile |
-| 8 | Sepia Theme, OpenDyslexic, Star Ratings, In-Book Search, Typography, Custom Fonts, Continuous Scroll, Time-to-Finish, Bookmark Naming, Series, Activity Log, MOBI, Nav History, Custom CSS, Dual-Page/Manga, Animations, Split View | 9 done | Reader & library enhancements |
+| 8 | Sepia Theme, OpenDyslexic, Star Ratings, In-Book Search, Typography, Custom Fonts, Continuous Scroll, Time-to-Finish, Bookmark Naming, Series, Activity Log, MOBI, Nav History, Custom CSS, Dual-Page/Manga, Animations, Split View | 10 done | Reader & library enhancements |
 | N/H | Dictionary, Vocabulary Builder, TTS, PDF Reflow, Library-Wide Search, Annotation Exports, Plugins/Hooks, User Themes | Not started | Nice to have |

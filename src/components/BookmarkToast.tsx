@@ -17,9 +17,8 @@ export default function BookmarkToast({
 
   // Auto-dismiss after 3s if still in confirmed mode
   useEffect(() => {
-    timerRef.current = setTimeout(() => {
-      if (mode === "confirmed") onDismiss();
-    }, 3000);
+    if (mode !== "confirmed") return;
+    timerRef.current = setTimeout(() => onDismiss(), 3000);
     return () => clearTimeout(timerRef.current);
   }, [mode, onDismiss]);
 
