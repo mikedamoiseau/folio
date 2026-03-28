@@ -96,7 +96,7 @@ jobs:
             -Uri "https://github.com/bblanchon/pdfium-binaries/releases/download/chromium%2F${{ env.PDFIUM_VERSION }}/${{ matrix.pdfium_archive }}" `
             -OutFile "$env:TEMP\pdfium.tgz"
           tar xzf "$env:TEMP\pdfium.tgz" -C $tmp
-          Copy-Item "$tmp\lib\${{ matrix.pdfium_lib }}" src-tauri/resources/
+          Copy-Item "$tmp\bin\${{ matrix.pdfium_lib }}" src-tauri/resources/
 
       - name: Install frontend dependencies
         run: npm ci
