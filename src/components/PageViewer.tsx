@@ -122,6 +122,11 @@ export default function PageViewer({
     }
   }, [dualPage, spread, pageIndex, totalPages, goTo]);
 
+  // Keep DOM transform in sync with zoom state (React doesn't manage this inline)
+  useEffect(() => {
+    applyTransform(zoom, panRef.current);
+  }, [zoom, applyTransform]);
+
   const isAtStart = dualPage ? spread.left <= 0 : pageIndex <= 0;
   const isAtEnd = dualPage
     ? (spread.right !== null ? spread.right >= totalPages - 1 : spread.left >= totalPages - 1)
@@ -245,9 +250,6 @@ export default function PageViewer({
           <div
             ref={spreadRef}
             className={`flex items-center justify-center gap-1 max-h-full will-change-transform ${mangaMode && dualPage ? "flex-row-reverse" : "flex-row"}`}
-            style={{
-              transform: `scale(${zoom}) translate(${panRef.current.x / zoom}px, ${panRef.current.y / zoom}px)`,
-            }}
           >
             {leftImageData && (
               <img
