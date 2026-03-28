@@ -107,6 +107,7 @@ pub fn run() {
                 active_profile: std::sync::Mutex::new("default".to_string()),
                 data_dir,
                 epub_cache: std::sync::Mutex::new(std::collections::HashMap::new()),
+                epub_cache_order: std::sync::Mutex::new(Vec::new()),
                 enrichment_registry,
             });
             Ok(())
@@ -186,6 +187,7 @@ pub fn run() {
             commands::get_enrichment_providers,
             commands::set_enrichment_provider_config,
             commands::get_activity_log,
+            commands::preview_collection_rules,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

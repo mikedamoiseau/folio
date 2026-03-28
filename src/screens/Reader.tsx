@@ -221,7 +221,9 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
       restoringScroll.current = null;
       savedScrollPosition.current = null;
     });
-  }, [allChaptersLoaded, isContinuous, chapterIndex]);
+  }, [allChaptersLoaded, isContinuous]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Note: chapterIndex intentionally excluded — including it would re-fire
+  // the restore effect when chapterIndex changes from scroll tracking.
 
   // ---- Track visible chapter in continuous scroll mode ----
 
@@ -518,7 +520,7 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
     for (const ch of highlightedHtml) {
       if (ch === "<") {
         // Flush text run with replacements
-        result += textRun.replace(regex, '<mark style="background-color:#fbbf2488;border-radius:2px;padding:1px 0">$1</mark>');
+        result += textRun.replace(regex, '<mark style="background-color:#93c5fd88;border-radius:2px;padding:1px 0">$1</mark>');
         textRun = "";
         inTag = true;
         result += ch;
@@ -532,7 +534,7 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
       }
     }
     // Flush remaining text
-    result += textRun.replace(regex, '<mark style="background-color:#fbbf2488;border-radius:2px;padding:1px 0">$1</mark>');
+    result += textRun.replace(regex, '<mark style="background-color:#93c5fd88;border-radius:2px;padding:1px 0">$1</mark>');
     return result;
   }, [highlightedHtml, searchOpen, searchQuery]);
 
@@ -618,6 +620,15 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
     goToChapter(chapterIndex + 1);
   }, [chapterIndex, goToChapter]);
 
+  // ---- Focus search input when search panel opens ----
+
+  useEffect(() => {
+    if (searchOpen) {
+      // Wait for the DOM to render the input before focusing
+      requestAnimationFrame(() => searchInputRef.current?.focus());
+    }
+  }, [searchOpen]);
+
   // ---- Book search ----
 
   const executeSearch = useCallback(async (query: string) => {
@@ -663,7 +674,6 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
         setSearchOpen(true);
         setSearchQuery("");
         setSearchResults([]);
-        setTimeout(() => searchInputRef.current?.focus(), 50);
         return;
       }
 
@@ -1001,6 +1011,21 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
             {currentChapterTitle}
           </h1>
 
+          {/* Search button (EPUB only) */}
+          {bookFormat === "epub" && (
+            <button
+              onClick={() => { setSearchOpen(true); setSearchQuery(""); setSearchResults([]); }}
+              className={`p-1.5 transition-colors rounded-lg focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 ${searchOpen ? "text-accent bg-accent-light" : "text-ink-muted hover:text-ink hover:bg-warm-subtle"}`}
+              aria-label="Search in book"
+              title="Search (⌘F)"
+            >
+              <svg width="17" height="17" viewBox="0 0 20 20" fill="none">
+                <circle cx="9" cy="9" r="5.5" stroke="currentColor" strokeWidth="1.5" />
+                <path d="M13 13l4 4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+              </svg>
+            </button>
+          )}
+
           {/* Highlights button */}
           <button
             onClick={() => setHighlightsOpen((prev) => !prev)}
@@ -1131,6 +1156,11 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
         )}
 
         {/* Search results dropdown */}
+        {searchOpen && !searching && searchQuery.trim().length >= 2 && searchResults.length === 0 && (
+          <div className="shrink-0 border-b border-warm-border bg-surface/95 px-4 py-3">
+            <p className="text-xs text-ink-muted text-center">No matches found for &ldquo;{searchQuery.trim()}&rdquo;</p>
+          </div>
+        )}
         {searchOpen && searchResults.length > 0 && (
           <div className="shrink-0 max-h-48 overflow-y-auto border-b border-warm-border bg-surface/95">
             {searchResults.map((result, i) => {
@@ -1150,6 +1180,11 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
                 </button>
               );
             })}
+            {searchResults.length >= 200 && (
+              <div className="px-4 py-2 text-[11px] text-ink-muted/70 text-center bg-warm-subtle/50">
+                Results capped at 200. Try a more specific query.
+              </div>
+            )}
           </div>
         )}
 
@@ -1290,8 +1325,9 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
                     })}
                   </div>
                 ) : (
-                  <div className="flex-1 flex items-center justify-center">
-                    <p className="text-sm text-ink-muted">Loading all chapters…</p>
+                  <div className="flex-1 flex flex-col items-center justify-center gap-2">
+                    <div className="w-5 h-5 border-2 border-accent/30 border-t-accent rounded-full animate-spin" />
+                    <p className="text-sm text-ink-muted">Loading {totalChapters} chapters…</p>
                   </div>
                 )
               ) : (

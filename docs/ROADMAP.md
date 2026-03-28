@@ -333,27 +333,33 @@ Tauri v2 supports mobile targets. The React frontend renders in a mobile WebView
 
 ### Power User & Reader Enhancements
 
-#### 35. Navigation History (Back/Forward)
+#### 35. Bookmark Naming & Editing
+- Edit an existing bookmark to change its name (currently bookmarks are unnamed positional markers)
+- Optionally prompt for a name when pressing `b` — or use a two-step flow (quick-create unnamed, then edit inline)
+- Research how other readers handle this: Kindle names by highlight/page, Apple Books uses page number, Calibre uses typed labels, browser-style bookmarks prompt for a name on creation
+- UX question: should `b` stay instant (name later) or show an inline input? Consider both power users (speed) and casual users (discoverability)
+
+#### 36. Navigation History (Back/Forward)
 - Browser-like back/forward buttons after following TOC links or internal references in EPUBs
 - Maintain a navigation stack per reading session
 
-#### 36. Custom CSS Override — **Done**
+#### 37. Custom CSS Override — **Done**
 - ~~Let users inject custom CSS into EPUB rendering~~
 - ~~Global stylesheet override via textarea in settings~~
 - ~~Applied as a `<style>` tag while reading EPUBs~~
 - Per-book CSS override (TBD)
 
-#### 37. Dual-Page Spread / Manga Mode
+#### 38. Dual-Page Spread / Manga Mode
 - Side-by-side two-page view for comics (CBZ/CBR) and PDFs
 - Right-to-left page order option for manga
 - Toggle in reader settings
 
-#### 38. Page Turn Animations
+#### 39. Page Turn Animations
 - Optional visual effects when turning pages (curl, slide, fade)
 - Configurable or disableable in settings
 - Pure polish feature
 
-#### 39. Split View / Side-by-Side Reading
+#### 40. Split View / Side-by-Side Reading
 - Open two books simultaneously in a split pane
 - Useful for reference material alongside primary reading
 - Niche but valuable for academic use
@@ -362,45 +368,45 @@ Tauri v2 supports mobile targets. The React frontend renders in a mobile WebView
 
 Lower priority features — high effort, niche audience, or dependent on other work.
 
-### 40. Dictionary / Word Lookup
+### 41. Dictionary / Word Lookup
 - Select a word in the reader to get a definition
 - Hybrid approach: bundle lightweight offline dictionary (WordNet) + online API fallback (Wiktionary, Free Dictionary API)
 - Optional: let users load StarDict dictionary files for full multilingual offline support
 - Cross-platform — no dependency on OS-specific dictionary APIs
 
-### 41. Vocabulary Builder
+### 42. Vocabulary Builder
 - Log every word looked up via the dictionary into a personal word list
 - Record the word, definition, and source sentence/book
 - Review screen with flashcard-style quizzing
-- *Depends on: Dictionary (#40)*
+- *Depends on: Dictionary (#41)*
 
-### 42. Text-to-Speech
+### 43. Text-to-Speech
 - Read current chapter aloud using system TTS
 - Play/pause, skip forward/back, speed control
 - Highlight current sentence as it's read
 
-### 43. PDF Text Reflow
+### 44. PDF Text Reflow
 - Extract text from PDF pages and re-render as flowing text (like EPUB)
 - Respects font size and screen width settings
 - Imperfect for complex layouts (tables, columns, images) but major readability win for text-heavy PDFs
 
-### 44. Library-Wide Full-Text Search
+### 45. Library-Wide Full-Text Search
 - Search inside the content of all books in the library, not just metadata
 - Requires building a full-text index (SQLite FTS or similar)
 - Results show matching books with context snippets
 
-### 45. Annotation Export Integrations
+### 46. Annotation Export Integrations
 - Export highlights and notes to Readwise, Notion, Obsidian via their APIs
 - Extends existing Markdown/plain text export with direct service integration
 - Readwise is a popular highlight aggregation service used by serious readers
 
-### 46. Plugin / Hook System
+### 47. Plugin / Hook System
 - Fire events at key points: `on_import`, `on_book_open`, `on_book_close`, `on_annotation_created`, etc.
 - Let user scripts react to events (similar to WordPress/Drupal hooks)
 - Lightweight alternative to a full plugin SDK — extensible without modifying core code
 - Enables custom automation: auto-tagging, post-import scripts, external sync
 
-### 47. User-Created Themes
+### 48. User-Created Themes
 - Custom color schemes beyond built-in presets (light, dark, sepia)
 - Define background, text, accent, and UI colors
 - Import/export themes for sharing
@@ -416,5 +422,5 @@ Lower priority features — high effort, niche audience, or dependent on other w
 | 5 | Multiple Profiles | Done | Multi-user |
 | 6 | Remote Library Access, OPDS Server | Not started | Remote access |
 | 7 | Android & iOS App | Not started | Mobile |
-| 8 | Sepia Theme, OpenDyslexic, Star Ratings, In-Book Search, Typography, Custom Fonts, Continuous Scroll, Time-to-Finish, Series, Activity Log, MOBI, Nav History, Custom CSS, Dual-Page/Manga, Animations, Split View | 9 done | Reader & library enhancements |
-| N/H | Dictionary, Vocabulary Builder, TTS, PDF Reflow, Library-Wide Search, Annotation Exports, Plugins/Hooks | Not started | Nice to have |
+| 8 | Sepia Theme, OpenDyslexic, Star Ratings, In-Book Search, Typography, Custom Fonts, Continuous Scroll, Time-to-Finish, Bookmark Naming, Series, Activity Log, MOBI, Nav History, Custom CSS, Dual-Page/Manga, Animations, Split View | 9 done | Reader & library enhancements |
+| N/H | Dictionary, Vocabulary Builder, TTS, PDF Reflow, Library-Wide Search, Annotation Exports, Plugins/Hooks, User Themes | Not started | Nice to have |

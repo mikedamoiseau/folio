@@ -1,4 +1,4 @@
-import { useState, useSyncExternalStore } from "react";
+import { useState, useEffect, useRef, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { getDraggedBookId, endDrag, isDragging, subscribe } from "../lib/dragState";
@@ -336,6 +336,27 @@ function CollectionForm({
     initial?.rules.map(({ field, operator, value }) => ({ field, operator, value })) ?? []
   );
 
+  // Live match count preview for automated rules
+  const [matchCount, setMatchCount] = useState<number | null>(null);
+  const previewTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+
+  useEffect(() => {
+    if (type !== "automated" || rules.length === 0 || rules.some((r) => !r.value.trim())) {
+      setMatchCount(null);
+      return;
+    }
+    clearTimeout(previewTimer.current);
+    previewTimer.current = setTimeout(async () => {
+      try {
+        const count = await invoke<number>("preview_collection_rules", { rules });
+        setMatchCount(count);
+      } catch {
+        setMatchCount(null);
+      }
+    }, 400);
+    return () => clearTimeout(previewTimer.current);
+  }, [type, rules]);
+
   const addRule = () => {
     setRules((prev) => [
       ...prev,
@@ -480,6 +501,13 @@ function CollectionForm({
             >
               + Add rule
             </button>
+            {matchCount !== null && (
+              <p className="mt-2 text-xs text-ink-muted">
+                {matchCount === 0
+                  ? "No books match these rules"
+                  : `${matchCount} book${matchCount === 1 ? "" : "s"} match${matchCount === 1 ? "es" : ""} these rules`}
+              </p>
+            )}
           </div>
         )}
       </div>

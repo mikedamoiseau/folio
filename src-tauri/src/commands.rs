@@ -24,6 +24,8 @@ pub struct AppState {
     /// Cache of opened EPUB zip archives keyed by file path, avoiding
     /// re-opening the zip and re-parsing OPF on every page turn.
     pub epub_cache: std::sync::Mutex<std::collections::HashMap<String, epub::CachedEpubArchive>>,
+    /// LRU access order for epub_cache keys (most recently used at end).
+    pub epub_cache_order: std::sync::Mutex<Vec<String>>,
     pub enrichment_registry: std::sync::Mutex<crate::providers::ProviderRegistry>,
 }
 
@@ -39,6 +41,37 @@ impl AppState {
             .get(&*profile)
             .cloned()
             .ok_or_else(|| format!("Profile '{}' not found", profile))
+    }
+}
+
+/// Insert or touch a key in the LRU cache order, evicting the oldest entry if at capacity.
+fn ensure_epub_cached(
+    cache: &mut std::collections::HashMap<String, epub::CachedEpubArchive>,
+    order: &mut Vec<String>,
+    file_path: &str,
+) {
+    if cache.contains_key(file_path) {
+        // Move to end (most recently used)
+        if let Some(pos) = order.iter().position(|k| k == file_path) {
+            order.remove(pos);
+        }
+        order.push(file_path.to_string());
+        return;
+    }
+    // Evict LRU entry when cache is full
+    while cache.len() >= EPUB_CACHE_MAX {
+        if let Some(oldest) = order.first().cloned() {
+            cache.remove(&oldest);
+            order.remove(0);
+        } else {
+            // Fallback: order out of sync, clear everything
+            cache.clear();
+            break;
+        }
+    }
+    if let Ok(archive) = epub::CachedEpubArchive::open(file_path) {
+        cache.insert(file_path.to_string(), archive);
+        order.push(file_path.to_string());
     }
 }
 
@@ -503,6 +536,9 @@ pub async fn remove_book(book_id: String, state: State<'_, AppState>) -> Result<
         if let Ok(mut cache) = state.epub_cache.lock() {
             cache.remove(path);
         }
+        if let Ok(mut order) = state.epub_cache_order.lock() {
+            order.retain(|k| k != path);
+        }
     }
 
     // Remove the physical file; ignore NotFound, log but don't fail on other errors.
@@ -623,7 +659,7 @@ pub async fn update_book_metadata(
         book.publish_year = Some(y);
     }
     if let Some(r) = rating {
-        book.rating = if r <= 0.0 { None } else { Some(r) };
+        book.rating = if r <= 0.0 { None } else { Some(r.min(5.0)) };
     }
     if let Some(image_path) = cover_image_path {
         // Copy new cover image into the covers directory
@@ -717,15 +753,11 @@ pub async fn get_chapter_content(
     let data_dir = state.data_dir.to_string_lossy().to_string();
 
     let mut cache = state.epub_cache.lock().map_err(|e| e.to_string())?;
-    if !cache.contains_key(&file_path) {
-        // Evict all entries when the cache is full (simple policy for a desktop app).
-        if cache.len() >= EPUB_CACHE_MAX {
-            cache.clear();
-        }
-        let c = epub::CachedEpubArchive::open(&file_path).map_err(|e| e.to_string())?;
-        cache.insert(file_path.clone(), c);
-    }
-    let cached = cache.get_mut(&file_path).unwrap();
+    let mut order = state.epub_cache_order.lock().map_err(|e| e.to_string())?;
+    ensure_epub_cached(&mut cache, &mut order, &file_path);
+    let cached = cache
+        .get_mut(&file_path)
+        .ok_or("Failed to open EPUB archive")?;
     epub::get_chapter_content_from_cache(cached, chapter_index as usize, &data_dir, &book_id)
         .map_err(|e| e.to_string())
 }
@@ -751,14 +783,11 @@ pub async fn search_book_content(
     validate_file_exists(&file_path)?;
 
     let mut cache = state.epub_cache.lock().map_err(|e| e.to_string())?;
-    if !cache.contains_key(&file_path) {
-        if cache.len() >= EPUB_CACHE_MAX {
-            cache.clear();
-        }
-        let c = epub::CachedEpubArchive::open(&file_path).map_err(|e| e.to_string())?;
-        cache.insert(file_path.clone(), c);
-    }
-    let cached = cache.get_mut(&file_path).unwrap();
+    let mut order = state.epub_cache_order.lock().map_err(|e| e.to_string())?;
+    ensure_epub_cached(&mut cache, &mut order, &file_path);
+    let cached = cache
+        .get_mut(&file_path)
+        .ok_or("Failed to open EPUB archive")?;
     epub::search_book(cached, &query).map_err(|e| e.to_string())
 }
 
@@ -778,14 +807,11 @@ pub async fn get_chapter_word_counts(
     validate_file_exists(&file_path)?;
 
     let mut cache = state.epub_cache.lock().map_err(|e| e.to_string())?;
-    if !cache.contains_key(&file_path) {
-        if cache.len() >= EPUB_CACHE_MAX {
-            cache.clear();
-        }
-        let c = epub::CachedEpubArchive::open(&file_path).map_err(|e| e.to_string())?;
-        cache.insert(file_path.clone(), c);
-    }
-    let cached = cache.get_mut(&file_path).unwrap();
+    let mut order = state.epub_cache_order.lock().map_err(|e| e.to_string())?;
+    ensure_epub_cached(&mut cache, &mut order, &file_path);
+    let cached = cache
+        .get_mut(&file_path)
+        .ok_or("Failed to open EPUB archive")?;
     epub::get_chapter_word_counts(cached).map_err(|e| e.to_string())
 }
 
@@ -806,14 +832,11 @@ pub async fn get_all_chapters(
     let data_dir = state.data_dir.to_string_lossy().to_string();
 
     let mut cache = state.epub_cache.lock().map_err(|e| e.to_string())?;
-    if !cache.contains_key(&file_path) {
-        if cache.len() >= EPUB_CACHE_MAX {
-            cache.clear();
-        }
-        let c = epub::CachedEpubArchive::open(&file_path).map_err(|e| e.to_string())?;
-        cache.insert(file_path.clone(), c);
-    }
-    let cached = cache.get_mut(&file_path).unwrap();
+    let mut order = state.epub_cache_order.lock().map_err(|e| e.to_string())?;
+    ensure_epub_cached(&mut cache, &mut order, &file_path);
+    let cached = cache
+        .get_mut(&file_path)
+        .ok_or("Failed to open EPUB archive")?;
 
     let mut chapters = Vec::with_capacity(total_chapters as usize);
     for i in 0..total_chapters as usize {
@@ -840,14 +863,11 @@ pub async fn get_toc(
     validate_file_exists(&file_path)?;
 
     let mut cache = state.epub_cache.lock().map_err(|e| e.to_string())?;
-    if !cache.contains_key(&file_path) {
-        if cache.len() >= EPUB_CACHE_MAX {
-            cache.clear();
-        }
-        let c = epub::CachedEpubArchive::open(&file_path).map_err(|e| e.to_string())?;
-        cache.insert(file_path.clone(), c);
-    }
-    let cached = cache.get_mut(&file_path).unwrap();
+    let mut order = state.epub_cache_order.lock().map_err(|e| e.to_string())?;
+    ensure_epub_cached(&mut cache, &mut order, &file_path);
+    let cached = cache
+        .get_mut(&file_path)
+        .ok_or("Failed to open EPUB archive")?;
     epub::get_toc_from_cache(cached).map_err(|e| e.to_string())
 }
 
@@ -2802,6 +2822,15 @@ pub async fn get_activity_log(
         action_filter.as_deref(),
     )
     .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn preview_collection_rules(
+    rules: Vec<crate::models::NewRuleInput>,
+    state: State<'_, AppState>,
+) -> Result<usize, String> {
+    let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
+    db::preview_collection_rules(&conn, &rules).map_err(|e| e.to_string())
 }
 
 #[cfg(test)]

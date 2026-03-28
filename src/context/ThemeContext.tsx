@@ -4,6 +4,7 @@ import {
   useState,
   useEffect,
   useCallback,
+  useMemo,
   useRef,
   type ReactNode,
 } from "react";
@@ -230,27 +231,29 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     localStorage.setItem(STORAGE_KEYS.typography, JSON.stringify(t));
   }, []);
 
+  const MAX_CUSTOM_CSS_LENGTH = 10000;
   const cssPersistTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
   const setCustomCss = useCallback((css: string) => {
-    setCustomCssState(css);
+    const trimmed = css.length > MAX_CUSTOM_CSS_LENGTH ? css.slice(0, MAX_CUSTOM_CSS_LENGTH) : css;
+    setCustomCssState(trimmed);
     clearTimeout(cssPersistTimer.current);
     cssPersistTimer.current = setTimeout(() => {
-      localStorage.setItem(STORAGE_KEYS.customCss, css);
+      localStorage.setItem(STORAGE_KEYS.customCss, trimmed);
     }, 500);
   }, []);
 
+  const value = useMemo<ThemeContextValue>(() => ({
+    mode, resolved, setMode,
+    customColors, setCustomColors,
+    fontSize, setFontSize,
+    fontFamily, setFontFamily,
+    scrollMode, setScrollMode,
+    typography, setTypography,
+    customCss, setCustomCss,
+  }), [mode, resolved, setMode, customColors, setCustomColors, fontSize, setFontSize, fontFamily, setFontFamily, scrollMode, setScrollMode, typography, setTypography, customCss, setCustomCss]);
+
   return (
-    <ThemeContext.Provider
-      value={{
-        mode, resolved, setMode,
-        customColors, setCustomColors,
-        fontSize, setFontSize,
-        fontFamily, setFontFamily,
-        scrollMode, setScrollMode,
-        typography, setTypography,
-        customCss, setCustomCss,
-      }}
-    >
+    <ThemeContext.Provider value={value}>
       {children}
     </ThemeContext.Provider>
   );

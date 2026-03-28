@@ -331,6 +331,56 @@ Toggle between two modes for how EPUB content is displayed:
 
 This is a global preference that applies to all EPUB books.
 
+### Full-text search (EPUB)
+
+Search the full text of any EPUB book:
+
+- Click the **magnifying glass** icon in the reader header or press **⌘/Ctrl+F** to open the search bar.
+- Type at least 2 characters to see results. Matches appear with chapter name and a text snippet.
+- Click a result to jump to that chapter. Search highlights appear in blue in the text.
+- Results are capped at 200 matches. If you hit the cap, try a more specific query.
+- Press **Escape** to close the search panel.
+
+### Advanced typography
+
+Fine-tune your reading experience under **Settings > Typography**:
+
+- **Line height** — adjust spacing between lines (1.2× to 2.4×)
+- **Page margins** — control horizontal padding (0px to 80px)
+- **Text alignment** — choose between left-aligned or justified text
+- **Paragraph spacing** — set the gap between paragraphs (0em to 2em)
+- **Hyphenation** — toggle automatic word breaking at line endings for tidier justified text
+
+All typography settings apply to EPUB content only and are saved globally.
+
+### Custom CSS
+
+For advanced customization, you can inject your own CSS that applies to EPUB reading content:
+
+1. Open **Settings > Custom CSS Override**
+2. Type or paste CSS rules in the text area (up to 10,000 characters)
+3. Changes apply immediately with a live preview
+4. Use the **Clear** button to remove all custom CSS
+
+Example uses: adjusting heading sizes, hiding specific elements, changing link colors, or modifying list styles.
+
+### Time-to-finish
+
+While reading an EPUB, the footer shows an estimated reading time:
+
+- **"X min left"** — estimated time remaining for the entire book, based on 250 words per minute
+- Hover over the time to see a tooltip with both chapter-level and book-level estimates
+
+The estimate updates as you scroll through the content.
+
+### Activity log
+
+Folio keeps a log of data-changing actions (imports, edits, deletes, collection changes, etc.):
+
+- Open **Settings > View Activity Log** to browse recent activity
+- Filter by action type (e.g., only imports, only edits)
+- Each entry shows the action, affected item, and timestamp
+
 ### Library folder
 
 In Settings, you can view your current library folder path, file count, and total storage used. You can change the library folder — Folio will offer to move existing files to the new location or keep them in place.
@@ -369,6 +419,7 @@ Press `?` at any time to see the shortcut reference.
 |----------|--------|
 | `←` | Previous chapter / page |
 | `→` | Next chapter / page |
+| `⌘/Ctrl+F` | Search in book (EPUB only) |
 | `T` | Toggle Table of Contents |
 | `B` | Add bookmark |
 | `D` | Toggle focus mode |

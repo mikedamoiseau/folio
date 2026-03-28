@@ -775,16 +775,19 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
               </div>
 
               {/* Hyphenation */}
-              <label className="flex items-center justify-between cursor-pointer">
-                <span className="text-xs font-medium text-ink-muted">Hyphenation</span>
-                <button
-                  type="button"
-                  onClick={() => setTypography({ ...typography, hyphenation: !typography.hyphenation })}
-                  className={`relative w-9 h-5 rounded-full transition-colors duration-200 ${typography.hyphenation ? "bg-accent" : "bg-warm-border"}`}
-                >
-                  <span className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform duration-200 ${typography.hyphenation ? "translate-x-4" : ""}`} />
-                </button>
-              </label>
+              <div>
+                <label className="flex items-center justify-between cursor-pointer">
+                  <span className="text-xs font-medium text-ink-muted">Hyphenation</span>
+                  <button
+                    type="button"
+                    onClick={() => setTypography({ ...typography, hyphenation: !typography.hyphenation })}
+                    className={`relative w-9 h-5 rounded-full transition-colors duration-200 ${typography.hyphenation ? "bg-accent" : "bg-warm-border"}`}
+                  >
+                    <span className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform duration-200 ${typography.hyphenation ? "translate-x-4" : ""}`} />
+                  </button>
+                </label>
+                <p className="text-[11px] text-ink-muted/60 mt-1">Automatically break long words at line endings for a tidier text block.</p>
+              </div>
             </div>
           </Accordion>
 
@@ -808,8 +811,8 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
             </div>
             <p className="mt-2 text-xs text-ink-muted">
               {scrollMode === "continuous"
-                ? "Scroll through all chapters in one continuous flow."
-                : "Read one chapter at a time with prev/next navigation."}
+                ? "Scroll through all chapters in one continuous flow. Large books may take a moment to load."
+                : "Read one chapter at a time with prev/next navigation. Switch to continuous scroll for a seamless reading experience."}
             </p>
           </Accordion>
 

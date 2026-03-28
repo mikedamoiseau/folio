@@ -64,6 +64,9 @@ fn run_schema(conn: &Connection) -> Result<()> {
             value TEXT NOT NULL
         );
 
+        CREATE INDEX IF NOT EXISTS idx_collection_rules_collection_id
+            ON collection_rules(collection_id);
+
         CREATE TABLE IF NOT EXISTS book_collections (
             book_id TEXT NOT NULL REFERENCES books(id) ON DELETE CASCADE,
             collection_id TEXT NOT NULL REFERENCES collections(id) ON DELETE CASCADE,
@@ -956,14 +959,31 @@ pub fn get_books_in_collection(conn: &Connection, collection_id: &str) -> Result
 
     // Automated: build a dynamic parameterized query from collection rules.
     let rules = get_collection_rules(conn, collection_id)?;
+    let (joins, where_str, param_values) = build_rule_query(&rules);
 
+    let sql = format!(
+        "SELECT DISTINCT {cols}
+         FROM books b
+         {joins}
+         {where_str}
+         ORDER BY b.added_at DESC",
+        cols = BOOK_COLUMNS_B
+    );
+
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map(rusqlite::params_from_iter(param_values.iter()), row_to_book)?;
+    rows.collect()
+}
+
+/// Build JOIN, WHERE, and parameter lists from a set of collection rules.
+fn build_rule_query(rules: &[CollectionRule]) -> (String, String, Vec<String>) {
     let mut join_clauses: Vec<String> = Vec::new();
     let mut where_clauses: Vec<String> = Vec::new();
     let mut param_values: Vec<String> = Vec::new();
     let mut rp_idx: u32 = 0;
     let mut tag_idx: u32 = 0;
 
-    for rule in &rules {
+    for rule in rules {
         match (rule.field.as_str(), rule.operator.as_str()) {
             ("author", "contains") => {
                 where_clauses.push("b.author LIKE ?".to_string());
@@ -1064,18 +1084,39 @@ pub fn get_books_in_collection(conn: &Connection, collection_id: &str) -> Result
         format!("WHERE {}", where_clauses.join(" AND "))
     };
 
+    (joins, where_str, param_values)
+}
+
+/// Preview how many books match a set of rules without persisting a collection.
+pub fn preview_collection_rules(
+    conn: &Connection,
+    rules: &[crate::models::NewRuleInput],
+) -> Result<usize> {
+    use crate::models::CollectionRule;
+    let converted: Vec<CollectionRule> = rules
+        .iter()
+        .map(|r| CollectionRule {
+            id: String::new(),
+            collection_id: String::new(),
+            field: r.field.clone(),
+            operator: r.operator.clone(),
+            value: r.value.clone(),
+        })
+        .collect();
+    let (joins, where_str, param_values) = build_rule_query(&converted);
+
     let sql = format!(
-        "SELECT DISTINCT {cols}
+        "SELECT COUNT(DISTINCT b.id)
          FROM books b
          {joins}
-         {where_str}
-         ORDER BY b.added_at DESC",
-        cols = BOOK_COLUMNS_B
+         {where_str}"
     );
 
     let mut stmt = conn.prepare(&sql)?;
-    let rows = stmt.query_map(rusqlite::params_from_iter(param_values.iter()), row_to_book)?;
-    rows.collect()
+    let count: usize = stmt.query_row(rusqlite::params_from_iter(param_values.iter()), |row| {
+        row.get(0)
+    })?;
+    Ok(count)
 }
 
 // --- Activity log ---

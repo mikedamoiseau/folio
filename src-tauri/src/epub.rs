@@ -797,6 +797,12 @@ pub fn search_book(
 // ---- Word counting ----
 
 /// Strip HTML tags from a string and return plain text.
+///
+/// This is a simple char-level scanner that replaces `<…>` runs with a space.
+/// It does NOT handle HTML entities (`&nbsp;`, `&amp;`), comments (`<!-- -->`),
+/// or CDATA sections. This is acceptable because all input has already been
+/// sanitized by ammonia's `clean()`, which strips comments and normalizes
+/// entities, so the remaining markup is well-formed simple HTML tags.
 pub fn strip_html_tags(html: &str) -> String {
     let mut result = String::with_capacity(html.len());
     let mut in_tag = false;

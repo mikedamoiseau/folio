@@ -299,7 +299,7 @@ export default function EditBookDialog({
             {/* Rating */}
             <div>
               <label className="block text-xs font-medium text-ink-muted mb-1">Rating</label>
-              <StarRating value={bookRating ?? 0} onChange={(v) => setBookRating(v === bookRating ? null : v)} />
+              <StarRating value={bookRating ?? 0} onChange={(v) => setBookRating(v)} />
             </div>
 
             {/* Tags */}

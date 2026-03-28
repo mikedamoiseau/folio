@@ -31,8 +31,12 @@ A cross-platform desktop ebook reader built with Tauri v2 (Rust) and React.
 - Bookmarks
 - Text highlighting with color choices and notes
 - Highlights panel with markdown export
+- Full-text search in EPUB books (⌘/Ctrl+F) with result snippets and chapter navigation
+- Time-to-finish estimates based on word count (250 WPM) in EPUB footer
 - Focus mode (hides UI chrome, auto-hides cursor)
 - Theme presets: Light, Sepia, Dark, Auto (system) — plus full custom color editor
+- Advanced typography: line height, page margins, text alignment, paragraph spacing, hyphenation
+- Custom CSS override for EPUB content (with length limit and live preview)
 - Reading fonts: Lora (serif), DM Sans (sans-serif), OpenDyslexic (accessibility)
 - Adjustable font size (14-24px)
 - All fonts bundled locally (works offline)
@@ -45,9 +49,10 @@ A cross-platform desktop ebook reader built with Tauri v2 (Rust) and React.
 - Library export/backup (metadata-only or full with book files)
 - Import from backup archive
 
-### Stats & Social
+### Stats & Activity
 - Reading session tracking with stats dashboard
 - Daily reading chart, streaks, books finished
+- Activity log tracking imports, edits, deletes, and collection changes
 - Share collections as Markdown (copy to clipboard)
 
 ## Tech Stack

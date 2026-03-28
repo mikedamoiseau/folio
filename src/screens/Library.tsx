@@ -31,11 +31,22 @@ export default function Library() {
   const [progressMap, setProgressMap] = useState<Record<string, number>>({});
   const [lastReadMap, setLastReadMap] = useState<Record<string, number>>({});
   const [search, setSearch] = useState("");
-  const [sortBy, setSortBy] = useState<"date_added" | "last_read" | "title" | "author" | "progress" | "rating">("date_added");
-  const [sortAsc, setSortAsc] = useState(false);
-  const [filterFormat, setFilterFormat] = useState<string>("all");
-  const [filterStatus, setFilterStatus] = useState<string>("all");
-  const [filterRating, setFilterRating] = useState<string>("all");
+  const [sortBy, setSortBy] = useState<"date_added" | "last_read" | "title" | "author" | "progress" | "rating">(() => {
+    const stored = localStorage.getItem("folio-library-sort-by");
+    if (stored === "date_added" || stored === "last_read" || stored === "title" || stored === "author" || stored === "progress" || stored === "rating") return stored;
+    return "date_added";
+  });
+  const [sortAsc, setSortAsc] = useState(() => localStorage.getItem("folio-library-sort-asc") === "true");
+  const [filterFormat, setFilterFormat] = useState<string>(() => localStorage.getItem("folio-library-filter-format") ?? "all");
+  const [filterStatus, setFilterStatus] = useState<string>(() => localStorage.getItem("folio-library-filter-status") ?? "all");
+  const [filterRating, setFilterRating] = useState<string>(() => localStorage.getItem("folio-library-filter-rating") ?? "all");
+  // Persist filter/sort state to localStorage
+  useEffect(() => { localStorage.setItem("folio-library-sort-by", sortBy); }, [sortBy]);
+  useEffect(() => { localStorage.setItem("folio-library-sort-asc", String(sortAsc)); }, [sortAsc]);
+  useEffect(() => { localStorage.setItem("folio-library-filter-format", filterFormat); }, [filterFormat]);
+  useEffect(() => { localStorage.setItem("folio-library-filter-status", filterStatus); }, [filterStatus]);
+  useEffect(() => { localStorage.setItem("folio-library-filter-rating", filterRating); }, [filterRating]);
+
   const [importing, setImporting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
