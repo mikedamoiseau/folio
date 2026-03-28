@@ -758,9 +758,8 @@ pub async fn get_all_chapters(
 
     let mut chapters = Vec::with_capacity(total_chapters as usize);
     for i in 0..total_chapters as usize {
-        let html =
-            epub::get_chapter_content_from_cache(cached, i, &data_dir, &book_id)
-                .map_err(|e| e.to_string())?;
+        let html = epub::get_chapter_content_from_cache(cached, i, &data_dir, &book_id)
+            .map_err(|e| e.to_string())?;
         chapters.push(html);
     }
     Ok(chapters)
