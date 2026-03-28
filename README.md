@@ -1,99 +1,182 @@
-# Folio — Ebook Reader
+# Folio
 
-A cross-platform desktop ebook reader built with Tauri v2 (Rust) and React.
+A local-first desktop app for people who want to read and organize the books they already own.
 
-## Features
+Folio is a cross-platform reader for EPUB, PDF, CBZ, and CBR. It keeps your library on your machine and gives you the tools to actually use it well: solid reading controls, sensible organization, metadata cleanup, highlights, profiles, backup, and OPDS catalog support.
 
-### Library Management
-- Import EPUB, PDF, CBZ, and CBR files via file picker, drag-and-drop, or folder scan
-- Multi-file import with progress bar and cancel support
-- Duplicate detection via SHA-256 file hashing
-- Sort by date added, last read, title, author, progress, or rating
-- Filter by format, reading status (unread / in progress / finished), and minimum star rating
+## Why Folio?
+
+A lot of reading apps try to funnel you into a store, an account, or somebody else's ecosystem.
+
+Folio is for the opposite case: you already have the files, and you want a better home for them.
+
+- Local-first: your books and reading data stay on your machine
+- Built for owned files: EPUBs, PDFs, and comics without vendor lock-in
+- Good to read in: typography, themes, focus mode, highlights, bookmarks, and progress tracking
+- Good to manage: collections, tags, metadata editing, profiles, ratings, backups, and activity history
+
+## Highlights
+
+### Reading
+- EPUB 2 & 3 reader with sanitized HTML rendering
+- PDF support via bundled Pdfium
+- CBZ and CBR comic reading
+- EPUB paginated mode and continuous scroll mode
+- Table of contents sidebar and chapter navigation
+- Full-text search inside EPUB books (`⌘/Ctrl+F`)
+- Focus mode for distraction-free reading
+- Bookmarks, highlights, and highlight notes
+- Time-to-finish estimate for EPUB books
+- Adjustable font size and advanced typography controls
+- Built-in themes: Light, Sepia, Dark, Auto
+- Custom fonts and custom CSS override for EPUB content
+
+### Library
+- Import via file picker, drag-and-drop, direct URL, or folder scan
+- Copy-on-import into an app-managed library folder
+- Duplicate detection using SHA-256 file hashing
 - Search by title or author
-- Collections (manual and rule-based automated — rules for author, title, series, language, publisher, format, tag, date, and reading status)
+- Sort by date added, last read, title, author, progress, or rating
+- Filter by format, reading status, and minimum rating
+- Manual and rule-based collections
 - Tags with autocomplete
-- 1-5 star ratings per book (displayed on cards, editable in metadata dialog)
-- Book metadata editing (title, author, series, language, publisher, cover image, rating, tags)
-- Recently opened section for quick resume
+- Metadata editing: title, author, series, language, publisher, cover, rating, tags
+- Recently opened books for quick resume
 - Multiple profiles with separate libraries
 
-### Reading Experience
-- EPUB 2 & 3 with sanitized HTML rendering (ammonia + DOMPurify)
-- PDF rendering via bundled pdfium
-- CBZ (ZIP) and CBR (RAR) comic reader
-- Chapter navigation with Table of Contents sidebar
-- Continuous scroll mode for EPUB (all chapters in one scrollable document, with chapter dividers)
-- Floating prev/next arrows for EPUB chapters (paginated mode)
-- Mouse wheel page navigation for PDF/CBZ/CBR
-- Page zoom (Ctrl+scroll, 50%–400%) with drag-to-pan
-- Reading progress auto-saved across sessions
-- Bookmarks
-- Text highlighting with color choices and notes
-- Highlights panel with markdown export
-- Full-text search in EPUB books (⌘/Ctrl+F) with result snippets and chapter navigation
-- Time-to-finish estimates based on word count (250 WPM) in EPUB footer
-- Focus mode (hides UI chrome, auto-hides cursor)
-- Theme presets: Light, Sepia, Dark, Auto (system) — plus full custom color editor
-- Advanced typography: line height, page margins, text alignment, paragraph spacing, hyphenation
-- Custom CSS override for EPUB content (with length limit and live preview)
-- Reading fonts: Lora (serif), DM Sans (sans-serif), OpenDyslexic (accessibility)
-- Adjustable font size (14-24px)
-- All fonts bundled locally (works offline)
-- Keyboard shortcuts with help overlay (`?` key)
+### Catalogs, metadata, and backup
+- OPDS catalog browsing
+- Built-in catalogs such as Project Gutenberg and Standard Ebooks
+- Add custom OPDS catalog URLs
+- One-click download from catalogs into your library
+- Metadata enrichment via OpenLibrary and provider-based scanning
+- Library export and backup
+- Restore from backup archive
+- Activity log for imports, edits, deletes, collection changes, and more
+- Reading stats dashboard
 
-### Import & Sync
-- OPDS catalog browsing (Project Gutenberg, Standard Ebooks, ManyBooks, Feedbooks)
-- Add custom OPDS catalog URLs (Calibre servers, etc.)
-- One-click download from catalogs into library
-- Library export/backup (metadata-only or full with book files)
-- Import from backup archive
+## Screens / product docs
 
-### Stats & Activity
-- Reading session tracking with stats dashboard
-- Daily reading chart, streaks, books finished
-- Activity log tracking imports, edits, deletes, and collection changes
-- Share collections as Markdown (copy to clipboard)
+- User guide: [`docs/USER_GUIDE.md`](docs/USER_GUIDE.md)
+- Roadmap: [`docs/ROADMAP.md`](docs/ROADMAP.md)
 
-## Tech Stack
-- **Backend:** Rust, Tauri v2, SQLite (rusqlite + r2d2), ammonia, pdfium-render, unrar, reqwest
-- **Frontend:** React 19, TypeScript, Vite, Tailwind CSS v4, DOMPurify
+## Installation
 
-## Requirements
-- [Tauri prerequisites](https://tauri.app/start/prerequisites/)
-- Node.js 18+
-- Rust (stable)
+Pre-built binaries are available on the [GitHub Releases page](https://github.com/mikedamoiseau/ebook-reader/releases).
+
+### macOS
+
+Open the `.dmg`, drag **Folio.app** to **Applications**, then launch it.
+
+#### macOS Gatekeeper: "damaged" / "unidentified developer" warning
+
+Because Folio is not currently notarized with an Apple Developer certificate, macOS may block it on first launch.
+
+Run this once after installing:
+
+```bash
+xattr -cr /Applications/Folio.app
+```
+
+Then launch the app normally.
+
+### Windows
+
+Run the `.msi` installer and follow the prompts.
+
+### Linux
+
+Use the provided `.AppImage` or `.deb` release artifact.
+
+## Supported formats
+
+| Format | Notes |
+|---|---|
+| EPUB 2 / EPUB 3 | Reflowable reading with search, themes, typography, highlights |
+| PDF | Page-based reading via Pdfium |
+| CBZ | Comic archive (ZIP) |
+| CBR | Comic archive (RAR) |
+
+## Tech stack
+
+### Backend
+- Rust
+- Tauri v2
+- SQLite (`rusqlite` + `r2d2`)
+- `ammonia` for EPUB sanitization
+- `pdfium-render` for PDF support
+- `unrar` for CBR support
+- `reqwest` for network operations
+
+### Frontend
+- React 19
+- TypeScript
+- Vite
+- Tailwind CSS v4
+- DOMPurify
 
 ## Development
+
+### Requirements
+- [Tauri prerequisites](https://tauri.app/start/prerequisites/)
+- Node.js 18+
+- Rust stable
+
+### Install dependencies
+
 ```bash
 npm install
-./scripts/download-pdfium.sh   # required for PDF support
+```
+
+### Pdfium setup
+
+PDF support requires Pdfium binaries. Download them before running the app in development:
+
+```bash
+./scripts/download-pdfium.sh
+```
+
+### Run the app
+
+```bash
 npm run tauri dev
 ```
 
-## Build
+### Build for production
+
 ```bash
 npm run tauri build
 ```
 
-## Installation
-
-Pre-built binaries are on the [GitHub Releases page](https://github.com/mikedamoiseau/ebook-reader/releases).
-
-### macOS — Gatekeeper "damaged" warning
-
-Because this app is not code-signed or notarized with an Apple Developer certificate, macOS 14+ may refuse to open it with a _"damaged and can't be opened"_ error.
-
-**One-time fix — run this in Terminal after installing:**
+### Useful commands
 
 ```bash
-xattr -cr /Applications/ebook-reader.app
+npm run type-check
+npm run build
+npm run test
 ```
 
-Then double-click the app as normal. You only need to do this once per install.
+Rust-only commands from `src-tauri/`:
 
-## CI Status
+```bash
+cargo test
+cargo clippy -- -D warnings
+cargo fmt --check
+```
+
+## Project structure
+
+- `src/` - React frontend
+- `src-tauri/src/commands.rs` - Tauri command handlers / IPC surface
+- `src-tauri/src/db.rs` - SQLite access layer
+- `src-tauri/src/models.rs` - shared data models
+- `src-tauri/src/epub.rs`, `pdf.rs`, `cbz.rs`, `cbr.rs` - format-specific parsing
+- `docs/` - user-facing docs and roadmap
+
+## CI
+
 ![CI](https://github.com/mikedamoiseau/ebook-reader/actions/workflows/ci.yml/badge.svg)
 
 ## License
+
 MIT
