@@ -151,6 +151,10 @@ Expand where books come from and how they persist.
 - ~~Google Books API provider (free, good international/French coverage)~~
 - ~~Provider settings: enable/disable, API keys, persisted in settings table~~
 
+#### Future Enrichment Improvements
+- Extract series/volume data from OpenLibrary and Google Books during enrichment scan
+- Currently series data comes only from book file metadata and manual entry
+
 #### Future Enrichment Providers
 | Provider | Coverage | API Key | Notes |
 |----------|----------|---------|-------|
