@@ -193,33 +193,37 @@ export default function PageViewer({
     [nextSpread, prevSpread, loading, zoomIn, zoomOut, zoom]
   );
 
-  // Check if scaled content overflows the container (pan should only work when it does)
-  const canPan = useCallback(() => {
-    if (!spreadRef.current || !containerRef.current) return false;
-    const spread = spreadRef.current.getBoundingClientRect();
-    const container = containerRef.current.getBoundingClientRect();
-    // Compare unscaled content size * zoom to container
-    // getBoundingClientRect already includes transforms, so divide out current zoom
-    const contentW = (spread.width / zoom) * zoom;
-    const contentH = (spread.height / zoom) * zoom;
-    return contentW > container.width || contentH > container.height;
+  // Measure the unscaled content size (spreadRef without transforms) vs container
+  const getOverflow = useCallback(() => {
+    if (!spreadRef.current || !containerRef.current) return { x: 0, y: 0 };
+    // offsetWidth/Height give layout size before CSS transforms
+    const contentW = spreadRef.current.offsetWidth * zoom;
+    const contentH = spreadRef.current.offsetHeight * zoom;
+    const containerW = containerRef.current.clientWidth;
+    const containerH = containerRef.current.clientHeight;
+    return {
+      x: Math.max(0, contentW - containerW),
+      y: Math.max(0, contentH - containerH),
+    };
   }, [zoom]);
 
-  // Clamp pan so content edge can't go past the container center
+  const canPan = useCallback(() => {
+    const overflow = getOverflow();
+    return overflow.x > 1 || overflow.y > 1;
+  }, [getOverflow]);
+
+  // Clamp pan so content can't be dragged beyond its edges
   const clampPan = useCallback((p: { x: number; y: number }): { x: number; y: number } => {
-    if (!spreadRef.current || !containerRef.current) return p;
-    const spreadRect = spreadRef.current.getBoundingClientRect();
-    const containerRect = containerRef.current.getBoundingClientRect();
-    // Content dimensions without current pan (divide out zoom for the translate portion)
-    const contentW = spreadRect.width;
-    const contentH = spreadRect.height;
-    const maxPanX = Math.max(0, (contentW - containerRect.width) / 2 / zoom + 40 / zoom);
-    const maxPanY = Math.max(0, (contentH - containerRect.height) / 2 / zoom + 40 / zoom);
+    const overflow = getOverflow();
+    // Max pan in each direction = half the overflow (content is centered)
+    // Divide by zoom because translate values are in pre-scale coordinates
+    const maxPanX = overflow.x / 2 / zoom;
+    const maxPanY = overflow.y / 2 / zoom;
     return {
       x: Math.max(-maxPanX, Math.min(maxPanX, p.x)),
       y: Math.max(-maxPanY, Math.min(maxPanY, p.y)),
     };
-  }, [zoom]);
+  }, [getOverflow, zoom]);
 
   const handleMouseDown = useCallback(
     (e: React.MouseEvent) => {
@@ -251,8 +255,6 @@ export default function PageViewer({
     isPanning.current = false;
   }, []);
 
-  const isZoomed = zoom !== 1;
-
   const pageLabel = dualPage && spread.right !== null
     ? `Pages ${spread.left + 1}–${spread.right + 1} / ${totalPages}`
     : `Page ${spread.left + 1} / ${totalPages}`;
@@ -262,7 +264,7 @@ export default function PageViewer({
       {/* Page image area */}
       <div
         ref={containerRef}
-        className={`flex-1 flex items-center justify-center overflow-hidden px-4 py-4 ${isZoomed ? "cursor-grab active:cursor-grabbing" : ""}`}
+        className={`flex-1 relative overflow-hidden ${canPan() ? "cursor-grab active:cursor-grabbing" : ""}`}
         onWheel={handleWheel}
         onMouseDown={handleMouseDown}
         onMouseMove={handleMouseMove}
@@ -270,22 +272,24 @@ export default function PageViewer({
         onMouseLeave={handleMouseUp}
       >
         {loading ? (
-          <div className="text-sm text-ink-muted">Loading page…</div>
+          <div className="absolute inset-0 flex items-center justify-center">
+            <span className="text-sm text-ink-muted">Loading page…</span>
+          </div>
         ) : error ? (
-          <div className="text-sm text-red-500 text-center max-w-sm">
-            Failed to load page: {error}
+          <div className="absolute inset-0 flex items-center justify-center">
+            <span className="text-sm text-red-500 text-center max-w-sm">Failed to load page: {error}</span>
           </div>
         ) : (
           <div
             ref={spreadRef}
-            className={`flex items-center justify-center gap-1 max-h-full will-change-transform ${mangaMode && dualPage ? "flex-row-reverse" : "flex-row"}`}
+            className={`absolute inset-0 flex items-center justify-center gap-1 will-change-transform ${mangaMode && dualPage ? "flex-row-reverse" : "flex-row"}`}
           >
             {leftImageData && (
               <img
                 src={leftImageData}
                 alt={`Page ${spread.left + 1} of ${totalPages}`}
-                className="max-h-full object-contain rounded-sm shadow-[0_4px_24px_-4px_rgba(44,34,24,0.18)]"
-                style={{ maxWidth: dualPage && rightImageData ? "50%" : "100%" }}
+                className="max-h-full max-w-full object-contain rounded-sm shadow-[0_4px_24px_-4px_rgba(44,34,24,0.18)]"
+                style={dualPage && rightImageData ? { maxWidth: "50%" } : undefined}
                 draggable={false}
               />
             )}
@@ -332,7 +336,7 @@ export default function PageViewer({
           </button>
           <button
             onClick={zoomReset}
-            className={`px-2 h-7 text-[11px] tabular-nums rounded-lg transition-colors ${isZoomed ? "text-accent bg-accent-light hover:bg-accent-light/80 font-medium" : "text-ink-muted bg-warm-subtle"}`}
+            className={`px-2 h-7 text-[11px] tabular-nums rounded-lg transition-colors ${zoom !== 1 ? "text-accent bg-accent-light hover:bg-accent-light/80 font-medium" : "text-ink-muted bg-warm-subtle"}`}
             title="Reset zoom"
           >
             {Math.round(zoom * 100)}%
