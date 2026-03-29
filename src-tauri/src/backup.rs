@@ -448,6 +448,14 @@ pub fn run_incremental_backup(
     op: &Operator,
     conn: &rusqlite::Connection,
 ) -> Result<SyncResult, String> {
+    run_incremental_backup_with_progress(op, conn, &|_, _, _| {})
+}
+
+pub fn run_incremental_backup_with_progress(
+    op: &Operator,
+    conn: &rusqlite::Connection,
+    on_progress: &dyn Fn(&str, u32, u32),
+) -> Result<SyncResult, String> {
     let mut manifest = read_manifest(op);
     let since = manifest.last_sync_at;
     let now = std::time::SystemTime::now()
@@ -521,8 +529,11 @@ pub fn run_incremental_backup(
     };
     if !books.is_empty() {
         result.books_pushed = books.len() as u32;
+        on_progress("Syncing metadata", 0, 0);
         push_json(op, "metadata/books.json", &books)?;
-        for book in &books {
+        let total_files = books.len() as u32;
+        for (i, book) in books.iter().enumerate() {
+            on_progress("Uploading books", (i + 1) as u32, total_files);
             if let Some(ref hash) = book.file_hash {
                 let ext = std::path::Path::new(&book.file_path)
                     .extension()
@@ -565,6 +576,7 @@ pub fn run_incremental_backup(
     };
     if !progress.is_empty() {
         result.progress_pushed = progress.len() as u32;
+        on_progress("Syncing reading progress", 0, 0);
         push_json(op, "metadata/progress.json", &progress)?;
     }
 
@@ -592,6 +604,7 @@ pub fn run_incremental_backup(
     };
     if !bookmarks.is_empty() {
         result.bookmarks_pushed = bookmarks.len() as u32;
+        on_progress("Syncing bookmarks", 0, 0);
         push_json(op, "metadata/bookmarks.json", &bookmarks)?;
     }
 
@@ -621,6 +634,7 @@ pub fn run_incremental_backup(
     };
     if !highlights.is_empty() {
         result.highlights_pushed = highlights.len() as u32;
+        on_progress("Syncing highlights", 0, 0);
         push_json(op, "metadata/highlights.json", &highlights)?;
     }
 
@@ -628,8 +642,11 @@ pub fn run_incremental_backup(
     let collections = crate::db::list_collections(conn).map_err(|e| e.to_string())?;
     if !collections.is_empty() {
         result.collections_pushed = collections.len() as u32;
+        on_progress("Syncing collections", 0, 0);
         push_json(op, "metadata/collections.json", &collections)?;
     }
+
+    on_progress("Finalizing", 0, 0);
 
     manifest.last_sync_at = now;
     if manifest.device_id.is_empty() {

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, useCallback, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { open as openFilePicker } from "@tauri-apps/plugin-dialog";
 import { useTheme, MIN_FONT_SIZE, MAX_FONT_SIZE, type ColorTokens } from "../context/ThemeContext";
 import {
@@ -292,6 +293,7 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
   const [savedBackupConfig, setSavedBackupConfig] = useState<BackupConfig | null>(null);
   const [savingBackupConfig, setSavingBackupConfig] = useState(false);
   const [runningBackup, setRunningBackup] = useState(false);
+  const [backupProgressText, setBackupProgressText] = useState("");
   const [backupStatus, setBackupStatus] = useState<SyncManifest | null>(null);
   const [remoteBackupMessage, setRemoteBackupMessage] = useState<string | null>(null);
 
@@ -585,6 +587,15 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
   const handleRunBackup = async () => {
     setRunningBackup(true);
     setRemoteBackupMessage(null);
+    setBackupProgressText("Starting...");
+    const unlisten = await listen<{ step: string; current: number; total: number }>("backup-progress", (event) => {
+      const { step, current, total } = event.payload;
+      if (total > 0) {
+        setBackupProgressText(`${step} ${current}/${total}`);
+      } else {
+        setBackupProgressText(step);
+      }
+    });
     try {
       const result = await invoke<SyncResult>("run_backup");
       const parts: string[] = [];
@@ -602,7 +613,9 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
     } catch (err) {
       setRemoteBackupMessage(`Backup failed: ${err}`);
     } finally {
+      unlisten();
       setRunningBackup(false);
+      setBackupProgressText("");
     }
   };
 
@@ -1267,7 +1280,7 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                         />
                       </svg>
                     )}
-                    {runningBackup ? "Backing up…" : "Backup Now"}
+                    {runningBackup ? (backupProgressText || "Backing up…") : "Backup Now"}
                   </button>
                 )}
 

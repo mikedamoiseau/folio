@@ -2412,7 +2412,7 @@ pub async fn get_backup_config(
 }
 
 #[tauri::command]
-pub async fn run_backup(state: State<'_, AppState>) -> Result<crate::backup::SyncResult, String> {
+pub async fn run_backup(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<crate::backup::SyncResult, String> {
     let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
     let json = db::get_setting(&conn, "backup_config")
         .map_err(|e| e.to_string())?
@@ -2423,8 +2423,16 @@ pub async fn run_backup(state: State<'_, AppState>) -> Result<crate::backup::Syn
     let provider_name = config.provider_type.clone();
     let op = crate::backup::build_operator(&config)?;
     let (tx, rx) = std::sync::mpsc::channel();
+    let app_handle = app.clone();
     std::thread::spawn(move || {
-        let _ = tx.send(crate::backup::run_incremental_backup(&op, &conn));
+        let result = crate::backup::run_incremental_backup_with_progress(&op, &conn, &|step, current, total| {
+            let _ = app_handle.emit("backup-progress", serde_json::json!({
+                "step": step,
+                "current": current,
+                "total": total,
+            }));
+        });
+        let _ = tx.send(result);
     });
     let result = rx.recv().map_err(|e| format!("Thread error: {e}"))?;
     let log_conn = state.active_db()?.get().map_err(|e| e.to_string())?;
