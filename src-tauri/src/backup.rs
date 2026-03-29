@@ -429,8 +429,14 @@ pub fn push_file_if_missing(
     remote_path: &str,
     local_path: &str,
 ) -> Result<bool, String> {
-    if op.stat(remote_path).is_ok() {
-        return Ok(false);
+    let local_size = std::fs::metadata(local_path)
+        .map(|m| m.len())
+        .map_err(|e| format!("Cannot read {local_path}: {e}"))?;
+    // Skip upload if remote file exists and size matches (catches partial uploads)
+    if let Ok(meta) = op.stat(remote_path) {
+        if meta.content_length() == local_size {
+            return Ok(false);
+        }
     }
     let data = std::fs::read(local_path).map_err(|e| format!("Cannot read {local_path}: {e}"))?;
     op.write(remote_path, data)
