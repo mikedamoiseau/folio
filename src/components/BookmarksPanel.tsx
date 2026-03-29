@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { useTranslation } from "react-i18next";
 
 interface Bookmark {
   id: string;
@@ -30,6 +31,7 @@ export default function BookmarksPanel({
   onNavigate,
   refreshKey,
 }: BookmarksPanelProps) {
+  const { t } = useTranslation();
   const [bookmarks, setBookmarks] = useState<Bookmark[]>([]);
 
   const loadBookmarks = useCallback(async () => {
@@ -90,7 +92,7 @@ export default function BookmarksPanel({
 
   const chapterLabel = (chapterIndex: number) => {
     const entry = toc.find((e) => e.chapter_index === chapterIndex);
-    return entry?.label ?? `Chapter ${chapterIndex + 1}`;
+    return entry?.label ?? t("reader.chapterDefault", { number: chapterIndex + 1 });
   };
 
   const formatDate = (timestamp: number) => {
@@ -125,12 +127,12 @@ export default function BookmarksPanel({
       <aside className="fixed right-0 top-0 bottom-0 w-80 max-w-[90vw] bg-surface border-l border-warm-border z-20 flex flex-col shadow-[-4px_0_24px_-4px_rgba(44,34,24,0.12)] animate-slide-in-right">
         <div className="px-5 py-4 border-b border-warm-border flex items-center justify-between">
           <h2 className="font-serif text-base font-semibold text-ink">
-            Bookmarks
+            {t("bookmarks.title")}
           </h2>
           <button
             onClick={onClose}
             className="p-1 text-ink-muted hover:text-ink transition-colors rounded"
-            aria-label="Close bookmarks"
+            aria-label={t("bookmarks.closeLabel")}
           >
             <svg width="18" height="18" viewBox="0 0 20 20" fill="none">
               <path
@@ -145,9 +147,7 @@ export default function BookmarksPanel({
 
         <div className="flex-1 overflow-y-auto py-2">
           {bookmarks.length === 0 ? (
-            <p className="px-5 py-8 text-sm text-ink-muted text-center">
-              No bookmarks yet. Press <kbd className="px-1.5 py-0.5 bg-warm-subtle rounded text-xs font-mono">b</kbd> while reading to add one.
-            </p>
+            <p className="px-5 py-8 text-sm text-ink-muted text-center" dangerouslySetInnerHTML={{ __html: t("bookmarks.empty") }} />
           ) : (
             Object.entries(grouped).map(([chapterStr, chapterBookmarks]) => {
               const chapterIdx = Number(chapterStr);
@@ -196,7 +196,7 @@ export default function BookmarksPanel({
                               }}
                               onBlur={() => saveEdit(bm.id)}
                               maxLength={100}
-                              placeholder="Bookmark name..."
+                              placeholder={t("bookmarks.namePlaceholder")}
                               className="text-sm text-ink bg-transparent border-b border-accent outline-none w-full py-0.5"
                               onClick={(e) => e.stopPropagation()}
                             />
@@ -208,13 +208,13 @@ export default function BookmarksPanel({
                                   e.stopPropagation();
                                   startEditing(bm);
                                 }}
-                                title="Click to edit name"
+                                title={t("bookmarks.clickToEditName")}
                               >
-                                {bm.name || `${Math.round(bm.scroll_position * 100)}% through`}
+                                {bm.name || t("bookmarks.percentThrough", { percent: Math.round(bm.scroll_position * 100) })}
                               </p>
                               {bm.name && (
                                 <p className="text-xs text-ink-muted mt-0.5">
-                                  {Math.round(bm.scroll_position * 100)}% through
+                                  {t("bookmarks.percentThrough", { percent: Math.round(bm.scroll_position * 100) })}
                                 </p>
                               )}
                               {bm.note && (
@@ -234,7 +234,7 @@ export default function BookmarksPanel({
                             handleDelete(bm.id);
                           }}
                           className="opacity-0 group-hover:opacity-100 p-0.5 text-ink-muted hover:text-red-500 transition-all shrink-0"
-                          aria-label="Delete bookmark"
+                          aria-label={t("bookmarks.deleteLabel")}
                         >
                           <svg
                             width="12"

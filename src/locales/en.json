@@ -103,6 +103,18 @@
     "highlightColor": "Highlight {{color}}",
     "clearHighlight": "Remove highlight",
     "dismiss": "Dismiss",
+    "closeToc": "Close table of contents",
+    "openToc": "Open table of contents",
+    "searchLabel": "Search in book",
+    "closeSearch": "Close search",
+    "decreaseFontSize": "Decrease font size",
+    "increaseFontSize": "Increase font size",
+    "toggleDualPage": "Toggle dual-page spread",
+    "toggleMangaMode": "Toggle manga mode (right-to-left)",
+    "toggleFocusMode": "Toggle focus mode",
+    "openSettings": "Open settings",
+    "previousChapter": "Previous chapter",
+    "nextChapter": "Next chapter",
     "paginatedDescription": "Read one chapter at a time with prev/next navigation. Switch to continuous scroll for a seamless reading experience.",
     "continuousDescription": "Scroll through all chapters in one continuous flow. Large books may take a moment to load."
   },
@@ -145,7 +157,9 @@
     "empty": "No bookmarks yet. Press <kbd>b</kbd> while reading to add one.",
     "emptyPlain": "No bookmarks yet. Press b while reading to add one.",
     "namePlaceholder": "Bookmark name...",
-    "deleteLabel": "Delete bookmark"
+    "deleteLabel": "Delete bookmark",
+    "percentThrough": "{{percent}}% through",
+    "clickToEditName": "Click to edit name"
   },
 
   "highlights": {

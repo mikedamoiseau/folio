@@ -103,6 +103,18 @@
     "highlightColor": "Surligner en {{color}}",
     "clearHighlight": "Supprimer le surlignage",
     "dismiss": "Fermer",
+    "closeToc": "Fermer la table des mati\u00e8res",
+    "openToc": "Ouvrir la table des mati\u00e8res",
+    "searchLabel": "Rechercher dans le livre",
+    "closeSearch": "Fermer la recherche",
+    "decreaseFontSize": "R\u00e9duire la taille de police",
+    "increaseFontSize": "Augmenter la taille de police",
+    "toggleDualPage": "Basculer la double page",
+    "toggleMangaMode": "Basculer le mode manga (droite \u00e0 gauche)",
+    "toggleFocusMode": "Basculer le mode concentration",
+    "openSettings": "Ouvrir les param\u00e8tres",
+    "previousChapter": "Chapitre pr\u00e9c\u00e9dent",
+    "nextChapter": "Chapitre suivant",
     "paginatedDescription": "Lire un chapitre \u00e0 la fois avec navigation pr\u00e9c\u00e9dent/suivant. Passez au d\u00e9filement continu pour une exp\u00e9rience de lecture fluide.",
     "continuousDescription": "D\u00e9filez \u00e0 travers tous les chapitres d\u2019un seul flux. Les gros livres peuvent prendre un moment \u00e0 charger."
   },
@@ -145,7 +157,9 @@
     "empty": "Aucun signet. Appuyez sur <kbd>b</kbd> pendant la lecture pour en ajouter un.",
     "emptyPlain": "Aucun signet. Appuyez sur b pendant la lecture pour en ajouter un.",
     "namePlaceholder": "Nom du signet...",
-    "deleteLabel": "Supprimer le signet"
+    "deleteLabel": "Supprimer le signet",
+    "percentThrough": "{{percent}}\u00a0% de progression",
+    "clickToEditName": "Cliquer pour modifier le nom"
   },
 
   "highlights": {

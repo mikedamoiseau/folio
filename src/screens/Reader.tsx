@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { invoke } from "@tauri-apps/api/core";
+import { useTranslation } from "react-i18next";
 import { useTheme, MIN_FONT_SIZE, MAX_FONT_SIZE } from "../context/ThemeContext";
 import PageViewer from "../components/PageViewer";
 import KeyboardShortcutsHelp from "../components/KeyboardShortcutsHelp";
@@ -46,6 +47,7 @@ interface ReaderProps {
 export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderProps) {
   const { bookId } = useParams<{ bookId: string }>();
   const navigate = useNavigate();
+  const { t } = useTranslation();
   const { fontSize, setFontSize, fontFamily, scrollMode, typography, customCss, dualPage, setDualPage, mangaMode, setMangaMode } = useTheme();
 
   const [bookTitle, setBookTitle] = useState("");
@@ -812,7 +814,7 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
 
   const currentChapterTitle =
     toc.find((entry) => entry.chapter_index === chapterIndex)?.label ??
-    `Chapter ${chapterIndex + 1}`;
+    t("reader.chapterDefault", { number: chapterIndex + 1 });
 
   // ---- Font family CSS value ----
 
@@ -868,7 +870,7 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
   if (loading) {
     return (
       <div className="flex items-center justify-center h-full bg-paper">
-        <div className="text-sm text-ink-muted">Loading…</div>
+        <div className="text-sm text-ink-muted">{t("reader.loading")}</div>
       </div>
     );
   }
@@ -876,13 +878,13 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
   if (error) {
     return (
       <div className="flex flex-col items-center justify-center h-full gap-4 p-8 bg-paper">
-        <div className="text-ink font-medium">Failed to load book</div>
+        <div className="text-ink font-medium">{t("reader.failedToLoad")}</div>
         <p className="text-ink-muted text-sm max-w-md text-center">{error}</p>
         <button
           onClick={() => navigate("/")}
           className="px-4 py-2 bg-accent text-white rounded-xl hover:bg-accent-hover transition-colors text-sm font-medium"
         >
-          Back to Library
+          {t("reader.backToLibrary")}
         </button>
       </div>
     );
@@ -933,14 +935,14 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
       {/* Progress saved indicator */}
       {saveIndicator && (
         <div className="fixed bottom-4 right-4 z-50 text-xs text-gray-400 dark:text-gray-500 transition-opacity">
-          Progress saved
+          {t("reader.progressSaved")}
         </div>
       )}
 
       {/* Progress save error indicator */}
       {saveError && (
         <div className="fixed bottom-4 right-4 z-50 text-xs text-amber-500 dark:text-amber-400 transition-opacity">
-          Progress not saved
+          {t("reader.progressNotSaved")}
         </div>
       )}
 
@@ -953,15 +955,15 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
             onClick={() => setTocOpen(false)}
           />
           {/* Sidebar */}
-          <aside id="toc-sidebar" role="dialog" aria-modal="true" aria-label="Table of Contents" className="fixed left-0 top-0 bottom-0 w-72 bg-surface border-r border-warm-border z-20 flex flex-col shadow-[4px_0_24px_-4px_rgba(44,34,24,0.12)] animate-slide-in-left">
+          <aside id="toc-sidebar" role="dialog" aria-modal="true" aria-label={t("reader.contents")} className="fixed left-0 top-0 bottom-0 w-72 bg-surface border-r border-warm-border z-20 flex flex-col shadow-[4px_0_24px_-4px_rgba(44,34,24,0.12)] animate-slide-in-left">
             <div className="px-5 py-4 border-b border-warm-border flex items-center justify-between">
               <h2 className="font-serif text-base font-semibold text-ink">
-                Contents
+                {t("reader.contents")}
               </h2>
               <button
                 onClick={() => setTocOpen(false)}
                 className="p-1 text-ink-muted hover:text-ink transition-colors rounded focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2"
-                aria-label="Close table of contents"
+                aria-label={t("reader.closeToc")}
               >
                 <svg width="18" height="18" viewBox="0 0 20 20" fill="none">
                   <path d="M15 5L5 15M5 5l10 10" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
@@ -1001,7 +1003,7 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
           <button
             onClick={() => navigate("/")}
             className="p-1.5 text-ink-muted hover:text-ink transition-colors rounded-lg hover:bg-warm-subtle focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2"
-            aria-label="Back to library"
+            aria-label={t("reader.backToLibrary")}
           >
             <svg width="18" height="18" viewBox="0 0 20 20" fill="none">
               <path d="M12 4l-6 6 6 6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
@@ -1011,7 +1013,7 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
           <button
             onClick={() => setTocOpen(true)}
             className="p-1.5 text-ink-muted hover:text-ink transition-colors rounded-lg hover:bg-warm-subtle focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2"
-            aria-label="Open table of contents"
+            aria-label={t("reader.openToc")}
           >
             <svg width="18" height="18" viewBox="0 0 20 20" fill="none">
               <path d="M3 5h14M3 10h14M3 15h14" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" />
@@ -1027,8 +1029,8 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
             <button
               onClick={() => { setSearchOpen(true); setSearchQuery(""); setSearchResults([]); }}
               className={`p-1.5 transition-colors rounded-lg focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 ${searchOpen ? "text-accent bg-accent-light" : "text-ink-muted hover:text-ink hover:bg-warm-subtle"}`}
-              aria-label="Search in book"
-              title="Search (⌘F)"
+              aria-label={t("reader.searchLabel")}
+              title={t("reader.searchShortcut")}
             >
               <svg width="17" height="17" viewBox="0 0 20 20" fill="none">
                 <circle cx="9" cy="9" r="5.5" stroke="currentColor" strokeWidth="1.5" />
@@ -1041,7 +1043,7 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
           <button
             onClick={() => setHighlightsOpen((prev) => !prev)}
             className={`p-1.5 transition-colors rounded-lg focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 ${highlightsOpen ? "text-accent bg-accent-light" : "text-ink-muted hover:text-ink hover:bg-warm-subtle"}`}
-            aria-label="Highlights"
+            aria-label={t("highlights.title")}
           >
             <svg width="17" height="17" viewBox="0 0 24 24" fill="none">
               <path d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
@@ -1052,8 +1054,8 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
           <button
             onClick={() => setBookmarksOpen((prev) => !prev)}
             className={`p-1.5 transition-colors rounded-lg focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 ${bookmarksOpen ? "text-accent bg-accent-light" : "text-ink-muted hover:text-ink hover:bg-warm-subtle"}`}
-            aria-label="Bookmarks"
-            title="Bookmarks"
+            aria-label={t("bookmarks.title")}
+            title={t("bookmarks.title")}
           >
             <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
               <path d="M19 21l-7-3.5L5 21V5a2 2 0 012-2h10a2 2 0 012 2z" />
@@ -1066,7 +1068,7 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
               onClick={() => setFontSize(fontSize - 2)}
               disabled={fontSize <= MIN_FONT_SIZE}
               className="px-2 py-1 text-xs text-ink-muted hover:text-ink hover:bg-warm-subtle rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2"
-              aria-label="Decrease font size"
+              aria-label={t("reader.decreaseFontSize")}
             >
               A−
             </button>
@@ -1077,7 +1079,7 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
               onClick={() => setFontSize(fontSize + 2)}
               disabled={fontSize >= MAX_FONT_SIZE}
               className="px-2 py-1 text-xs text-ink-muted hover:text-ink hover:bg-warm-subtle rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2"
-              aria-label="Increase font size"
+              aria-label={t("reader.increaseFontSize")}
             >
               A+
             </button>
@@ -1089,8 +1091,8 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
               <button
                 onClick={() => setDualPage(!dualPage)}
                 className={`p-1.5 transition-colors rounded-lg focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 ${dualPage ? "text-accent bg-accent-light" : "text-ink-muted hover:text-ink hover:bg-warm-subtle"}`}
-                aria-label="Toggle dual-page spread"
-                title="Dual-page spread"
+                aria-label={t("reader.toggleDualPage")}
+                title={t("reader.dualPageSpread")}
               >
                 <svg width="17" height="17" viewBox="0 0 24 24" fill="none">
                   <rect x="2" y="4" width="8" height="16" rx="1" stroke="currentColor" strokeWidth="1.5" />
@@ -1101,8 +1103,8 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
                 <button
                   onClick={() => setMangaMode(!mangaMode)}
                   className={`p-1.5 transition-colors rounded-lg focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 ${mangaMode ? "text-accent bg-accent-light" : "text-ink-muted hover:text-ink hover:bg-warm-subtle"}`}
-                  aria-label="Toggle manga mode (right-to-left)"
-                  title="Manga mode (RTL)"
+                  aria-label={t("reader.toggleMangaMode")}
+                  title={t("reader.mangaMode")}
                 >
                   <svg width="17" height="17" viewBox="0 0 24 24" fill="none">
                     <path d="M19 12H5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
@@ -1117,8 +1119,8 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
           <button
             onClick={() => setDndMode((prev) => !prev)}
             className={`p-1.5 transition-colors rounded-lg focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 ${dndMode ? "text-accent bg-accent-light" : "text-ink-muted hover:text-ink hover:bg-warm-subtle"}`}
-            aria-label="Toggle focus mode"
-            title="Focus mode (d)"
+            aria-label={t("reader.toggleFocusMode")}
+            title={t("reader.focusMode")}
           >
             <svg width="17" height="17" viewBox="0 0 24 24" fill="none">
               <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="1.5" />
@@ -1133,7 +1135,7 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
           <button
             onClick={onOpenSettings}
             className="p-1.5 text-ink-muted hover:text-ink transition-colors rounded-lg hover:bg-warm-subtle focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2"
-            aria-label="Open settings"
+            aria-label={t("reader.openSettings")}
           >
             <svg width="17" height="17" viewBox="0 0 20 20" fill="none">
               <path
@@ -1178,19 +1180,19 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
                   executeSearch(searchQuery);
                 }
               }}
-              placeholder="Search in book..."
+              placeholder={t("reader.searchInBook")}
               className="flex-1 text-sm bg-transparent text-ink placeholder-ink-muted/50 focus:outline-none"
               autoFocus
             />
-            {searching && <span className="text-xs text-ink-muted">Searching...</span>}
+            {searching && <span className="text-xs text-ink-muted">{t("reader.searchingText")}</span>}
             {!searching && searchResults.length > 0 && (
-              <span className="text-xs text-ink-muted tabular-nums">{searchResults.length} {searchResults.length === 1 ? "match" : "matches"}</span>
+              <span className="text-xs text-ink-muted tabular-nums">{searchResults.length === 1 ? t("reader.matchCount", { count: searchResults.length }) : t("reader.matchesCount", { count: searchResults.length })}</span>
             )}
             <button
               type="button"
               onClick={() => { setSearchOpen(false); setSearchQuery(""); setSearchResults([]); }}
               className="p-1 text-ink-muted hover:text-ink transition-colors"
-              aria-label="Close search"
+              aria-label={t("reader.closeSearch")}
             >
               <svg width="14" height="14" viewBox="0 0 20 20" fill="none">
                 <path d="M15 5L5 15M5 5l10 10" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
@@ -1202,13 +1204,13 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
         {/* Search results dropdown */}
         {searchOpen && !searching && searchQuery.trim().length >= 2 && searchResults.length === 0 && (
           <div className="shrink-0 border-b border-warm-border bg-surface/95 px-4 py-3">
-            <p className="text-xs text-ink-muted text-center">No matches found for &ldquo;{searchQuery.trim()}&rdquo;</p>
+            <p className="text-xs text-ink-muted text-center">{t("reader.noMatchesFor", { query: searchQuery.trim() })}</p>
           </div>
         )}
         {searchOpen && searchResults.length > 0 && (
           <div className="shrink-0 max-h-48 overflow-y-auto border-b border-warm-border bg-surface/95">
             {searchResults.map((result, i) => {
-              const chapterTitle = toc.find((t) => t.chapter_index === result.chapterIndex)?.label ?? `Chapter ${result.chapterIndex + 1}`;
+              const chapterTitle = toc.find((e) => e.chapter_index === result.chapterIndex)?.label ?? t("reader.chapterDefault", { number: result.chapterIndex + 1 });
               return (
                 <button
                   key={`${result.chapterIndex}-${result.matchOffset}-${i}`}
@@ -1226,7 +1228,7 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
             })}
             {searchResults.length >= 200 && (
               <div className="px-4 py-2 text-[11px] text-ink-muted/70 text-center bg-warm-subtle/50">
-                Results capped at 200. Try a more specific query.
+                {t("reader.resultsCapped")}
               </div>
             )}
           </div>
@@ -1246,7 +1248,7 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
             />
           ) : (
             <div className="flex-1 flex items-center justify-center">
-              <p className="text-sm text-ink-muted">Loading pages…</p>
+              <p className="text-sm text-ink-muted">{t("reader.loadingPages")}</p>
             </div>
           )
         ) : (
@@ -1286,7 +1288,7 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
                     <button
                       onClick={prevChapter}
                       className="fixed left-3 top-1/2 -translate-y-1/2 z-20 w-9 h-9 flex items-center justify-center rounded-full bg-surface/90 border border-warm-border shadow-md text-ink-muted hover:text-ink hover:bg-surface transition-all opacity-60 hover:opacity-100 focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2"
-                      aria-label="Previous chapter"
+                      aria-label={t("reader.previousChapter")}
                     >
                       <svg width="16" height="16" viewBox="0 0 20 20" fill="none">
                         <path d="M12 4l-6 6 6 6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
@@ -1297,7 +1299,7 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
                     <button
                       onClick={nextChapter}
                       className="fixed right-3 top-1/2 -translate-y-1/2 z-20 w-9 h-9 flex items-center justify-center rounded-full bg-surface/90 border border-warm-border shadow-md text-ink-muted hover:text-ink hover:bg-surface transition-all opacity-60 hover:opacity-100 focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2"
-                      aria-label="Next chapter"
+                      aria-label={t("reader.nextChapter")}
                     >
                       <svg width="16" height="16" viewBox="0 0 20 20" fill="none">
                         <path d="M8 4l6 6-6 6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
@@ -1323,7 +1325,7 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
                       onClick={() => handleCreateHighlight(c.value)}
                       className="w-5 h-5 rounded-full hover:scale-125 transition-transform"
                       style={{ backgroundColor: c.value }}
-                      aria-label={`Highlight ${c.name}`}
+                      aria-label={t("reader.highlightColor", { color: c.name })}
                     />
                   ))}
                   {/* Clear highlight — only show if selection overlaps existing highlights */}
@@ -1332,15 +1334,15 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
                       onClick={handleClearHighlight}
                       className="w-5 h-5 rounded-full hover:scale-125 transition-transform border border-white/40 flex items-center justify-center"
                       style={{ background: "repeating-conic-gradient(#ccc 0% 25%, transparent 0% 50%) 50% / 6px 6px" }}
-                      aria-label="Clear highlight"
-                      title="Remove highlight"
+                      aria-label={t("reader.clearHighlight")}
+                      title={t("reader.clearHighlight")}
                     />
                   )}
                   <div className="w-px h-4 bg-white/20 mx-0.5" />
                   <button
                     onClick={() => { setSelectionPopup(null); window.getSelection()?.removeAllRanges(); }}
                     className="w-5 h-5 rounded-full hover:scale-125 transition-transform flex items-center justify-center text-white/60 hover:text-white"
-                    aria-label="Dismiss"
+                    aria-label={t("reader.dismiss")}
                   >
                     <svg width="12" height="12" viewBox="0 0 16 16" fill="none">
                       <path d="M12 4L4 12M4 4l8 8" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
@@ -1351,14 +1353,14 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
 
               {chapterError ? (
                 <div className="max-w-[680px] mx-auto px-8 py-10">
-                  <p className="text-red-500 text-sm">Failed to load chapter: {chapterError}</p>
+                  <p className="text-red-500 text-sm">{t("reader.failedToLoadChapter", { error: chapterError })}</p>
                 </div>
               ) : isContinuous ? (
                 /* ── Continuous scroll: all chapters stacked ── */
                 allChaptersLoaded ? (
                   <div ref={contentRef} className="max-w-[680px] mx-auto py-10" style={{ paddingLeft: `${typography.pageMargins}px`, paddingRight: `${typography.pageMargins}px` }}>
                     {allChaptersHtml.map((html, i) => {
-                      const chapterTitle = toc.find((t) => t.chapter_index === i)?.label;
+                      const chapterTitle = toc.find((e) => e.chapter_index === i)?.label;
                       return (
                         <div
                           key={i}
@@ -1369,7 +1371,7 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
                             <div className="my-10 flex items-center gap-4">
                               <div className="flex-1 h-px bg-warm-border" />
                               <span className="text-xs text-ink-muted font-medium shrink-0">
-                                {chapterTitle ?? `Chapter ${i + 1}`}
+                                {chapterTitle ?? t("reader.chapterDefault", { number: i + 1 })}
                               </span>
                               <div className="flex-1 h-px bg-warm-border" />
                             </div>
@@ -1386,7 +1388,7 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
                 ) : (
                   <div className="flex-1 flex flex-col items-center justify-center gap-2">
                     <div className="w-5 h-5 border-2 border-accent/30 border-t-accent rounded-full animate-spin" />
-                    <p className="text-sm text-ink-muted">Loading {totalChapters} chapters…</p>
+                    <p className="text-sm text-ink-muted">{t("reader.loadingChapters", { count: totalChapters })}</p>
                   </div>
                 )
               ) : (
@@ -1410,17 +1412,17 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
                     <svg width="14" height="14" viewBox="0 0 20 20" fill="none">
                       <path d="M12 4l-6 6 6 6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
                     </svg>
-                    Previous
+                    {t("common.previous")}
                   </button>
                   <span className="text-xs text-ink-muted tabular-nums">
-                    {chapterIndex + 1} / {totalChapters}
+                    {t("reader.chapterOf", { current: chapterIndex + 1, total: totalChapters })}
                   </span>
                   <button
                     onClick={nextChapter}
                     disabled={chapterIndex >= totalChapters - 1}
                     className="flex items-center gap-1.5 px-4 py-2 text-sm text-ink-muted bg-warm-subtle hover:bg-warm-border rounded-xl transition-colors disabled:opacity-50 disabled:cursor-not-allowed focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2"
                   >
-                    Next
+                    {t("common.next")}
                     <svg width="14" height="14" viewBox="0 0 20 20" fill="none">
                       <path d="M8 4l6 6-6 6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
                     </svg>
@@ -1432,7 +1434,7 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
             {/* Progress bar */}
             <footer className={`shrink-0 border-t border-warm-border bg-surface px-5 py-2 flex items-center gap-3 transition-all duration-300 ${showFooter ? "opacity-100 max-h-20" : "opacity-0 max-h-0 overflow-hidden py-0 border-t-0"}`}>
               <span className="text-[11px] text-ink-muted tabular-nums whitespace-nowrap">
-                Ch. {chapterIndex + 1} / {totalChapters}
+                {t("reader.chapterLabel", { current: chapterIndex + 1, total: totalChapters })}
               </span>
               <div className="flex-1 h-[3px] bg-warm-subtle rounded-full overflow-hidden">
                 <div
@@ -1444,8 +1446,8 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
                 {Math.round(scrollProgress * 100)}%
               </span>
               {timeEstimate && (
-                <span className="text-[11px] text-ink-muted/70 whitespace-nowrap ml-1" title={`${timeEstimate.chapter} left in chapter, ${timeEstimate.book} left in book`}>
-                  {timeEstimate.book} left
+                <span className="text-[11px] text-ink-muted/70 whitespace-nowrap ml-1" title={t("reader.timeLeftTitle", { chapter: timeEstimate.chapter, book: timeEstimate.book })}>
+                  {t("reader.timeLeft", { time: timeEstimate.book })}
                 </span>
               )}
             </footer>
