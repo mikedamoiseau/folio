@@ -24,7 +24,7 @@ pub fn store_secrets(config: &BackupConfig) -> BackupConfig {
             if value.is_empty() {
                 continue;
             }
-            let service = format!("folio-backup-{}", key);
+            let service = format!("folio-backup-{:?}-{}", config.provider_type, key);
             if let Ok(entry) = keyring::Entry::new(&service, "default") {
                 let _ = entry.set_password(value);
             }
@@ -41,7 +41,7 @@ pub fn load_secrets(config: &mut BackupConfig) {
         if config.values.contains_key(*key) {
             continue; // already populated (e.g. test config)
         }
-        let service = format!("folio-backup-{}", key);
+        let service = format!("folio-backup-{:?}-{}", config.provider_type, key);
         if let Ok(entry) = keyring::Entry::new(&service, "default") {
             if let Ok(pw) = entry.get_password() {
                 config.values.insert(key.to_string(), pw);
@@ -201,6 +201,13 @@ pub fn provider_schemas() -> Vec<ProviderInfo> {
                     required: false,
                     placeholder: "/home/user/folio-backup".into(),
                 },
+                ConfigField {
+                    key: "known_hosts_strategy".into(),
+                    label: "Skip host key verification (insecure)".into(),
+                    field_type: "checkbox".into(),
+                    required: false,
+                    placeholder: "".into(),
+                },
             ],
         },
         ProviderInfo {
@@ -338,7 +345,11 @@ pub fn build_operator(config: &BackupConfig) -> Result<Operator, String> {
                     builder = builder.root(v);
                 }
             }
-            builder = builder.known_hosts_strategy("accept");
+            let skip_host_key = config
+                .values
+                .get("known_hosts_strategy")
+                .is_some_and(|v| v == "true");
+            builder = builder.known_hosts_strategy(if skip_host_key { "accept" } else { "strict" });
             let async_op = opendal::Operator::new(builder)
                 .map(|b| b.finish())
                 .map_err(|e| format!("Failed to create SFTP operator: {e}"))?;
@@ -489,50 +500,62 @@ pub fn run_incremental_backup_with_progress(
         items
     }
 
-    // Books
-    let books: Vec<crate::models::Book> = {
+    // Books — always write full metadata, but only upload files for changed books
+    let book_query = "SELECT id, title, author, file_path, cover_path, total_chapters, added_at, format, file_hash, description, genres, rating, isbn, openlibrary_key, enrichment_status, series, volume, language, publisher, publish_year FROM books";
+    let book_mapper = |row: &rusqlite::Row| {
+        let format_str: String = row.get(7)?;
+        Ok(crate::models::Book {
+            id: row.get(0)?,
+            title: row.get(1)?,
+            author: row.get(2)?,
+            file_path: row.get(3)?,
+            cover_path: row.get(4)?,
+            total_chapters: row.get(5)?,
+            added_at: row.get(6)?,
+            format: format_str
+                .parse()
+                .unwrap_or(crate::models::BookFormat::Epub),
+            file_hash: row.get(8)?,
+            description: row.get(9)?,
+            genres: row.get(10)?,
+            rating: row.get(11)?,
+            isbn: row.get(12)?,
+            openlibrary_key: row.get(13)?,
+            enrichment_status: row.get(14)?,
+            series: row.get(15)?,
+            volume: row.get(16)?,
+            language: row.get(17)?,
+            publisher: row.get(18)?,
+            publish_year: row.get(19)?,
+        })
+    };
+
+    // Full set for metadata JSON
+    let all_books: Vec<crate::models::Book> = {
+        let mut stmt = conn.prepare(book_query).map_err(|e| e.to_string())?;
+        let rows = stmt.query_map([], book_mapper).map_err(|e| e.to_string())?;
+        collect_rows(rows, "book", &mut result.warnings)
+    };
+    if !all_books.is_empty() {
+        on_progress("Syncing metadata", 0, 0);
+        push_json(op, "metadata/books.json", &all_books)?;
+    }
+
+    // Changed books only — upload files
+    let changed_books: Vec<crate::models::Book> = {
+        let query_with_filter = format!("{} WHERE updated_at > ?1", book_query);
         let mut stmt = conn
-            .prepare(
-                "SELECT id, title, author, file_path, cover_path, total_chapters, added_at, format, file_hash, description, genres, rating, isbn, openlibrary_key, enrichment_status, series, volume, language, publisher, publish_year FROM books WHERE updated_at > ?1",
-            )
+            .prepare(&query_with_filter)
             .map_err(|e| e.to_string())?;
         let rows = stmt
-            .query_map(rusqlite::params![since], |row| {
-                let format_str: String = row.get(7)?;
-                Ok(crate::models::Book {
-                    id: row.get(0)?,
-                    title: row.get(1)?,
-                    author: row.get(2)?,
-                    file_path: row.get(3)?,
-                    cover_path: row.get(4)?,
-                    total_chapters: row.get(5)?,
-                    added_at: row.get(6)?,
-                    format: format_str
-                        .parse()
-                        .unwrap_or(crate::models::BookFormat::Epub),
-                    file_hash: row.get(8)?,
-                    description: row.get(9)?,
-                    genres: row.get(10)?,
-                    rating: row.get(11)?,
-                    isbn: row.get(12)?,
-                    openlibrary_key: row.get(13)?,
-                    enrichment_status: row.get(14)?,
-                    series: row.get(15)?,
-                    volume: row.get(16)?,
-                    language: row.get(17)?,
-                    publisher: row.get(18)?,
-                    publish_year: row.get(19)?,
-                })
-            })
+            .query_map(rusqlite::params![since], book_mapper)
             .map_err(|e| e.to_string())?;
         collect_rows(rows, "book", &mut result.warnings)
     };
-    if !books.is_empty() {
-        result.books_pushed = books.len() as u32;
-        on_progress("Syncing metadata", 0, 0);
-        push_json(op, "metadata/books.json", &books)?;
-        let total_files = books.len() as u32;
-        for (i, book) in books.iter().enumerate() {
+    if !changed_books.is_empty() {
+        result.books_pushed = changed_books.len() as u32;
+        let total_files = changed_books.len() as u32;
+        for (i, book) in changed_books.iter().enumerate() {
             on_progress("Uploading books", (i + 1) as u32, total_files);
             if let Some(ref hash) = book.file_hash {
                 let ext = std::path::Path::new(&book.file_path)
@@ -543,6 +566,11 @@ pub fn run_incremental_backup_with_progress(
                 if push_file_if_missing(op, &remote_path, &book.file_path)? {
                     result.files_pushed += 1;
                 }
+            } else {
+                result.warnings.push(format!(
+                    "Book '{}' has no file hash — file not uploaded",
+                    book.title
+                ));
             }
             if let Some(ref cover) = book.cover_path {
                 let ext = std::path::Path::new(cover)
@@ -550,20 +578,24 @@ pub fn run_incremental_backup_with_progress(
                     .and_then(|e| e.to_str())
                     .unwrap_or("jpg");
                 let remote_path = format!("covers/{}.{}", book.id, ext);
-                let _ = push_file_if_missing(op, &remote_path, cover);
+                if let Err(e) = push_file_if_missing(op, &remote_path, cover) {
+                    result
+                        .warnings
+                        .push(format!("Cover upload failed for '{}': {}", book.title, e));
+                }
             }
         }
     }
 
-    // Reading progress
+    // Reading progress — always full set
     let progress: Vec<crate::models::ReadingProgress> = {
         let mut stmt = conn
             .prepare(
-                "SELECT book_id, chapter_index, scroll_position, last_read_at FROM reading_progress WHERE last_read_at > ?1",
+                "SELECT book_id, chapter_index, scroll_position, last_read_at FROM reading_progress",
             )
             .map_err(|e| e.to_string())?;
         let rows = stmt
-            .query_map(rusqlite::params![since], |row| {
+            .query_map([], |row| {
                 Ok(crate::models::ReadingProgress {
                     book_id: row.get(0)?,
                     chapter_index: row.get(1)?,
@@ -580,15 +612,15 @@ pub fn run_incremental_backup_with_progress(
         push_json(op, "metadata/progress.json", &progress)?;
     }
 
-    // Bookmarks
+    // Bookmarks — always full set
     let bookmarks: Vec<crate::models::Bookmark> = {
         let mut stmt = conn
             .prepare(
-                "SELECT id, book_id, chapter_index, scroll_position, name, note, created_at FROM bookmarks WHERE updated_at > ?1",
+                "SELECT id, book_id, chapter_index, scroll_position, name, note, created_at FROM bookmarks",
             )
             .map_err(|e| e.to_string())?;
         let rows = stmt
-            .query_map(rusqlite::params![since], |row| {
+            .query_map([], |row| {
                 Ok(crate::models::Bookmark {
                     id: row.get(0)?,
                     book_id: row.get(1)?,
@@ -608,15 +640,15 @@ pub fn run_incremental_backup_with_progress(
         push_json(op, "metadata/bookmarks.json", &bookmarks)?;
     }
 
-    // Highlights
+    // Highlights — always full set
     let highlights: Vec<crate::models::Highlight> = {
         let mut stmt = conn
             .prepare(
-                "SELECT id, book_id, chapter_index, text, color, note, start_offset, end_offset, created_at FROM highlights WHERE updated_at > ?1",
+                "SELECT id, book_id, chapter_index, text, color, note, start_offset, end_offset, created_at FROM highlights",
             )
             .map_err(|e| e.to_string())?;
         let rows = stmt
-            .query_map(rusqlite::params![since], |row| {
+            .query_map([], |row| {
                 Ok(crate::models::Highlight {
                     id: row.get(0)?,
                     book_id: row.get(1)?,

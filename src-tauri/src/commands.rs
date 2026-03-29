@@ -2411,11 +2411,19 @@ pub async fn get_backup_config(
     }
 }
 
+static BACKUP_RUNNING: AtomicBool = AtomicBool::new(false);
+
 #[tauri::command]
 pub async fn run_backup(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
 ) -> Result<crate::backup::SyncResult, String> {
+    if BACKUP_RUNNING
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        return Err("A backup is already in progress".to_string());
+    }
     let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
     let json = db::get_setting(&conn, "backup_config")
         .map_err(|e| e.to_string())?
@@ -2474,6 +2482,7 @@ pub async fn run_backup(
             );
         }
     }
+    BACKUP_RUNNING.store(false, Ordering::SeqCst);
     result
 }
 
