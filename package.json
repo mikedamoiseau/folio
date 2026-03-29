@@ -21,8 +21,11 @@
     "@tauri-apps/plugin-clipboard-manager": "^2.3.2",
     "@tauri-apps/plugin-dialog": "^2.6.0",
     "@tauri-apps/plugin-opener": "^2",
+    "i18next": "^26.0.1",
+    "i18next-browser-languagedetector": "^8.2.1",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
+    "react-i18next": "^17.0.1",
     "react-router-dom": "^7.13.2"
   },
   "devDependencies": {

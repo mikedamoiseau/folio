@@ -10,6 +10,7 @@ import "@fontsource-variable/literata";
 import "@fontsource-variable/literata/wght-italic.css";
 import "@fontsource-variable/playfair-display";
 
+import "./i18n";
 import "./index.css";
 import App from "./App";
 
