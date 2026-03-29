@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { useTranslation } from "react-i18next";
 import { formatDuration } from "../lib/utils";
 
 interface ReadingStatsData {
@@ -17,6 +18,7 @@ interface ReadingStatsProps {
 }
 
 export default function ReadingStats({ onClose }: ReadingStatsProps) {
+  const { t } = useTranslation();
   const [stats, setStats] = useState<ReadingStatsData | null>(null);
 
   const loadStats = useCallback(async () => {
@@ -32,17 +34,23 @@ export default function ReadingStats({ onClose }: ReadingStatsProps) {
 
   const maxDaily = stats?.dailyReading.reduce((max, [, secs]) => Math.max(max, secs), 0) ?? 0;
 
+  const formatStreak = (days: number) => {
+    return days === 1
+      ? t("stats.dayCount", { count: days })
+      : t("stats.daysCount", { count: days });
+  };
+
   return (
     <>
       <div className="fixed inset-0 bg-ink/30 z-50 animate-fade-in" onClick={onClose} />
       <div className="fixed inset-0 z-50 flex items-center justify-center p-4 pointer-events-none">
         <div className="bg-surface rounded-2xl shadow-xl border border-warm-border w-full max-w-lg pointer-events-auto animate-fade-in max-h-[80vh] overflow-y-auto">
           <div className="px-5 py-4 border-b border-warm-border flex items-center justify-between">
-            <h2 className="font-serif text-base font-semibold text-ink">Reading Stats</h2>
+            <h2 className="font-serif text-base font-semibold text-ink">{t("stats.title")}</h2>
             <button
               onClick={onClose}
               className="p-1 text-ink-muted hover:text-ink transition-colors rounded"
-              aria-label="Close"
+              aria-label={t("common.close")}
             >
               <svg width="18" height="18" viewBox="0 0 20 20" fill="none">
                 <path d="M15 5L5 15M5 5l10 10" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
@@ -51,23 +59,23 @@ export default function ReadingStats({ onClose }: ReadingStatsProps) {
           </div>
 
           {!stats ? (
-            <div className="px-5 py-8 text-center text-sm text-ink-muted">Loading…</div>
+            <div className="px-5 py-8 text-center text-sm text-ink-muted">{t("common.loading")}</div>
           ) : (
             <div className="px-5 py-4 space-y-5">
               {/* Stat cards */}
               <div className="grid grid-cols-2 gap-3">
-                <StatCard label="Time Reading" value={formatDuration(stats.totalReadingTimeSecs)} />
-                <StatCard label="Sessions" value={stats.totalSessions.toString()} />
-                <StatCard label="Pages Read" value={stats.totalPagesRead.toString()} />
-                <StatCard label="Books Finished" value={stats.booksFinished.toString()} />
-                <StatCard label="Current Streak" value={`${stats.currentStreakDays} day${stats.currentStreakDays !== 1 ? "s" : ""}`} />
-                <StatCard label="Longest Streak" value={`${stats.longestStreakDays} day${stats.longestStreakDays !== 1 ? "s" : ""}`} />
+                <StatCard label={t("stats.timeReading")} value={formatDuration(stats.totalReadingTimeSecs)} />
+                <StatCard label={t("stats.sessions")} value={stats.totalSessions.toString()} />
+                <StatCard label={t("stats.pagesRead")} value={stats.totalPagesRead.toString()} />
+                <StatCard label={t("stats.booksFinished")} value={stats.booksFinished.toString()} />
+                <StatCard label={t("stats.currentStreak")} value={formatStreak(stats.currentStreakDays)} />
+                <StatCard label={t("stats.longestStreak")} value={formatStreak(stats.longestStreakDays)} />
               </div>
 
               {/* Daily reading chart */}
               {stats.dailyReading.length > 0 && (
                 <div>
-                  <h3 className="text-xs font-semibold text-ink-muted uppercase tracking-wide mb-3">Last 30 Days</h3>
+                  <h3 className="text-xs font-semibold text-ink-muted uppercase tracking-wide mb-3">{t("stats.last30Days")}</h3>
                   <div className="flex items-end gap-0.5 h-20">
                     {stats.dailyReading.map(([date, secs]) => {
                       const height = maxDaily > 0 ? Math.max(4, (secs / maxDaily) * 100) : 4;

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
+import { useTranslation } from "react-i18next";
 import type { Book } from "../types";
 
 interface BookDetailModalProps {
@@ -11,6 +12,7 @@ interface BookDetailModalProps {
 }
 
 function ScanButton({ bookId, onScan }: { bookId: string; onScan: (id: string) => Promise<void> }) {
+  const { t } = useTranslation();
   const [scanning, setScanning] = useState(false);
   return (
     <button
@@ -21,7 +23,7 @@ function ScanButton({ bookId, onScan }: { bookId: string; onScan: (id: string) =
         try { await onScan(bookId); } finally { setScanning(false); }
       }}
       className="px-4 py-2 rounded-xl bg-warm-subtle text-ink text-sm font-medium hover:bg-warm-border transition-colors disabled:opacity-50 focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2"
-      title="Scan for metadata"
+      title={t("detail.scanForMetadata")}
     >
       {scanning ? (
         <div className="w-4 h-4 border-2 border-ink-muted border-t-transparent rounded-full animate-spin mx-auto" />
@@ -35,6 +37,7 @@ function ScanButton({ bookId, onScan }: { bookId: string; onScan: (id: string) =
 }
 
 export default function BookDetailModal({ book, onClose, onOpen, onEdit, onScan }: BookDetailModalProps) {
+  const { t } = useTranslation();
   const dialogRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -71,11 +74,11 @@ export default function BookDetailModal({ book, onClose, onOpen, onEdit, onScan 
   const metadataRows: { label: string; value: string }[] = [];
   if (book.series) {
     const val = book.volume != null ? `${book.series} #${book.volume}` : book.series;
-    metadataRows.push({ label: "Series", value: val });
+    metadataRows.push({ label: t("detail.series"), value: val });
   }
-  if (book.language) metadataRows.push({ label: "Language", value: book.language });
-  if (book.publish_year != null) metadataRows.push({ label: "Year", value: String(book.publish_year) });
-  if (book.publisher) metadataRows.push({ label: "Publisher", value: book.publisher });
+  if (book.language) metadataRows.push({ label: t("detail.language"), value: book.language });
+  if (book.publish_year != null) metadataRows.push({ label: t("detail.year"), value: String(book.publish_year) });
+  if (book.publisher) metadataRows.push({ label: t("detail.publisher"), value: book.publisher });
 
   return (
     <div
@@ -86,7 +89,7 @@ export default function BookDetailModal({ book, onClose, onOpen, onEdit, onScan 
         ref={dialogRef}
         role="dialog"
         aria-modal="true"
-        aria-label={`Details for ${book.title}`}
+        aria-label={t("detail.detailsFor", { title: book.title })}
         className="bg-surface border border-warm-border rounded-2xl shadow-xl max-w-md w-full mx-4 overflow-hidden"
         onClick={(e) => e.stopPropagation()}
       >
@@ -95,7 +98,7 @@ export default function BookDetailModal({ book, onClose, onOpen, onEdit, onScan 
           {coverSrc ? (
             <img
               src={coverSrc}
-              alt={`Cover of ${book.title}`}
+              alt={t("detail.coverAlt", { title: book.title })}
               className="w-[100px] h-[150px] object-cover rounded-lg shadow-sm flex-shrink-0"
             />
           ) : (
@@ -151,14 +154,14 @@ export default function BookDetailModal({ book, onClose, onOpen, onEdit, onScan 
             onClick={() => onOpen(book.id)}
             className="flex-1 px-4 py-2 rounded-xl bg-accent text-white text-sm font-medium hover:bg-accent/90 transition-colors focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2"
           >
-            Open
+            {t("common.open")}
           </button>
           <button
             type="button"
             onClick={() => onEdit(book.id)}
             className="flex-1 px-4 py-2 rounded-xl bg-warm-subtle text-ink text-sm font-medium hover:bg-warm-border transition-colors focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2"
           >
-            Edit
+            {t("common.edit")}
           </button>
           {onScan && <ScanButton bookId={book.id} onScan={onScan} />}
         </div>

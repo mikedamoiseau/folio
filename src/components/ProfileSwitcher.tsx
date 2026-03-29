@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { useTranslation } from "react-i18next";
 
 interface Profile {
   name: string;
@@ -11,6 +12,7 @@ interface ProfileSwitcherProps {
 }
 
 export default function ProfileSwitcher({ onSwitch }: ProfileSwitcherProps) {
+  const { t } = useTranslation();
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [open, setOpen] = useState(false);
   const [creating, setCreating] = useState(false);
@@ -90,7 +92,7 @@ export default function ProfileSwitcher({ onSwitch }: ProfileSwitcherProps) {
       <button
         onClick={() => { loadProfiles(); setOpen(true); }}
         className="text-xs text-ink-muted hover:text-ink transition-colors ml-2"
-        title="Manage profiles"
+        title={t("profiles.manageProfiles")}
       >
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
           <circle cx="12" cy="8" r="4" stroke="currentColor" strokeWidth="1.5" />
@@ -135,7 +137,7 @@ export default function ProfileSwitcher({ onSwitch }: ProfileSwitcherProps) {
                 <button
                   onClick={(e) => { e.stopPropagation(); handleDelete(p.name); }}
                   className="opacity-0 group-hover:opacity-100 p-0.5 text-ink-muted hover:text-red-500 transition-all"
-                  aria-label={`Delete profile ${p.name}`}
+                  aria-label={t("profiles.deleteLabel", { name: p.name })}
                 >
                   <svg width="12" height="12" viewBox="0 0 20 20" fill="none">
                     <path d="M15 5L5 15M5 5l10 10" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
@@ -154,7 +156,7 @@ export default function ProfileSwitcher({ onSwitch }: ProfileSwitcherProps) {
                 value={newName}
                 onChange={(e) => setNewName(e.target.value)}
                 onKeyDown={(e) => { if (e.key === "Enter") handleCreate(); if (e.key === "Escape") { setCreating(false); setError(null); } }}
-                placeholder="Profile name"
+                placeholder={t("profiles.profileName")}
                 autoFocus
                 className="w-full text-sm bg-warm-subtle border border-warm-border rounded-lg px-2.5 py-1.5 text-ink placeholder-ink-muted/50 focus:outline-none focus:border-accent"
               />
@@ -165,13 +167,13 @@ export default function ProfileSwitcher({ onSwitch }: ProfileSwitcherProps) {
                   disabled={!newName.trim()}
                   className="flex-1 py-1 text-xs font-medium text-white bg-accent hover:bg-accent-hover rounded-lg transition-colors disabled:opacity-40"
                 >
-                  Create
+                  {t("common.create")}
                 </button>
                 <button
                   onClick={() => { setCreating(false); setError(null); }}
                   className="flex-1 py-1 text-xs text-ink-muted hover:text-ink transition-colors"
                 >
-                  Cancel
+                  {t("common.cancel")}
                 </button>
               </div>
             </div>
@@ -183,7 +185,7 @@ export default function ProfileSwitcher({ onSwitch }: ProfileSwitcherProps) {
               <svg width="12" height="12" viewBox="0 0 20 20" fill="none">
                 <path d="M10 4v12M4 10h12" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
               </svg>
-              New profile
+              {t("profiles.newProfile")}
             </button>
           )}
         </div>

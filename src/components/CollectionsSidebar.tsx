@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
+import { useTranslation } from "react-i18next";
 import { getDraggedBookId, endDrag, isDragging, subscribe } from "../lib/dragState";
 
 // ---- Types ----
@@ -59,60 +60,66 @@ const PRESET_COLORS = [
 
 const PRESET_ICONS = ["📚", "⭐", "❤️", "🔖", "🎯", "💡", "🌟", "📖", "🏆", "✨"];
 
-const FIELD_OPTIONS: { value: CollectionRule["field"]; label: string }[] = [
-  { value: "author", label: "Author" },
-  { value: "filename", label: "Title" },
-  { value: "series", label: "Series" },
-  { value: "language", label: "Language" },
-  { value: "publisher", label: "Publisher" },
-  { value: "description", label: "Description" },
-  { value: "format", label: "Format" },
-  { value: "tag", label: "Tag" },
-  { value: "date_added", label: "Date Added" },
-  { value: "reading_progress", label: "Reading Progress" },
-];
+function getFieldOptions(t: (key: string) => string) {
+  return [
+    { value: "author" as const, label: t("collections.fieldAuthor") },
+    { value: "filename" as const, label: t("collections.fieldTitle") },
+    { value: "series" as const, label: t("collections.fieldSeries") },
+    { value: "language" as const, label: t("collections.fieldLanguage") },
+    { value: "publisher" as const, label: t("collections.fieldPublisher") },
+    { value: "description" as const, label: t("collections.fieldDescription") },
+    { value: "format" as const, label: t("collections.fieldFormat") },
+    { value: "tag" as const, label: t("collections.fieldTag") },
+    { value: "date_added" as const, label: t("collections.fieldDateAdded") },
+    { value: "reading_progress" as const, label: t("collections.fieldReadingProgress") },
+  ];
+}
 
-const OPERATOR_OPTIONS: Record<CollectionRule["field"], { value: string; label: string }[]> = {
-  author: [
-    { value: "contains", label: "contains" },
-  ],
-  filename: [
-    { value: "contains", label: "contains" },
-  ],
-  series: [
-    { value: "contains", label: "contains" },
-    { value: "equals", label: "is" },
-  ],
-  language: [
-    { value: "equals", label: "is" },
-    { value: "contains", label: "contains" },
-  ],
-  publisher: [
-    { value: "contains", label: "contains" },
-  ],
-  description: [
-    { value: "contains", label: "contains" },
-  ],
-  format: [
-    { value: "equals", label: "is" },
-  ],
-  tag: [
-    { value: "equals", label: "is" },
-    { value: "contains", label: "contains" },
-  ],
-  date_added: [
-    { value: "last_n_days", label: "within last (days)" },
-  ],
-  reading_progress: [
-    { value: "equals", label: "is" },
-  ],
-};
+function getOperatorOptions(t: (key: string) => string): Record<CollectionRule["field"], { value: string; label: string }[]> {
+  return {
+    author: [
+      { value: "contains", label: t("collections.operatorContains") },
+    ],
+    filename: [
+      { value: "contains", label: t("collections.operatorContains") },
+    ],
+    series: [
+      { value: "contains", label: t("collections.operatorContains") },
+      { value: "equals", label: t("collections.operatorIs") },
+    ],
+    language: [
+      { value: "equals", label: t("collections.operatorIs") },
+      { value: "contains", label: t("collections.operatorContains") },
+    ],
+    publisher: [
+      { value: "contains", label: t("collections.operatorContains") },
+    ],
+    description: [
+      { value: "contains", label: t("collections.operatorContains") },
+    ],
+    format: [
+      { value: "equals", label: t("collections.operatorIs") },
+    ],
+    tag: [
+      { value: "equals", label: t("collections.operatorIs") },
+      { value: "contains", label: t("collections.operatorContains") },
+    ],
+    date_added: [
+      { value: "last_n_days", label: t("collections.operatorWithinDays") },
+    ],
+    reading_progress: [
+      { value: "equals", label: t("collections.operatorIs") },
+    ],
+  };
+}
 
-const READING_PROGRESS_VALUES = [
-  { value: "unread", label: "Unread" },
-  { value: "in_progress", label: "In Progress" },
-  { value: "finished", label: "Finished" },
-];
+function getReadingProgressValues(t: (key: string) => string) {
+  return [
+    { value: "unread", label: t("collections.unread") },
+    { value: "in_progress", label: t("collections.inProgressValue") },
+    { value: "finished", label: t("collections.finishedValue") },
+  ];
+}
 
 // ---- CollectionRow ----
 
@@ -133,6 +140,7 @@ function CollectionRow({
   onDropBook: (bookId: string, collectionId: string) => void;
   isManual: boolean;
 }) {
+  const { t } = useTranslation();
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [isHovered, setIsHovered] = useState(false);
   const [shareMenu, setShareMenu] = useState(false);
@@ -158,18 +166,18 @@ function CollectionRow({
   if (confirmDelete) {
     return (
       <div className="px-3 py-2 flex items-center gap-2 bg-accent-light border-l-2 border-accent">
-        <span className="flex-1 text-xs text-ink-muted">Delete "{collection.name}"?</span>
+        <span className="flex-1 text-xs text-ink-muted">{t("collections.deleteConfirm", { name: collection.name })}</span>
         <button
           onClick={() => onDelete()}
           className="text-xs px-2 py-0.5 bg-accent text-white rounded hover:bg-accent-hover transition-colors"
         >
-          Delete
+          {t("common.delete")}
         </button>
         <button
           onClick={() => setConfirmDelete(false)}
           className="text-xs px-2 py-0.5 text-ink-muted hover:text-ink transition-colors"
         >
-          Cancel
+          {t("common.cancel")}
         </button>
       </div>
     );
@@ -202,18 +210,18 @@ function CollectionRow({
       <span className="flex-1 text-sm truncate font-medium" title={collection.name}>{collection.name}</span>
       {/* Automated badge */}
       {collection.type === "automated" && (
-        <span className="text-[10px] text-ink-muted opacity-60 mr-1">auto</span>
+        <span className="text-[10px] text-ink-muted opacity-60 mr-1">{t("collections.auto")}</span>
       )}
       {/* Share button */}
       <div className="relative">
         <button
           className="opacity-0 group-hover:opacity-100 p-0.5 text-ink-muted hover:text-accent transition-all"
-          aria-label={`Share ${collection.name}`}
+          aria-label={t("collections.shareLabel", { name: collection.name })}
           onClick={(e) => {
             e.stopPropagation();
             setShareMenu((v) => !v);
           }}
-          title="Export collection"
+          title={t("collections.exportCollection")}
         >
           <svg width="13" height="13" viewBox="0 0 20 20" fill="none">
             <path d="M13 3H7a2 2 0 00-2 2v10a2 2 0 002 2h6a2 2 0 002-2V5a2 2 0 00-2-2z" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" />
@@ -232,15 +240,15 @@ function CollectionRow({
                   try {
                     const md = await invoke<string>("export_collection_markdown", { collectionId: collection.id });
                     await copyToClipboard(md);
-                    setCopyFeedback("Copied as Markdown!");
+                    setCopyFeedback(t("collections.copiedMarkdown"));
                     setTimeout(() => setCopyFeedback(null), 1500);
                   } catch {
-                    setCopyFeedback("Export failed");
+                    setCopyFeedback(t("collections.exportFailedMsg"));
                     setTimeout(() => setCopyFeedback(null), 1500);
                   }
                 }}
               >
-                Copy as Markdown
+                {t("collections.copyAsMarkdown")}
               </button>
               <button
                 className="w-full text-left px-3 py-1.5 text-xs text-ink hover:bg-warm-subtle transition-colors"
@@ -250,15 +258,15 @@ function CollectionRow({
                   try {
                     const json = await invoke<string>("export_collection_json", { collectionId: collection.id });
                     await copyToClipboard(json);
-                    setCopyFeedback("Copied as JSON!");
+                    setCopyFeedback(t("collections.copiedJson"));
                     setTimeout(() => setCopyFeedback(null), 1500);
                   } catch {
-                    setCopyFeedback("Export failed");
+                    setCopyFeedback(t("collections.exportFailedMsg"));
                     setTimeout(() => setCopyFeedback(null), 1500);
                   }
                 }}
               >
-                Copy as JSON
+                {t("collections.copyAsJson")}
               </button>
             </div>
           </>
@@ -267,9 +275,9 @@ function CollectionRow({
       {/* Edit button */}
       <button
         className="opacity-0 group-hover:opacity-100 p-0.5 text-ink-muted hover:text-accent transition-all"
-        aria-label={`Edit ${collection.name}`}
+        aria-label={t("collections.editLabel", { name: collection.name })}
         onClick={(e) => { e.stopPropagation(); onEdit(); }}
-        title="Edit collection"
+        title={t("collections.editCollection")}
       >
         <svg width="13" height="13" viewBox="0 0 20 20" fill="none">
           <path d="M13.586 3.586a2 2 0 112.828 2.828l-9.5 9.5-3.5 1 1-3.5 9.172-9.828z" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
@@ -278,7 +286,7 @@ function CollectionRow({
       {/* Delete button */}
       <button
         className="opacity-0 group-hover:opacity-100 p-0.5 text-ink-muted hover:text-accent transition-all"
-        aria-label={`Delete ${collection.name}`}
+        aria-label={t("collections.deleteLabel", { name: collection.name })}
         onClick={(e) => {
           e.stopPropagation();
           setConfirmDelete(true);
@@ -310,12 +318,19 @@ function RuleRow({
   rule,
   onChange,
   onRemove,
+  fieldOptions,
+  operatorOptions,
+  readingProgressValues,
 }: {
   rule: Omit<CollectionRule, "id">;
   onChange: (updated: Omit<CollectionRule, "id">) => void;
   onRemove: () => void;
+  fieldOptions: { value: CollectionRule["field"]; label: string }[];
+  operatorOptions: Record<CollectionRule["field"], { value: string; label: string }[]>;
+  readingProgressValues: { value: string; label: string }[];
 }) {
-  const operators = OPERATOR_OPTIONS[rule.field];
+  const { t } = useTranslation();
+  const operators = operatorOptions[rule.field];
 
   return (
     <div className="flex items-center gap-1.5">
@@ -324,11 +339,11 @@ function RuleRow({
         onChange={(e) => {
           const field = e.target.value as CollectionRule["field"];
           const defaultValue = field === "reading_progress" ? "unread" : "";
-          onChange({ field, operator: OPERATOR_OPTIONS[field][0].value, value: defaultValue });
+          onChange({ field, operator: operatorOptions[field][0].value, value: defaultValue });
         }}
         className="flex-1 min-w-0 text-xs bg-warm-subtle border border-warm-border rounded px-2 py-1 text-ink focus:outline-none focus:border-accent"
       >
-        {FIELD_OPTIONS.map((f) => (
+        {fieldOptions.map((f) => (
           <option key={f.value} value={f.value}>{f.label}</option>
         ))}
       </select>
@@ -347,7 +362,7 @@ function RuleRow({
           onChange={(e) => onChange({ ...rule, value: e.target.value })}
           className="flex-1 min-w-0 text-xs bg-warm-subtle border border-warm-border rounded px-2 py-1 text-ink focus:outline-none focus:border-accent"
         >
-          {READING_PROGRESS_VALUES.map((v) => (
+          {readingProgressValues.map((v) => (
             <option key={v.value} value={v.value}>{v.label}</option>
           ))}
         </select>
@@ -355,7 +370,7 @@ function RuleRow({
         <input
           type="text"
           value={rule.value}
-          placeholder="value"
+          placeholder={t("collections.valuePlaceholder")}
           onChange={(e) => onChange({ ...rule, value: e.target.value })}
           className="flex-1 min-w-0 text-xs bg-warm-subtle border border-warm-border rounded px-2 py-1 text-ink placeholder-ink-muted/50 focus:outline-none focus:border-accent"
         />
@@ -364,7 +379,7 @@ function RuleRow({
         type="button"
         onClick={onRemove}
         className="shrink-0 p-0.5 text-ink-muted hover:text-accent transition-colors"
-        aria-label="Remove rule"
+        aria-label={t("collections.removeRule")}
       >
         <svg width="13" height="13" viewBox="0 0 20 20" fill="none">
           <path d="M15 5L5 15M5 5l10 10" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
@@ -385,6 +400,7 @@ function CollectionForm({
   onSave: (data: CreateCollectionData) => void | Promise<void>;
   onCancel: () => void;
 }) {
+  const { t } = useTranslation();
   const [name, setName] = useState(initial?.name ?? "");
   const [saving, setSaving] = useState(false);
   const [type, setType] = useState<"manual" | "automated">(initial?.type ?? "manual");
@@ -393,6 +409,10 @@ function CollectionForm({
   const [rules, setRules] = useState<Omit<CollectionRule, "id">[]>(
     initial?.rules.map(({ field, operator, value }) => ({ field, operator, value })) ?? []
   );
+
+  const fieldOptions = getFieldOptions(t);
+  const operatorOptions = getOperatorOptions(t);
+  const readingProgressValues = getReadingProgressValues(t);
 
   // Live match count preview for automated rules
   const [matchCount, setMatchCount] = useState<number | null>(null);
@@ -446,6 +466,11 @@ function CollectionForm({
     }
   };
 
+  const typeLabels: Record<string, string> = {
+    manual: t("collections.manual"),
+    automated: t("collections.automated"),
+  };
+
   return (
     <div className="flex flex-col flex-1 min-h-0">
       {/* Header */}
@@ -453,25 +478,25 @@ function CollectionForm({
         <button
           onClick={onCancel}
           className="p-1 text-ink-muted hover:text-ink transition-colors rounded"
-          aria-label="Back"
+          aria-label={t("common.back")}
         >
           <svg width="16" height="16" viewBox="0 0 20 20" fill="none">
             <path d="M12 4l-6 6 6 6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
           </svg>
         </button>
-        <h2 className="font-serif text-base font-semibold text-ink">{initial ? "Edit Collection" : "New Collection"}</h2>
+        <h2 className="font-serif text-base font-semibold text-ink">{initial ? t("collections.editCollection") : t("collections.newCollection")}</h2>
       </div>
 
       {/* Form body */}
       <div className="flex-1 overflow-y-auto px-5 py-4 space-y-4">
         {/* Name */}
         <div>
-          <label className="block text-xs font-medium text-ink-muted mb-1.5">Name</label>
+          <label className="block text-xs font-medium text-ink-muted mb-1.5">{t("collections.name")}</label>
           <input
             type="text"
             value={name}
             onChange={(e) => setName(e.target.value)}
-            placeholder="Collection name"
+            placeholder={t("collections.namePlaceholder")}
             autoFocus
             className="w-full text-sm bg-warm-subtle border border-warm-border rounded-lg px-3 py-2 text-ink placeholder-ink-muted/50 focus:outline-none focus:border-accent"
           />
@@ -479,20 +504,20 @@ function CollectionForm({
 
         {/* Type */}
         <div>
-          <label className="block text-xs font-medium text-ink-muted mb-1.5">Type</label>
+          <label className="block text-xs font-medium text-ink-muted mb-1.5">{t("collections.type")}</label>
           <div className="flex rounded-lg border border-warm-border overflow-hidden">
-            {(["manual", "automated"] as const).map((t) => (
+            {(["manual", "automated"] as const).map((tp) => (
               <button
-                key={t}
+                key={tp}
                 type="button"
-                onClick={() => setType(t)}
+                onClick={() => setType(tp)}
                 className={`flex-1 py-1.5 text-xs font-medium capitalize transition-colors ${
-                  type === t
+                  type === tp
                     ? "bg-accent text-white"
                     : "bg-warm-subtle text-ink-muted hover:text-ink"
                 }`}
               >
-                {t}
+                {typeLabels[tp]}
               </button>
             ))}
           </div>
@@ -500,7 +525,7 @@ function CollectionForm({
 
         {/* Icon picker */}
         <div>
-          <label className="block text-xs font-medium text-ink-muted mb-1.5">Icon (optional)</label>
+          <label className="block text-xs font-medium text-ink-muted mb-1.5">{t("collections.iconOptional")}</label>
           <div className="flex flex-wrap gap-1.5">
             {PRESET_ICONS.map((icon) => (
               <button
@@ -521,7 +546,7 @@ function CollectionForm({
 
         {/* Color picker */}
         <div>
-          <label className="block text-xs font-medium text-ink-muted mb-1.5">Color</label>
+          <label className="block text-xs font-medium text-ink-muted mb-1.5">{t("collections.color")}</label>
           <div className="flex gap-2 flex-wrap">
             {PRESET_COLORS.map((color) => (
               <button
@@ -532,7 +557,7 @@ function CollectionForm({
                   selectedColor === color ? "scale-125 ring-2 ring-offset-1 ring-accent" : "hover:scale-110"
                 }`}
                 style={{ backgroundColor: color }}
-                aria-label={`Color ${color}`}
+                aria-label={t("collections.colorLabel", { color })}
               />
             ))}
           </div>
@@ -541,7 +566,7 @@ function CollectionForm({
         {/* Rule builder (automated only) */}
         {type === "automated" && (
           <div>
-            <label className="block text-xs font-medium text-ink-muted mb-1.5">Rules</label>
+            <label className="block text-xs font-medium text-ink-muted mb-1.5">{t("collections.rules")}</label>
             <div className="space-y-2">
               {rules.map((rule, index) => (
                 <RuleRow
@@ -549,6 +574,9 @@ function CollectionForm({
                   rule={rule}
                   onChange={(updated) => updateRule(index, updated)}
                   onRemove={() => removeRule(index)}
+                  fieldOptions={fieldOptions}
+                  operatorOptions={operatorOptions}
+                  readingProgressValues={readingProgressValues}
                 />
               ))}
             </div>
@@ -557,13 +585,15 @@ function CollectionForm({
               onClick={addRule}
               className="mt-2 w-full py-1.5 text-xs text-ink-muted border border-dashed border-warm-border rounded-lg hover:border-accent hover:text-accent transition-colors"
             >
-              + Add rule
+              {t("collections.addRule")}
             </button>
             {matchCount !== null && (
               <p className="mt-2 text-xs text-ink-muted">
                 {matchCount === 0
-                  ? "No books match these rules"
-                  : `${matchCount} book${matchCount === 1 ? "" : "s"} match${matchCount === 1 ? "es" : ""} these rules`}
+                  ? t("collections.noMatchRules")
+                  : matchCount === 1
+                    ? t("collections.matchCount", { count: matchCount })
+                    : t("collections.matchesCount", { count: matchCount })}
               </p>
             )}
           </div>
@@ -577,7 +607,7 @@ function CollectionForm({
           onClick={onCancel}
           className="flex-1 py-2 text-sm text-ink-muted bg-warm-subtle hover:bg-warm-border rounded-lg transition-colors"
         >
-          Cancel
+          {t("common.cancel")}
         </button>
         <button
           type="button"
@@ -585,7 +615,7 @@ function CollectionForm({
           disabled={!name.trim() || saving}
           className="flex-1 py-2 text-sm font-medium text-white bg-accent hover:bg-accent-hover rounded-lg transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
         >
-          {saving ? "Saving..." : "Save"}
+          {saving ? t("common.saving") : t("common.save")}
         </button>
       </div>
     </div>
@@ -608,6 +638,7 @@ export default function CollectionsSidebar({
   onDelete,
   onDropBook,
 }: CollectionsSidebarProps) {
+  const { t } = useTranslation();
   const [formMode, setFormMode] = useState<{ mode: "create" } | { mode: "edit"; collection: Collection } | null>(null);
 
   if (!open) return null;
@@ -640,11 +671,11 @@ export default function CollectionsSidebar({
           <>
             {/* Header */}
             <div className="px-5 py-4 border-b border-warm-border flex items-center justify-between shrink-0">
-              <h2 className="font-serif text-base font-semibold text-ink">Collections</h2>
+              <h2 className="font-serif text-base font-semibold text-ink">{t("collections.title")}</h2>
               <button
                 onClick={onClose}
                 className="p-1 text-ink-muted hover:text-ink transition-colors rounded"
-                aria-label="Close collections"
+                aria-label={t("collections.closeLabel")}
               >
                 <svg width="18" height="18" viewBox="0 0 20 20" fill="none">
                   <path d="M15 5L5 15M5 5l10 10" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
@@ -653,7 +684,7 @@ export default function CollectionsSidebar({
             </div>
 
             {/* List */}
-            <nav className="flex-1 overflow-y-auto py-1" aria-label="Collections">
+            <nav className="flex-1 overflow-y-auto py-1" aria-label={t("collections.title")}>
               {/* All Books row */}
               <button
                 className={`w-full flex items-center gap-2.5 px-3 py-2.5 text-sm transition-colors ${
@@ -671,7 +702,7 @@ export default function CollectionsSidebar({
                     strokeLinecap="round"
                   />
                 </svg>
-                <span>All Books</span>
+                <span>{t("collections.allBooks")}</span>
               </button>
 
               {/* Divider */}
@@ -699,7 +730,7 @@ export default function CollectionsSidebar({
                   <div className="mx-3 my-1 border-t border-warm-border" />
                   <div className="px-3 pt-2 pb-1">
                     <span className="text-[10px] font-semibold uppercase tracking-wider text-ink-muted">
-                      Series
+                      {t("collections.series")}
                     </span>
                   </div>
                   {seriesList.map((s) => (
@@ -735,7 +766,7 @@ export default function CollectionsSidebar({
                 <svg width="13" height="13" viewBox="0 0 20 20" fill="none">
                   <path d="M10 4v12M4 10h12" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
                 </svg>
-                New Collection
+                {t("collections.newCollection")}
               </button>
             </div>
           </>

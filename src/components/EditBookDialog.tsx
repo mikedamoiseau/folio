@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
+import { useTranslation } from "react-i18next";
 import StarRating from "./StarRating";
 
 interface Tag {
@@ -52,6 +53,7 @@ export default function EditBookDialog({
   onClose,
   onSaved,
 }: EditBookDialogProps) {
+  const { t } = useTranslation();
   const [title, setTitle] = useState(initialTitle);
   const [author, setAuthor] = useState(initialAuthor);
   const [series, setSeries] = useState(initialSeries ?? "");
@@ -94,13 +96,13 @@ export default function EditBookDialog({
 
   const suggestions = tagInput.trim()
     ? allTags
-        .filter((t) => t.name.toLowerCase().includes(tagInput.toLowerCase()) && !bookTags.some((bt) => bt.id === t.id))
+        .filter((tg) => tg.name.toLowerCase().includes(tagInput.toLowerCase()) && !bookTags.some((bt) => bt.id === tg.id))
         .slice(0, 5)
     : [];
 
   const handleAddTag = async (name: string) => {
     const trimmed = name.trim().toLowerCase();
-    if (!trimmed || bookTags.some((t) => t.name.toLowerCase() === trimmed)) return;
+    if (!trimmed || bookTags.some((tg) => tg.name.toLowerCase() === trimmed)) return;
     try {
       await invoke("add_tag_to_book", { bookId, tagName: trimmed });
       setTagInput("");
@@ -212,12 +214,12 @@ export default function EditBookDialog({
           onClick={(e) => e.stopPropagation()}
         >
           <div className="px-5 py-4 border-b border-warm-border">
-            <h2 className="font-serif text-base font-semibold text-ink">Edit Book</h2>
+            <h2 className="font-serif text-base font-semibold text-ink">{t("editor.title")}</h2>
           </div>
 
           <div className="px-5 py-4 space-y-3 max-h-[60vh] overflow-y-auto">
             <div>
-              <label className="block text-xs font-medium text-ink-muted mb-1">Title</label>
+              <label className="block text-xs font-medium text-ink-muted mb-1">{t("editor.titleLabel")}</label>
               <input
                 type="text"
                 value={title}
@@ -226,7 +228,7 @@ export default function EditBookDialog({
               />
             </div>
             <div>
-              <label className="block text-xs font-medium text-ink-muted mb-1">Author</label>
+              <label className="block text-xs font-medium text-ink-muted mb-1">{t("editor.authorLabel")}</label>
               <input
                 type="text"
                 value={author}
@@ -238,23 +240,23 @@ export default function EditBookDialog({
             {/* Series & Volume - inline row */}
             <div className="flex gap-2">
               <div className="flex-1">
-                <label className="block text-xs font-medium text-ink-muted mb-1">Series</label>
+                <label className="block text-xs font-medium text-ink-muted mb-1">{t("editor.seriesLabel")}</label>
                 <input
                   type="text"
                   value={series}
                   onChange={(e) => setSeries(e.target.value)}
-                  placeholder="e.g. Aria"
+                  placeholder={t("editor.seriesPlaceholder")}
                   className="w-full text-sm bg-warm-subtle border border-warm-border rounded-lg px-3 py-2 text-ink placeholder-ink-muted/50 focus:outline-none focus:border-accent"
                 />
               </div>
               <div className="w-20">
-                <label className="block text-xs font-medium text-ink-muted mb-1">Vol.</label>
+                <label className="block text-xs font-medium text-ink-muted mb-1">{t("editor.volumeLabel")}</label>
                 <input
                   type="text"
                   inputMode="numeric"
                   value={volume}
                   onChange={(e) => setVolume(e.target.value.replace(/\D/g, ""))}
-                  placeholder="#"
+                  placeholder={t("editor.volumePlaceholder")}
                   className="w-full text-sm bg-warm-subtle border border-warm-border rounded-lg px-3 py-2 text-ink placeholder-ink-muted/50 focus:outline-none focus:border-accent"
                 />
               </div>
@@ -263,23 +265,23 @@ export default function EditBookDialog({
             {/* Language & Year - inline row */}
             <div className="flex gap-2">
               <div className="flex-1">
-                <label className="block text-xs font-medium text-ink-muted mb-1">Language</label>
+                <label className="block text-xs font-medium text-ink-muted mb-1">{t("editor.languageLabel")}</label>
                 <input
                   type="text"
                   value={language}
                   onChange={(e) => setLanguage(e.target.value)}
-                  placeholder="e.g. fr, en"
+                  placeholder={t("editor.languagePlaceholder")}
                   className="w-full text-sm bg-warm-subtle border border-warm-border rounded-lg px-3 py-2 text-ink placeholder-ink-muted/50 focus:outline-none focus:border-accent"
                 />
               </div>
               <div className="w-24">
-                <label className="block text-xs font-medium text-ink-muted mb-1">Year</label>
+                <label className="block text-xs font-medium text-ink-muted mb-1">{t("editor.yearLabel")}</label>
                 <input
                   type="text"
                   inputMode="numeric"
                   value={publishYear}
                   onChange={(e) => setPublishYear(e.target.value.replace(/\D/g, ""))}
-                  placeholder="2024"
+                  placeholder={t("editor.yearPlaceholder")}
                   className="w-full text-sm bg-warm-subtle border border-warm-border rounded-lg px-3 py-2 text-ink placeholder-ink-muted/50 focus:outline-none focus:border-accent"
                 />
               </div>
@@ -287,7 +289,7 @@ export default function EditBookDialog({
 
             {/* Publisher */}
             <div>
-              <label className="block text-xs font-medium text-ink-muted mb-1">Publisher</label>
+              <label className="block text-xs font-medium text-ink-muted mb-1">{t("editor.publisherLabel")}</label>
               <input
                 type="text"
                 value={publisher}
@@ -298,13 +300,13 @@ export default function EditBookDialog({
 
             {/* Rating */}
             <div>
-              <label className="block text-xs font-medium text-ink-muted mb-1">Rating</label>
+              <label className="block text-xs font-medium text-ink-muted mb-1">{t("editor.ratingLabel")}</label>
               <StarRating value={bookRating ?? 0} onChange={(v) => setBookRating(v)} />
             </div>
 
             {/* Tags */}
             <div>
-              <label className="block text-xs font-medium text-ink-muted mb-1">Tags</label>
+              <label className="block text-xs font-medium text-ink-muted mb-1">{t("editor.tagsLabel")}</label>
               <div className="flex flex-wrap gap-1.5 mb-2">
                 {bookTags.map((tag) => (
                   <span
@@ -316,7 +318,7 @@ export default function EditBookDialog({
                       type="button"
                       onClick={() => handleRemoveTag(tag.id)}
                       className="hover:text-accent-hover"
-                      aria-label={`Remove tag ${tag.name}`}
+                      aria-label={t("editor.removeTagLabel", { name: tag.name })}
                     >
                       <svg width="10" height="10" viewBox="0 0 20 20" fill="none">
                         <path d="M15 5L5 15M5 5l10 10" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" />
@@ -336,7 +338,7 @@ export default function EditBookDialog({
                       handleAddTag(tagInput);
                     }
                   }}
-                  placeholder="Add a tag…"
+                  placeholder={t("editor.addTagPlaceholder")}
                   className="w-full text-sm bg-warm-subtle border border-warm-border rounded-lg px-3 py-2 text-ink placeholder-ink-muted/50 focus:outline-none focus:border-accent"
                 />
                 {suggestions.length > 0 && (
@@ -362,12 +364,12 @@ export default function EditBookDialog({
               disabled={saving}
               className="w-full py-2 text-sm text-ink-muted bg-warm-subtle hover:bg-warm-border rounded-lg transition-colors border border-dashed border-warm-border"
             >
-              Change cover image…
+              {t("editor.changeCover")}
             </button>
 
             {/* OpenLibrary enrichment */}
             <div>
-              <label className="block text-xs font-medium text-ink-muted mb-1">Metadata from OpenLibrary</label>
+              <label className="block text-xs font-medium text-ink-muted mb-1">{t("editor.metadataFromOL")}</label>
               {olEnriched && bookDescription ? (
                 <div className="space-y-2">
                   <p className="text-xs text-ink leading-relaxed line-clamp-4">{bookDescription}</p>
@@ -379,7 +381,7 @@ export default function EditBookDialog({
                     </div>
                   )}
                   {bookRating != null && (
-                    <p className="text-xs text-ink-muted">Rating: {bookRating.toFixed(1)} / 5</p>
+                    <p className="text-xs text-ink-muted">{t("editor.ratingDisplay", { rating: bookRating.toFixed(1) })}</p>
                   )}
                 </div>
               ) : olResults.length > 0 ? (
@@ -412,7 +414,7 @@ export default function EditBookDialog({
                   disabled={olSearching || saving}
                   className="w-full py-2 text-sm text-ink-muted bg-warm-subtle hover:bg-warm-border rounded-lg transition-colors border border-dashed border-warm-border disabled:opacity-40"
                 >
-                  {olSearching ? "Searching…" : "Look up on OpenLibrary"}
+                  {olSearching ? t("editor.searchingOL") : t("editor.lookUpOL")}
                 </button>
               )}
             </div>
@@ -428,7 +430,7 @@ export default function EditBookDialog({
               onClick={onClose}
               className="flex-1 py-2 text-sm text-ink-muted bg-warm-subtle hover:bg-warm-border rounded-lg transition-colors"
             >
-              Cancel
+              {t("common.cancel")}
             </button>
             <button
               type="button"
@@ -436,7 +438,7 @@ export default function EditBookDialog({
               disabled={saving || (!title.trim())}
               className="flex-1 py-2 text-sm font-medium text-white bg-accent hover:bg-accent-hover rounded-lg transition-colors disabled:opacity-40"
             >
-              {saving ? "Saving…" : "Save"}
+              {saving ? t("common.saving") : t("common.save")}
             </button>
           </div>
         </div>

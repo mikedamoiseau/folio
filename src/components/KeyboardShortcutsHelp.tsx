@@ -1,29 +1,9 @@
+import { useTranslation } from "react-i18next";
+
 interface ShortcutGroup {
   title: string;
   shortcuts: { keys: string; description: string }[];
 }
-
-const LIBRARY_SHORTCUTS: ShortcutGroup = {
-  title: "Library",
-  shortcuts: [
-    { keys: "/", description: "Focus search" },
-    { keys: "Escape", description: "Clear search / close panels" },
-    { keys: "c", description: "Toggle collections sidebar" },
-    { keys: "?", description: "Toggle this help" },
-  ],
-};
-
-const READER_SHORTCUTS: ShortcutGroup = {
-  title: "Reader",
-  shortcuts: [
-    { keys: "\u2190 / \u2192", description: "Previous / Next chapter" },
-    { keys: "t", description: "Toggle table of contents" },
-    { keys: "b", description: "Add bookmark" },
-    { keys: "d", description: "Toggle focus mode" },
-    { keys: "Escape", description: "Close panels / Exit focus / Back to library" },
-    { keys: "?", description: "Toggle this help" },
-  ],
-};
 
 interface KeyboardShortcutsHelpProps {
   context: "library" | "reader";
@@ -31,9 +11,33 @@ interface KeyboardShortcutsHelpProps {
 }
 
 export default function KeyboardShortcutsHelp({ context, onClose }: KeyboardShortcutsHelpProps) {
+  const { t } = useTranslation();
+
+  const libraryShortcuts: ShortcutGroup = {
+    title: t("shortcuts.libraryGroup"),
+    shortcuts: [
+      { keys: "/", description: t("shortcuts.focusSearch") },
+      { keys: "Escape", description: t("shortcuts.clearClose") },
+      { keys: "c", description: t("shortcuts.toggleCollections") },
+      { keys: "?", description: t("shortcuts.toggleHelp") },
+    ],
+  };
+
+  const readerShortcuts: ShortcutGroup = {
+    title: t("shortcuts.readerGroup"),
+    shortcuts: [
+      { keys: "\u2190 / \u2192", description: t("shortcuts.prevNextChapter") },
+      { keys: "t", description: t("shortcuts.toggleToc") },
+      { keys: "b", description: t("shortcuts.addBookmark") },
+      { keys: "d", description: t("shortcuts.toggleFocus") },
+      { keys: "Escape", description: t("shortcuts.closeExit") },
+      { keys: "?", description: t("shortcuts.toggleHelp") },
+    ],
+  };
+
   const groups = context === "library"
-    ? [LIBRARY_SHORTCUTS, READER_SHORTCUTS]
-    : [READER_SHORTCUTS, LIBRARY_SHORTCUTS];
+    ? [libraryShortcuts, readerShortcuts]
+    : [readerShortcuts, libraryShortcuts];
 
   return (
     <>
@@ -41,11 +45,11 @@ export default function KeyboardShortcutsHelp({ context, onClose }: KeyboardShor
       <div className="fixed inset-0 z-50 flex items-center justify-center p-4 pointer-events-none">
         <div className="bg-surface rounded-2xl shadow-xl border border-warm-border w-full max-w-md pointer-events-auto animate-fade-in max-h-[80vh] overflow-y-auto">
           <div className="px-5 py-4 border-b border-warm-border flex items-center justify-between">
-            <h2 className="font-serif text-base font-semibold text-ink">Keyboard Shortcuts</h2>
+            <h2 className="font-serif text-base font-semibold text-ink">{t("shortcuts.title")}</h2>
             <button
               onClick={onClose}
               className="p-1 text-ink-muted hover:text-ink transition-colors rounded"
-              aria-label="Close"
+              aria-label={t("common.close")}
             >
               <svg width="18" height="18" viewBox="0 0 20 20" fill="none">
                 <path d="M15 5L5 15M5 5l10 10" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
