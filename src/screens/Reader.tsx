@@ -154,7 +154,7 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
         }
       } catch (err) {
         if (!cancelled) {
-          setError(friendlyError(String(err)));
+          setError(friendlyError(String(err), t));
         }
       } finally {
         if (!cancelled) {
@@ -197,7 +197,7 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
           setAllChaptersLoaded(true);
         }
       } catch (err) {
-        if (!cancelled) setChapterError(friendlyError(String(err)));
+        if (!cancelled) setChapterError(friendlyError(String(err), t));
       }
     }
 
@@ -281,7 +281,7 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
         }
       } catch (err) {
         if (!cancelled) {
-          setChapterError(friendlyError(String(err)));
+          setChapterError(friendlyError(String(err), t));
         }
       }
     }

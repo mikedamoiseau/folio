@@ -116,7 +116,7 @@ export default function Library() {
       setProgressMap(Object.fromEntries(progData.map((d) => [d.id, d.pct])));
       setLastReadMap(Object.fromEntries(progData.map((d) => [d.id, d.lastRead])));
     } catch (err) {
-      setError(friendlyError(String(err)));
+      setError(friendlyError(String(err), t));
     } finally {
       setLoaded(true);
     }
@@ -182,7 +182,7 @@ export default function Library() {
         await invoke("remove_book", { bookId });
         await loadBooks(activeCollectionIdRef.current);
       } catch (err) {
-        setError(friendlyError(String(err)));
+        setError(friendlyError(String(err), t));
       }
     },
     [loadBooks]
@@ -206,7 +206,7 @@ export default function Library() {
           if (msg.includes("duplicate") || msg.includes("already")) {
             results.duplicates++;
           } else {
-            results.errors.push(`${paths[i].split("/").pop()}: ${friendlyError(msg)}`);
+            results.errors.push(`${paths[i].split("/").pop()}: ${friendlyError(msg, t)}`);
           }
         }
       }
@@ -253,7 +253,7 @@ export default function Library() {
       }
       await importFiles(files);
     } catch (err) {
-      setError(friendlyError(String(err)));
+      setError(friendlyError(String(err), t));
       setImporting(false);
     }
   }, [importFiles]);
@@ -276,7 +276,7 @@ export default function Library() {
       const paths = Array.isArray(selected) ? selected : [selected];
       await importFiles(paths);
     } catch (err) {
-      setError(friendlyError(String(err)));
+      setError(friendlyError(String(err), t));
     }
   }, [importFiles]);
 
@@ -287,7 +287,7 @@ export default function Library() {
       await invoke("download_opds_book", { downloadUrl: url });
       await loadBooks(activeCollectionIdRef.current);
     } catch (err) {
-      setError(friendlyError(String(err)));
+      setError(friendlyError(String(err), t));
     } finally {
       setImporting(false);
     }
@@ -432,7 +432,7 @@ export default function Library() {
   }, [loadBooks]);
 
   const handleStartScan = useCallback(async () => {
-    try { await invoke("start_scan"); } catch (err) { setError(friendlyError(String(err))); }
+    try { await invoke("start_scan"); } catch (err) { setError(friendlyError(String(err), t)); }
   }, []);
   const handleCancelScan = useCallback(async () => {
     try { await invoke("cancel_scan"); } catch {}
@@ -774,7 +774,7 @@ export default function Library() {
                                 await loadBooks(activeCollectionIdRef.current);
                                 setDiscoverBooks((prev) => prev.filter((e) => e.id !== entry.id));
                               } catch (err) {
-                                setError(friendlyError(String(err)));
+                                setError(friendlyError(String(err), t));
                               }
                             }}
                             className="mt-1 text-[10px] font-medium text-accent hover:text-accent-hover transition-colors"
@@ -1152,7 +1152,7 @@ export default function Library() {
             const updated = await invoke<Collection[]>("get_collections");
             setCollections(updated);
           } catch (err) {
-            setError(friendlyError(String(err)));
+            setError(friendlyError(String(err), t));
           }
         }}
         onEdit={async (id: string, data: CreateCollectionData) => {
@@ -1171,7 +1171,7 @@ export default function Library() {
               await loadBooks(id);
             }
           } catch (err) {
-            setError(friendlyError(String(err)));
+            setError(friendlyError(String(err), t));
           }
         }}
         onDelete={async (id: string) => {
@@ -1181,7 +1181,7 @@ export default function Library() {
             setCollections(updated);
             if (activeCollectionIdRef.current === id) setActiveCollectionId(null);
           } catch (err) {
-            setError(friendlyError(String(err)));
+            setError(friendlyError(String(err), t));
           }
         }}
         onDropBook={async (bookId: string, collectionId: string) => {
@@ -1191,7 +1191,7 @@ export default function Library() {
               await loadBooks(collectionId);
             }
           } catch (err) {
-            setError(friendlyError(String(err)));
+            setError(friendlyError(String(err), t));
           }
         }}
       />
