@@ -2427,16 +2427,34 @@ pub async fn run_backup(state: State<'_, AppState>) -> Result<crate::backup::Syn
         let _ = tx.send(crate::backup::run_incremental_backup(&op, &conn));
     });
     let result = rx.recv().map_err(|e| format!("Thread error: {e}"))?;
-    if result.is_ok() {
-        let log_conn = state.active_db()?.get().map_err(|e| e.to_string())?;
-        log_activity(
-            &log_conn,
-            "backup_completed",
-            "library",
-            None,
-            None,
-            Some(&format!("Provider: {:?}", provider_name)),
-        );
+    let log_conn = state.active_db()?.get().map_err(|e| e.to_string())?;
+    match &result {
+        Ok(sync_result) => {
+            log_activity(
+                &log_conn,
+                "backup_completed",
+                "library",
+                None,
+                None,
+                Some(&format!(
+                    "Provider: {:?} — {} books, {} bookmarks, {} highlights pushed",
+                    provider_name,
+                    sync_result.books_pushed,
+                    sync_result.bookmarks_pushed,
+                    sync_result.highlights_pushed,
+                )),
+            );
+        }
+        Err(e) => {
+            log_activity(
+                &log_conn,
+                "backup_failed",
+                "library",
+                None,
+                None,
+                Some(&format!("Provider: {:?} — {}", provider_name, e)),
+            );
+        }
     }
     result
 }
