@@ -38,7 +38,7 @@ dirs = "5"
 sha2 = "0.10"
 unrar = "0.5"
 reqwest = { version = "0.12", features = ["blocking", "json"] }
-opendal = { version = "0.55", features = ["services-s3", "services-fs", "services-ftp", "services-webdav", "blocking"] }
+opendal = { version = "0.55", features = ["services-s3", "services-fs", "services-ftp", "services-sftp", "services-webdav", "blocking"] }
 tokio = { version = "1", features = ["rt", "rt-multi-thread"] }
 keyring = "3"
 regex = "1"

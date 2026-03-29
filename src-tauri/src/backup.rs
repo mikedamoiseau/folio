@@ -9,6 +9,7 @@ pub fn secret_keys(provider_type: &ProviderType) -> Vec<&'static str> {
     match provider_type {
         ProviderType::S3 => vec!["access_key_id", "secret_access_key"],
         ProviderType::Ftp => vec!["password"],
+        ProviderType::Sftp => vec![],
         ProviderType::Webdav => vec!["password"],
         ProviderType::Fs => vec![],
     }
@@ -54,6 +55,7 @@ pub fn load_secrets(config: &mut BackupConfig) {
 pub enum ProviderType {
     S3,
     Ftp,
+    Sftp,
     Webdav,
     Fs,
 }
@@ -164,6 +166,40 @@ pub fn provider_schemas() -> Vec<ProviderInfo> {
                     field_type: "text".into(),
                     required: false,
                     placeholder: "/folio-backup".into(),
+                },
+            ],
+        },
+        ProviderInfo {
+            provider_type: ProviderType::Sftp,
+            label: "SFTP (SSH)".to_string(),
+            fields: vec![
+                ConfigField {
+                    key: "endpoint".into(),
+                    label: "Server".into(),
+                    field_type: "text".into(),
+                    required: true,
+                    placeholder: "sftp.example.com:22".into(),
+                },
+                ConfigField {
+                    key: "user".into(),
+                    label: "Username".into(),
+                    field_type: "text".into(),
+                    required: true,
+                    placeholder: "".into(),
+                },
+                ConfigField {
+                    key: "key".into(),
+                    label: "SSH private key path".into(),
+                    field_type: "text".into(),
+                    required: false,
+                    placeholder: "~/.ssh/id_rsa".into(),
+                },
+                ConfigField {
+                    key: "root".into(),
+                    label: "Remote path".into(),
+                    field_type: "text".into(),
+                    required: false,
+                    placeholder: "/home/user/folio-backup".into(),
                 },
             ],
         },
@@ -282,6 +318,30 @@ pub fn build_operator(config: &BackupConfig) -> Result<Operator, String> {
             let async_op = opendal::Operator::new(builder)
                 .map(|b| b.finish())
                 .map_err(|e| format!("Failed to create FTP operator: {e}"))?;
+            make_blocking(async_op)
+        }
+        ProviderType::Sftp => {
+            let mut builder = opendal::services::Sftp::default();
+            if let Some(v) = config.values.get("endpoint") {
+                builder = builder.endpoint(v);
+            }
+            if let Some(v) = config.values.get("user") {
+                builder = builder.user(v);
+            }
+            if let Some(v) = config.values.get("key") {
+                if !v.is_empty() {
+                    builder = builder.key(v);
+                }
+            }
+            if let Some(v) = config.values.get("root") {
+                if !v.is_empty() {
+                    builder = builder.root(v);
+                }
+            }
+            builder = builder.known_hosts_strategy("accept");
+            let async_op = opendal::Operator::new(builder)
+                .map(|b| b.finish())
+                .map_err(|e| format!("Failed to create SFTP operator: {e}"))?;
             make_blocking(async_op)
         }
         ProviderType::Webdav => {
@@ -579,12 +639,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn provider_schemas_returns_three_providers() {
+    fn provider_schemas_returns_all_providers() {
         let schemas = provider_schemas();
-        assert_eq!(schemas.len(), 3);
+        assert_eq!(schemas.len(), 4);
         assert_eq!(schemas[0].provider_type, ProviderType::S3);
         assert_eq!(schemas[1].provider_type, ProviderType::Ftp);
-        assert_eq!(schemas[2].provider_type, ProviderType::Webdav);
+        assert_eq!(schemas[2].provider_type, ProviderType::Sftp);
+        assert_eq!(schemas[3].provider_type, ProviderType::Webdav);
     }
 
     #[test]
