@@ -5,6 +5,7 @@ import SettingsPanel from "./components/SettingsPanel";
 import ReadingStats from "./components/ReadingStats";
 import ProfileSwitcher from "./components/ProfileSwitcher";
 import CatalogBrowser from "./components/CatalogBrowser";
+import LanguageSwitcher from "./components/LanguageSwitcher";
 import Library from "./screens/Library";
 import Reader from "./screens/Reader";
 
@@ -54,6 +55,7 @@ function AppShell() {
               <path d="M12 6.042A8.967 8.967 0 006 3.75c-1.052 0-2.062.18-3 .512v14.25A8.987 8.987 0 016 18c2.305 0 4.408.867 6 2.292m0-14.25a8.966 8.966 0 016-2.292c1.052 0 2.062.18 3 .512v14.25A8.987 8.987 0 0018 18a8.967 8.967 0 00-6 2.292m0-14.25v14.25" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
             </svg>
           </button>
+          <LanguageSwitcher />
           <button
             onClick={() => setSettingsOpen(true)}
             className="p-2 text-ink-muted hover:text-ink transition-colors duration-150 rounded-lg hover:bg-warm-subtle"

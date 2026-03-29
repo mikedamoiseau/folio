@@ -7,6 +7,7 @@ import KeyboardShortcutsHelp from "../components/KeyboardShortcutsHelp";
 import HighlightsPanel, { HIGHLIGHT_COLORS } from "../components/HighlightsPanel";
 import BookmarksPanel from "../components/BookmarksPanel";
 import BookmarkToast from "../components/BookmarkToast";
+import LanguageSwitcher from "../components/LanguageSwitcher";
 import { friendlyError } from "../lib/errors";
 
 // ---- Types matching Rust backend ----
@@ -1124,6 +1125,9 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
               <path d="M12 8v4l2.5 2.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
             </svg>
           </button>
+
+          {/* Language switcher */}
+          <LanguageSwitcher />
 
           {/* Settings button */}
           <button
