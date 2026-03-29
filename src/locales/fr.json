@@ -264,7 +264,8 @@
     "cardLabel": "Carte",
     "mutedText": "Texte att\u00e9nu\u00e9",
     "border": "Bordure",
-    "subtleFill": "Remplissage subtil"
+    "subtleFill": "Remplissage subtil",
+    "fontSize": "Taille de police"
   },
 
   "collections": {

@@ -264,7 +264,8 @@
     "cardLabel": "Card",
     "mutedText": "Muted text",
     "border": "Border",
-    "subtleFill": "Subtle fill"
+    "subtleFill": "Subtle fill",
+    "fontSize": "Font size"
   },
 
   "collections": {

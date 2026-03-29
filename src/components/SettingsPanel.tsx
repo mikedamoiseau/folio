@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, useCallback, type ReactNode } from "react"
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open as openFilePicker } from "@tauri-apps/plugin-dialog";
+import { useTranslation } from "react-i18next";
 import { useTheme, MIN_FONT_SIZE, MAX_FONT_SIZE, type ColorTokens } from "../context/ThemeContext";
 import {
   SEPIA_TOKENS,
@@ -40,24 +41,24 @@ function Accordion({ title, children, defaultOpen = false }: { title: string; ch
 // ── Custom color theme editor ───────────────────────────────
 
 const TOKEN_GROUPS: Array<{
-  label: string;
-  tokens: Array<{ key: keyof ColorTokens; label: string }>;
+  labelKey: string;
+  tokens: Array<{ key: keyof ColorTokens; labelKey: string }>;
 }> = [
   {
-    label: "Accent",
+    labelKey: "settings.accent",
     tokens: [
-      { key: "accent", label: "Accent" },
-      { key: "accent-hover", label: "Hover" },
-      { key: "accent-light", label: "Light bg" },
+      { key: "accent", labelKey: "settings.accent" },
+      { key: "accent-hover", labelKey: "settings.accentHover" },
+      { key: "accent-light", labelKey: "settings.accentLight" },
     ],
   },
   {
-    label: "Surface",
+    labelKey: "settings.surface",
     tokens: [
-      { key: "surface", label: "Card" },
-      { key: "ink-muted", label: "Muted text" },
-      { key: "warm-border", label: "Border" },
-      { key: "warm-subtle", label: "Subtle fill" },
+      { key: "surface", labelKey: "settings.cardLabel" },
+      { key: "ink-muted", labelKey: "settings.mutedText" },
+      { key: "warm-border", labelKey: "settings.border" },
+      { key: "warm-subtle", labelKey: "settings.subtleFill" },
     ],
   },
 ];
@@ -69,6 +70,7 @@ function CustomColorEditor({
   customColors: ColorTokens;
   setCustomColors: (c: ColorTokens) => void;
 }) {
+  const { t } = useTranslation();
   const [showAdvanced, setShowAdvanced] = useState(false);
 
   const updateColor = (key: keyof ColorTokens, value: string) => {
@@ -87,12 +89,12 @@ function CustomColorEditor({
       {/* Primary pickers: Background + Text */}
       <div className="flex gap-3">
         <ColorInput
-          label="Background"
+          label={t("settings.background")}
           value={customColors.paper}
           onChange={(v) => updateBaseAndDerive("paper", v)}
         />
         <ColorInput
-          label="Text"
+          label={t("settings.text")}
           value={customColors.ink}
           onChange={(v) => updateBaseAndDerive("ink", v)}
         />
@@ -103,7 +105,7 @@ function CustomColorEditor({
         className="rounded-lg px-3 py-2 text-sm leading-relaxed"
         style={{ backgroundColor: customColors.paper, color: customColors.ink }}
       >
-        The quick brown fox jumps over the lazy dog.
+        {t("settings.fontPreview")}
       </div>
 
       {/* Advanced toggle */}
@@ -112,20 +114,20 @@ function CustomColorEditor({
         onClick={() => setShowAdvanced(!showAdvanced)}
         className="text-xs text-ink-muted hover:text-ink transition-colors"
       >
-        {showAdvanced ? "Hide" : "Show"} advanced colors
+        {showAdvanced ? t("settings.hideAdvanced") : t("settings.showAdvanced")}
       </button>
 
       {/* Advanced token grid */}
       {showAdvanced && (
         <div className="space-y-3">
           {TOKEN_GROUPS.map((group) => (
-            <div key={group.label}>
-              <p className="text-xs text-ink-muted mb-1.5">{group.label}</p>
+            <div key={group.labelKey}>
+              <p className="text-xs text-ink-muted mb-1.5">{t(group.labelKey)}</p>
               <div className="flex flex-wrap gap-2">
-                {group.tokens.map(({ key, label }) => (
+                {group.tokens.map(({ key, labelKey }) => (
                   <ColorInput
                     key={key}
-                    label={label}
+                    label={t(labelKey)}
                     value={customColors[key]}
                     onChange={(v) => updateColor(key, v)}
                     compact
@@ -144,14 +146,14 @@ function CustomColorEditor({
           onClick={() => setCustomColors({ ...SEPIA_TOKENS })}
           className="flex-1 px-2 py-1.5 text-xs rounded-lg border border-warm-border text-ink-muted hover:text-ink hover:border-ink-muted transition-colors"
         >
-          Reset to sepia
+          {t("settings.resetToSepia")}
         </button>
         <button
           type="button"
           onClick={() => setCustomColors({ ...LIGHT_TOKENS })}
           className="flex-1 px-2 py-1.5 text-xs rounded-lg border border-warm-border text-ink-muted hover:text-ink hover:border-ink-muted transition-colors"
         >
-          Reset to light
+          {t("settings.resetToLight")}
         </button>
       </div>
     </div>
@@ -260,6 +262,7 @@ function formatBytes(bytes: number): string {
 }
 
 export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
+  const { t } = useTranslation();
   const { mode, setMode, customColors, setCustomColors, fontSize, setFontSize, fontFamily, setFontFamily, scrollMode, setScrollMode, typography, setTypography, customCss, setCustomCss, dualPage, setDualPage, mangaMode, setMangaMode } =
     useTheme();
   const panelRef = useRef<HTMLDivElement>(null);
@@ -520,9 +523,9 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
       const folder = typeof dest === "string" ? dest : dest[0];
       const path = `${folder}/folio-backup-${new Date().toISOString().slice(0, 10)}.zip`;
       await invoke("export_library", { destPath: path, includeFiles });
-      setBackupMessage(`Exported to ${path}`);
+      setBackupMessage(t("settings.exportedTo", { path }));
     } catch (err) {
-      setBackupMessage(`Export failed: ${err}`);
+      setBackupMessage(t("settings.exportFailed", { error: String(err) }));
     } finally {
       setExporting(false);
     }
@@ -539,9 +542,9 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
       setBackupMessage(null);
       const path = typeof selected === "string" ? selected : selected[0];
       const count = await invoke<number>("import_library_backup", { archivePath: path });
-      setBackupMessage(`Imported ${count} books from backup.`);
+      setBackupMessage(t("settings.importedBooks", { count }));
     } catch (err) {
-      setBackupMessage(`Import failed: ${err}`);
+      setBackupMessage(t("settings.importFailed", { error: String(err) }));
     } finally {
       setExporting(false);
     }
@@ -576,9 +579,9 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
       };
       await invoke("save_backup_config", { config });
       setSavedBackupConfig(config);
-      setRemoteBackupMessage("Configuration saved.");
+      setRemoteBackupMessage(t("settings.configSaved"));
     } catch (err) {
-      setRemoteBackupMessage(`Save failed: ${err}`);
+      setRemoteBackupMessage(t("settings.saveFailed", { error: String(err) }));
     } finally {
       setSavingBackupConfig(false);
     }
@@ -587,7 +590,7 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
   const handleRunBackup = async () => {
     setRunningBackup(true);
     setRemoteBackupMessage(null);
-    setBackupProgressText("Starting...");
+    setBackupProgressText(t("settings.starting"));
     const unlisten = await listen<{ step: string; current: number; total: number }>("backup-progress", (event) => {
       const { step, current, total } = event.payload;
       if (total > 0) {
@@ -606,12 +609,12 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
       if (result.collectionsPushed > 0) parts.push(`${result.collectionsPushed} collections`);
       if (result.filesPushed > 0) parts.push(`${result.filesPushed} files`);
       const summary =
-        parts.length > 0 ? `Backed up: ${parts.join(", ")}.` : "Everything already up to date.";
+        parts.length > 0 ? t("settings.backedUp", { details: parts.join(", ") }) : t("settings.alreadyUpToDate");
       setRemoteBackupMessage(summary);
       const status = await invoke<SyncManifest | null>("get_backup_status");
       setBackupStatus(status);
     } catch (err) {
-      setRemoteBackupMessage(`Backup failed: ${err}`);
+      setRemoteBackupMessage(t("settings.backupFailed", { error: String(err) }));
     } finally {
       unlisten();
       setRunningBackup(false);
@@ -634,7 +637,7 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
       <div
         ref={panelRef}
         role="dialog"
-        aria-label="Reading settings"
+        aria-label={t("settings.title")}
         aria-modal="true"
         tabIndex={-1}
         className="fixed right-0 top-0 bottom-0 w-80 max-w-[90vw] bg-surface border-l border-warm-border z-50 flex flex-col shadow-[-4px_0_24px_-4px_rgba(44,34,24,0.12)] outline-none animate-slide-in-right"
@@ -642,12 +645,12 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
         {/* Header */}
         <div className="px-5 py-4 border-b border-warm-border flex items-center justify-between">
           <h2 className="font-serif text-base font-semibold text-ink">
-            Settings
+            {t("settings.title")}
           </h2>
           <button
             onClick={onClose}
             className="p-1 text-ink-muted hover:text-ink transition-colors rounded focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2"
-            aria-label="Close settings"
+            aria-label={t("settings.closeLabel")}
           >
             <svg width="18" height="18" viewBox="0 0 20 20" fill="none">
               <path d="M15 5L5 15M5 5l10 10" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
@@ -658,7 +661,7 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
         {/* Settings content */}
         <div className="flex-1 overflow-y-auto p-5 space-y-7">
           {/* Theme */}
-          <Accordion title="Appearance" defaultOpen>
+          <Accordion title={t("settings.appearance")} defaultOpen>
             <div className="space-y-3">
               {/* Preset mode buttons */}
               <div className="flex gap-1 bg-warm-subtle rounded-xl p-1">
@@ -673,7 +676,7 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                         : "text-ink-muted hover:text-ink"
                     }`}
                   >
-                    {option === "system" ? "Auto" : option}
+                    {option === "system" ? t("settings.auto") : option === "light" ? t("settings.light") : option === "sepia" ? t("settings.sepia") : t("settings.dark")}
                   </button>
                 ))}
               </div>
@@ -688,7 +691,7 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                     : "border-warm-border text-ink-muted hover:text-ink hover:border-ink-muted"
                 }`}
               >
-                Custom colors
+                {t("settings.customColors")}
               </button>
 
               {/* Custom color editor */}
@@ -702,7 +705,7 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
 
             {/* Custom CSS */}
             <div className="mt-4 pt-4 border-t border-warm-border/50 space-y-2">
-              <label className="text-xs font-medium text-ink-muted mb-1 block">Custom CSS</label>
+              <label className="text-xs font-medium text-ink-muted mb-1 block">{t("settings.customCss")}</label>
               <textarea
                 value={customCss}
                 onChange={(e) => setCustomCss(e.target.value)}
@@ -710,29 +713,27 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                 className="w-full h-28 text-xs font-mono bg-warm-subtle border border-warm-border rounded-lg px-3 py-2 text-ink placeholder-ink-muted/40 focus:outline-none focus:border-accent resize-y"
                 spellCheck={false}
               />
-              <p className="text-[11px] text-ink-muted leading-relaxed">
-                Applied as a global stylesheet while reading EPUBs. Target <code className="bg-warm-subtle px-1 rounded">.reader-content</code> and its children.
-              </p>
+              <p className="text-[11px] text-ink-muted leading-relaxed" dangerouslySetInnerHTML={{ __html: t("settings.customCssHint") }} />
               {customCss && (
                 <button
                   type="button"
                   onClick={() => setCustomCss("")}
                   className="text-xs text-ink-muted hover:text-ink transition-colors"
                 >
-                  Clear custom CSS
+                  {t("settings.clearCustomCss")}
                 </button>
               )}
             </div>
           </Accordion>
 
           {/* Text & Typography */}
-          <Accordion title="Text & Typography" defaultOpen>
+          <Accordion title={t("settings.textTypography")} defaultOpen>
             <div className="flex items-center gap-3">
               <button
                 onClick={() => setFontSize(fontSize - 1)}
                 disabled={fontSize <= MIN_FONT_SIZE}
                 className="w-8 h-8 flex items-center justify-center rounded-lg bg-warm-subtle text-ink-muted hover:text-ink hover:bg-warm-border transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-sm font-medium focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2"
-                aria-label="Decrease font size"
+                aria-label={t("reader.decreaseFontSize")}
               >
                 −
               </button>
@@ -744,7 +745,7 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                   value={fontSize}
                   onChange={(e) => setFontSize(Number(e.target.value))}
                   className="w-full accent-accent"
-                  aria-label="Font size"
+                  aria-label={t("settings.fontSize")}
                   aria-valuetext={`${fontSize} pixels`}
                 />
                 <span className="text-xs text-ink-muted tabular-nums">
@@ -755,7 +756,7 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                 onClick={() => setFontSize(fontSize + 1)}
                 disabled={fontSize >= MAX_FONT_SIZE}
                 className="w-8 h-8 flex items-center justify-center rounded-lg bg-warm-subtle text-ink-muted hover:text-ink hover:bg-warm-border transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-sm font-medium focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2"
-                aria-label="Increase font size"
+                aria-label={t("reader.increaseFontSize")}
               >
                 +
               </button>
@@ -763,7 +764,7 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
 
             {/* Reading font */}
             <div className="mt-4 pt-4 border-t border-warm-border/50">
-            <label className="text-xs font-medium text-ink-muted mb-2 block">Reading font</label>
+            <label className="text-xs font-medium text-ink-muted mb-2 block">{t("settings.readingFont")}</label>
             <div className="flex flex-col gap-1">
               {/* Built-in fonts */}
               {([
@@ -810,20 +811,20 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                         onClick={(e) => { e.stopPropagation(); handleDeleteFont(font.id); }}
                         className="text-[10px] px-1.5 py-0.5 bg-accent text-white rounded hover:bg-accent-hover transition-colors"
                       >
-                        Delete
+                        {t("common.delete")}
                       </button>
                       <button
                         onClick={(e) => { e.stopPropagation(); setDeletingFontId(null); }}
                         className="text-[10px] px-1.5 py-0.5 text-ink-muted hover:text-ink transition-colors"
                       >
-                        Cancel
+                        {t("common.cancel")}
                       </button>
                     </span>
                   ) : (
                     <button
                       onClick={(e) => { e.stopPropagation(); setDeletingFontId(font.id); }}
                       className="opacity-0 group-hover:opacity-100 p-0.5 text-ink-muted hover:text-red-500 transition-all shrink-0"
-                      aria-label={`Remove ${font.name}`}
+                      aria-label={t("common.remove") + " " + font.name}
                     >
                       <svg width="12" height="12" viewBox="0 0 20 20" fill="none">
                         <path d="M15 5L5 15M5 5l10 10" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
@@ -842,10 +843,10 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                 <svg width="14" height="14" viewBox="0 0 20 20" fill="none">
                   <path d="M10 4v12M4 10h12" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
                 </svg>
-                Add font...
+                {t("settings.addFont")}
               </button>
               <p className="px-3 text-[10px] text-ink-muted/60">
-                Adding many fonts may slow down the app
+                {t("settings.addFontWarning")}
               </p>
             </div>
 
@@ -865,7 +866,7 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                           : '"DM Sans Variable", system-ui, sans-serif',
               }}
             >
-              The quick brown fox jumps over the lazy dog.
+              {t("settings.fontPreview")}
             </p>
             </div>
 
@@ -875,7 +876,7 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
               {/* Line height */}
               <div>
                 <div className="flex items-center justify-between mb-1">
-                  <label className="text-xs font-medium text-ink-muted">Line height</label>
+                  <label className="text-xs font-medium text-ink-muted">{t("settings.lineHeight")}</label>
                   <span className="text-xs text-ink-muted tabular-nums">{typography.lineHeight.toFixed(1)}</span>
                 </div>
                 <input
@@ -892,7 +893,7 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
               {/* Page margins */}
               <div>
                 <div className="flex items-center justify-between mb-1">
-                  <label className="text-xs font-medium text-ink-muted">Page margins</label>
+                  <label className="text-xs font-medium text-ink-muted">{t("settings.pageMargins")}</label>
                   <span className="text-xs text-ink-muted tabular-nums">{typography.pageMargins}px</span>
                 </div>
                 <input
@@ -909,7 +910,7 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
               {/* Paragraph spacing */}
               <div>
                 <div className="flex items-center justify-between mb-1">
-                  <label className="text-xs font-medium text-ink-muted">Paragraph spacing</label>
+                  <label className="text-xs font-medium text-ink-muted">{t("settings.paragraphSpacing")}</label>
                   <span className="text-xs text-ink-muted tabular-nums">{typography.paragraphSpacing.toFixed(1)}em</span>
                 </div>
                 <input
@@ -925,7 +926,7 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
 
               {/* Text alignment */}
               <div>
-                <label className="text-xs font-medium text-ink-muted mb-1 block">Text alignment</label>
+                <label className="text-xs font-medium text-ink-muted mb-1 block">{t("settings.textAlignment")}</label>
                 <div className="flex gap-1 bg-warm-subtle rounded-xl p-1">
                   {(["left", "justify"] as const).map((option) => (
                     <button
@@ -938,7 +939,7 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                           : "text-ink-muted hover:text-ink"
                       }`}
                     >
-                      {option === "left" ? "Left" : "Justify"}
+                      {option === "left" ? t("settings.left") : t("settings.justify")}
                     </button>
                   ))}
                 </div>
@@ -947,7 +948,7 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
               {/* Hyphenation */}
               <div>
                 <label className="flex items-center justify-between cursor-pointer">
-                  <span className="text-xs font-medium text-ink-muted">Hyphenation</span>
+                  <span className="text-xs font-medium text-ink-muted">{t("settings.hyphenation")}</span>
                   <button
                     type="button"
                     onClick={() => setTypography({ ...typography, hyphenation: !typography.hyphenation })}
@@ -956,14 +957,14 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                     <span className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform duration-200 ${typography.hyphenation ? "translate-x-4" : ""}`} />
                   </button>
                 </label>
-                <p className="text-[11px] text-ink-muted/60 mt-1">Automatically break long words at line endings for a tidier text block.</p>
+                <p className="text-[11px] text-ink-muted/60 mt-1">{t("settings.hyphenationHint")}</p>
               </div>
             </div>
             </div>
           </Accordion>
 
           {/* Page Layout */}
-          <Accordion title="Page Layout" defaultOpen>
+          <Accordion title={t("settings.pageLayout")} defaultOpen>
             <div className="flex gap-1 bg-warm-subtle rounded-xl p-1">
               {(["paginated", "continuous"] as const).map((option) => (
                 <button
@@ -976,22 +977,22 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                       : "text-ink-muted hover:text-ink"
                   }`}
                 >
-                  {option === "paginated" ? "Paginated" : "Continuous"}
+                  {option === "paginated" ? t("settings.paginated") : t("settings.continuous")}
                 </button>
               ))}
             </div>
             <p className="mt-2 text-xs text-ink-muted">
               {scrollMode === "continuous"
-                ? "Scroll through all chapters in one continuous flow. Large books may take a moment to load."
-                : "Read one chapter at a time with prev/next navigation. Switch to continuous scroll for a seamless reading experience."}
+                ? t("reader.continuousDescription")
+                : t("reader.paginatedDescription")}
             </p>
 
             {/* Dual-page spread */}
             <div className="mt-4 pt-4 border-t border-warm-border/50 space-y-4">
               <label className="flex items-center justify-between gap-3">
                 <div>
-                  <span className="text-sm text-ink">Dual-page spread</span>
-                  <p className="text-[11px] text-ink-muted/60 mt-0.5">Show two pages side by side, like an open book.</p>
+                  <span className="text-sm text-ink">{t("settings.dualPageSpread")}</span>
+                  <p className="text-[11px] text-ink-muted/60 mt-0.5">{t("settings.dualPageHint")}</p>
                 </div>
                 <button
                   type="button"
@@ -1009,8 +1010,8 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
               {/* Manga mode toggle */}
               <label className={`flex items-center justify-between gap-3 ${!dualPage ? "opacity-40 pointer-events-none" : ""}`}>
                 <div>
-                  <span className="text-sm text-ink">Manga mode (right-to-left)</span>
-                  <p className="text-[11px] text-ink-muted/60 mt-0.5">Swap page order so the right page comes first, for manga and RTL comics.</p>
+                  <span className="text-sm text-ink">{t("settings.mangaMode")}</span>
+                  <p className="text-[11px] text-ink-muted/60 mt-0.5">{t("settings.mangaHint")}</p>
                 </div>
                 <button
                   type="button"
@@ -1029,16 +1030,16 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
           </Accordion>
 
           {/* Library */}
-          <Accordion title="Library">
+          <Accordion title={t("settings.librarySection")}>
             <div className="space-y-2">
               <div className="bg-warm-subtle rounded-xl px-3 py-2.5">
-                <p className="text-xs text-ink-muted mb-0.5">Storage folder</p>
+                <p className="text-xs text-ink-muted mb-0.5">{t("settings.storageFolder")}</p>
                 <p className="text-sm text-ink break-all leading-snug font-mono">
                   {libraryFolder ?? "—"}
                 </p>
                 {libraryInfo && (
                   <p className="text-xs text-ink-muted mt-1.5">
-                    {libraryInfo.file_count} {libraryInfo.file_count === 1 ? "book" : "books"} · {formatBytes(libraryInfo.total_size_bytes)}
+                    {libraryInfo.file_count === 1 ? t("settings.bookCount", { count: libraryInfo.file_count }) : t("settings.booksCount", { count: libraryInfo.file_count })} · {formatBytes(libraryInfo.total_size_bytes)}
                   </p>
                 )}
               </div>
@@ -1046,13 +1047,13 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                 onClick={handleChangeFolder}
                 className="w-full px-3 py-2 text-sm text-ink-muted hover:text-ink bg-warm-subtle hover:bg-warm-border rounded-xl transition-colors text-left"
               >
-                Change folder…
+                {t("settings.changeFolder")}
               </button>
             </div>
           </Accordion>
 
           {/* Backup & Restore */}
-          <Accordion title="Backup & Restore">
+          <Accordion title={t("settings.backupRestore")}>
             <div className="space-y-2">
               <label className="flex items-start gap-2.5 cursor-pointer px-1">
                 <input
@@ -1063,11 +1064,11 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                   className="mt-0.5 accent-accent"
                 />
                 <span className="text-sm text-ink leading-snug">
-                  Include book files
+                  {t("settings.includeBookFiles")}
                   <span className="block text-xs text-ink-muted mt-0.5">
                     {includeFiles
-                      ? "Full backup — metadata + all book files (can be large)"
-                      : "Metadata only — progress, collections, tags, highlights (small)"}
+                      ? t("settings.fullBackup")
+                      : t("settings.metadataOnly")}
                   </span>
                 </span>
               </label>
@@ -1076,14 +1077,14 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                 disabled={exporting}
                 className="w-full px-3 py-2 text-sm text-ink-muted hover:text-ink bg-warm-subtle hover:bg-warm-border rounded-xl transition-colors text-left disabled:opacity-40"
               >
-                {exporting ? "Working…" : "Export library backup…"}
+                {exporting ? t("common.working") : t("settings.exportLibrary")}
               </button>
               <button
                 onClick={handleImportBackup}
                 disabled={exporting}
                 className="w-full px-3 py-2 text-sm text-ink-muted hover:text-ink bg-warm-subtle hover:bg-warm-border rounded-xl transition-colors text-left disabled:opacity-40"
               >
-                Import from backup…
+                {t("settings.importFromBackup")}
               </button>
               {backupMessage && (
                 <p className="text-xs text-ink-muted px-1">{backupMessage}</p>
@@ -1092,7 +1093,7 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
           </Accordion>
 
           {/* Metadata Scan */}
-          <Accordion title="Metadata Scan">
+          <Accordion title={t("settings.metadataScan")}>
             <div className="space-y-2">
               <label className="flex items-start gap-2.5 cursor-pointer px-1">
                 <input type="checkbox" checked={autoScanImport}
@@ -1103,8 +1104,8 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                   }}
                   className="mt-0.5 accent-accent" />
                 <span className="text-sm text-ink leading-snug">
-                  Auto-scan on import
-                  <span className="block text-xs text-ink-muted mt-0.5">Automatically look up metadata when importing new books</span>
+                  {t("settings.autoScanImport")}
+                  <span className="block text-xs text-ink-muted mt-0.5">{t("settings.autoScanImportHint")}</span>
                 </span>
               </label>
               <label className="flex items-start gap-2.5 cursor-pointer px-1">
@@ -1116,13 +1117,13 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                   }}
                   className="mt-0.5 accent-accent" />
                 <span className="text-sm text-ink leading-snug">
-                  Auto-scan on startup
-                  <span className="block text-xs text-ink-muted mt-0.5">Scan unenriched books when the app starts</span>
+                  {t("settings.autoScanStartup")}
+                  <span className="block text-xs text-ink-muted mt-0.5">{t("settings.autoScanStartupHint")}</span>
                 </span>
               </label>
               {enrichmentProviders.length > 0 && (
                 <div className="mt-3">
-                  <h4 className="text-xs font-medium text-ink-muted mb-2">Enrichment Sources</h4>
+                  <h4 className="text-xs font-medium text-ink-muted mb-2">{t("settings.enrichmentSources")}</h4>
                   {enrichmentProviders.map((provider) => (
                     <div key={provider.id} className="flex items-start gap-2 py-2 border-b border-warm-border last:border-0">
                       <input
@@ -1161,7 +1162,7 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                                   apiKey: e.target.value || null,
                                 }).catch(() => {});
                               }}
-                              placeholder="API key (optional)"
+                              placeholder={t("settings.apiKeyPlaceholder")}
                               className="w-full text-xs bg-warm-subtle border border-warm-border rounded px-2 py-1 text-ink placeholder-ink-muted/50 focus:outline-none focus:border-accent"
                             />
                             <p className="text-[10px] text-ink-muted mt-0.5">{provider.apiKeyHelp}</p>
@@ -1175,19 +1176,19 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
             </div>
           </Accordion>
 
-          <Accordion title="Activity">
+          <Accordion title={t("settings.activity")}>
             <button type="button" onClick={() => setShowActivityLog(true)}
               className="w-full px-3 py-2 text-sm text-ink-muted hover:text-ink bg-warm-subtle hover:bg-warm-border rounded-xl transition-colors text-left">
-              View activity log
+              {t("settings.viewActivityLog")}
             </button>
           </Accordion>
 
           {backupProviders.length > 0 && (
-            <Accordion title="Remote Backup">
+            <Accordion title={t("settings.remoteBackup")}>
               <div className="space-y-2">
                 {/* Provider selector */}
                 <div className="bg-warm-subtle rounded-xl px-3 py-2.5">
-                  <label className="text-xs text-ink-muted mb-1 block">Provider</label>
+                  <label className="text-xs text-ink-muted mb-1 block">{t("settings.provider")}</label>
                   <select
                     value={selectedProvider}
                     onChange={(e) => handleProviderChange(e.target.value)}
@@ -1251,7 +1252,7 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                   disabled={savingBackupConfig || !selectedProvider}
                   className="w-full px-3 py-2 text-sm font-medium bg-accent text-surface rounded-xl hover:opacity-90 transition-opacity disabled:opacity-40"
                 >
-                  {savingBackupConfig ? "Saving…" : "Save Configuration"}
+                  {savingBackupConfig ? t("common.saving") : t("settings.saveConfiguration")}
                 </button>
 
                 {/* Backup now — only shown when a config has been saved */}
@@ -1280,17 +1281,17 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                         />
                       </svg>
                     )}
-                    {runningBackup ? (backupProgressText || "Backing up…") : "Backup Now"}
+                    {runningBackup ? (backupProgressText || t("settings.backingUp")) : t("settings.backupNow")}
                   </button>
                 )}
 
                 {/* Last backup timestamp */}
                 {backupStatus && (
                   <p className="text-xs text-ink-muted px-1">
-                    Last backup:{" "}
+                    {t("settings.lastBackup")}{" "}
                     {new Date(backupStatus.lastSyncAt * 1000).toLocaleString()}
                     {" · "}
-                    Device: {backupStatus.deviceId}
+                    {t("settings.device")} {backupStatus.deviceId}
                   </p>
                 )}
 
@@ -1316,26 +1317,26 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
           />
           <div
             role="dialog"
-            aria-label="Change library folder"
+            aria-label={t("settings.changeLibraryFolder")}
             aria-modal="true"
             className="fixed inset-0 z-[70] flex items-center justify-center p-4"
           >
             <div className="bg-surface rounded-2xl shadow-2xl w-full max-w-md border border-warm-border p-6 space-y-5">
               <h3 className="font-serif text-base font-semibold text-ink">
-                Change Library Folder
+                {t("settings.changeLibraryFolder")}
               </h3>
 
               {/* Paths */}
               <div className="space-y-2 text-sm">
                 <div>
-                  <p className="text-xs text-ink-muted mb-0.5">Current folder</p>
+                  <p className="text-xs text-ink-muted mb-0.5">{t("settings.currentFolder")}</p>
                   <p className="text-ink font-mono text-xs break-all bg-warm-subtle rounded-lg px-2.5 py-1.5">
                     {migrationDialog.currentFolder}
                   </p>
                 </div>
                 <div className="flex justify-center text-ink-muted text-xs">↓</div>
                 <div>
-                  <p className="text-xs text-ink-muted mb-0.5">New folder</p>
+                  <p className="text-xs text-ink-muted mb-0.5">{t("settings.newFolder")}</p>
                   <p className="text-ink font-mono text-xs break-all bg-warm-subtle rounded-lg px-2.5 py-1.5">
                     {migrationDialog.newFolder}
                   </p>
@@ -1344,7 +1345,7 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
 
               {/* File count / size */}
               <p className="text-sm text-ink-muted">
-                {migrationDialog.fileCount} {migrationDialog.fileCount === 1 ? "file" : "files"},{" "}
+                {migrationDialog.fileCount === 1 ? t("settings.fileCount", { count: migrationDialog.fileCount }) : t("settings.filesCount", { count: migrationDialog.fileCount })},{" "}
                 {formatBytes(migrationDialog.totalSizeBytes)}
               </p>
 
@@ -1358,7 +1359,7 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                   className="mt-0.5 accent-accent"
                 />
                 <span className="text-sm text-ink leading-snug">
-                  Don't move existing files — only use new folder for future imports
+                  {t("settings.dontMoveFiles")}
                 </span>
               </label>
 
@@ -1376,7 +1377,7 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                   disabled={migrating}
                   className="px-4 py-2 text-sm text-ink-muted hover:text-ink rounded-xl transition-colors disabled:opacity-40"
                 >
-                  Cancel
+                  {t("common.cancel")}
                 </button>
                 <button
                   onClick={handleConfirmMigration}
@@ -1402,7 +1403,7 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                       />
                     </svg>
                   )}
-                  {dontMoveFiles ? "Change Folder" : "Move & Update"}
+                  {dontMoveFiles ? t("settings.changeFolder2") : t("settings.moveAndUpdate")}
                 </button>
               </div>
             </div>
