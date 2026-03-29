@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from "react";
+import { useTranslation } from "react-i18next";
 
 interface ImportButtonProps {
   onImportFiles: () => void;
@@ -15,6 +16,7 @@ export default function ImportButton({
   loading,
   progress,
 }: ImportButtonProps) {
+  const { t } = useTranslation();
   const [menuOpen, setMenuOpen] = useState(false);
   const [urlDialogOpen, setUrlDialogOpen] = useState(false);
   const [url, setUrl] = useState("");
@@ -23,10 +25,10 @@ export default function ImportButton({
 
   const label =
     loading && progress && progress.total > 1
-      ? `Importing ${progress.current} of ${progress.total}…`
+      ? t("import.importingProgress", { current: progress.current, total: progress.total })
       : loading
-      ? "Importing…"
-      : "+ Add books";
+      ? t("import.importing")
+      : t("import.addBooks");
 
   // Close menu on outside click
   useEffect(() => {
@@ -107,7 +109,7 @@ export default function ImportButton({
                 <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" stroke="currentColor" strokeWidth="1.75" strokeLinejoin="round" />
                 <path d="M14 2v6h6" stroke="currentColor" strokeWidth="1.75" strokeLinejoin="round" />
               </svg>
-              Add files
+              {t("import.addFiles")}
             </button>
             <button
               type="button"
@@ -120,7 +122,7 @@ export default function ImportButton({
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" className="shrink-0 text-ink-muted">
                 <path d="M2 6a2 2 0 012-2h4l2 2h8a2 2 0 012 2v10a2 2 0 01-2 2H4a2 2 0 01-2-2V6z" stroke="currentColor" strokeWidth="1.75" strokeLinejoin="round" />
               </svg>
-              Import folder
+              {t("import.importFolder")}
             </button>
             <button
               type="button"
@@ -134,7 +136,7 @@ export default function ImportButton({
                 <path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" />
                 <path d="M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" />
               </svg>
-              Import from URL
+              {t("import.importFromUrl")}
             </button>
           </div>
         )}
@@ -149,7 +151,7 @@ export default function ImportButton({
           />
           <div className="fixed top-1/3 left-1/2 -translate-x-1/2 w-[420px] max-w-[90vw] bg-surface border border-warm-border rounded-2xl shadow-xl z-50 p-6 animate-fade-in">
             <h3 className="font-serif text-base font-semibold text-ink mb-4">
-              Import from URL
+              {t("import.importFromUrl")}
             </h3>
             <input
               ref={urlInputRef}
@@ -160,11 +162,11 @@ export default function ImportButton({
                 if (e.key === "Enter") handleUrlSubmit();
                 if (e.key === "Escape") setUrlDialogOpen(false);
               }}
-              placeholder="https://example.com/book.epub"
+              placeholder={t("import.urlPlaceholder")}
               className="w-full h-10 px-3 bg-warm-subtle rounded-lg text-sm text-ink placeholder-ink-muted border border-transparent focus:border-accent/40 focus:outline-none focus:bg-surface transition-colors"
             />
             <p className="mt-2 text-xs text-ink-muted">
-              Direct link to an EPUB, PDF, CBZ, or CBR file.
+              {t("import.urlHint")}
             </p>
             <div className="mt-5 flex justify-end gap-2">
               <button
@@ -172,7 +174,7 @@ export default function ImportButton({
                 onClick={() => setUrlDialogOpen(false)}
                 className="px-4 py-2 text-sm text-ink-muted hover:text-ink rounded-lg transition-colors"
               >
-                Cancel
+                {t("common.cancel")}
               </button>
               <button
                 type="button"
@@ -180,7 +182,7 @@ export default function ImportButton({
                 disabled={!url.trim()}
                 className="px-4 py-2 bg-accent text-white text-sm font-medium rounded-xl hover:bg-accent-hover disabled:opacity-40 disabled:cursor-not-allowed transition-all"
               >
-                Import
+                {t("common.import")}
               </button>
             </div>
           </div>

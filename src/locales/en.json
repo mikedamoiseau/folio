@@ -69,7 +69,10 @@
     "cancelScan": "Cancel scan",
     "metadataUpdated": "Metadata updated",
     "noMetadataFound": "No metadata found",
-    "scanFailed": "Scan failed"
+    "scanFailed": "Scan failed",
+    "filterByFormat": "Filter by format",
+    "filterByStatus": "Filter by status",
+    "filterByRating": "Filter by rating"
   },
 
   "reader": {

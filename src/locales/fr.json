@@ -69,7 +69,10 @@
     "cancelScan": "Annuler le scan",
     "metadataUpdated": "M\u00e9tadonn\u00e9es mises \u00e0 jour",
     "noMetadataFound": "Aucune m\u00e9tadonn\u00e9e trouv\u00e9e",
-    "scanFailed": "\u00c9chec du scan"
+    "scanFailed": "\u00c9chec du scan",
+    "filterByFormat": "Filtrer par format",
+    "filterByStatus": "Filtrer par statut",
+    "filterByRating": "Filtrer par note"
   },
 
   "reader": {

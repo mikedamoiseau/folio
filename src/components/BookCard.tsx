@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { formatMetadataPills } from "../lib/utils";
 import StarRating from "./StarRating";
@@ -45,6 +46,7 @@ export default function BookCard({
   onScanForMetadata,
   isScanning,
 }: BookCardProps) {
+  const { t } = useTranslation();
   const coverSrc = coverPath ? convertFileSrc(coverPath) : null;
   const [confirming, setConfirming] = useState(false);
   const pills = formatMetadataPills({ language, publishYear, series, volume });
@@ -76,7 +78,7 @@ export default function BookCard({
         {coverSrc ? (
           <img
             src={coverSrc}
-            alt={`Cover of ${title}`}
+            alt={t("bookCard.coverAlt", { title })}
             className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-[1.02]"
           />
         ) : (
@@ -129,7 +131,7 @@ export default function BookCard({
               <button
                 type="button"
                 onClick={(e) => { e.stopPropagation(); onEdit(id); }}
-                aria-label={`Edit ${title}`}
+                aria-label={t("bookCard.editLabel", { title })}
                 className="w-6 h-6 flex items-center justify-center rounded-full bg-ink/60 text-paper hover:bg-accent focus:opacity-100 focus:outline-none"
               >
                 <svg width="10" height="10" viewBox="0 0 24 24" fill="none">
@@ -142,7 +144,7 @@ export default function BookCard({
                 type="button"
                 onClick={(e) => { e.stopPropagation(); if (!isScanning) onScanForMetadata(id); }}
                 className={`w-6 h-6 rounded-full bg-ink/60 hover:bg-accent text-white flex items-center justify-center transition-all ${isScanning ? "opacity-100" : "opacity-0 group-hover:opacity-100"}`}
-                title="Scan for metadata"
+                title={t("bookCard.scanForMetadata")}
                 disabled={isScanning}
               >
                 {isScanning ? (
@@ -158,7 +160,7 @@ export default function BookCard({
               <button
                 type="button"
                 onClick={(e) => { e.stopPropagation(); onInfo(id); }}
-                aria-label={`Details for ${title}`}
+                aria-label={t("bookCard.detailsLabel", { title })}
                 className="w-6 h-6 flex items-center justify-center rounded-full bg-ink/60 text-paper hover:bg-accent focus:opacity-100 focus:outline-none"
               >
                 <svg width="10" height="10" viewBox="0 0 24 24" fill="none">
@@ -175,7 +177,7 @@ export default function BookCard({
           <button
             type="button"
             onClick={handleDeleteClick}
-            aria-label={`Remove ${title}`}
+            aria-label={t("bookCard.removeLabel", { title })}
             className="absolute bottom-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity duration-150 w-6 h-6 flex items-center justify-center rounded-full bg-ink/60 text-paper hover:bg-red-600 focus:opacity-100 focus:outline-none"
           >
             <svg width="10" height="10" viewBox="0 0 24 24" fill="none">
@@ -189,8 +191,8 @@ export default function BookCard({
           <button
             type="button"
             onClick={(e) => { e.stopPropagation(); onRemoveFromCollection(); }}
-            aria-label="Remove from collection"
-            title="Remove from collection"
+            aria-label={t("bookCard.removeFromCollection")}
+            title={t("bookCard.removeFromCollection")}
             className="absolute bottom-2 left-2 opacity-0 group-hover:opacity-100 transition-opacity duration-150 w-6 h-6 flex items-center justify-center rounded-full bg-ink/60 text-paper hover:bg-accent focus:opacity-100 focus:outline-none"
           >
             <svg width="11" height="11" viewBox="0 0 24 24" fill="none">
@@ -205,13 +207,13 @@ export default function BookCard({
           <div
             role="alertdialog"
             aria-modal="true"
-            aria-label="Confirm deletion"
+            aria-label={t("bookCard.confirmDeletion")}
             className="absolute inset-0 flex flex-col items-center justify-center gap-2.5 bg-ink/80 px-4 backdrop-blur-sm"
             onClick={(e) => e.stopPropagation()}
             onKeyDown={(e) => { if (e.key === "Escape") { e.stopPropagation(); setConfirming(false); } }}
           >
             <p className="text-white text-xs text-center line-clamp-2 font-medium leading-snug">
-              Delete &ldquo;{title}&rdquo;?
+              {t("bookCard.confirmDelete", { title })}
             </p>
             <div className="flex gap-2">
               <button
@@ -219,14 +221,14 @@ export default function BookCard({
                 onClick={handleConfirm}
                 className="px-3 py-1 rounded-lg bg-red-600 hover:bg-red-700 text-white text-xs font-medium focus:outline-none focus:ring-2 focus:ring-red-400"
               >
-                Remove
+                {t("common.remove")}
               </button>
               <button
                 type="button"
                 onClick={handleCancel}
                 className="px-3 py-1 rounded-lg bg-paper/20 hover:bg-paper/30 text-paper text-xs font-medium focus:outline-none focus:ring-2 focus:ring-paper/50"
               >
-                Cancel
+                {t("common.cancel")}
               </button>
             </div>
           </div>

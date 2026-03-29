@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef, useSyncExternalStore } from "react";
+import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
@@ -26,6 +27,7 @@ interface ReadingProgress {
 }
 
 export default function Library() {
+  const { t } = useTranslation();
   const navigate = useNavigate();
   const [books, setBooks] = useState<Book[]>([]);
   const [progressMap, setProgressMap] = useState<Record<string, number>>({});
@@ -211,10 +213,10 @@ export default function Library() {
       await loadBooks(activeCollectionIdRef.current);
       await loadRecentlyRead();
       const parts: string[] = [];
-      if (results.imported > 0) parts.push(`${results.imported} imported`);
-      if (results.duplicates > 0) parts.push(`${results.duplicates} skipped`);
-      if (importCancelledRef.current) parts.push("cancelled");
-      if (results.errors.length > 0) parts.push(`${results.errors.length} failed`);
+      if (results.imported > 0) parts.push(t("library.imported", { count: results.imported }));
+      if (results.duplicates > 0) parts.push(t("library.skipped", { count: results.duplicates }));
+      if (importCancelledRef.current) parts.push(t("library.cancelled"));
+      if (results.errors.length > 0) parts.push(t("library.failed", { count: results.errors.length }));
       if (results.errors.length > 0 || importCancelledRef.current) {
         setError(parts.join(", ") + (results.errors.length > 0 ? ": " + results.errors.join("; ") : ""));
       }
@@ -245,7 +247,7 @@ export default function Library() {
       setError(null);
       const files = await invoke<string[]>("scan_folder_for_books", { folderPath });
       if (files.length === 0) {
-        setError("No supported book files (.epub, .pdf, .cbz, .cbr) found in that folder.");
+        setError(t("library.noSupportedFiles"));
         setImporting(false);
         return;
       }
@@ -453,7 +455,7 @@ export default function Library() {
   if (!loaded) {
     return (
       <div className="flex items-center justify-center h-full bg-paper">
-        <p className="text-sm text-ink-muted">Loading library…</p>
+        <p className="text-sm text-ink-muted">{t("library.loading")}</p>
       </div>
     );
   }
@@ -467,13 +469,13 @@ export default function Library() {
           <button
             type="button"
             onClick={() => setCollectionsOpen(true)}
-            title="Collections"
+            title={t("collections.title")}
             className={`shrink-0 p-2 rounded-lg transition-colors ${
               activeCollectionId
                 ? "text-accent bg-accent-light"
                 : "text-ink-muted hover:text-ink hover:bg-warm-subtle"
             }`}
-            aria-label="Open collections"
+            aria-label={t("collections.openLabel")}
           >
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
               <path
@@ -498,7 +500,7 @@ export default function Library() {
             <input
               ref={searchRef}
               type="text"
-              placeholder="Search by title or author…"
+              placeholder={t("library.searchPlaceholder")}
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               className="w-full h-9 pl-9 pr-3 bg-warm-subtle rounded-lg text-sm text-ink placeholder-ink-muted border border-transparent focus:border-accent focus:outline-none focus:bg-surface transition-colors duration-150"
@@ -509,9 +511,9 @@ export default function Library() {
             value={filterFormat}
             onChange={(e) => setFilterFormat(e.target.value)}
             className="shrink-0 h-9 px-2 bg-warm-subtle rounded-lg text-xs text-ink border border-transparent focus:border-accent/40 focus:outline-none"
-            aria-label="Filter by format"
+            aria-label={t("library.filterByFormat")}
           >
-            <option value="all">All formats</option>
+            <option value="all">{t("library.allFormats")}</option>
             <option value="epub">EPUB</option>
             <option value="pdf">PDF</option>
             <option value="cbz">CBZ</option>
@@ -523,12 +525,12 @@ export default function Library() {
             value={filterStatus}
             onChange={(e) => setFilterStatus(e.target.value)}
             className="shrink-0 h-9 px-2 bg-warm-subtle rounded-lg text-xs text-ink border border-transparent focus:border-accent/40 focus:outline-none"
-            aria-label="Filter by status"
+            aria-label={t("library.filterByStatus")}
           >
-            <option value="all">All status</option>
-            <option value="unread">Unread</option>
-            <option value="in_progress">In progress</option>
-            <option value="finished">Finished</option>
+            <option value="all">{t("library.allStatus")}</option>
+            <option value="unread">{t("library.unread")}</option>
+            <option value="in_progress">{t("library.inProgress")}</option>
+            <option value="finished">{t("library.finished")}</option>
           </select>
 
           {/* Filter: rating */}
@@ -536,14 +538,14 @@ export default function Library() {
             value={filterRating}
             onChange={(e) => setFilterRating(e.target.value)}
             className="shrink-0 h-9 px-2 bg-warm-subtle rounded-lg text-xs text-ink border border-transparent focus:border-accent/40 focus:outline-none"
-            aria-label="Filter by rating"
+            aria-label={t("library.filterByRating")}
           >
-            <option value="all">All ratings</option>
-            <option value="1">1+ stars</option>
-            <option value="2">2+ stars</option>
-            <option value="3">3+ stars</option>
-            <option value="4">4+ stars</option>
-            <option value="5">5 stars</option>
+            <option value="all">{t("library.allRatings")}</option>
+            <option value="1">{t("library.starsPlus", { count: 1 })}</option>
+            <option value="2">{t("library.starsPlus", { count: 2 })}</option>
+            <option value="3">{t("library.starsPlus", { count: 3 })}</option>
+            <option value="4">{t("library.starsPlus", { count: 4 })}</option>
+            <option value="5">{t("library.fiveStars")}</option>
           </select>
 
           {scanProgress ? (
@@ -553,17 +555,17 @@ export default function Library() {
                 <path d="M4 12a8 8 0 018-8" stroke="currentColor" strokeWidth="3" strokeLinecap="round" className="opacity-75" />
               </svg>
               <span className="truncate max-w-[200px]">
-                Enriching {scanProgress.current}/{scanProgress.total}: {scanProgress.bookTitle}
+                {t("library.enrichingProgress", { current: scanProgress.current, total: scanProgress.total, bookTitle: scanProgress.bookTitle })}
               </span>
-              <button onClick={handleCancelScan} className="shrink-0 text-ink-muted hover:text-ink transition-colors" title="Cancel scan">
+              <button onClick={handleCancelScan} className="shrink-0 text-ink-muted hover:text-ink transition-colors" title={t("library.cancelScan")}>
                 <svg width="14" height="14" viewBox="0 0 20 20" fill="none">
                   <path d="M15 5L5 15M5 5l10 10" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
                 </svg>
               </button>
             </div>
           ) : (
-            <button type="button" onClick={handleStartScan} title="Scan library for metadata"
-              className="shrink-0 p-2 rounded-lg text-ink-muted hover:text-ink hover:bg-warm-subtle transition-colors" aria-label="Scan library">
+            <button type="button" onClick={handleStartScan} title={t("library.scanLibrary")}
+              className="shrink-0 p-2 rounded-lg text-ink-muted hover:text-ink hover:bg-warm-subtle transition-colors" aria-label={t("library.scanLibrary")}>
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
                 <path d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09zM18.259 8.715L18 9.75l-.259-1.035a3.375 3.375 0 00-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 002.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 002.455 2.456L21.75 6l-1.036.259a3.375 3.375 0 00-2.455 2.456zM16.894 20.567L16.5 21.75l-.394-1.183a2.25 2.25 0 00-1.423-1.423L13.5 18.75l1.183-.394a2.25 2.25 0 001.423-1.423l.394-1.183.394 1.183a2.25 2.25 0 001.423 1.423l1.183.394-1.183.394a2.25 2.25 0 00-1.423 1.423z" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
               </svg>
@@ -584,13 +586,13 @@ export default function Library() {
         <div className="shrink-0 px-6 py-1.5 flex items-center gap-1 border-b border-warm-border/50 bg-paper">
           {(["date_added", "title", "author", "last_read", "progress", "rating", "series"] as const).map((key) => {
             const labels: Record<string, string> = {
-              date_added: "Date added",
-              title: "Title",
-              author: "Author",
-              last_read: "Last read",
-              progress: "Progress",
-              rating: "Rating",
-              series: "Series",
+              date_added: t("library.sortDateAdded"),
+              title: t("library.sortTitle"),
+              author: t("library.sortAuthor"),
+              last_read: t("library.sortLastRead"),
+              progress: t("library.sortProgress"),
+              rating: t("library.sortRating"),
+              series: t("library.sortSeries"),
             };
             const isActive = sortBy === key;
             return (
@@ -634,7 +636,7 @@ export default function Library() {
             type="button"
             onClick={() => setError(null)}
             className="text-red-400 hover:text-red-600 p-1 rounded transition-colors"
-            aria-label="Dismiss error"
+            aria-label={t("reader.dismiss")}
           >
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
               <path d="M18 6L6 18M6 6l12 12" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
@@ -647,18 +649,18 @@ export default function Library() {
       <div className="flex-1 overflow-y-auto p-6">
         {!hasBooks && activeCollectionId ? (
           <div className="flex flex-col items-center justify-center h-full text-center">
-            <p className="text-base font-medium text-ink">This collection is empty</p>
+            <p className="text-base font-medium text-ink">{t("library.collectionEmpty")}</p>
             <p className="text-sm text-ink-muted mt-1">
               {activeCollection?.type === "manual"
-                ? "Drag books onto this collection to add them."
-                : "No books match this collection\u2019s rules yet."}
+                ? t("library.collectionEmptyManual")
+                : t("library.collectionEmptyAuto")}
             </p>
             <button
               type="button"
               onClick={() => setActiveCollectionId(null)}
               className="mt-3 px-4 py-1.5 text-sm text-accent hover:text-accent-hover transition-colors"
             >
-              Back to all books
+              {t("library.backToAllBooks")}
             </button>
           </div>
         ) : !hasBooks ? (
@@ -668,7 +670,7 @@ export default function Library() {
           {/* Continue Reading — recently opened books */}
           {!search && !activeCollectionId && recentlyRead.length > 0 && (
             <div className="mb-6">
-              <h2 className="text-sm font-semibold text-ink-muted uppercase tracking-wide mb-3">Continue Reading</h2>
+              <h2 className="text-sm font-semibold text-ink-muted uppercase tracking-wide mb-3">{t("library.continueReading")}</h2>
               <div className="flex gap-4 overflow-x-auto pb-2">
                 {recentlyRead.map((book) => (
                   <button
@@ -707,7 +709,7 @@ export default function Library() {
           {/* Discover — popular/new from catalogs */}
           {!search && !activeCollectionId && (discoverLoading || discoverBooks.length > 0) && (
             <div className="mb-6">
-              <h2 className="text-sm font-semibold text-ink-muted uppercase tracking-wide mb-3">Discover</h2>
+              <h2 className="text-sm font-semibold text-ink-muted uppercase tracking-wide mb-3">{t("library.discover")}</h2>
               <div className="flex gap-4 overflow-x-auto pb-2">
                 {discoverLoading && discoverBooks.length === 0 && (
                   <>
@@ -750,7 +752,7 @@ export default function Library() {
                         {plainSummary && (
                           <button
                             className="absolute top-1 right-1 w-5 h-5 rounded-full bg-ink/50 text-white flex items-center justify-center opacity-0 group-hover/card:opacity-100 transition-opacity text-[10px] font-serif font-bold leading-none hover:bg-ink/70"
-                            aria-label="Show description"
+                            aria-label={t("library.showDescription")}
                             onClick={(e) => {
                               e.stopPropagation();
                               const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
@@ -777,7 +779,7 @@ export default function Library() {
                             }}
                             className="mt-1 text-[10px] font-medium text-accent hover:text-accent-hover transition-colors"
                           >
-                            + Add to library
+                            {t("library.addToLibrary")}
                           </button>
                         )}
                       </div>
@@ -835,7 +837,7 @@ export default function Library() {
                       <React.Fragment key={seriesName}>
                         <div className="col-span-full flex items-center gap-2 pt-4 pb-2">
                           <span className="text-xs font-semibold text-ink-muted uppercase tracking-wider">{seriesName}</span>
-                          <span className="text-[10px] text-ink-muted/50">{groups[seriesName].length} books</span>
+                          <span className="text-[10px] text-ink-muted/50">{t("library.booksCount", { count: groups[seriesName].length })}</span>
                           <div className="flex-1 border-t border-warm-border/50" />
                         </div>
                         {groups[seriesName].map((book) => (
@@ -883,8 +885,8 @@ export default function Library() {
                     ))}
                     {nonSeriesBooks.length > 0 && sortedGroupNames.length > 0 && (
                       <div className="col-span-full flex items-center gap-2 pt-4 pb-2">
-                        <span className="text-xs font-semibold text-ink-muted uppercase tracking-wider">Other Books</span>
-                        <span className="text-[10px] text-ink-muted/50">{nonSeriesBooks.length} books</span>
+                        <span className="text-xs font-semibold text-ink-muted uppercase tracking-wider">{t("library.otherBooks")}</span>
+                        <span className="text-[10px] text-ink-muted/50">{t("library.booksCount", { count: nonSeriesBooks.length })}</span>
                         <div className="flex-1 border-t border-warm-border/50" />
                       </div>
                     )}
@@ -970,12 +972,12 @@ export default function Library() {
         ) : (
           <div className="flex flex-col items-center justify-center h-full text-center">
             <p className="text-base font-medium text-ink">
-              No books match the current filters
+              {t("library.noMatchFilters")}
             </p>
             <p className="text-sm text-ink-muted mt-1">
               {search
-                ? `No results for "${search}". Try a different search term.`
-                : "Try adjusting your sort, format, or status filters."}
+                ? t("library.noResultsFor", { query: search })
+                : t("library.adjustFilters")}
             </p>
             {(filterFormat !== "all" || filterStatus !== "all" || search) && (
               <button
@@ -983,7 +985,7 @@ export default function Library() {
                 onClick={() => { setSearch(""); setFilterFormat("all"); setFilterStatus("all"); }}
                 className="mt-3 px-4 py-1.5 text-sm text-accent hover:text-accent-hover transition-colors"
               >
-                Clear all filters
+                {t("library.clearAllFilters")}
               </button>
             )}
           </div>
@@ -997,7 +999,7 @@ export default function Library() {
             <div className="flex-1 min-w-0">
               <div className="flex items-center justify-between mb-1.5">
                 <span className="text-sm font-medium text-ink">
-                  Importing {importProgress.current} of {importProgress.total}…
+                  {t("library.importingProgress", { current: importProgress.current, total: importProgress.total })}
                 </span>
                 <span className="text-xs text-ink-muted tabular-nums">
                   {Math.round((importProgress.current / importProgress.total) * 100)}%
@@ -1015,7 +1017,7 @@ export default function Library() {
               onClick={() => { importCancelledRef.current = true; }}
               className="shrink-0 px-3 py-1.5 text-sm text-ink-muted hover:text-red-600 bg-warm-subtle hover:bg-red-50 rounded-lg transition-colors"
             >
-              Cancel
+              {t("common.cancel")}
             </button>
           </div>
         </div>
@@ -1035,7 +1037,7 @@ export default function Library() {
               />
             </svg>
             <span className="text-sm font-medium text-accent">
-              Drop to add books
+              {t("library.dropToAdd")}
             </span>
           </div>
         </div>
@@ -1091,10 +1093,10 @@ export default function Library() {
               await loadBooks(activeCollectionIdRef.current);
               const updated = books.find((b) => b.id === id);
               if (updated) setDetailBook(updated);
-              setScanToast({ message: "Metadata updated", isError: false });
+              setScanToast({ message: t("library.metadataUpdated"), isError: false });
             } catch (err) {
               const msg = String(err);
-              setScanToast({ message: msg.includes("No match") ? "No metadata found" : "Scan failed", isError: true });
+              setScanToast({ message: msg.includes("No match") ? t("library.noMetadataFound") : t("library.scanFailed"), isError: true });
             } finally {
               setScanningBookId(null);
               setTimeout(() => setScanToast(null), 2500);
@@ -1197,7 +1199,7 @@ export default function Library() {
         <div className="fixed inset-0 bg-black/20 flex items-center justify-center z-50">
           <div className="bg-white dark:bg-gray-800 rounded-lg p-6 shadow-lg flex flex-col items-center gap-3">
             <div className="animate-spin h-8 w-8 border-2 border-blue-500 border-t-transparent rounded-full" />
-            <p className="text-sm text-gray-600 dark:text-gray-300">Importing books...</p>
+            <p className="text-sm text-gray-600 dark:text-gray-300">{t("import.importing")}</p>
           </div>
         </div>
       )}
