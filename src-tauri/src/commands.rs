@@ -228,11 +228,27 @@ pub async fn import_book(
     };
     std::fs::create_dir_all(&library_folder).map_err(|e| e.to_string())?;
 
-    // Step 4: Copy source file into library folder as {book_id}.{ext}.
-    // On failure, no DB entry is created and the source file is untouched.
-    let library_path = format!("{}/{}.{}", library_folder, book_id, extension);
-    std::fs::copy(&file_path, &library_path)
-        .map_err(|e| format!("Failed to copy file to library: {e}"))?;
+    // Step 4: Copy source file into library folder as {book_id}.{ext},
+    // or keep original path if import_mode is "link".
+    // URL imports always copy (file was downloaded to a temp location).
+    let import_mode = {
+        let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
+        db::get_setting(&conn, "import_mode")
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| "import".to_string())
+    };
+    let is_url_import = file_path.starts_with("http://") || file_path.starts_with("https://");
+    let should_copy = import_mode != "link" || is_url_import;
+
+    let (final_path, is_imported) = if should_copy {
+        let library_path = format!("{}/{}.{}", library_folder, book_id, extension);
+        std::fs::copy(&file_path, &library_path)
+            .map_err(|e| format!("Failed to copy file to library: {e}"))?;
+        (library_path, true)
+    } else {
+        (file_path.clone(), false)
+    };
 
     // Steps 5 & 6: Parse using library-internal path; store hash in Book.
     // cover_dir is set by the EPUB arm if a cover was extracted; the outer
@@ -243,17 +259,23 @@ pub async fn import_book(
         BookFormat::Epub => {
             // Open the EPUB zip archive once and reuse it for all operations
             // (metadata, cover extraction, chapter list) instead of reopening 3 times.
-            let epub_file = std::fs::File::open(&library_path).map_err(|e| {
-                let _ = std::fs::remove_file(&library_path);
+            let epub_file = std::fs::File::open(&final_path).map_err(|e| {
+                if should_copy {
+                    let _ = std::fs::remove_file(&final_path);
+                }
                 e.to_string()
             })?;
             let mut archive = zip::ZipArchive::new(epub_file).map_err(|e| {
-                let _ = std::fs::remove_file(&library_path);
+                if should_copy {
+                    let _ = std::fs::remove_file(&final_path);
+                }
                 e.to_string()
             })?;
 
             let metadata = epub::parse_epub_metadata_from_archive(&mut archive).map_err(|e| {
-                let _ = std::fs::remove_file(&library_path);
+                if should_copy {
+                    let _ = std::fs::remove_file(&final_path);
+                }
                 e.to_string()
             })?;
 
@@ -276,7 +298,9 @@ pub async fn import_book(
             };
 
             let chapters = epub::get_chapter_list_from_archive(&mut archive).map_err(|e| {
-                let _ = std::fs::remove_file(&library_path);
+                if should_copy {
+                    let _ = std::fs::remove_file(&final_path);
+                }
                 e.to_string()
             })?;
 
@@ -289,7 +313,7 @@ pub async fn import_book(
                 id: book_id,
                 title: metadata.title,
                 author: metadata.author,
-                file_path: library_path.clone(),
+                file_path: final_path.clone(),
                 cover_path,
                 total_chapters: chapters.len() as u32,
                 added_at: std::time::SystemTime::now()
@@ -313,16 +337,18 @@ pub async fn import_book(
                 language,
                 publisher: None,
                 publish_year: None,
-                is_imported: true,
+                is_imported,
             }
         }
         BookFormat::Cbz => {
-            let meta = cbz::import_cbz(&library_path).inspect_err(|_e| {
-                let _ = std::fs::remove_file(&library_path);
+            let meta = cbz::import_cbz(&final_path).inspect_err(|_e| {
+                if should_copy {
+                    let _ = std::fs::remove_file(&final_path);
+                }
             })?;
             let cover_path = if let Ok(data_dir) = app.path().app_data_dir() {
                 let dir = data_dir.join("covers").join(&book_id);
-                let page_result = cbz::get_page_image(&library_path, 0);
+                let page_result = cbz::get_page_image(&final_path, 0);
                 if let Err(ref e) = page_result {
                     log::warn!("cover extraction failed for book {book_id}: {e}");
                 }
@@ -342,7 +368,7 @@ pub async fn import_book(
                 id: book_id,
                 title: meta.title,
                 author: meta.author.unwrap_or_default(),
-                file_path: library_path.clone(),
+                file_path: final_path.clone(),
                 cover_path,
                 total_chapters: meta.page_count,
                 added_at: std::time::SystemTime::now()
@@ -362,16 +388,18 @@ pub async fn import_book(
                 language: meta.language,
                 publisher: meta.publisher,
                 publish_year: meta.year,
-                is_imported: true,
+                is_imported,
             }
         }
         BookFormat::Cbr => {
-            let meta = cbr::import_cbr(&library_path).inspect_err(|_e| {
-                let _ = std::fs::remove_file(&library_path);
+            let meta = cbr::import_cbr(&final_path).inspect_err(|_e| {
+                if should_copy {
+                    let _ = std::fs::remove_file(&final_path);
+                }
             })?;
             let cover_path = if let Ok(data_dir) = app.path().app_data_dir() {
                 let dir = data_dir.join("covers").join(&book_id);
-                let page_result = cbr::get_page_image(&library_path, 0);
+                let page_result = cbr::get_page_image(&final_path, 0);
                 if let Err(ref e) = page_result {
                     log::warn!("cover extraction failed for book {book_id}: {e}");
                 }
@@ -391,7 +419,7 @@ pub async fn import_book(
                 id: book_id,
                 title: original_stem.clone(),
                 author: String::new(),
-                file_path: library_path.clone(),
+                file_path: final_path.clone(),
                 cover_path,
                 total_chapters: meta.page_count,
                 added_at: std::time::SystemTime::now()
@@ -411,15 +439,17 @@ pub async fn import_book(
                 language: None,
                 publisher: None,
                 publish_year: None,
-                is_imported: true,
+                is_imported,
             }
         }
         BookFormat::Pdf => {
-            let meta = pdf::import_pdf(&library_path).inspect_err(|_e| {
-                let _ = std::fs::remove_file(&library_path);
+            let meta = pdf::import_pdf(&final_path).inspect_err(|_e| {
+                if should_copy {
+                    let _ = std::fs::remove_file(&final_path);
+                }
             })?;
             // Use PDF metadata title if available; fall back to original filename.
-            let library_stem = std::path::Path::new(&library_path)
+            let library_stem = std::path::Path::new(&final_path)
                 .file_stem()
                 .map(|s| s.to_string_lossy().to_string())
                 .unwrap_or_default();
@@ -431,7 +461,7 @@ pub async fn import_book(
             // Extract first page as cover thumbnail.
             let cover_path = if let Ok(data_dir) = app.path().app_data_dir() {
                 let dir = data_dir.join("covers").join(&book_id);
-                let page_result = pdf::get_page_image(&library_path, 0, 400);
+                let page_result = pdf::get_page_image(&final_path, 0, 400);
                 if let Err(ref e) = page_result {
                     log::warn!("cover extraction failed for book {book_id}: {e}");
                 }
@@ -451,7 +481,7 @@ pub async fn import_book(
                 id: book_id,
                 title,
                 author: meta.author,
-                file_path: library_path.clone(),
+                file_path: final_path.clone(),
                 cover_path,
                 total_chapters: meta.page_count,
                 added_at: std::time::SystemTime::now()
@@ -471,7 +501,7 @@ pub async fn import_book(
                 language: None,
                 publisher: None,
                 publish_year: None,
-                is_imported: true,
+                is_imported,
             }
         }
     };
@@ -485,13 +515,17 @@ pub async fn import_book(
                 .ok()
                 .flatten()
         {
-            let _ = std::fs::remove_file(&library_path);
+            if should_copy {
+                let _ = std::fs::remove_file(&final_path);
+            }
             if let Some(dir) = cover_dir {
                 let _ = std::fs::remove_dir_all(dir);
             }
             return Ok(existing);
         }
-        let _ = std::fs::remove_file(&library_path);
+        if should_copy {
+            let _ = std::fs::remove_file(&final_path);
+        }
         if let Some(dir) = cover_dir {
             let _ = std::fs::remove_dir_all(dir);
         }
@@ -545,11 +579,18 @@ pub async fn remove_book(book_id: String, state: State<'_, AppState>) -> Result<
         }
     }
 
-    // Remove the physical file; ignore NotFound, log but don't fail on other errors.
-    if let Some(path) = file_path {
-        if let Err(e) = std::fs::remove_file(&path) {
-            if e.kind() != std::io::ErrorKind::NotFound {
-                eprintln!("Warning: could not delete library file '{}': {}", path, e);
+    // Remove the physical file only if it was imported (copied) into the library.
+    // Linked books reference external files that should not be deleted.
+    let is_imported = existing_book
+        .as_ref()
+        .map(|b| b.is_imported)
+        .unwrap_or(true);
+    if is_imported {
+        if let Some(path) = file_path {
+            if let Err(e) = std::fs::remove_file(&path) {
+                if e.kind() != std::io::ErrorKind::NotFound {
+                    eprintln!("Warning: could not delete library file '{}': {}", path, e);
+                }
             }
         }
     }
