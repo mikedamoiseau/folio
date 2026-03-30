@@ -418,11 +418,6 @@ Lower priority features — high effort, niche audience, or dependent on other w
 - Respects font size and screen width settings
 - Imperfect for complex layouts (tables, columns, images) but major readability win for text-heavy PDFs
 
-### 45. Library-Wide Full-Text Search
-- Search inside the content of all books in the library, not just metadata
-- Requires building a full-text index (SQLite FTS or similar)
-- Results show matching books with context snippets
-
 ### 46. Annotation Export Integrations
 - Export highlights and notes to Readwise, Notion, Obsidian via their APIs
 - Extends existing Markdown/plain text export with direct service integration
