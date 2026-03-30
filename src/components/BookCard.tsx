@@ -112,24 +112,24 @@ export default function BookCard({
         {/* Subtle gradient overlay at bottom for text legibility */}
         <div className="absolute inset-x-0 bottom-0 h-1/3 bg-gradient-to-t from-black/30 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none" />
 
-        {/* Bottom-left badges: format + linked */}
-        {!confirming && (format && format !== "epub" || isImported === false) && (
-          <div className="absolute bottom-2 left-2 flex flex-col gap-1">
-            {isImported === false && (
-              <span
-                className="bg-ink/70 text-paper text-[9px] px-1.5 py-0.5 rounded backdrop-blur-sm flex items-center gap-0.5 w-fit"
-                title={t("bookCard.linkedBadge")}
-              >
-                <svg width="10" height="10" viewBox="0 0 16 16" fill="none">
-                  <path d="M6.5 9.5L9.5 6.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-                  <path d="M11 5L12.5 3.5a2.12 2.12 0 00-3-3L8 2" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-                  <path d="M5 11L3.5 12.5a2.12 2.12 0 003 3L8 14" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-                </svg>
+        {/* Bottom-left badges: format + linked (horizontal) */}
+        {!confirming && ((format && format !== "epub") || isImported === false) && (
+          <div className="absolute bottom-2 left-2 flex items-center gap-1">
+            {format && format !== "epub" && (
+              <span className="bg-ink/70 text-paper text-[9px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded backdrop-blur-sm">
+                {format}
               </span>
             )}
-            {format && format !== "epub" && (
-              <span className="bg-ink/70 text-paper text-[9px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded backdrop-blur-sm w-fit">
-                {format}
+            {isImported === false && (
+              <span
+                className="bg-ink/70 text-paper text-[9px] px-1.5 py-0.5 rounded backdrop-blur-sm flex items-center gap-0.5"
+                title={t("bookCard.linkedBadge")}
+              >
+                <svg width="9" height="9" viewBox="0 0 16 16" fill="none">
+                  <path d="M6 2H2v12h12v-4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                  <path d="M9 1h6v6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                  <path d="M15 1L7 9" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+                </svg>
               </span>
             )}
           </div>
