@@ -195,6 +195,7 @@ pub fn run() {
             commands::remove_custom_font,
             commands::get_series,
             commands::copy_to_library,
+            commands::check_file_exists,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

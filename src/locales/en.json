@@ -75,8 +75,8 @@
     "filterByRating": "Filter by rating",
     "filterBySource": "Filter by source",
     "allBooks": "All books",
-    "imported": "Imported",
-    "linked": "Linked"
+    "sourceImported": "Imported",
+    "sourceLinked": "Linked"
   },
 
   "reader": {

@@ -42,12 +42,16 @@ export default function Library() {
   const [filterFormat, setFilterFormat] = useState<string>(() => localStorage.getItem("folio-library-filter-format") ?? "all");
   const [filterStatus, setFilterStatus] = useState<string>(() => localStorage.getItem("folio-library-filter-status") ?? "all");
   const [filterRating, setFilterRating] = useState<string>(() => localStorage.getItem("folio-library-filter-rating") ?? "all");
+  const [filterSource, setFilterSource] = useState<string>(() => localStorage.getItem("folio-library-filter-source") ?? "all");
   // Persist filter/sort state to localStorage
   useEffect(() => { localStorage.setItem("folio-library-sort-by", sortBy); }, [sortBy]);
   useEffect(() => { localStorage.setItem("folio-library-sort-asc", String(sortAsc)); }, [sortAsc]);
   useEffect(() => { localStorage.setItem("folio-library-filter-format", filterFormat); }, [filterFormat]);
   useEffect(() => { localStorage.setItem("folio-library-filter-status", filterStatus); }, [filterStatus]);
   useEffect(() => { localStorage.setItem("folio-library-filter-rating", filterRating); }, [filterRating]);
+  useEffect(() => { localStorage.setItem("folio-library-filter-source", filterSource); }, [filterSource]);
+
+  const [fileNotAvailableBookId, setFileNotAvailableBookId] = useState<string | null>(null);
 
   const [importing, setImporting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -186,6 +190,22 @@ export default function Library() {
       }
     },
     [loadBooks]
+  );
+
+  const openBook = useCallback(
+    async (bookId: string) => {
+      const book = books.find((b) => b.id === bookId);
+      if (book && book.is_imported === false) {
+        try {
+          await invoke("check_file_exists", { filePath: book.file_path });
+        } catch {
+          setFileNotAvailableBookId(bookId);
+          return;
+        }
+      }
+      navigate(`/reader/${bookId}`);
+    },
+    [books, navigate]
   );
 
   const importFiles = useCallback(async (paths: string[]) => {
@@ -340,6 +360,10 @@ export default function Library() {
       if (filterRating !== "all") {
         const minRating = parseInt(filterRating);
         if (Math.round(book.rating ?? 0) < minRating) return false;
+      }
+      if (filterSource !== "all") {
+        if (filterSource === "imported" && book.is_imported === false) return false;
+        if (filterSource === "linked" && book.is_imported !== false) return false;
       }
       return true;
     })
@@ -548,6 +572,18 @@ export default function Library() {
             <option value="5">{t("library.fiveStars")}</option>
           </select>
 
+          {/* Filter: source */}
+          <select
+            value={filterSource}
+            onChange={(e) => setFilterSource(e.target.value)}
+            className="shrink-0 h-9 px-2 bg-warm-subtle rounded-lg text-xs text-ink border border-transparent focus:border-accent/40 focus:outline-none"
+            aria-label={t("library.filterBySource")}
+          >
+            <option value="all">{t("library.allBooks")}</option>
+            <option value="imported">{t("library.sourceImported")}</option>
+            <option value="linked">{t("library.sourceLinked")}</option>
+          </select>
+
           {scanProgress ? (
             <div className="flex items-center gap-2 text-xs text-ink-muted">
               <svg className="animate-spin w-3.5 h-3.5 text-accent" viewBox="0 0 24 24" fill="none">
@@ -675,7 +711,7 @@ export default function Library() {
                 {recentlyRead.map((book) => (
                   <button
                     key={book.id}
-                    onClick={() => navigate(`/reader/${book.id}`)}
+                    onClick={() => openBook(book.id)}
                     className="shrink-0 w-28 group text-left rounded-lg overflow-hidden bg-surface border border-warm-border hover:shadow-md hover:-translate-y-0.5 transition-all duration-200"
                   >
                     <div className="aspect-[2/3] bg-warm-subtle overflow-hidden">
@@ -860,7 +896,7 @@ export default function Library() {
                               series={book.series}
                               volume={book.volume}
                               rating={book.rating}
-                              onClick={() => navigate(`/reader/${book.id}`)}
+                              onClick={() => openBook(book.id)}
                               onDelete={handleRemoveBook}
                               onInfo={(id) => {
                                 const found = books.find((b) => b.id === id);
@@ -910,7 +946,7 @@ export default function Library() {
                           series={book.series}
                           volume={book.volume}
                           rating={book.rating}
-                          onClick={() => navigate(`/reader/${book.id}`)}
+                          onClick={() => openBook(book.id)}
                           onDelete={handleRemoveBook}
                           onInfo={(id) => {
                             const found = books.find((b) => b.id === id);
@@ -945,7 +981,7 @@ export default function Library() {
                     series={book.series}
                     volume={book.volume}
                     rating={book.rating}
-                    onClick={() => navigate(`/reader/${book.id}`)}
+                    onClick={() => openBook(book.id)}
                     onDelete={handleRemoveBook}
                     onInfo={(id) => {
                       const found = books.find((b) => b.id === id);
@@ -979,10 +1015,10 @@ export default function Library() {
                 ? t("library.noResultsFor", { query: search })
                 : t("library.adjustFilters")}
             </p>
-            {(filterFormat !== "all" || filterStatus !== "all" || search) && (
+            {(filterFormat !== "all" || filterStatus !== "all" || filterRating !== "all" || filterSource !== "all" || search) && (
               <button
                 type="button"
-                onClick={() => { setSearch(""); setFilterFormat("all"); setFilterStatus("all"); }}
+                onClick={() => { setSearch(""); setFilterFormat("all"); setFilterStatus("all"); setFilterRating("all"); setFilterSource("all"); }}
                 className="mt-3 px-4 py-1.5 text-sm text-accent hover:text-accent-hover transition-colors"
               >
                 {t("library.clearAllFilters")}
@@ -1078,7 +1114,7 @@ export default function Library() {
           onClose={() => setDetailBook(null)}
           onOpen={(id) => {
             setDetailBook(null);
-            navigate(`/reader/${id}`);
+            openBook(id);
           }}
           onEdit={(id) => {
             setDetailBook(null);
@@ -1205,6 +1241,31 @@ export default function Library() {
       )}
 
       {/* Scan toast */}
+      {fileNotAvailableBookId && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 bg-red-900/90 text-white px-4 py-3 rounded-xl shadow-lg flex items-center gap-3 text-sm">
+          <span>{t("bookCard.fileNotAvailable")}</span>
+          <button
+            onClick={() => {
+              const bookId = fileNotAvailableBookId;
+              setFileNotAvailableBookId(null);
+              handleRemoveBook(bookId);
+            }}
+            className="px-3 py-1 bg-red-700 hover:bg-red-600 rounded-lg text-xs font-medium transition-colors"
+          >
+            {t("common.remove")}
+          </button>
+          <button
+            onClick={() => setFileNotAvailableBookId(null)}
+            className="text-white/60 hover:text-white"
+            aria-label={t("common.close")}
+          >
+            <svg width="14" height="14" viewBox="0 0 20 20" fill="none">
+              <path d="M15 5L5 15M5 5l10 10" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+            </svg>
+          </button>
+        </div>
+      )}
+
       {scanToast && (
         <div className={`fixed bottom-4 right-4 z-50 px-3 py-2 rounded-lg text-xs shadow-lg ${scanToast.isError ? "bg-red-50 text-red-700 dark:bg-red-900/30 dark:text-red-300" : "bg-green-50 text-green-700 dark:bg-green-900/30 dark:text-green-300"}`}>
           {scanToast.message}

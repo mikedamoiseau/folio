@@ -75,8 +75,8 @@
     "filterByRating": "Filtrer par note",
     "filterBySource": "Filtrer par source",
     "allBooks": "Tous les livres",
-    "imported": "Importés",
-    "linked": "Liés"
+    "sourceImported": "Importés",
+    "sourceLinked": "Liés"
   },
 
   "reader": {

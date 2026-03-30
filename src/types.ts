@@ -17,4 +17,5 @@ export interface Book {
   language: string | null;
   publisher: string | null;
   publish_year: number | null;
+  is_imported?: boolean;
 }

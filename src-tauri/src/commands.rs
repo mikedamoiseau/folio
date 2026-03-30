@@ -3096,6 +3096,18 @@ pub async fn remove_custom_font(font_id: String, state: State<'_, AppState>) -> 
 }
 
 #[tauri::command]
+pub async fn check_file_exists(file_path: String) -> Result<bool, String> {
+    if std::path::Path::new(&file_path).exists() {
+        Ok(true)
+    } else {
+        Err(format!(
+            "Book file not found at '{}'. It may have been moved or deleted.",
+            file_path
+        ))
+    }
+}
+
+#[tauri::command]
 pub async fn get_series(state: State<'_, AppState>) -> Result<Vec<SeriesInfo>, String> {
     let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
     db::list_series(&conn).map_err(|e| e.to_string())
