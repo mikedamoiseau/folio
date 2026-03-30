@@ -313,6 +313,7 @@ pub async fn import_book(
                 language,
                 publisher: None,
                 publish_year: None,
+                is_imported: true,
             }
         }
         BookFormat::Cbz => {
@@ -361,6 +362,7 @@ pub async fn import_book(
                 language: meta.language,
                 publisher: meta.publisher,
                 publish_year: meta.year,
+                is_imported: true,
             }
         }
         BookFormat::Cbr => {
@@ -409,6 +411,7 @@ pub async fn import_book(
                 language: None,
                 publisher: None,
                 publish_year: None,
+                is_imported: true,
             }
         }
         BookFormat::Pdf => {
@@ -468,6 +471,7 @@ pub async fn import_book(
                 language: None,
                 publisher: None,
                 publish_year: None,
+                is_imported: true,
             }
         }
     };

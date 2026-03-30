@@ -162,6 +162,10 @@ fn run_schema(conn: &Connection) -> Result<()> {
     let _ = conn.execute_batch("ALTER TABLE bookmarks ADD COLUMN name TEXT;");
     let _ = conn
         .execute_batch("ALTER TABLE highlights ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0;");
+    // Linked-books: is_imported flag (1 = copied into library, 0 = linked in-place)
+    let _ =
+        conn.execute_batch("ALTER TABLE books ADD COLUMN is_imported INTEGER NOT NULL DEFAULT 1;");
+
     // Backfill: set updated_at = added_at or created_at for existing rows
     let _ = conn.execute_batch("UPDATE books SET updated_at = added_at WHERE updated_at = 0;");
     let _ =
@@ -238,8 +242,8 @@ pub fn init_db(db_path: &Path) -> Result<Connection> {
 
 pub fn insert_book(conn: &Connection, book: &Book) -> Result<()> {
     conn.execute(
-        "INSERT INTO books (id, title, author, file_path, cover_path, total_chapters, added_at, format, file_hash, description, genres, rating, isbn, openlibrary_key, updated_at, enrichment_status, series, volume, language, publisher, publish_year)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21)",
+        "INSERT INTO books (id, title, author, file_path, cover_path, total_chapters, added_at, format, file_hash, description, genres, rating, isbn, openlibrary_key, updated_at, enrichment_status, series, volume, language, publisher, publish_year, is_imported)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22)",
         params![
             book.id,
             book.title,
@@ -262,6 +266,7 @@ pub fn insert_book(conn: &Connection, book: &Book) -> Result<()> {
             book.language,
             book.publisher,
             book.publish_year,
+            book.is_imported as i32,
         ],
     )?;
     Ok(())
@@ -527,10 +532,10 @@ pub fn update_bookmark_name(conn: &Connection, id: &str, name: Option<&str>) -> 
 // --- Collections CRUD ---
 
 /// Standard column list for SELECT queries on books.
-const BOOK_COLUMNS: &str = "id, title, author, file_path, cover_path, total_chapters, added_at, format, file_hash, description, genres, rating, isbn, openlibrary_key, enrichment_status, series, volume, language, publisher, publish_year";
+const BOOK_COLUMNS: &str = "id, title, author, file_path, cover_path, total_chapters, added_at, format, file_hash, description, genres, rating, isbn, openlibrary_key, enrichment_status, series, volume, language, publisher, publish_year, is_imported";
 
 /// Standard column list prefixed with table alias `b.`.
-const BOOK_COLUMNS_B: &str = "b.id, b.title, b.author, b.file_path, b.cover_path, b.total_chapters, b.added_at, b.format, b.file_hash, b.description, b.genres, b.rating, b.isbn, b.openlibrary_key, b.enrichment_status, b.series, b.volume, b.language, b.publisher, b.publish_year";
+const BOOK_COLUMNS_B: &str = "b.id, b.title, b.author, b.file_path, b.cover_path, b.total_chapters, b.added_at, b.format, b.file_hash, b.description, b.genres, b.rating, b.isbn, b.openlibrary_key, b.enrichment_status, b.series, b.volume, b.language, b.publisher, b.publish_year, b.is_imported";
 
 fn row_to_book(row: &rusqlite::Row) -> rusqlite::Result<Book> {
     let format_str: String = row.get(7)?;
@@ -557,6 +562,7 @@ fn row_to_book(row: &rusqlite::Row) -> rusqlite::Result<Book> {
         language: row.get(17)?,
         publisher: row.get(18)?,
         publish_year: row.get(19)?,
+        is_imported: row.get::<_, i32>(20).unwrap_or(1) != 0,
     })
 }
 
@@ -1310,6 +1316,7 @@ mod tests {
             language: None,
             publisher: None,
             publish_year: None,
+            is_imported: true,
         }
     }
 
@@ -1818,5 +1825,37 @@ mod tests {
         assert_eq!(series.len(), 1); // Only "Dune" has 2+ books
         assert_eq!(series[0].name, "Dune");
         assert_eq!(series[0].count, 2);
+    }
+
+    #[test]
+    fn test_books_have_is_imported() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("test.db");
+        let conn = Connection::open(&db_path).unwrap();
+        run_schema(&conn).unwrap();
+
+        conn.execute(
+            "INSERT INTO books (id, title, author, file_path, total_chapters, added_at, format, is_imported) VALUES ('b1', 'Test', 'Author', '/tmp/test.epub', 1, 0, 'epub', 1)",
+            [],
+        ).unwrap();
+
+        let is_imported: i32 = conn
+            .query_row("SELECT is_imported FROM books WHERE id = 'b1'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(is_imported, 1);
+
+        conn.execute(
+            "INSERT INTO books (id, title, author, file_path, total_chapters, added_at, format, is_imported) VALUES ('b2', 'Linked', 'Author', '/mnt/nas/book.epub', 1, 0, 'epub', 0)",
+            [],
+        ).unwrap();
+
+        let is_imported: i32 = conn
+            .query_row("SELECT is_imported FROM books WHERE id = 'b2'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(is_imported, 0);
     }
 }

@@ -56,6 +56,7 @@ pub struct Book {
     pub language: Option<String>,
     pub publisher: Option<String>,
     pub publish_year: Option<u16>,
+    pub is_imported: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -501,7 +501,7 @@ pub fn run_incremental_backup_with_progress(
     }
 
     // Books — always write full metadata, but only upload files for changed books
-    let book_query = "SELECT id, title, author, file_path, cover_path, total_chapters, added_at, format, file_hash, description, genres, rating, isbn, openlibrary_key, enrichment_status, series, volume, language, publisher, publish_year FROM books";
+    let book_query = "SELECT id, title, author, file_path, cover_path, total_chapters, added_at, format, file_hash, description, genres, rating, isbn, openlibrary_key, enrichment_status, series, volume, language, publisher, publish_year, is_imported FROM books";
     let book_mapper = |row: &rusqlite::Row| {
         let format_str: String = row.get(7)?;
         Ok(crate::models::Book {
@@ -527,6 +527,7 @@ pub fn run_incremental_backup_with_progress(
             language: row.get(17)?,
             publisher: row.get(18)?,
             publish_year: row.get(19)?,
+            is_imported: row.get::<_, i32>(20).unwrap_or(1) != 0,
         })
     };
 
