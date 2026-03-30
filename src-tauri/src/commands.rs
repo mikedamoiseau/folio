@@ -2277,11 +2277,16 @@ pub async fn export_library(
     zip.write_all(metadata_json.as_bytes())
         .map_err(|e| e.to_string())?;
 
+    let mut linked_count = 0u32;
     if include_files {
         // Add each book file (use Stored for already-compressed formats)
         let stored_options =
             SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
         for book in &books {
+            if !book.is_imported {
+                linked_count += 1;
+                continue;
+            }
             let ext = std::path::Path::new(&book.file_path)
                 .extension()
                 .and_then(|e| e.to_str())
@@ -2317,7 +2322,14 @@ pub async fn export_library(
     zip.finish().map_err(|e| e.to_string())?;
 
     let export_detail = if include_files {
-        "Full backup with files"
+        if linked_count > 0 {
+            &format!(
+                "Full backup with files ({} linked books skipped)",
+                linked_count
+            )
+        } else {
+            "Full backup with files"
+        }
     } else {
         "Metadata only"
     };

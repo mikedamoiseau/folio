@@ -558,6 +558,10 @@ pub fn run_incremental_backup_with_progress(
         let total_files = changed_books.len() as u32;
         for (i, book) in changed_books.iter().enumerate() {
             on_progress("Uploading books", (i + 1) as u32, total_files);
+            // Skip file upload for linked books — they're not in the library folder
+            if !book.is_imported {
+                continue;
+            }
             if let Some(ref hash) = book.file_hash {
                 let ext = std::path::Path::new(&book.file_path)
                     .extension()
