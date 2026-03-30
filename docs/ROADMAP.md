@@ -92,6 +92,21 @@ Expand where books come from and how they persist.
   - ~~One-click download & import into library~~
 - ~~Downloads into the library folder from Phase 1~~
 
+### 11b. Linked Books (Read Without Importing)
+- Option on import to keep the file in its original location instead of copying to the library folder
+- Checkbox in import dialog: "Keep file in original location" (unchecked by default)
+- Linked books have full features: progress, bookmarks, highlights, metadata — only the file stays external
+- Visual badge on linked book cards to distinguish from library-local books
+- Graceful handling when file is missing (drive ejected, path moved): clear error, metadata preserved
+- "Copy to library" action to internalize a linked book later
+- Useful for: external drives, NAS, network shares, large libraries where disk space matters
+
+### 11c. Library Cleanup
+- "Check for missing files" action in Settings > Library
+- Scans all books, lists ones where file no longer exists
+- Bulk "Remove all broken" or individual removal
+- Especially useful alongside linked books (#11b)
+
 ### 12. Bulk Import — **Done**
 - ~~Scan a folder recursively for supported formats (.epub, .cbz, .cbr, .pdf)~~
 - ~~skip duplicates~~ *(hash-based dedup silently returns existing book)*
