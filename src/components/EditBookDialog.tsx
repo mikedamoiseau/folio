@@ -33,6 +33,7 @@ interface EditBookDialogProps {
   initialLanguage?: string | null;
   initialPublisher?: string | null;
   initialPublishYear?: number | null;
+  isImported?: boolean;
   onClose: () => void;
   onSaved: () => void;
 }
@@ -50,6 +51,7 @@ export default function EditBookDialog({
   initialLanguage,
   initialPublisher,
   initialPublishYear,
+  isImported,
   onClose,
   onSaved,
 }: EditBookDialogProps) {
@@ -62,6 +64,7 @@ export default function EditBookDialog({
   const [publisher, setPublisher] = useState(initialPublisher ?? "");
   const [publishYear, setPublishYear] = useState<string>(initialPublishYear != null ? String(initialPublishYear) : "");
   const [saving, setSaving] = useState(false);
+  const [copyingToLibrary, setCopyingToLibrary] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   // OpenLibrary
@@ -423,6 +426,29 @@ export default function EditBookDialog({
               <p className="text-xs text-red-600">{error}</p>
             )}
           </div>
+
+          {isImported === false && (
+            <div className="px-5 py-3 border-t border-warm-border">
+              <button
+                type="button"
+                onClick={async () => {
+                  setCopyingToLibrary(true);
+                  try {
+                    await invoke("copy_to_library", { bookId });
+                    onSaved(); // refresh book data and close dialog
+                  } catch (err) {
+                    setError(String(err));
+                  } finally {
+                    setCopyingToLibrary(false);
+                  }
+                }}
+                disabled={copyingToLibrary}
+                className="w-full py-2 text-sm text-ink-muted bg-warm-subtle hover:bg-warm-border rounded-lg transition-colors disabled:opacity-40"
+              >
+                {copyingToLibrary ? t("editor.copyingToLibrary") : t("editor.copyToLibrary")}
+              </button>
+            </div>
+          )}
 
           <div className="px-5 py-4 border-t border-warm-border flex gap-2">
             <button

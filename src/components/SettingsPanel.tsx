@@ -279,6 +279,9 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
   const [backupMessage, setBackupMessage] = useState<string | null>(null);
   const [includeFiles, setIncludeFiles] = useState(false);
 
+  // Import mode setting
+  const [importMode, setImportMode] = useState<string>("import");
+
   // Metadata scan settings
   const [autoScanImport, setAutoScanImport] = useState(true);
   const [autoScanStartup, setAutoScanStartup] = useState(false);
@@ -419,6 +422,8 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
         setAutoScanImport(scanImport !== "false");
         const scanStartup = await invoke<string | null>("get_setting_value", { key: "auto_scan_startup" });
         setAutoScanStartup(scanStartup === "true");
+        const importModeVal = await invoke<string | null>("get_setting_value", { key: "import_mode" });
+        if (importModeVal) setImportMode(importModeVal);
       })().catch(() => {});
     }
   }, [open, loadLibraryFolder, loadBackupSettings, loadProviders]);
@@ -1049,6 +1054,30 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
               >
                 {t("settings.changeFolder")}
               </button>
+
+              <div className="mt-3 pt-3 border-t border-warm-border/50">
+                <label className="text-xs font-medium text-ink-muted mb-2 block">{t("settings.importMode")}</label>
+                <div className="flex gap-1 bg-warm-subtle rounded-xl p-1">
+                  {(["import", "link"] as const).map((option) => (
+                    <button
+                      type="button"
+                      key={option}
+                      onClick={async () => {
+                        setImportMode(option);
+                        await invoke("set_setting_value", { key: "import_mode", value: option });
+                      }}
+                      className={`flex-1 px-3 py-2 text-sm rounded-lg transition-all duration-150 ${
+                        importMode === option
+                          ? "bg-surface text-ink shadow-sm font-medium"
+                          : "text-ink-muted hover:text-ink"
+                      }`}
+                    >
+                      {option === "import" ? t("settings.importModeCopy") : t("settings.importModeLink")}
+                    </button>
+                  ))}
+                </div>
+                <p className="mt-2 text-xs text-ink-muted">{t("settings.importModeHelp")}</p>
+              </div>
             </div>
           </Accordion>
 
