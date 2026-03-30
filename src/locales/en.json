@@ -72,7 +72,11 @@
     "scanFailed": "Scan failed",
     "filterByFormat": "Filter by format",
     "filterByStatus": "Filter by status",
-    "filterByRating": "Filter by rating"
+    "filterByRating": "Filter by rating",
+    "filterBySource": "Filter by source",
+    "allBooks": "All books",
+    "imported": "Imported",
+    "linked": "Linked"
   },
 
   "reader": {
@@ -148,7 +152,9 @@
     "confirmDelete": "Delete \u201c{{title}}\u201d?",
     "confirmDeletion": "Confirm deletion",
     "clickToEditName": "Click to edit name",
-    "percentThrough": "{{percent}}% through"
+    "percentThrough": "{{percent}}% through",
+    "linkedBadge": "Linked \u2014 file at original location",
+    "fileNotAvailable": "File not available. Reconnect the drive or remove this book."
   },
 
   "bookmarks": {
@@ -265,7 +271,11 @@
     "mutedText": "Muted text",
     "border": "Border",
     "subtleFill": "Subtle fill",
-    "fontSize": "Font size"
+    "fontSize": "Font size",
+    "importMode": "Import mode",
+    "importModeCopy": "Copy to library",
+    "importModeLink": "Link to original file",
+    "importModeHelp": "Copied books are self-contained. Linked books save disk space but require the original file to remain accessible."
   },
 
   "collections": {
@@ -358,7 +368,10 @@
     "metadataFromOL": "Metadata from OpenLibrary",
     "lookUpOL": "Look up on OpenLibrary",
     "searchingOL": "Searching\u2026",
-    "ratingDisplay": "Rating: {{rating}} / 5"
+    "ratingDisplay": "Rating: {{rating}} / 5",
+    "copyToLibrary": "Copy to library",
+    "copyingToLibrary": "Copying...",
+    "fileNotAvailable": "File not available"
   },
 
   "activity": {
@@ -439,6 +452,10 @@
     "chapterIndex": "Could not load this chapter. Try restarting the reader.",
     "corrupt": "This file appears to be damaged and cannot be opened.",
     "generic": "Something went wrong. Please try again."
+  },
+
+  "backup": {
+    "linkedBooksExcluded": "{{count}} linked books excluded (files not in library)"
   },
 
   "language": {

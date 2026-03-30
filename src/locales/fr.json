@@ -72,7 +72,11 @@
     "scanFailed": "\u00c9chec du scan",
     "filterByFormat": "Filtrer par format",
     "filterByStatus": "Filtrer par statut",
-    "filterByRating": "Filtrer par note"
+    "filterByRating": "Filtrer par note",
+    "filterBySource": "Filtrer par source",
+    "allBooks": "Tous les livres",
+    "imported": "Importés",
+    "linked": "Liés"
   },
 
   "reader": {
@@ -148,7 +152,9 @@
     "confirmDelete": "Supprimer \u00ab\u00a0{{title}}\u00a0\u00bb\u00a0?",
     "confirmDeletion": "Confirmer la suppression",
     "clickToEditName": "Cliquer pour modifier le nom",
-    "percentThrough": "{{percent}}\u00a0% de progression"
+    "percentThrough": "{{percent}}\u00a0% de progression",
+    "linkedBadge": "Li\u00e9 \u2014 fichier \u00e0 l'emplacement d'origine",
+    "fileNotAvailable": "Fichier non disponible. Reconnectez le disque ou supprimez ce livre."
   },
 
   "bookmarks": {
@@ -265,7 +271,11 @@
     "mutedText": "Texte att\u00e9nu\u00e9",
     "border": "Bordure",
     "subtleFill": "Remplissage subtil",
-    "fontSize": "Taille de police"
+    "fontSize": "Taille de police",
+    "importMode": "Mode d'importation",
+    "importModeCopy": "Copier dans la biblioth\u00e8que",
+    "importModeLink": "Lier au fichier original",
+    "importModeHelp": "Les livres copi\u00e9s sont autonomes. Les livres li\u00e9s \u00e9conomisent de l'espace disque mais n\u00e9cessitent que le fichier original reste accessible."
   },
 
   "collections": {
@@ -358,7 +368,10 @@
     "metadataFromOL": "M\u00e9tadonn\u00e9es depuis OpenLibrary",
     "lookUpOL": "Rechercher sur OpenLibrary",
     "searchingOL": "Recherche\u2026",
-    "ratingDisplay": "Note\u00a0: {{rating}} / 5"
+    "ratingDisplay": "Note\u00a0: {{rating}} / 5",
+    "copyToLibrary": "Copier dans la biblioth\u00e8que",
+    "copyingToLibrary": "Copie en cours...",
+    "fileNotAvailable": "Fichier non disponible"
   },
 
   "activity": {
@@ -439,6 +452,10 @@
     "chapterIndex": "Impossible de charger ce chapitre. Essayez de red\u00e9marrer la liseuse.",
     "corrupt": "Ce fichier semble endommag\u00e9 et ne peut pas \u00eatre ouvert.",
     "generic": "Une erreur s\u2019est produite. Veuillez r\u00e9essayer."
+  },
+
+  "backup": {
+    "linkedBooksExcluded": "{{count}} livres li\u00e9s exclus (fichiers hors de la biblioth\u00e8que)"
   },
 
   "language": {
