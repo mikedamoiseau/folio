@@ -16,8 +16,10 @@ How to install, import books, and read them. Covers all formats, collections, hi
 8. [Profiles](#8-profiles)
 9. [Customizing Your Reading Experience](#9-customizing-your-reading-experience)
 10. [Backup and Restore](#10-backup-and-restore)
-11. [Keyboard Shortcuts](#11-keyboard-shortcuts)
-12. [Troubleshooting](#12-troubleshooting)
+11. [Reading Stats](#11-reading-stats)
+12. [Language](#12-language)
+13. [Keyboard Shortcuts](#13-keyboard-shortcuts)
+14. [Troubleshooting](#14-troubleshooting)
 
 ---
 
@@ -166,7 +168,7 @@ Click any book card to open it. If you've read it before, Folio picks up where y
 
 ### EPUB reading
 
-Folio offers two reading modes for EPUBs, selectable in **Settings > EPUB Reading Mode**:
+Folio offers two reading modes for EPUBs, selectable in **Settings > Page Layout**:
 
 **Paginated mode** (default) — read one chapter at a time:
 
@@ -350,7 +352,7 @@ Show two pages side by side, like an open book. Works for all formats: comics (C
 **Toggling on/off:**
 
 - **Reader header:** Click the dual-page icon (two rectangles) in the header bar. When active, the icon highlights.
-- **Settings > Reading Layout:** Toggle "Dual-page spread" on or off.
+- **Settings > Page Layout:** Toggle "Dual-page spread" on or off.
 
 **Page pairing:** The cover page (page 1) always displays solo. Subsequent pages are paired: 2-3, 4-5, 6-7, etc. If the last page has no partner, it displays solo.
 
@@ -372,7 +374,7 @@ Search the full text of any EPUB book:
 
 ### Advanced typography
 
-Fine-tune your reading experience under **Settings > Typography**:
+Fine-tune your reading experience under **Settings > Text & Typography**:
 
 - **Line height** — adjust spacing between lines (1.2× to 2.4×)
 - **Page margins** — control horizontal padding (0px to 80px)
@@ -386,8 +388,8 @@ All typography settings apply to EPUB content only and are saved globally.
 
 For advanced customization, you can inject your own CSS that applies to EPUB reading content:
 
-1. Open **Settings > Custom CSS Override**
-2. Type or paste CSS rules in the text area (up to 10,000 characters)
+1. Open **Settings > Appearance** and scroll to the Custom CSS section
+2. Type or paste CSS rules in the text area
 3. Changes apply immediately with a live preview
 4. Use the **Clear** button to remove all custom CSS
 
@@ -418,7 +420,9 @@ In Settings, you can view your current library folder path, file count, and tota
 
 ## 10. Backup and Restore
 
-From Settings you can export and import library backups as ZIP files.
+### Local backup
+
+From **Settings > Backup & Restore** you can export and import library backups as ZIP files.
 
 **Export options:**
 
@@ -427,9 +431,70 @@ From Settings you can export and import library backups as ZIP files.
 
 **Import:** Select a backup ZIP to restore your library.
 
+### Remote backup
+
+Folio can sync your library to a remote storage provider for off-site backup. Configure in **Settings > Remote Backup**.
+
+**Supported providers:**
+
+| Provider | Auth | Notes |
+|----------|------|-------|
+| AWS S3 | Access key + secret | Any S3-compatible service (MinIO, Backblaze B2, etc.) |
+| FTP | Username + password | FTP and FTPS (TLS) |
+| SFTP (SSH) | Username + SSH key | Key-based auth via system ssh |
+| WebDAV | Username + password | Nextcloud, ownCloud, etc. |
+
+**How it works:**
+
+1. Select a provider and fill in connection details
+2. Click **Save Configuration** (passwords are stored in your OS keychain, not in the database)
+3. Click **Backup Now** to start a sync
+
+**What gets synced:** Book files, covers, reading progress, bookmarks, highlights, and collections. Metadata files (JSON) always contain the full library. Book files are uploaded incrementally — only new or changed files are transferred.
+
+**Progress:** During backup, the button shows real-time status like "Uploading books 3/12" or "Syncing bookmarks".
+
+**Reliability:**
+- If a backup is interrupted, the next run picks up where it left off — already-uploaded files are detected by size comparison and skipped
+- Both successful and failed backups are logged in the activity log
+- Only one backup can run at a time (a second click is blocked while one is in progress)
+
 ---
 
-## 11. Keyboard Shortcuts
+## 11. Reading Stats
+
+Open the reading stats dashboard from the library toolbar (bar chart icon).
+
+**Tracked metrics:**
+
+- **Time Reading** — total time spent in the reader
+- **Sessions** — number of reading sessions
+- **Pages Read** — total pages turned (PDF/CBZ/CBR)
+- **Books Finished** — books read to completion
+- **Current Streak** — consecutive days with reading activity
+- **Longest Streak** — your all-time record
+
+A **30-day bar chart** shows your daily reading time over the past month.
+
+Stats are tracked automatically — reading sessions are recorded when you open and close a book.
+
+---
+
+## 12. Language
+
+Folio supports multiple interface languages. Currently available: **English** and **French**.
+
+**Switching language:** Click the flag icon in the library toolbar or reader header. A dropdown shows available languages with flag emojis. Select one to switch immediately — no restart needed.
+
+**Auto-detection:** On first launch, Folio detects your operating system language. If it matches a supported language, that language is used. Otherwise, English is the default.
+
+**Persistence:** Your language choice is saved and remembered across sessions.
+
+**Adding languages:** Folio's translation architecture supports community contributions. Each language is a single JSON file.
+
+---
+
+## 13. Keyboard Shortcuts
 
 Press `?` at any time to see the shortcut reference.
 
@@ -457,7 +522,7 @@ Press `?` at any time to see the shortcut reference.
 
 ---
 
-## 12. Troubleshooting
+## 14. Troubleshooting
 
 ### "Failed to load book"
 

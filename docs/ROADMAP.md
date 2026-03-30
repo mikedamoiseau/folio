@@ -103,11 +103,16 @@ Expand where books come from and how they persist.
 - ~~Import from a backup archive~~
 - ~~Useful for migration between machines~~
 
-### 13b. Remote Backup Destinations — **Partial** *(S3 & FTP done)*
-- ~~Backup to external services: AWS S3, FTP — implemented via OpenDAL~~
-- ~~Configurable destinations in settings — add/remove targets~~
-- ~~Incremental backups (only changed files since last backup)~~
-- Google Drive, Dropbox, WebDAV, network share (not yet)
+### 13b. Remote Backup Destinations — **Partial** *(S3, FTP, SFTP, WebDAV done)*
+- ~~Backup to external services: AWS S3, FTP, SFTP (SSH), WebDAV — implemented via OpenDAL~~
+- ~~Configurable destinations in settings — add/remove targets, provider-specific fields~~
+- ~~Incremental backups (only changed book files since last backup; metadata always full set)~~
+- ~~Real-time progress reporting during backup (step label + file count)~~
+- ~~Partial upload recovery (file size comparison to detect interrupted transfers)~~
+- ~~Concurrency guard (prevents double-backup corruption)~~
+- ~~Secrets stored in OS keychain, scoped per provider~~
+- ~~Activity log: success (with item counts) and failure logged~~
+- Google Drive, Dropbox, network share (not yet)
 - Scheduled automatic backups (daily/weekly) (not yet)
 - *Depends on: Library Export/Backup*
 
@@ -367,7 +372,18 @@ Tauri v2 supports mobile targets. The React frontend renders in a mobile WebView
 - Future: preload next spread in background for smoother page turns
 - Future: auto-detect landscape/wide images and display solo at full width
 
-#### 39. Page Turn Animations
+#### 38b. Settings Panel Reorganization — **Done**
+- ~~Grouped 7 accordions into 3: Appearance (theme + custom CSS), Text & Typography (font + line height + margins + alignment), Page Layout (paginated/continuous + dual-page + manga)~~
+
+#### 39. Multi-Language Support (i18n) — **Done**
+- ~~i18next + react-i18next infrastructure with browser locale auto-detection~~
+- ~~English and French translations (373 keys)~~
+- ~~Flag dropdown language switcher in library toolbar and reader header~~
+- ~~All 17 components migrated to use `t()` calls~~
+- ~~Error messages translated via `friendlyError(raw, t)`~~
+- ~~Architecture supports adding new languages by adding a JSON file~~
+
+#### 40. Page Turn Animations
 - Optional visual effects when turning pages (curl, slide, fade)
 - Configurable or disableable in settings
 - Pure polish feature
@@ -435,5 +451,5 @@ Lower priority features — high effort, niche audience, or dependent on other w
 | 5 | Multiple Profiles | Done | Multi-user |
 | 6 | Remote Library Access, OPDS Server | Not started | Remote access |
 | 7 | Android & iOS App | Not started | Mobile |
-| 8 | Sepia Theme, OpenDyslexic, Star Ratings, In-Book Search, Typography, Custom Fonts, Continuous Scroll, Time-to-Finish, Bookmark Naming, Series, Activity Log, MOBI, Nav History, Custom CSS, Dual-Page/Manga, Animations, Split View | 13 done | Reader & library enhancements |
+| 8 | Sepia Theme, OpenDyslexic, Star Ratings, In-Book Search, Typography, Custom Fonts, Continuous Scroll, Time-to-Finish, Bookmark Naming, Series, Activity Log, MOBI, Nav History, Custom CSS, Dual-Page/Manga, Settings Reorg, i18n (EN+FR), Animations, Split View | 15 done | Reader & library enhancements |
 | N/H | Dictionary, Vocabulary Builder, TTS, PDF Reflow, Library-Wide Search, Annotation Exports, Plugins/Hooks, User Themes | Not started | Nice to have |
