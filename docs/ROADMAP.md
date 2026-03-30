@@ -8,7 +8,6 @@ These features fix core limitations and unlock future work.
 - ~~On import, copy the file into an app-managed library directory~~
 - ~~Add a setting for the destination folder (default: `~/Documents/Folio Library/` or platform equivalent)~~
 - ~~Allow changing the folder in settings — existing files should be migrated when the folder changes~~
-- Existing books imported by path-reference should be migrated on first run (or offer a one-time prompt)
 - This is the foundation for remote files, backup/export, and general reliability
 - *Prerequisite for: Remote Files, Library Export/Backup*
 
