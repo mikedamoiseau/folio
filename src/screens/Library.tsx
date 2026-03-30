@@ -896,6 +896,7 @@ export default function Library() {
                               series={book.series}
                               volume={book.volume}
                               rating={book.rating}
+                              isImported={book.is_imported}
                               onClick={() => openBook(book.id)}
                               onDelete={handleRemoveBook}
                               onInfo={(id) => {
@@ -946,6 +947,7 @@ export default function Library() {
                           series={book.series}
                           volume={book.volume}
                           rating={book.rating}
+                          isImported={book.is_imported}
                           onClick={() => openBook(book.id)}
                           onDelete={handleRemoveBook}
                           onInfo={(id) => {
@@ -981,6 +983,7 @@ export default function Library() {
                     series={book.series}
                     volume={book.volume}
                     rating={book.rating}
+                    isImported={book.is_imported}
                     onClick={() => openBook(book.id)}
                     onDelete={handleRemoveBook}
                     onInfo={(id) => {
@@ -1156,6 +1159,7 @@ export default function Library() {
           initialLanguage={editingBook.language}
           initialPublisher={editingBook.publisher}
           initialPublishYear={editingBook.publish_year}
+          isImported={editingBook.is_imported}
           onClose={() => setEditingBook(null)}
           onSaved={() => {
             setEditingBook(null);

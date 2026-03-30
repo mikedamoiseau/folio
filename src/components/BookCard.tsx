@@ -17,6 +17,7 @@ interface BookCardProps {
   series?: string | null;
   volume?: number | null;
   rating?: number | null;
+  isImported?: boolean;
   onClick: () => void;
   onDelete?: (id: string) => void;
   onEdit?: (id: string) => void;
@@ -38,6 +39,7 @@ export default function BookCard({
   series,
   volume,
   rating,
+  isImported,
   onClick,
   onDelete,
   onEdit,
@@ -114,6 +116,20 @@ export default function BookCard({
         {format && format !== "epub" && !confirming && (
           <span className="absolute bottom-2 left-2 bg-ink/70 text-paper text-[9px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded backdrop-blur-sm">
             {format}
+          </span>
+        )}
+
+        {/* Linked badge — only for linked (non-imported) books */}
+        {isImported === false && !confirming && (
+          <span
+            className="absolute top-2 left-2 bg-ink/70 text-paper text-[9px] px-1.5 py-0.5 rounded backdrop-blur-sm flex items-center gap-0.5"
+            title={t("bookCard.linkedBadge")}
+          >
+            <svg width="10" height="10" viewBox="0 0 16 16" fill="none">
+              <path d="M6.5 9.5L9.5 6.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+              <path d="M11 5L12.5 3.5a2.12 2.12 0 00-3-3L8 2" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+              <path d="M5 11L3.5 12.5a2.12 2.12 0 003 3L8 14" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+            </svg>
           </span>
         )}
 
