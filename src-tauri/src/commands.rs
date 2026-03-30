@@ -2170,6 +2170,50 @@ pub async fn set_library_folder(
     Ok(())
 }
 
+#[tauri::command]
+pub async fn copy_to_library(book_id: String, state: State<'_, AppState>) -> Result<Book, String> {
+    let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
+    let book = db::get_book(&conn, &book_id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "Book not found".to_string())?;
+
+    if book.is_imported {
+        return Err("Book is already in the library".to_string());
+    }
+
+    if !std::path::Path::new(&book.file_path).exists() {
+        return Err("Source file not available. Reconnect the drive and try again.".to_string());
+    }
+
+    let library_folder = db::get_setting(&conn, "library_folder")
+        .map_err(|e| e.to_string())?
+        .unwrap_or_else(|| default_library_folder().unwrap_or_default());
+
+    let ext = std::path::Path::new(&book.file_path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("epub");
+    let library_path = format!("{}/{}.{}", library_folder, book.id, ext);
+
+    std::fs::copy(&book.file_path, &library_path)
+        .map_err(|e| format!("Failed to copy file to library: {e}"))?;
+
+    db::update_book_path(&conn, &book.id, &library_path, true).map_err(|e| e.to_string())?;
+
+    log_activity(
+        &conn,
+        "book_updated",
+        "book",
+        Some(&book.id),
+        Some(&book.title),
+        Some("Copied to library"),
+    );
+
+    db::get_book(&conn, &book_id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "Book not found after update".to_string())
+}
+
 // --- Library Export/Import ---
 
 #[tauri::command]

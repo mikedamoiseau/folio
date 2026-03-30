@@ -349,6 +349,23 @@ pub fn update_book(conn: &Connection, book: &Book) -> Result<()> {
     Ok(())
 }
 
+pub fn update_book_path(
+    conn: &Connection,
+    book_id: &str,
+    new_path: &str,
+    is_imported: bool,
+) -> Result<()> {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64;
+    conn.execute(
+        "UPDATE books SET file_path = ?1, is_imported = ?2, updated_at = ?3 WHERE id = ?4",
+        params![new_path, is_imported as i32, now, book_id],
+    )?;
+    Ok(())
+}
+
 pub fn delete_book(conn: &Connection, id: &str) -> Result<()> {
     conn.execute("DELETE FROM books WHERE id = ?1", params![id])?;
     Ok(())
@@ -1857,5 +1874,29 @@ mod tests {
             })
             .unwrap();
         assert_eq!(is_imported, 0);
+    }
+
+    #[test]
+    fn test_update_book_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("test.db");
+        let conn = init_db(&db_path).unwrap();
+
+        conn.execute(
+            "INSERT INTO books (id, title, author, file_path, total_chapters, added_at, format, is_imported) VALUES ('b1', 'Test', 'Author', '/mnt/nas/book.epub', 1, 0, 'epub', 0)",
+            [],
+        ).unwrap();
+
+        update_book_path(&conn, "b1", "/library/b1.epub", true).unwrap();
+
+        let (path, imported): (String, i32) = conn
+            .query_row(
+                "SELECT file_path, is_imported FROM books WHERE id = 'b1'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(path, "/library/b1.epub");
+        assert_eq!(imported, 1);
     }
 }
