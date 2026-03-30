@@ -122,7 +122,7 @@ export default function BookCard({
         {/* Linked badge — only for linked (non-imported) books */}
         {isImported === false && !confirming && (
           <span
-            className="absolute top-2 left-2 bg-ink/70 text-paper text-[9px] px-1.5 py-0.5 rounded backdrop-blur-sm flex items-center gap-0.5"
+            className="absolute bottom-2 right-2 bg-ink/70 text-paper text-[9px] px-1.5 py-0.5 rounded backdrop-blur-sm flex items-center gap-0.5"
             title={t("bookCard.linkedBadge")}
           >
             <svg width="10" height="10" viewBox="0 0 16 16" fill="none">
