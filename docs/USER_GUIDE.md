@@ -37,7 +37,7 @@ No extra runtimes or dependencies needed. The installer is self-contained.
 
 ### Downloading
 
-Go to the [GitHub Releases page](https://github.com/mikedamoiseau/ebook-reader/releases) and grab the package for your OS:
+Go to the [GitHub Releases page](https://github.com/mikedamoiseau/folio/releases) and grab the package for your OS:
 
 - macOS: `.dmg`
 - Windows: `.msi`
@@ -90,7 +90,7 @@ Click the **+ Add books** button in the top-right corner to open the import menu
 
 **Drag and drop:** You can also drag files from Finder or File Explorer directly onto the library window. A "Drop to import" overlay appears. Release to import them.
 
-When you import a book, Folio copies the file into its own managed library folder (default `~/Documents/ebook-reader/`). The original file is not modified or moved. Duplicate files are detected by content hash and skipped automatically.
+When you import a book, Folio copies the file into its own managed library folder (default `~/Documents/folio/`). The original file is not modified or moved. Duplicate files are detected by content hash and skipped automatically.
 
 ### Viewing your books
 
@@ -546,7 +546,7 @@ Folio supports **EPUB** (versions 2 and 3), **PDF**, **CBZ**, and **CBR**. Other
 | Windows  | `%APPDATA%\com.mike.folio\` |
 | Linux    | `~/.local/share/com.mike.folio/` |
 
-**Book files:** Imported books are copied to the library folder, which defaults to `~/Documents/ebook-reader/`. You can change this in Settings. Since Folio keeps its own copy of each book, moving or deleting the original file has no effect on your library.
+**Book files:** Imported books are copied to the library folder, which defaults to `~/Documents/folio/`. You can change this in Settings. Since Folio keeps its own copy of each book, moving or deleting the original file has no effect on your library.
 
 ### The app won't start
 

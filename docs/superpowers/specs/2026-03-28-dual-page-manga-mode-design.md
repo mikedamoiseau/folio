@@ -29,8 +29,8 @@ No database changes. Two new localStorage keys via ThemeContext:
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `ebook-reader-dual-page` | `boolean` | `false` | Show two pages side by side |
-| `ebook-reader-manga-mode` | `boolean` | `false` | Swap page order in spread (RTL) |
+| `folio-dual-page` | `boolean` | `false` | Show two pages side by side |
+| `folio-manga-mode` | `boolean` | `false` | Swap page order in spread (RTL) |
 
 Both managed in ThemeContext alongside existing reader preferences (`scrollMode`, `typography`, etc.).
 

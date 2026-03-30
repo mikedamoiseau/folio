@@ -21,7 +21,7 @@ i18n
     interpolation: { escapeValue: false },
     detection: {
       order: ["localStorage", "navigator"],
-      lookupLocalStorage: "ebook-reader-language",
+      lookupLocalStorage: "folio-language",
       caches: ["localStorage"],
     },
   });

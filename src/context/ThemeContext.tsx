@@ -57,15 +57,15 @@ interface ThemeContextValue {
 }
 
 const STORAGE_KEYS = {
-  theme: "ebook-reader-theme",
-  customColors: "ebook-reader-custom-colors",
-  fontSize: "ebook-reader-font-size",
-  fontFamily: "ebook-reader-font-family",
-  scrollMode: "ebook-reader-scroll-mode",
-  typography: "ebook-reader-typography",
-  customCss: "ebook-reader-custom-css",
-  dualPage: "ebook-reader-dual-page",
-  mangaMode: "ebook-reader-manga-mode",
+  theme: "folio-theme",
+  customColors: "folio-custom-colors",
+  fontSize: "folio-font-size",
+  fontFamily: "folio-font-family",
+  scrollMode: "folio-scroll-mode",
+  typography: "folio-typography",
+  customCss: "folio-custom-css",
+  dualPage: "folio-dual-page",
+  mangaMode: "folio-manga-mode",
 } as const;
 
 export const MIN_FONT_SIZE = 14;

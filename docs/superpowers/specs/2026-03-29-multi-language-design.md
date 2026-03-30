@@ -76,7 +76,7 @@ i18n
     interpolation: { escapeValue: false }, // React already escapes
     detection: {
       order: ["localStorage", "navigator"],
-      lookupLocalStorage: "ebook-reader-language",
+      lookupLocalStorage: "folio-language",
       caches: ["localStorage"],
     },
   });
@@ -103,7 +103,7 @@ Imported once in `main.tsx` before `<App />`.
 **Behavior:**
 - Selection calls `i18next.changeLanguage(code)`
 - All translated strings re-render instantly (no page reload)
-- Choice persisted to `ebook-reader-language` in localStorage
+- Choice persisted to `folio-language` in localStorage
 - On launch: check localStorage first, then OS locale, then fallback to English
 
 ## Component Migration

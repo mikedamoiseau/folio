@@ -69,7 +69,7 @@ Commands are registered in `src-tauri/src/lib.rs` via `invoke_handler`. Every ne
 
 ### Book Storage
 
-Books are copied into an app-managed library folder (default `~/Documents/ebook-reader/`). The `file_path` in the DB points to the library-internal copy. Covers are extracted to `{app_data_dir}/covers/{book_id}/`.
+Books are copied into an app-managed library folder (default `~/Documents/folio/`). The `file_path` in the DB points to the library-internal copy. Covers are extracted to `{app_data_dir}/covers/{book_id}/`.
 
 ## Adding Common Things
 

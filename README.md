@@ -62,7 +62,7 @@ Folio is for the opposite case: you already have the files, and you want a bette
 
 ## Installation
 
-Pre-built binaries are available on the [GitHub Releases page](https://github.com/mikedamoiseau/ebook-reader/releases).
+Pre-built binaries are available on the [GitHub Releases page](https://github.com/mikedamoiseau/folio/releases).
 
 ### macOS
 
@@ -175,7 +175,7 @@ cargo fmt --check
 
 ## CI
 
-![CI](https://github.com/mikedamoiseau/ebook-reader/actions/workflows/ci.yml/badge.svg)
+![CI](https://github.com/mikedamoiseau/folio/actions/workflows/ci.yml/badge.svg)
 
 ## License
 

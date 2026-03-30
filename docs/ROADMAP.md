@@ -280,7 +280,7 @@ Tauri v2 supports mobile targets. The React frontend renders in a mobile WebView
 **Platform adaptation required:**
 - **File storage:** `dirs` crate paths won't work on mobile; adapt to Android/iOS sandboxed storage
 - **File picker:** `tauri-plugin-dialog` needs mobile-compatible file picker equivalents
-- **Library path:** `~/Documents/ebook-reader/` assumption must be replaced with platform-appropriate app storage
+- **Library path:** `~/Documents/folio/` assumption must be replaced with platform-appropriate app storage
 
 **UX changes required:**
 - Responsive layouts for phone and tablet screens (currently fixed 800x600 window)
