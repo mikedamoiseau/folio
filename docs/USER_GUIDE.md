@@ -192,6 +192,10 @@ Folio offers two reading modes for EPUBs, selectable in **Settings > Page Layout
 
 These formats use a page-by-page viewer. Navigate with the Previous/Next buttons or arrow keys. The footer shows the current page number and total page count.
 
+**Go to page:** Click the page label (e.g., "Page 5 / 45") in the footer bar. It turns into a number input — type the page you want and press Enter. Press Escape or click away to cancel.
+
+**PDF zoom quality:** When you zoom into a PDF, Folio re-renders the page at the higher resolution so text stays sharp — similar to how native PDF viewers work. Pages are rendered as high-quality JPEG images with an in-memory cache for fast navigation.
+
 ### Reading progress
 
 Progress is saved automatically as you read. The library shows a percentage on each book card. When you reopen a book, you return to exactly where you stopped.

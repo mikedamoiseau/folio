@@ -62,7 +62,16 @@ Improve the core activity — actually reading books.
 - ~~Pan/drag to navigate when zoomed in~~
 - ~~Keyboard: Cmd/Ctrl + / − / 0 to zoom in/out/reset~~
 - ~~Zoom resets on page change~~
+- ~~PDF zoom-aware rendering: re-renders pages at current zoom resolution (physically resizes spread instead of CSS scale) for sharp text at any zoom level~~
+- ~~JPEG encoding (90% quality) for ~10x faster PDF page loads and smaller transfers~~
+- ~~In-memory LRU cache (20 entries) for rendered PDF pages~~
 - Remember zoom level per book or per format (TBD)
+
+### 8e. Go to Page — **Done**
+- ~~Click the page label in the footer (e.g., "Page 5 / 45") to open an inline number input~~
+- ~~Type a page number and press Enter to jump directly~~
+- ~~Escape or click away to cancel~~
+- ~~Works in both single-page and dual-page spread modes~~
 
 ### 8b. Mouse Wheel Page Navigation — **Done**
 - ~~In the reader, use mouse wheel (scroll up/down) to go to previous/next page — same as arrow keys left/right~~
@@ -92,14 +101,16 @@ Expand where books come from and how they persist.
   - ~~One-click download & import into library~~
 - ~~Downloads into the library folder from Phase 1~~
 
-### 11b. Linked Books (Read Without Importing)
-- Option on import to keep the file in its original location instead of copying to the library folder
-- Checkbox in import dialog: "Keep file in original location" (unchecked by default)
-- Linked books have full features: progress, bookmarks, highlights, metadata — only the file stays external
-- Visual badge on linked book cards to distinguish from library-local books
-- Graceful handling when file is missing (drive ejected, path moved): clear error, metadata preserved
-- "Copy to library" action to internalize a linked book later
-- Useful for: external drives, NAS, network shares, large libraries where disk space matters
+### 11b. Linked Books (Read Without Importing) — **Done**
+- ~~Option on import to keep the file in its original location instead of copying to the library folder~~
+- ~~Settings toggle for default import mode (copy vs link) — applies to file picker, folder import, drag-and-drop~~
+- ~~Linked books have full features: progress, bookmarks, highlights, metadata — only the file stays external~~
+- ~~Visual badge on linked book cards (external-link icon) to distinguish from library-local books~~
+- ~~Library filter: All / Imported / Linked~~
+- ~~Graceful handling when file is missing (drive ejected, path moved): error toast with remove option~~
+- ~~"Copy to library" action in Edit Book dialog to internalize a linked book later~~
+- ~~Remote backup and ZIP export skip linked book files (metadata still included)~~
+- ~~`is_imported` column in books table, translation keys in EN + FR~~
 
 ### 11c. Library Cleanup
 - "Check for missing files" action in Settings > Library
@@ -455,10 +466,10 @@ Lower priority features — high effort, niche audience, or dependent on other w
 |-------|----------|--------|-------|
 | 1 | Copy-on-Import, Multi-File Picker, Collections, Sort/Filter, Tags | 5 done | Storage & organization |
 | 2 | Highlights, Metadata Edit, Keyboard Shortcuts, Focus Mode, Zoom | Done | Reading experience |
-| 3 | Remote Files, Bulk Import, Backup, Book Discovery, Position Sync | 3 done, 2 partial, 1 not started | Import & sync |
+| 3 | Remote Files, Bulk Import, Backup, Book Discovery, Linked Books, Position Sync | 4 done, 2 partial, 1 not started | Import & sync |
 | 4 | Stats, Goodreads, Recents, Share, Recommendations | 4 done, 1 partial | Discovery & social |
 | 5 | Multiple Profiles | Done | Multi-user |
 | 6 | Remote Library Access, OPDS Server | Not started | Remote access |
 | 7 | Android & iOS App | Not started | Mobile |
-| 8 | Sepia Theme, OpenDyslexic, Star Ratings, In-Book Search, Typography, Custom Fonts, Continuous Scroll, Time-to-Finish, Bookmark Naming, Series, Activity Log, MOBI, Nav History, Custom CSS, Dual-Page/Manga, Settings Reorg, i18n (EN+FR), Animations, Split View | 15 done | Reader & library enhancements |
+| 8 | Sepia Theme, OpenDyslexic, Star Ratings, In-Book Search, Typography, Custom Fonts, Continuous Scroll, Time-to-Finish, Bookmark Naming, Series, Activity Log, MOBI, Nav History, Custom CSS, Dual-Page/Manga, Settings Reorg, i18n (EN+FR), PDF Zoom Quality, Go to Page, Animations, Split View | 17 done | Reader & library enhancements |
 | N/H | Dictionary, Vocabulary Builder, TTS, PDF Reflow, Library-Wide Search, Annotation Exports, Plugins/Hooks, User Themes | Not started | Nice to have |
