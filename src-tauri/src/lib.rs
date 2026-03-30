@@ -110,6 +110,8 @@ pub fn run() {
                 epub_cache: std::sync::Mutex::new(std::collections::HashMap::new()),
                 epub_cache_order: std::sync::Mutex::new(Vec::new()),
                 enrichment_registry,
+                pdf_render_cache: std::sync::Mutex::new(std::collections::HashMap::new()),
+                pdf_render_cache_order: std::sync::Mutex::new(Vec::new()),
             });
             Ok(())
         })

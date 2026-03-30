@@ -934,14 +934,14 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
 
       {/* Progress saved indicator */}
       {saveIndicator && (
-        <div className="fixed bottom-4 right-4 z-50 text-xs text-gray-400 dark:text-gray-500 transition-opacity">
+        <div className="fixed bottom-16 right-4 z-50 text-xs text-gray-400 dark:text-gray-500 transition-opacity">
           {t("reader.progressSaved")}
         </div>
       )}
 
       {/* Progress save error indicator */}
       {saveError && (
-        <div className="fixed bottom-4 right-4 z-50 text-xs text-amber-500 dark:text-amber-400 transition-opacity">
+        <div className="fixed bottom-16 right-4 z-50 text-xs text-amber-500 dark:text-amber-400 transition-opacity">
           {t("reader.progressNotSaved")}
         </div>
       )}

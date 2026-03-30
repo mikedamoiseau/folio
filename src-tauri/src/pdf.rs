@@ -1,7 +1,5 @@
 use base64::Engine;
-use image::ImageFormat;
 use pdfium_render::prelude::*;
-use std::io::Cursor;
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
@@ -93,9 +91,10 @@ pub fn get_page_count(path: &str) -> Result<u32, String> {
     Ok(document.pages().len() as u32)
 }
 
-/// Render one PDF page to a base64-encoded PNG data URI.
+/// Render one PDF page to a base64-encoded JPEG data URI.
 ///
 /// `width` is the target pixel width; height is calculated to preserve aspect ratio.
+/// Uses JPEG encoding for fast encode times and small transfer sizes.
 pub fn get_page_image(path: &str, page_index: u32, width: u32) -> Result<String, String> {
     let pdfium = bind_pdfium()?;
     let document = pdfium
@@ -114,12 +113,13 @@ pub fn get_page_image(path: &str, page_index: u32, width: u32) -> Result<String,
         .map_err(|e| format!("render failed: {e}"))?;
 
     let img = bitmap.as_image();
-    let mut png_bytes: Vec<u8> = Vec::new();
-    img.write_to(&mut Cursor::new(&mut png_bytes), ImageFormat::Png)
-        .map_err(|e| format!("PNG encode failed: {e}"))?;
+    let mut jpeg_bytes: Vec<u8> = Vec::new();
+    let encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpeg_bytes, 90);
+    img.write_with_encoder(encoder)
+        .map_err(|e| format!("JPEG encode failed: {e}"))?;
 
-    let b64 = base64::engine::general_purpose::STANDARD.encode(&png_bytes);
-    Ok(format!("data:image/png;base64,{b64}"))
+    let b64 = base64::engine::general_purpose::STANDARD.encode(&jpeg_bytes);
+    Ok(format!("data:image/jpeg;base64,{b64}"))
 }
 
 #[cfg(test)]

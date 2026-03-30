@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from "react";
+import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
 import { getSpreadPages } from "../lib/utils";
 
@@ -40,26 +41,44 @@ export default function PageViewer({
   const containerRef = useRef<HTMLDivElement>(null);
   const spreadRef = useRef<HTMLDivElement>(null);
 
+  const { t } = useTranslation();
+  const isPdf = format === "pdf";
   const spread = dualPage ? getSpreadPages(pageIndex, totalPages) : { left: pageIndex, right: null };
 
   // Apply transform directly to the DOM (no React re-render)
   const applyTransform = useCallback((z: number, p: { x: number; y: number }) => {
-    if (spreadRef.current) {
+    if (!spreadRef.current) return;
+    if (isPdf) {
+      // PDF: physically resize the spread so the browser paints images at full resolution.
+      // CSS scale() would only upscale the rasterized paint buffer, causing blurriness.
+      spreadRef.current.style.width = `${z * 100}%`;
+      spreadRef.current.style.height = `${z * 100}%`;
+      spreadRef.current.style.transform = `translate(calc(-50% + ${p.x}px), calc(-50% + ${p.y}px))`;
+    } else {
+      // Comics: CSS scale + translate (fixed-res images, scale is fine)
       spreadRef.current.style.transform = `scale(${z}) translate(${p.x / z}px, ${p.y / z}px)`;
     }
-  }, []);
+  }, [isPdf]);
+
+  // Quantize zoom to nearest 0.25 so we don't re-render on every tiny change
+  const renderZoom = Math.ceil(zoom * 4) / 4;
 
   const loadPage = useCallback(
-    async (index: number): Promise<string> => {
-      const command = format === "pdf" ? "get_pdf_page" : "get_comic_page";
-      const data = await invoke<string>(command, {
-        bookId,
-        pageIndex: index,
-      });
+    async (index: number, renderWidth?: number): Promise<string> => {
+      const command = isPdf ? "get_pdf_page" : "get_comic_page";
+      const params: Record<string, unknown> = { bookId, pageIndex: index };
+      if (isPdf && renderWidth) {
+        params.width = renderWidth;
+      }
+      const data = await invoke<string>(command, params);
       return data;
     },
-    [bookId, format]
+    [bookId, isPdf]
   );
+
+  // For PDF, compute render width based on zoom + device pixel ratio for Retina sharpness
+  const dpr = typeof window !== "undefined" ? window.devicePixelRatio || 1 : 1;
+  const pdfRenderWidth = isPdf ? Math.round(1200 * Math.max(renderZoom, 1) * dpr) : undefined;
 
   // Load spread (one or two pages in parallel)
   useEffect(() => {
@@ -69,9 +88,9 @@ export default function PageViewer({
 
     const loadSpread = async () => {
       try {
-        const promises: Promise<string>[] = [loadPage(spread.left)];
+        const promises: Promise<string>[] = [loadPage(spread.left, pdfRenderWidth)];
         if (spread.right !== null) {
-          promises.push(loadPage(spread.right));
+          promises.push(loadPage(spread.right, pdfRenderWidth));
         }
         const results = await Promise.all(promises);
         if (cancelled) return;
@@ -86,7 +105,7 @@ export default function PageViewer({
 
     loadSpread();
     return () => { cancelled = true; };
-  }, [spread.left, spread.right, loadPage]);
+  }, [spread.left, spread.right, loadPage, pdfRenderWidth]);
 
   const goTo = useCallback(
     (index: number) => {
@@ -193,19 +212,29 @@ export default function PageViewer({
     [nextSpread, prevSpread, loading, zoomIn, zoomOut, zoom]
   );
 
-  // Measure the unscaled content size (spreadRef without transforms) vs container
+  // Measure content vs container to determine pan overflow
   const getOverflow = useCallback(() => {
-    if (!spreadRef.current || !containerRef.current) return { x: 0, y: 0 };
-    // offsetWidth/Height give layout size before CSS transforms
-    const contentW = spreadRef.current.offsetWidth * zoom;
-    const contentH = spreadRef.current.offsetHeight * zoom;
+    if (!containerRef.current) return { x: 0, y: 0 };
     const containerW = containerRef.current.clientWidth;
     const containerH = containerRef.current.clientHeight;
+    if (isPdf) {
+      // PDF: spread is physically zoom-sized, no CSS scale
+      const contentW = containerW * zoom;
+      const contentH = containerH * zoom;
+      return {
+        x: Math.max(0, contentW - containerW),
+        y: Math.max(0, contentH - containerH),
+      };
+    }
+    // Comics: spread is container-sized, CSS scale multiplies
+    if (!spreadRef.current) return { x: 0, y: 0 };
+    const contentW = spreadRef.current.offsetWidth * zoom;
+    const contentH = spreadRef.current.offsetHeight * zoom;
     return {
       x: Math.max(0, contentW - containerW),
       y: Math.max(0, contentH - containerH),
     };
-  }, [zoom]);
+  }, [zoom, isPdf]);
 
   const canPan = useCallback(() => {
     const overflow = getOverflow();
@@ -215,9 +244,6 @@ export default function PageViewer({
   // Clamp pan so content can't be dragged beyond its edges
   const clampPan = useCallback((p: { x: number; y: number }): { x: number; y: number } => {
     const overflow = getOverflow();
-    // panRef values are in visual (post-scale) coordinates because
-    // applyTransform uses translate(p.x/zoom, p.y/zoom) inside scale(zoom),
-    // so the zoom cancels out. Max visual pan = half the overflow.
     const maxPanX = overflow.x / 2;
     const maxPanY = overflow.y / 2;
     return {
@@ -256,9 +282,32 @@ export default function PageViewer({
     isPanning.current = false;
   }, []);
 
+  const [editingPage, setEditingPage] = useState(false);
+  const [pageInput, setPageInput] = useState("");
+  const pageInputRef = useRef<HTMLInputElement>(null);
+
+  const handlePageLabelClick = useCallback(() => {
+    setPageInput(String(spread.left + 1));
+    setEditingPage(true);
+  }, [spread.left]);
+
+  const handlePageInputSubmit = useCallback(() => {
+    const num = parseInt(pageInput, 10);
+    if (!isNaN(num) && num >= 1 && num <= totalPages) {
+      goTo(num - 1);
+    }
+    setEditingPage(false);
+  }, [pageInput, totalPages, goTo]);
+
+  useEffect(() => {
+    if (editingPage && pageInputRef.current) {
+      pageInputRef.current.select();
+    }
+  }, [editingPage]);
+
   const pageLabel = dualPage && spread.right !== null
-    ? `Pages ${spread.left + 1}–${spread.right + 1} / ${totalPages}`
-    : `Page ${spread.left + 1} / ${totalPages}`;
+    ? `${t("reader.pages")} ${spread.left + 1}–${spread.right + 1} / ${totalPages}`
+    : `${t("reader.page")} ${spread.left + 1} / ${totalPages}`;
 
   return (
     <div className="flex flex-col flex-1 min-h-0 bg-paper">
@@ -283,7 +332,8 @@ export default function PageViewer({
         ) : (
           <div
             ref={spreadRef}
-            className={`absolute inset-0 flex items-center justify-center gap-1 will-change-transform ${mangaMode && dualPage ? "flex-row-reverse" : "flex-row"}`}
+            className={`absolute flex items-center justify-center gap-1 will-change-transform ${isPdf ? "top-1/2 left-1/2" : "inset-0"} ${mangaMode && dualPage ? "flex-row-reverse" : "flex-row"}`}
+            style={isPdf ? { width: `${zoom * 100}%`, height: `${zoom * 100}%`, transform: `translate(calc(-50% + ${panRef.current.x}px), calc(-50% + ${panRef.current.y}px))` } : undefined}
           >
             {leftImageData && (
               <img
@@ -318,12 +368,38 @@ export default function PageViewer({
           <svg width="14" height="14" viewBox="0 0 20 20" fill="none">
             <path d="M12 4l-6 6 6 6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
           </svg>
-          Prev
+          {t("common.previous")}
         </button>
 
-        <span className="flex-1 text-center text-xs text-ink-muted tabular-nums">
-          {pageLabel}
-        </span>
+        {editingPage ? (
+          <form
+            className="flex-1 flex items-center justify-center gap-1.5"
+            onSubmit={(e) => { e.preventDefault(); handlePageInputSubmit(); }}
+          >
+            <input
+              ref={pageInputRef}
+              type="number"
+              min={1}
+              max={totalPages}
+              value={pageInput}
+              onChange={(e) => setPageInput(e.target.value)}
+              onBlur={() => setEditingPage(false)}
+              onKeyDown={(e) => { if (e.key === "Escape") setEditingPage(false); }}
+              className="w-14 text-center text-xs tabular-nums bg-warm-subtle text-ink border border-warm-border rounded-lg px-2 py-1 focus:outline-none focus:ring-1 focus:ring-accent"
+              aria-label={t("reader.goToPage")}
+            />
+            <span className="text-xs text-ink-muted tabular-nums">/ {totalPages}</span>
+          </form>
+        ) : (
+          <button
+            type="button"
+            onClick={handlePageLabelClick}
+            className="flex-1 text-center text-xs text-ink-muted tabular-nums hover:text-ink transition-colors cursor-pointer"
+            title={t("reader.goToPage")}
+          >
+            {pageLabel}
+          </button>
+        )}
 
         {/* Zoom controls */}
         <div className="flex items-center gap-1">
@@ -358,7 +434,7 @@ export default function PageViewer({
           className="flex items-center gap-1.5 px-4 py-1.5 text-sm text-ink-muted bg-warm-subtle hover:bg-warm-border rounded-xl transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
           aria-label="Next page"
         >
-          Next
+          {t("common.next")}
           <svg width="14" height="14" viewBox="0 0 20 20" fill="none">
             <path d="M8 4l6 6-6 6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
           </svg>

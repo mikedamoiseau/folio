@@ -16,6 +16,9 @@ use crate::pdf;
 /// Maximum number of EPUB archives kept open in the cache.
 const EPUB_CACHE_MAX: usize = 5;
 
+/// Maximum number of rendered PDF page images kept in the cache.
+const PDF_RENDER_CACHE_MAX: usize = 20;
+
 pub struct AppState {
     pub db: DbPool,
     pub profiles: std::sync::Mutex<std::collections::HashMap<String, DbPool>>,
@@ -27,6 +30,10 @@ pub struct AppState {
     /// LRU access order for epub_cache keys (most recently used at end).
     pub epub_cache_order: std::sync::Mutex<Vec<String>>,
     pub enrichment_registry: std::sync::Mutex<crate::providers::ProviderRegistry>,
+    /// Cache of rendered PDF page images keyed by "path:page:width".
+    pub pdf_render_cache: std::sync::Mutex<std::collections::HashMap<String, String>>,
+    /// LRU access order for pdf_render_cache keys (most recently used at end).
+    pub pdf_render_cache_order: std::sync::Mutex<Vec<String>>,
 }
 
 impl AppState {
@@ -2463,8 +2470,10 @@ pub async fn get_pdf_page_count(
 pub async fn get_pdf_page(
     book_id: String,
     page_index: u32,
+    width: Option<u32>,
     state: State<'_, AppState>,
 ) -> Result<String, String> {
+    let render_width = width.unwrap_or(1200).min(9600);
     let file_path = {
         let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
         db::get_book(&conn, &book_id)
@@ -2473,7 +2482,50 @@ pub async fn get_pdf_page(
             .file_path
     };
     validate_file_exists(&file_path)?;
-    pdf::get_page_image(&file_path, page_index, 1200)
+
+    let cache_key = format!("{}:{}:{}", file_path, page_index, render_width);
+
+    // Check cache
+    {
+        let cache = state.pdf_render_cache.lock().map_err(|e| e.to_string())?;
+        if let Some(data) = cache.get(&cache_key) {
+            let result = data.clone();
+            // Update LRU order
+            let mut order = state
+                .pdf_render_cache_order
+                .lock()
+                .map_err(|e| e.to_string())?;
+            if let Some(pos) = order.iter().position(|k| k == &cache_key) {
+                order.remove(pos);
+            }
+            order.push(cache_key);
+            drop(order);
+            drop(cache);
+            return Ok(result);
+        }
+    }
+
+    // Render
+    let data = pdf::get_page_image(&file_path, page_index, render_width)?;
+
+    // Store in cache with LRU eviction
+    {
+        let mut cache = state.pdf_render_cache.lock().map_err(|e| e.to_string())?;
+        let mut order = state
+            .pdf_render_cache_order
+            .lock()
+            .map_err(|e| e.to_string())?;
+        while order.len() >= PDF_RENDER_CACHE_MAX {
+            if let Some(old_key) = order.first().cloned() {
+                order.remove(0);
+                cache.remove(&old_key);
+            }
+        }
+        cache.insert(cache_key.clone(), data.clone());
+        order.push(cache_key);
+    }
+
+    Ok(data)
 }
 
 // ---- Remote Backup Commands ----
