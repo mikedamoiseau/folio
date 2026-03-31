@@ -849,6 +849,13 @@ export default function Library() {
             </div>
           )}
 
+          {(activeCollection || activeSeries) && (
+            <div className="flex items-center gap-2 pb-2">
+              <span className="text-xs font-semibold text-ink-muted uppercase tracking-wider">{activeSeries ?? activeCollection?.name}</span>
+              <span className="text-[10px] text-ink-muted/50">{t("library.booksCount", { count: filtered.length })}</span>
+              <div className="flex-1 border-t border-warm-border/50" />
+            </div>
+          )}
           <div className="grid grid-cols-[repeat(auto-fill,160px)] justify-center gap-5">
             {sortBy === "series" ? (
               (() => {
