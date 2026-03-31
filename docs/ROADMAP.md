@@ -191,6 +191,7 @@ Expand where books come from and how they persist.
 #### Future Enrichment Improvements
 - Extract series/volume data from OpenLibrary and Google Books during enrichment scan
 - Currently series data comes only from book file metadata and manual entry
+- User-configurable provider priority order (drag-to-reorder in Settings)
 
 #### 17b. Comic Vine Enrichment Provider — **Done**
 - ~~Add Comic Vine (comicvine.gamespot.com) as an enrichment provider~~
