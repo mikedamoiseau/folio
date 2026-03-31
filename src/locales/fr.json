@@ -275,6 +275,7 @@
     "cleanupConfirmContinue": "Continuer",
     "cleanupScanning": "Analyse\u2026 {{current}} / {{total}}",
     "cleanupDoneRemoved": "{{count}} livres avec des fichiers manquants supprim\u00e9s.",
+    "cleanupBackupSaved": "Une sauvegarde a \u00e9t\u00e9 enregistr\u00e9e dans {{path}}",
     "cleanupDoneNone": "Tous les livres sont en ordre. Aucun probl\u00e8me trouv\u00e9.",
     "cleanupDone": "Termin\u00e9",
     "accent": "Accent",

@@ -284,6 +284,7 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
   const [cleanupProgress, setCleanupProgress] = useState({ current: 0, total: 0 });
   const [cleanupResult, setCleanupResult] = useState<{
     removedCount: number;
+    backupPath: string;
   } | null>(null);
 
   // Import mode setting
@@ -644,10 +645,10 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
       }
     );
     try {
-      const result = await invoke<{ removedCount: number; removedBooks: { id: string; title: string; author: string }[] }>(
+      const result = await invoke<{ removedCount: number; removedBooks: { id: string; title: string; author: string }[]; backupPath: string }>(
         "cleanup_library"
       );
-      setCleanupResult({ removedCount: result.removedCount });
+      setCleanupResult({ removedCount: result.removedCount, backupPath: result.backupPath });
       setCleanupState("done");
     } catch (err) {
       setCleanupResult(null);
@@ -1531,6 +1532,11 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                       ? t("settings.cleanupDoneRemoved", { count: cleanupResult.removedCount })
                       : t("settings.cleanupDoneNone")}
                   </p>
+                  {cleanupResult && (
+                    <p className="text-xs text-ink-muted/70 break-all font-mono">
+                      {t("settings.cleanupBackupSaved", { path: cleanupResult.backupPath })}
+                    </p>
+                  )}
                   <div className="flex justify-end pt-1">
                     <button
                       onClick={() => {

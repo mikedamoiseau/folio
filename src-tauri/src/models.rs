@@ -163,6 +163,7 @@ pub struct SeriesInfo {
 pub struct CleanupResult {
     pub removed_count: u32,
     pub removed_books: Vec<CleanupEntry>,
+    pub backup_path: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

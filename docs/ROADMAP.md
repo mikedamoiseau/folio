@@ -112,11 +112,18 @@ Expand where books come from and how they persist.
 - ~~Remote backup and ZIP export skip linked book files (metadata still included)~~
 - ~~`is_imported` column in books table, translation keys in EN + FR~~
 
-### 11c. Library Cleanup
-- "Check for missing files" action in Settings > Library
-- Scans all books, lists ones where file no longer exists
-- Bulk "Remove all broken" or individual removal
-- Especially useful alongside linked books (#11b)
+### 11c. Library Cleanup — **Done**
+- ~~"Check for missing files" action in Settings > Library~~
+- ~~Scans all books, removes ones where file no longer exists~~
+- ~~Auto-backup of library metadata before cleanup~~
+- ~~Missing-file dialog in Reader with "Remove from library" option~~
+- ~~Especially useful alongside linked books (#11b)~~
+
+### 11d. Backup Restore Picker
+- Restore from automated backups via dropdown (lists backups from app data dir)
+- Restore from manual backup via file picker (existing "Import from backup" flow)
+- Show backup date, type (pre-cleanup, manual export), and size
+- *Depends on: Library Cleanup (#11c), Library Export/Backup (#13)*
 
 ### 12. Bulk Import — **Done**
 - ~~Scan a folder recursively for supported formats (.epub, .cbz, .cbr, .pdf)~~

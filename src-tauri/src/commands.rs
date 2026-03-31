@@ -3165,9 +3165,70 @@ pub async fn cleanup_library(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<CleanupResult, String> {
+    use std::io::Write as _;
+    use zip::write::SimpleFileOptions;
+
     let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
     let books = db::list_books(&conn).map_err(|e| e.to_string())?;
     let total = books.len() as u32;
+
+    // Auto-backup metadata before cleanup.
+    let backups_dir = state.data_dir.join("backups");
+    std::fs::create_dir_all(&backups_dir).map_err(|e| e.to_string())?;
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let backup_path = backups_dir.join(format!("pre-cleanup-{}.zip", timestamp));
+
+    {
+        let progress: Vec<ReadingProgress> = books
+            .iter()
+            .filter_map(|b| db::get_reading_progress(&conn, &b.id).ok().flatten())
+            .collect();
+        let bookmarks: Vec<Bookmark> = books
+            .iter()
+            .flat_map(|b| db::list_bookmarks(&conn, &b.id).unwrap_or_default())
+            .collect();
+        let highlights: Vec<Highlight> = books
+            .iter()
+            .flat_map(|b| db::list_highlights(&conn, &b.id).unwrap_or_default())
+            .collect();
+        let collections = db::list_collections(&conn).map_err(|e| e.to_string())?;
+        let tags = db::list_tags(&conn).map_err(|e| e.to_string())?;
+        let book_tags: Vec<(String, String, String)> = books
+            .iter()
+            .flat_map(|b| {
+                db::get_book_tags(&conn, &b.id)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|(tag_id, tag_name)| (b.id.clone(), tag_id, tag_name))
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+
+        let metadata = serde_json::json!({
+            "version": 1,
+            "books": books,
+            "reading_progress": progress,
+            "bookmarks": bookmarks,
+            "highlights": highlights,
+            "collections": collections,
+            "tags": tags,
+            "book_tags": book_tags,
+        });
+
+        let file = std::fs::File::create(&backup_path).map_err(|e| e.to_string())?;
+        let mut zip = zip::ZipWriter::new(file);
+        let options =
+            SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+        let metadata_json = serde_json::to_string_pretty(&metadata).map_err(|e| e.to_string())?;
+        zip.start_file("library.json", options)
+            .map_err(|e| e.to_string())?;
+        zip.write_all(metadata_json.as_bytes())
+            .map_err(|e| e.to_string())?;
+        zip.finish().map_err(|e| e.to_string())?;
+    }
 
     let mut removed_books: Vec<CleanupEntry> = Vec::new();
 
@@ -3226,6 +3287,7 @@ pub async fn cleanup_library(
     Ok(CleanupResult {
         removed_count: removed_books.len() as u32,
         removed_books,
+        backup_path: backup_path.to_string_lossy().to_string(),
     })
 }
 
