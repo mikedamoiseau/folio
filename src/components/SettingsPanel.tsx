@@ -795,7 +795,7 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
           </Accordion>
 
           {/* Text & Typography */}
-          <Accordion title={t("settings.textTypography")} defaultOpen>
+          <Accordion title={t("settings.textTypography")}>
             <div className="flex items-center gap-3">
               <button
                 onClick={() => setFontSize(fontSize - 1)}
@@ -1032,7 +1032,7 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
           </Accordion>
 
           {/* Page Layout */}
-          <Accordion title={t("settings.pageLayout")} defaultOpen>
+          <Accordion title={t("settings.pageLayout")}>
             <div className="flex gap-1 bg-warm-subtle rounded-xl p-1">
               {(["paginated", "continuous"] as const).map((option) => (
                 <button
