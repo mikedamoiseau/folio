@@ -2690,15 +2690,16 @@ struct ScanProgress {
 
 #[tauri::command]
 pub async fn start_scan(
-    rescan: Option<bool>,
+    include_skipped: Option<bool>,
     state: State<'_, AppState>,
     app: AppHandle,
 ) -> Result<(), String> {
     SCAN_CANCEL.store(false, Ordering::SeqCst);
     let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
-    if rescan.unwrap_or(false) {
+    if include_skipped.unwrap_or(false) {
+        // Re-queue previously skipped books so new providers can try them
         conn.execute(
-            "UPDATE books SET enrichment_status = NULL WHERE enrichment_status IS NOT NULL",
+            "UPDATE books SET enrichment_status = NULL WHERE enrichment_status = 'skipped'",
             [],
         )
         .map_err(|e| e.to_string())?;
