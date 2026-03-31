@@ -1128,10 +1128,9 @@ export default function Library() {
             setScanningBookId(id);
             setScanToast(null);
             try {
-              await invoke("scan_single_book", { bookId: id });
+              const updatedBook = await invoke<Book>("scan_single_book", { bookId: id });
               await loadBooks(activeCollectionIdRef.current);
-              const updated = books.find((b) => b.id === id);
-              if (updated) setDetailBook(updated);
+              setDetailBook(updatedBook);
               setScanToast({ message: t("library.metadataUpdated"), isError: false });
             } catch (err) {
               const msg = String(err);
