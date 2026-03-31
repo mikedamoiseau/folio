@@ -1,3 +1,4 @@
+pub mod bnf;
 pub mod comic_vine;
 pub mod google_books;
 pub mod openlibrary;
@@ -85,6 +86,7 @@ impl ProviderRegistry {
                 Box::new(google_books::GoogleBooksProvider::new()),
                 Box::new(openlibrary::OpenLibraryProvider::new()),
                 Box::new(comic_vine::ComicVineProvider::new()),
+                Box::new(bnf::BnfProvider::new()),
             ],
         }
     }
@@ -207,20 +209,22 @@ mod tests {
     fn registry_lists_providers_in_order() {
         let reg = ProviderRegistry::new();
         let providers = reg.list_providers();
-        assert_eq!(providers.len(), 3);
+        assert_eq!(providers.len(), 4);
         assert_eq!(providers[0].id, "google_books");
         assert_eq!(providers[0].name, "Google Books");
         assert_eq!(providers[1].id, "openlibrary");
         assert_eq!(providers[1].name, "OpenLibrary");
         assert_eq!(providers[2].id, "comic_vine");
         assert_eq!(providers[2].name, "Comic Vine");
+        assert_eq!(providers[3].id, "bnf");
+        assert_eq!(providers[3].name, "BnF (Bibliothèque nationale de France)");
     }
 
     #[test]
     fn registry_get_enabled_providers() {
         let mut reg = ProviderRegistry::new();
-        // Comic Vine is disabled by default (needs API key), so only 2 enabled
-        assert_eq!(reg.enabled_providers().len(), 2);
+        // Google Books + OpenLibrary + BnF enabled; Comic Vine disabled (needs API key)
+        assert_eq!(reg.enabled_providers().len(), 3);
         reg.configure_provider(
             "google_books",
             ProviderConfig {
@@ -229,7 +233,8 @@ mod tests {
             },
         );
         let enabled = reg.enabled_providers();
-        assert_eq!(enabled.len(), 1);
+        assert_eq!(enabled.len(), 2);
         assert_eq!(enabled[0], "openlibrary");
+        assert_eq!(enabled[1], "bnf");
     }
 }

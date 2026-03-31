@@ -172,8 +172,12 @@ fn extract_all_dc<'a>(tag: &str, xml: &'a str) -> Vec<&'a str> {
     results
 }
 
-/// Check if a string looks like an ISBN (10 or 13 digits, possibly with hyphens).
+/// Check if a string looks like an ISBN (10 or 13 digits, possibly separated by hyphens only).
 fn looks_like_isbn(s: &str) -> bool {
+    // Only allow digits and hyphens — ARK identifiers and ISSNs contain letters or slashes
+    if !s.chars().all(|c| c.is_ascii_digit() || c == '-') {
+        return false;
+    }
     let digits: String = s.chars().filter(|c| c.is_ascii_digit()).collect();
     digits.len() == 10 || digits.len() == 13
 }
