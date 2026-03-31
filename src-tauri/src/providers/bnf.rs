@@ -76,7 +76,9 @@ fn fetch_and_parse(url: &str) -> Result<Vec<EnrichmentData>, String> {
         return Err(format!("BnF HTTP {}", resp.status()));
     }
 
-    let body = resp.text().map_err(|e| format!("BnF response read error: {e}"))?;
+    let body = resp
+        .text()
+        .map_err(|e| format!("BnF response read error: {e}"))?;
 
     // Split on <srw:record> to get individual records
     let records: Vec<EnrichmentData> = body
@@ -191,7 +193,7 @@ fn extract_year(date: &str) -> Option<u16> {
 
 /// Escape special CQL characters in a query value.
 fn cql_escape(s: &str) -> String {
-    s.replace('"', "").replace('\\', "")
+    s.replace(['"', '\\'], "")
 }
 
 fn urlencoding(s: &str) -> String {
@@ -241,10 +243,7 @@ mod tests {
         assert_eq!(result.isbn.as_deref(), Some("978-2-01-210103-6"));
         assert!(result.cover_url.is_none());
         assert_eq!(result.source, "bnf");
-        assert_eq!(
-            result.source_key.as_deref(),
-            Some("ark:/12148/cb30058120v")
-        );
+        assert_eq!(result.source_key.as_deref(), Some("ark:/12148/cb30058120v"));
     }
 
     #[test]

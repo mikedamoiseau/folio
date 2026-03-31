@@ -201,13 +201,13 @@ Expand where books come from and how they persist.
 - ~~Two-tier search: volumes first, then issues~~
 - ~~*Depends on: Multi-Provider Enrichment (#17)*~~
 
-#### 17c. BnF (Bibliothèque Nationale de France) Enrichment Provider
-- Add BnF as an enrichment provider via their SRU API
-- Excellent coverage for French editions (books + BD)
-- Free and open, highly accurate national records
-- Complex MARC format response parsing required
-- Search by ISBN or title+author
-- *Depends on: Multi-Provider Enrichment (#17)*
+#### 17c. BnF (Bibliothèque Nationale de France) Enrichment Provider — **Done**
+- ~~Add BnF as an enrichment provider via their SRU API~~
+- ~~Excellent coverage for French editions (books + BD)~~
+- ~~Free and open, highly accurate national records, no API key needed~~
+- ~~Dublin Core response format (simple XML parsing)~~
+- ~~Search by ISBN or title+author with document type filtering~~
+- ~~*Depends on: Multi-Provider Enrichment (#17)*~~
 
 #### Future Enrichment Providers
 | Provider | Coverage | API Key | Notes |
@@ -329,6 +329,11 @@ Tauri v2 supports mobile targets. The React frontend renders in a mobile WebView
 - ~~Bundle the OpenDyslexic font (free, open-source) as a built-in font option~~
 - ~~Designed for readers with dyslexia — weighted letterforms prevent visual rotation/flipping~~
 - ~~WOFF2 files bundled locally (Regular, Bold, Italic, Bold-Italic); 3-button font selector in settings~~
+
+#### 25b. Context-Aware Library Sections
+- Hide "Continue Reading" and "Discover" sections when viewing a collection or series
+- These sections are only relevant in the full library view
+- When filtered to a collection/series, show only the matching books grid
 
 #### 26. Star Ratings — **Done**
 - ~~1-5 star rating per book~~
