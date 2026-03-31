@@ -207,7 +207,10 @@ mod tests {
 
         let result = parse_volume(&item).expect("should parse");
         assert_eq!(result.title, "Astérix");
-        assert_eq!(result.description.as_deref(), Some("A series of French comic books."));
+        assert_eq!(
+            result.description.as_deref(),
+            Some("A series of French comic books.")
+        );
         assert_eq!(result.publisher.as_deref(), Some("Dargaud"));
         assert_eq!(result.publish_year, Some(1959));
         assert!(result.cover_url.is_some());
@@ -255,7 +258,10 @@ mod tests {
 
         let result = parse_issue(&item).expect("should parse");
         assert_eq!(result.title, "The Blue Lotus");
-        assert_eq!(result.description.as_deref(), Some("Tintin travels to China."));
+        assert_eq!(
+            result.description.as_deref(),
+            Some("Tintin travels to China.")
+        );
         assert_eq!(result.publish_year, Some(1936));
         assert!(result.cover_url.is_some());
         assert_eq!(result.source, "comic_vine");
