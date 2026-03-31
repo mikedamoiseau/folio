@@ -84,6 +84,7 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
   const dndTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const [chapterError, setChapterError] = useState<string | null>(null);
+  const [missingFileDialog, setMissingFileDialog] = useState(false);
 
   // Continuous scroll mode state
   const [allChaptersHtml, setAllChaptersHtml] = useState<string[]>([]);
@@ -103,6 +104,11 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
   const startChapterRef = useRef<number>(0);
   const restoringScroll = useRef<number | null>(null);
   const savedScrollPosition = useRef<number | null>(null);
+
+  const isFileNotFound = (err: unknown): boolean => {
+    const msg = String(err).toLowerCase();
+    return msg.includes("book file not found");
+  };
 
   // ---- Load book info, TOC, and saved progress on mount ----
 
@@ -154,6 +160,9 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
         }
       } catch (err) {
         if (!cancelled) {
+          if (isFileNotFound(err)) {
+            setMissingFileDialog(true);
+          }
           setError(friendlyError(String(err), t));
         }
       } finally {
@@ -281,6 +290,9 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
         }
       } catch (err) {
         if (!cancelled) {
+          if (isFileNotFound(err)) {
+            setMissingFileDialog(true);
+          }
           setChapterError(friendlyError(String(err), t));
         }
       }
@@ -886,6 +898,50 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
         >
           {t("reader.backToLibrary")}
         </button>
+        {missingFileDialog && (
+          <>
+            <div className="fixed inset-0 bg-ink/40 z-[80]" aria-hidden="true" />
+            <div
+              role="dialog"
+              aria-label={t("reader.missingFileTitle")}
+              aria-modal="true"
+              className="fixed inset-0 z-[90] flex items-center justify-center p-4"
+            >
+              <div className="bg-surface rounded-2xl shadow-2xl w-full max-w-md border border-warm-border p-6 space-y-5">
+                <h3 className="font-serif text-base font-semibold text-ink">
+                  {t("reader.missingFileTitle")}
+                </h3>
+                <p className="text-sm text-ink-muted">
+                  {t("reader.missingFileMessage")}
+                </p>
+                <div className="flex gap-3 justify-end pt-1">
+                  <button
+                    onClick={() => {
+                      setMissingFileDialog(false);
+                      navigate("/");
+                    }}
+                    className="px-4 py-2 text-sm text-ink-muted hover:text-ink transition-colors"
+                  >
+                    {t("common.cancel")}
+                  </button>
+                  <button
+                    onClick={async () => {
+                      try {
+                        await invoke("remove_book", { bookId });
+                      } catch {
+                        // Already gone or other error — navigate away regardless
+                      }
+                      navigate("/");
+                    }}
+                    className="px-4 py-2 text-sm bg-red-600 text-white rounded-xl hover:bg-red-700 transition-colors font-medium"
+                  >
+                    {t("reader.removeFromLibrary")}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </>
+        )}
       </div>
     );
   }
@@ -1453,6 +1509,50 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
             </footer>
           </>
         )}
+      {missingFileDialog && (
+        <>
+          <div className="fixed inset-0 bg-ink/40 z-[80]" aria-hidden="true" />
+          <div
+            role="dialog"
+            aria-label={t("reader.missingFileTitle")}
+            aria-modal="true"
+            className="fixed inset-0 z-[90] flex items-center justify-center p-4"
+          >
+            <div className="bg-surface rounded-2xl shadow-2xl w-full max-w-md border border-warm-border p-6 space-y-5">
+              <h3 className="font-serif text-base font-semibold text-ink">
+                {t("reader.missingFileTitle")}
+              </h3>
+              <p className="text-sm text-ink-muted">
+                {t("reader.missingFileMessage")}
+              </p>
+              <div className="flex gap-3 justify-end pt-1">
+                <button
+                  onClick={() => {
+                    setMissingFileDialog(false);
+                    navigate("/");
+                  }}
+                  className="px-4 py-2 text-sm text-ink-muted hover:text-ink transition-colors"
+                >
+                  {t("common.cancel")}
+                </button>
+                <button
+                  onClick={async () => {
+                    try {
+                      await invoke("remove_book", { bookId });
+                    } catch {
+                      // Already gone or other error — navigate away regardless
+                    }
+                    navigate("/");
+                  }}
+                  className="px-4 py-2 text-sm bg-red-600 text-white rounded-xl hover:bg-red-700 transition-colors font-medium"
+                >
+                  {t("reader.removeFromLibrary")}
+                </button>
+              </div>
+            </div>
+          </div>
+        </>
+      )}
       </div>
     </div>
   );
