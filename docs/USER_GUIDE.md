@@ -11,7 +11,7 @@ How to install, import books, and read them. Covers all formats, collections, hi
 3. [Collections](#3-collections)
 4. [Reading a Book](#4-reading-a-book)
 5. [Highlights and Bookmarks](#5-highlights-and-bookmarks)
-6. [Book Metadata and OpenLibrary](#6-book-metadata-and-openlibrary)
+6. [Book Metadata and Enrichment](#6-book-metadata-and-enrichment)
 7. [Catalog Browsing (OPDS)](#7-catalog-browsing-opds)
 8. [Profiles](#8-profiles)
 9. [Customizing Your Reading Experience](#9-customizing-your-reading-experience)
@@ -94,7 +94,9 @@ When you import a book, Folio copies the file into its own managed library folde
 
 ### Viewing your books
 
-Books are shown as a cover grid. Each card displays the cover image, title, author, star rating (if set), a progress percentage badge, and a format badge for non-EPUB books. A "Continue Reading" row at the top shows your 5 most recently read books.
+Books are shown as a cover grid. Each card displays the cover image, title, author, star rating (if set), a progress percentage badge, and a format badge for non-EPUB books.
+
+In the full library view, a **"Continue Reading"** row at the top shows your most recently read books, and a **"Discover"** row shows popular titles from your configured OPDS catalogs. Both sections are hidden when viewing a collection or series, so you see only the relevant books.
 
 ### Searching and filtering
 
@@ -102,7 +104,8 @@ Books are shown as a cover grid. Each card displays the cover image, title, auth
 - **Format filter:** Filter by All, EPUB, PDF, CBZ, or CBR.
 - **Status filter:** Filter by All, Unread, In Progress, or Finished.
 - **Rating filter:** Filter by minimum star rating (1+ through 5 stars).
-- **Sorting:** Sort by date added, title, author, last read, progress, or rating — ascending or descending.
+- **Sorting:** Sort by date added, title, author, last read, progress, rating, or series — ascending or descending.
+- **Source filter:** Filter by All, Imported, or Linked books.
 
 All filters combine, so you can search for "asimov" within "epub" books that are "in progress."
 
@@ -228,7 +231,7 @@ Press `B` in the reader to bookmark the current position. Bookmarks are listed a
 
 ---
 
-## 6. Book Metadata and OpenLibrary
+## 6. Book Metadata and Enrichment
 
 Click the edit button on any book card to open the metadata editor.
 
@@ -243,28 +246,31 @@ Click the edit button on any book card to open the metadata editor.
 - Star rating (1-5 stars — click a star to rate, click the same star again to clear)
 - Tags (with autocomplete from your existing tags)
 
-### OpenLibrary enrichment
+### Enrichment providers
 
-Click "Search OpenLibrary" in the edit dialog to look up your book by title and author. From the results you can pull in:
+Folio can look up metadata from multiple sources. Providers are tried in order — the first one that finds a match wins. Configure which providers are active in **Settings > Metadata Scan > Enrichment Sources**.
 
-- Description
-- Genres
-- Community rating (0-5 stars)
+| Provider | Coverage | API Key | Default |
+|----------|----------|---------|---------|
+| **Google Books** | General books, good international coverage | Optional (for higher rate limits) | Enabled |
+| **OpenLibrary** | Open data, ratings, subjects | None | Enabled |
+| **Comic Vine** | Comics, BD, manga — the most comprehensive free comics database | Free key from comicvine.gamespot.com/api | Disabled (needs key) |
+| **BnF** | French national library — excellent for French editions | None | Enabled |
 
-This is a one-click operation — select a match and the metadata is applied to your book.
+Click "Search" in the edit dialog to look up your book by title and author. From the results you can pull in description, genres, and ratings.
 
 ### Automatic metadata scanning
 
-Folio can automatically look up metadata for your books via OpenLibrary. The scan uses multiple strategies in order of confidence:
+Folio can automatically look up metadata for your books. The scan uses multiple strategies in order of confidence:
 
-1. **ISBN lookup** — if the EPUB contains an ISBN in its metadata, Folio does a direct lookup (highest accuracy)
-2. **Title + Author search** — searches OpenLibrary and auto-applies if the match is strong
+1. **ISBN lookup** — if the book contains an ISBN in its metadata, Folio does a direct lookup (highest accuracy)
+2. **Title + Author search** — searches providers and auto-applies if the match is strong
 3. **Filename parsing** — for CBR/CBZ comics and files with no embedded metadata, Folio parses the filename to extract title, author, and year
 
 **Scan controls:**
 
-- **Scan Library** button in the toolbar (magnifying glass icon) — scans all unenriched books
-- **Per-book scan** — hover over a book card and click the scan icon
+- **Scan Library** button in the toolbar (magnifying glass icon) — scans all unenriched books. Also retries previously skipped books (they may match with newly enabled providers).
+- **Per-book scan** — click the scan icon in the book detail popup to enrich a single book. The popup updates immediately with the new metadata.
 - **Progress indicator** — shows "Enriching 3/12: Book Title" with a cancel button
 
 **Settings** (in Settings > Metadata Scan):
@@ -272,7 +278,12 @@ Folio can automatically look up metadata for your books via OpenLibrary. The sca
 - **Auto-scan on import** (default: on) — newly imported books are automatically queued for metadata lookup
 - **Auto-scan on startup** (default: off) — scan unenriched books when the app launches
 
-Comics with `ComicInfo.xml` inside the CBZ archive will have writer and title extracted automatically.
+### Comics metadata
+
+Comics (CBZ and CBR) get metadata from two sources:
+
+- **ComicInfo.xml** — if present inside the archive, Folio extracts writer, title, series, volume, year, language, publisher, genre, and summary automatically at import time.
+- **Enrichment providers** — Comic Vine is recommended for comics. Get a free API key from comicvine.gamespot.com/api, enable it in Settings, then run a scan.
 
 ---
 
@@ -416,9 +427,14 @@ Folio keeps a log of data-changing actions (imports, edits, deletes, collection 
 - Filter by action type (e.g., only imports, only edits)
 - Each entry shows the action, affected item, and timestamp
 
-### Library folder
+### Library folder and import mode
 
-In Settings, you can view your current library folder path, file count, and total storage used. You can change the library folder — Folio will offer to move existing files to the new location or keep them in place.
+In Settings > Library, you can view your current library folder path, file count, and total storage used. You can change the library folder — Folio will offer to move existing files to the new location or keep them in place.
+
+**Import mode:** Choose between two modes for how books are added:
+
+- **Copy** (default) — the file is copied into Folio's managed library folder. Safe and self-contained.
+- **Link** — Folio references the file at its original location without copying. Useful for large libraries on external drives or NAS. Linked books show a link badge on their card.
 
 ---
 
@@ -426,14 +442,25 @@ In Settings, you can view your current library folder path, file count, and tota
 
 ### Local backup
 
-From **Settings > Backup & Restore** you can export and import library backups as ZIP files.
+From **Settings > Backup & Restore** you can export and restore library backups.
 
 **Export options:**
 
 - **Metadata only** — small file containing your reading progress, collections, tags, and highlights.
 - **Full backup** — includes all book files alongside the metadata.
 
-**Import:** Select a backup ZIP to restore your library.
+**Restore from backup:** Click "Restore from backup" to open the restore picker:
+
+- **Automatic backups** — Folio creates automatic backups before destructive operations like library cleanup. These are listed with their date, type, and file size. Click "Restore" on any entry.
+- **From file** — Click "Choose file" to select a backup ZIP you exported previously.
+
+Restoring a backup imports books and metadata. Existing data is not deleted — it's a non-destructive merge.
+
+### Library cleanup
+
+From **Settings > Library**, click "Check for missing files" to scan your library for books whose files no longer exist on disk (moved, deleted, or on a disconnected drive). Folio automatically creates a metadata backup before removing any broken entries. The result shows how many books were removed and where the backup was saved.
+
+If you try to open a book whose file is missing, Folio shows a dialog offering to remove it from your library.
 
 ### Remote backup
 
