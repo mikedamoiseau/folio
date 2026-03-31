@@ -180,6 +180,15 @@ pub struct CleanupProgress {
     pub total: u32,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoBackup {
+    pub path: String,
+    pub label: String,
+    pub timestamp: i64,
+    pub size_bytes: u64,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
