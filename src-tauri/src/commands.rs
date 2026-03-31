@@ -2689,9 +2689,20 @@ struct ScanProgress {
 }
 
 #[tauri::command]
-pub async fn start_scan(state: State<'_, AppState>, app: AppHandle) -> Result<(), String> {
+pub async fn start_scan(
+    rescan: Option<bool>,
+    state: State<'_, AppState>,
+    app: AppHandle,
+) -> Result<(), String> {
     SCAN_CANCEL.store(false, Ordering::SeqCst);
     let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
+    if rescan.unwrap_or(false) {
+        conn.execute(
+            "UPDATE books SET enrichment_status = NULL WHERE enrichment_status IS NOT NULL",
+            [],
+        )
+        .map_err(|e| e.to_string())?;
+    }
     let books = db::list_unenriched_books(&conn).map_err(|e| e.to_string())?;
     let total = books.len() as u32;
     if total == 0 {

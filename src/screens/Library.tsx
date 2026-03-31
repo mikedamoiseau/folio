@@ -456,7 +456,7 @@ export default function Library() {
   }, [loadBooks]);
 
   const handleStartScan = useCallback(async () => {
-    try { await invoke("start_scan"); } catch (err) { setError(friendlyError(String(err), t)); }
+    try { await invoke("start_scan", { rescan: true }); } catch (err) { setError(friendlyError(String(err), t)); }
   }, []);
   const handleCancelScan = useCallback(async () => {
     try { await invoke("cancel_scan"); } catch {}
