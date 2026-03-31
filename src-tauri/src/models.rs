@@ -158,6 +158,27 @@ pub struct SeriesInfo {
     pub count: i64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CleanupResult {
+    pub removed_count: u32,
+    pub removed_books: Vec<CleanupEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CleanupEntry {
+    pub id: String,
+    pub title: String,
+    pub author: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CleanupProgress {
+    pub current: u32,
+    pub total: u32,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
