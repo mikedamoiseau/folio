@@ -6,9 +6,9 @@ use crate::cbz;
 use crate::db::{self, DbPool};
 use crate::epub;
 use crate::models::{
-    Book, BookFormat, Bookmark, CleanupEntry, CleanupProgress, CleanupResult, Collection,
-    CollectionRule, CollectionType, CustomFont, Highlight, NewRuleInput, ReadingProgress,
-    SeriesInfo,
+    AutoBackup, Book, BookFormat, Bookmark, CleanupEntry, CleanupProgress, CleanupResult,
+    Collection, CollectionRule, CollectionType, CustomFont, Highlight, NewRuleInput,
+    ReadingProgress, SeriesInfo,
 };
 use crate::opds;
 use crate::openlibrary;
@@ -3289,6 +3289,53 @@ pub async fn cleanup_library(
         removed_books,
         backup_path: backup_path.to_string_lossy().to_string(),
     })
+}
+
+#[tauri::command]
+pub async fn list_auto_backups(state: State<'_, AppState>) -> Result<Vec<AutoBackup>, String> {
+    let backups_dir = state.data_dir.join("backups");
+    if !backups_dir.exists() {
+        return Ok(Vec::new());
+    }
+
+    let mut backups: Vec<AutoBackup> = Vec::new();
+
+    let entries = std::fs::read_dir(&backups_dir).map_err(|e| e.to_string())?;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("zip") {
+            continue;
+        }
+
+        let filename = match path.file_stem().and_then(|s| s.to_str()) {
+            Some(s) => s.to_string(),
+            None => continue,
+        };
+
+        // Parse known prefixes: "pre-cleanup-{timestamp}"
+        let (label, timestamp) = if let Some(ts_str) = filename.strip_prefix("pre-cleanup-") {
+            match ts_str.parse::<i64>() {
+                Ok(ts) => ("Pre-cleanup".to_string(), ts),
+                Err(_) => continue,
+            }
+        } else {
+            continue; // Skip unknown files
+        };
+
+        let size_bytes = entry.metadata().map(|m| m.len()).unwrap_or(0);
+
+        backups.push(AutoBackup {
+            path: path.to_string_lossy().to_string(),
+            label,
+            timestamp,
+            size_bytes,
+        });
+    }
+
+    // Sort newest first
+    backups.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+
+    Ok(backups)
 }
 
 #[tauri::command]
