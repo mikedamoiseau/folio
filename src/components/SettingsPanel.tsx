@@ -278,6 +278,13 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
   const [exporting, setExporting] = useState(false);
   const [backupMessage, setBackupMessage] = useState<string | null>(null);
   const [includeFiles, setIncludeFiles] = useState(false);
+  const [cleanupState, setCleanupState] = useState<
+    "idle" | "confirm" | "scanning" | "done"
+  >("idle");
+  const [cleanupProgress, setCleanupProgress] = useState({ current: 0, total: 0 });
+  const [cleanupResult, setCleanupResult] = useState<{
+    removedCount: number;
+  } | null>(null);
 
   // Import mode setting
   const [importMode, setImportMode] = useState<string>("import");
@@ -624,6 +631,29 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
       unlisten();
       setRunningBackup(false);
       setBackupProgressText("");
+    }
+  };
+
+  const handleCleanup = async () => {
+    setCleanupState("scanning");
+    setCleanupProgress({ current: 0, total: 0 });
+    const unlisten = await listen<{ current: number; total: number }>(
+      "cleanup-progress",
+      (event) => {
+        setCleanupProgress(event.payload);
+      }
+    );
+    try {
+      const result = await invoke<{ removedCount: number; removedBooks: { id: string; title: string; author: string }[] }>(
+        "cleanup_library"
+      );
+      setCleanupResult({ removedCount: result.removedCount });
+      setCleanupState("done");
+    } catch (err) {
+      setCleanupResult(null);
+      setCleanupState("idle");
+    } finally {
+      unlisten();
     }
   };
 
@@ -1054,6 +1084,12 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
               >
                 {t("settings.changeFolder")}
               </button>
+              <button
+                onClick={() => setCleanupState("confirm")}
+                className="w-full px-3 py-2 text-sm text-ink-muted hover:text-ink bg-warm-subtle hover:bg-warm-border rounded-xl transition-colors text-left"
+              >
+                {t("settings.checkMissingFiles")}
+              </button>
 
               <div className="mt-3 pt-3 border-t border-warm-border/50">
                 <label className="text-xs font-medium text-ink-muted mb-2 block">{t("settings.importMode")}</label>
@@ -1435,6 +1471,79 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                   {dontMoveFiles ? t("settings.changeFolder2") : t("settings.moveAndUpdate")}
                 </button>
               </div>
+            </div>
+          </div>
+        </>
+      )}
+      {cleanupState !== "idle" && (
+        <>
+          <div
+            className="fixed inset-0 bg-ink/40 z-[60]"
+            onClick={() => cleanupState !== "scanning" && setCleanupState("idle")}
+            aria-hidden="true"
+          />
+          <div
+            role="dialog"
+            aria-label={t("settings.cleanupConfirmTitle")}
+            aria-modal="true"
+            className="fixed inset-0 z-[70] flex items-center justify-center p-4"
+          >
+            <div className="bg-surface rounded-2xl shadow-2xl w-full max-w-md border border-warm-border p-6 space-y-5">
+              <h3 className="font-serif text-base font-semibold text-ink">
+                {t("settings.cleanupConfirmTitle")}
+              </h3>
+
+              {cleanupState === "confirm" && (
+                <>
+                  <p className="text-sm text-ink-muted">
+                    {t("settings.cleanupConfirmMessage")}
+                  </p>
+                  <div className="flex gap-3 justify-end pt-1">
+                    <button
+                      onClick={() => setCleanupState("idle")}
+                      className="px-4 py-2 text-sm text-ink-muted hover:text-ink transition-colors"
+                    >
+                      {t("common.cancel")}
+                    </button>
+                    <button
+                      onClick={handleCleanup}
+                      className="px-4 py-2 text-sm bg-accent text-white rounded-xl hover:bg-accent-hover transition-colors font-medium"
+                    >
+                      {t("settings.cleanupConfirmContinue")}
+                    </button>
+                  </div>
+                </>
+              )}
+
+              {cleanupState === "scanning" && (
+                <p className="text-sm text-ink-muted">
+                  {t("settings.cleanupScanning", {
+                    current: cleanupProgress.current,
+                    total: cleanupProgress.total,
+                  })}
+                </p>
+              )}
+
+              {cleanupState === "done" && (
+                <>
+                  <p className="text-sm text-ink-muted">
+                    {cleanupResult && cleanupResult.removedCount > 0
+                      ? t("settings.cleanupDoneRemoved", { count: cleanupResult.removedCount })
+                      : t("settings.cleanupDoneNone")}
+                  </p>
+                  <div className="flex justify-end pt-1">
+                    <button
+                      onClick={() => {
+                        setCleanupState("idle");
+                        loadLibraryFolder();
+                      }}
+                      className="px-4 py-2 text-sm bg-accent text-white rounded-xl hover:bg-accent-hover transition-colors font-medium"
+                    >
+                      {t("settings.cleanupDone")}
+                    </button>
+                  </div>
+                </>
+              )}
             </div>
           </div>
         </>
