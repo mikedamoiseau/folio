@@ -6,8 +6,9 @@ use crate::cbz;
 use crate::db::{self, DbPool};
 use crate::epub;
 use crate::models::{
-    Book, BookFormat, Bookmark, Collection, CollectionRule, CollectionType, CustomFont, Highlight,
-    NewRuleInput, ReadingProgress, SeriesInfo,
+    Book, BookFormat, Bookmark, CleanupEntry, CleanupProgress, CleanupResult, Collection,
+    CollectionRule, CollectionType, CustomFont, Highlight, NewRuleInput, ReadingProgress,
+    SeriesInfo,
 };
 use crate::opds;
 use crate::openlibrary;
@@ -3157,6 +3158,75 @@ pub async fn check_file_exists(file_path: String) -> Result<bool, String> {
             file_path
         ))
     }
+}
+
+#[tauri::command]
+pub async fn cleanup_library(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<CleanupResult, String> {
+    let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
+    let books = db::list_books(&conn).map_err(|e| e.to_string())?;
+    let total = books.len() as u32;
+
+    let mut removed_books: Vec<CleanupEntry> = Vec::new();
+
+    for (i, book) in books.iter().enumerate() {
+        let _ = app.emit(
+            "cleanup-progress",
+            CleanupProgress {
+                current: (i + 1) as u32,
+                total,
+            },
+        );
+
+        if std::path::Path::new(&book.file_path).exists() {
+            continue;
+        }
+
+        // Book file is missing — remove from database.
+        db::delete_book(&conn, &book.id).map_err(|e| e.to_string())?;
+
+        // Evict EPUB cache entry.
+        if let Ok(mut cache) = state.epub_cache.lock() {
+            cache.remove(&book.file_path);
+        }
+        if let Ok(mut order) = state.epub_cache_order.lock() {
+            order.retain(|k| k != &book.file_path);
+        }
+
+        // Remove cover directory.
+        let cover_dir = state.data_dir.join("covers").join(&book.id);
+        if cover_dir.exists() {
+            let _ = std::fs::remove_dir_all(&cover_dir);
+        }
+
+        // Remove extracted image cache.
+        let image_cache_dir = state.data_dir.join("images").join(&book.id);
+        if image_cache_dir.exists() {
+            let _ = std::fs::remove_dir_all(&image_cache_dir);
+        }
+
+        log_activity(
+            &conn,
+            "book_removed_cleanup",
+            "book",
+            Some(&book.id),
+            Some(&book.title),
+            None,
+        );
+
+        removed_books.push(CleanupEntry {
+            id: book.id.clone(),
+            title: book.title.clone(),
+            author: book.author.clone(),
+        });
+    }
+
+    Ok(CleanupResult {
+        removed_count: removed_books.len() as u32,
+        removed_books,
+    })
 }
 
 #[tauri::command]
