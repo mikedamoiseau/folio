@@ -277,6 +277,10 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
   const [migrationError, setMigrationError] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
   const [backupMessage, setBackupMessage] = useState<string | null>(null);
+  const [restoreModalOpen, setRestoreModalOpen] = useState(false);
+  const [autoBackups, setAutoBackups] = useState<{ path: string; label: string; timestamp: number; sizeBytes: number }[]>([]);
+  const [restoreConfirmPath, setRestoreConfirmPath] = useState<string | null>(null);
+  const [restoring, setRestoring] = useState(false);
   const [includeFiles, setIncludeFiles] = useState(false);
   const [cleanupState, setCleanupState] = useState<
     "idle" | "confirm" | "scanning" | "done"
@@ -544,22 +548,50 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
     }
   };
 
-  const handleImportBackup = async () => {
+  const loadAutoBackups = async () => {
+    try {
+      const list = await invoke<{ path: string; label: string; timestamp: number; sizeBytes: number }[]>(
+        "list_auto_backups"
+      );
+      setAutoBackups(list);
+    } catch {
+      setAutoBackups([]);
+    }
+  };
+
+  const handleOpenRestoreModal = async () => {
+    setRestoreModalOpen(true);
+    setBackupMessage(null);
+    await loadAutoBackups();
+  };
+
+  const handleRestoreFromFile = async () => {
     try {
       const selected = await openFilePicker({
         multiple: false,
         filters: [{ name: "Backup", extensions: ["zip"] }],
       } as Parameters<typeof openFilePicker>[0]);
       if (!selected) return;
-      setExporting(true);
-      setBackupMessage(null);
       const path = typeof selected === "string" ? selected : selected[0];
-      const count = await invoke<number>("import_library_backup", { archivePath: path });
+      setRestoreConfirmPath(path);
+    } catch {
+      // User cancelled
+    }
+  };
+
+  const handleConfirmRestore = async () => {
+    if (!restoreConfirmPath) return;
+    setRestoring(true);
+    try {
+      const count = await invoke<number>("import_library_backup", { archivePath: restoreConfirmPath });
       setBackupMessage(t("settings.importedBooks", { count }));
+      setRestoreConfirmPath(null);
+      setRestoreModalOpen(false);
     } catch (err) {
       setBackupMessage(t("settings.importFailed", { error: String(err) }));
+      setRestoreConfirmPath(null);
     } finally {
-      setExporting(false);
+      setRestoring(false);
     }
   };
 
@@ -1146,11 +1178,11 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                 {exporting ? t("common.working") : t("settings.exportLibrary")}
               </button>
               <button
-                onClick={handleImportBackup}
+                onClick={handleOpenRestoreModal}
                 disabled={exporting}
                 className="w-full px-3 py-2 text-sm text-ink-muted hover:text-ink bg-warm-subtle hover:bg-warm-border rounded-xl transition-colors text-left disabled:opacity-40"
               >
-                {t("settings.importFromBackup")}
+                {t("settings.restoreFromBackup")}
               </button>
               {backupMessage && (
                 <p className="text-xs text-ink-muted px-1">{backupMessage}</p>
@@ -1550,6 +1582,115 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                   </div>
                 </>
               )}
+            </div>
+          </div>
+        </>
+      )}
+      {restoreModalOpen && !restoreConfirmPath && (
+        <>
+          <div
+            className="fixed inset-0 bg-ink/40 z-[60]"
+            onClick={() => !restoring && setRestoreModalOpen(false)}
+            aria-hidden="true"
+          />
+          <div
+            role="dialog"
+            aria-label={t("settings.restoreTitle")}
+            aria-modal="true"
+            className="fixed inset-0 z-[70] flex items-center justify-center p-4"
+          >
+            <div className="bg-surface rounded-2xl shadow-2xl w-full max-w-md border border-warm-border p-6 space-y-5">
+              <h3 className="font-serif text-base font-semibold text-ink">
+                {t("settings.restoreTitle")}
+              </h3>
+
+              <div>
+                <p className="text-xs font-medium text-ink-muted mb-2">{t("settings.autoBackups")}</p>
+                {autoBackups.length === 0 ? (
+                  <p className="text-sm text-ink-muted/70 italic">{t("settings.noAutoBackups")}</p>
+                ) : (
+                  <div className="max-h-[200px] overflow-y-auto space-y-1.5">
+                    {autoBackups.map((backup) => (
+                      <div
+                        key={backup.path}
+                        className="flex items-center justify-between gap-2 bg-warm-subtle rounded-xl px-3 py-2"
+                      >
+                        <div className="min-w-0">
+                          <p className="text-sm text-ink truncate">
+                            {backup.label} — {new Intl.DateTimeFormat(undefined, {
+                              dateStyle: "medium",
+                              timeStyle: "short",
+                            }).format(new Date(backup.timestamp * 1000))}
+                          </p>
+                          <p className="text-xs text-ink-muted">{formatBytes(backup.sizeBytes)}</p>
+                        </div>
+                        <button
+                          onClick={() => setRestoreConfirmPath(backup.path)}
+                          className="shrink-0 px-3 py-1.5 text-xs bg-accent text-white rounded-lg hover:bg-accent-hover transition-colors font-medium"
+                        >
+                          {t("settings.restore")}
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <div>
+                <p className="text-xs font-medium text-ink-muted mb-2">{t("settings.fromFile")}</p>
+                <button
+                  onClick={handleRestoreFromFile}
+                  className="w-full px-3 py-2 text-sm text-ink-muted hover:text-ink bg-warm-subtle hover:bg-warm-border rounded-xl transition-colors text-left"
+                >
+                  {t("settings.chooseFile")}
+                </button>
+              </div>
+
+              <div className="flex justify-end pt-1">
+                <button
+                  onClick={() => setRestoreModalOpen(false)}
+                  className="px-4 py-2 text-sm text-ink-muted hover:text-ink transition-colors"
+                >
+                  {t("common.cancel")}
+                </button>
+              </div>
+            </div>
+          </div>
+        </>
+      )}
+
+      {restoreConfirmPath && (
+        <>
+          <div className="fixed inset-0 bg-ink/40 z-[80]" aria-hidden="true" />
+          <div
+            role="dialog"
+            aria-label={t("settings.restoreTitle")}
+            aria-modal="true"
+            className="fixed inset-0 z-[90] flex items-center justify-center p-4"
+          >
+            <div className="bg-surface rounded-2xl shadow-2xl w-full max-w-md border border-warm-border p-6 space-y-5">
+              <h3 className="font-serif text-base font-semibold text-ink">
+                {t("settings.restoreTitle")}
+              </h3>
+              <p className="text-sm text-ink-muted">
+                {t("settings.restoreConfirmMessage")}
+              </p>
+              <div className="flex gap-3 justify-end pt-1">
+                <button
+                  onClick={() => setRestoreConfirmPath(null)}
+                  disabled={restoring}
+                  className="px-4 py-2 text-sm text-ink-muted hover:text-ink transition-colors"
+                >
+                  {t("common.cancel")}
+                </button>
+                <button
+                  onClick={handleConfirmRestore}
+                  disabled={restoring}
+                  className="px-4 py-2 text-sm bg-accent text-white rounded-xl hover:bg-accent-hover transition-colors font-medium disabled:opacity-40"
+                >
+                  {restoring ? t("common.working") : t("settings.restore")}
+                </button>
+              </div>
             </div>
           </div>
         </>
