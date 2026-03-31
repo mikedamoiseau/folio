@@ -192,10 +192,27 @@ Expand where books come from and how they persist.
 - Extract series/volume data from OpenLibrary and Google Books during enrichment scan
 - Currently series data comes only from book file metadata and manual entry
 
+#### 17b. Comic Vine Enrichment Provider
+- Add Comic Vine (comicvine.gamespot.com) as an enrichment provider
+- Most comprehensive free public API for comics metadata (American, European, manga)
+- Good coverage of BD/Franco-Belgian comics
+- Requires free API key (rate-limited)
+- Search by title+author, return series, volume, description, genres, cover
+- *Depends on: Multi-Provider Enrichment (#17)*
+
+#### 17c. BnF (Bibliothèque Nationale de France) Enrichment Provider
+- Add BnF as an enrichment provider via their SRU API
+- Excellent coverage for French editions (books + BD)
+- Free and open, highly accurate national records
+- Complex MARC format response parsing required
+- Search by ISBN or title+author
+- *Depends on: Multi-Provider Enrichment (#17)*
+
 #### Future Enrichment Providers
 | Provider | Coverage | API Key | Notes |
 |----------|----------|---------|-------|
-| Comic Vine | Comics (American, some European) | Free key required | comicvine.gamespot.com |
+| ~~Comic Vine~~ | ~~Comics (American, some European)~~ | ~~Free key required~~ | ~~see #17b above~~ |
+| ~~BnF~~ | ~~French national library~~ | ~~Free~~ | ~~see #17c above~~ |
 | Bédéthèque | Franco-Belgian BD (best for French comics) | N/A (scraping) | bedetheque.com — no public API, fragile |
 | ISBNdb | Very comprehensive, all formats | Paid | isbndb.com |
 | MangaUpdates | Manga | Free | mangaupdates.com |

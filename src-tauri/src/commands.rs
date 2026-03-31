@@ -385,8 +385,15 @@ pub async fn import_book(
                     .as_secs() as i64,
                 format,
                 file_hash: Some(hash),
-                description: None,
-                genres: None,
+                description: meta.summary,
+                genres: meta.genre.map(|g| {
+                    let genres: Vec<String> = g
+                        .split(',')
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty())
+                        .collect();
+                    serde_json::to_string(&genres).unwrap_or_else(|_| "[]".to_string())
+                }),
                 rating: None,
                 isbn: None,
                 openlibrary_key: None,
@@ -425,8 +432,8 @@ pub async fn import_book(
             };
             Book {
                 id: book_id,
-                title: original_stem.clone(),
-                author: String::new(),
+                title: meta.title,
+                author: meta.author.unwrap_or_default(),
                 file_path: final_path.clone(),
                 cover_path,
                 total_chapters: meta.page_count,
@@ -436,17 +443,24 @@ pub async fn import_book(
                     .as_secs() as i64,
                 format,
                 file_hash: Some(hash),
-                description: None,
-                genres: None,
+                description: meta.summary,
+                genres: meta.genre.map(|g| {
+                    let genres: Vec<String> = g
+                        .split(',')
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty())
+                        .collect();
+                    serde_json::to_string(&genres).unwrap_or_else(|_| "[]".to_string())
+                }),
                 rating: None,
                 isbn: None,
                 openlibrary_key: None,
                 enrichment_status: None,
-                series: None,
-                volume: None,
-                language: None,
-                publisher: None,
-                publish_year: None,
+                series: meta.series,
+                volume: meta.volume,
+                language: meta.language,
+                publisher: meta.publisher,
+                publish_year: meta.year,
                 is_imported,
             }
         }

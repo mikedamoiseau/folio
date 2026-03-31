@@ -47,6 +47,35 @@ fn collect_image_names(path: &str) -> Result<Vec<String>, String> {
 pub struct CbrMeta {
     pub title: String,
     pub page_count: u32,
+    pub author: Option<String>,
+    pub year: Option<u16>,
+    pub series: Option<String>,
+    pub volume: Option<u32>,
+    pub language: Option<String>,
+    pub publisher: Option<String>,
+    pub summary: Option<String>,
+    pub genre: Option<String>,
+}
+
+/// Extract ComicInfo.xml content from a RAR archive, if present.
+fn extract_comic_info(path: &str) -> Option<String> {
+    let archive = unrar::Archive::new(path).open_for_processing().ok()?;
+    let mut cursor = archive;
+    loop {
+        let header = cursor.read_header().ok()?;
+        match header {
+            None => return None,
+            Some(entry) => {
+                let name = entry.entry().filename.to_string_lossy().to_string();
+                if name == "ComicInfo.xml" || name.ends_with("/ComicInfo.xml") {
+                    let (data, _) = entry.read().ok()?;
+                    return String::from_utf8(data).ok();
+                } else {
+                    cursor = entry.skip().ok()?;
+                }
+            }
+        }
+    }
 }
 
 pub fn import_cbr(path: &str) -> Result<CbrMeta, String> {
@@ -58,9 +87,46 @@ pub fn import_cbr(path: &str) -> Result<CbrMeta, String> {
         .file_stem()
         .map(|s| s.to_string_lossy().to_string())
         .unwrap_or_else(|| "Unknown".to_string());
+
+    let mut author = None;
+    let mut year = None;
+    let mut comic_title = None;
+    let mut series = None;
+    let mut volume = None;
+    let mut language = None;
+    let mut publisher = None;
+    let mut summary = None;
+    let mut genre = None;
+
+    if let Some(xml) = extract_comic_info(path) {
+        if let Some(writer) = crate::epub::extract_tag_text(&xml, "Writer") {
+            author = Some(writer.to_string());
+        }
+        if let Some(t) = crate::epub::extract_tag_text(&xml, "Title") {
+            comic_title = Some(t.to_string());
+        }
+        if let Some(y) = crate::epub::extract_tag_text(&xml, "Year") {
+            year = y.parse::<u16>().ok();
+        }
+        series = crate::epub::extract_tag_text(&xml, "Series").map(|s| s.to_string());
+        volume = crate::epub::extract_tag_text(&xml, "Volume").and_then(|v| v.parse::<u32>().ok());
+        language = crate::epub::extract_tag_text(&xml, "LanguageISO").map(|s| s.to_string());
+        publisher = crate::epub::extract_tag_text(&xml, "Publisher").map(|s| s.to_string());
+        summary = crate::epub::extract_tag_text(&xml, "Summary").map(|s| s.to_string());
+        genre = crate::epub::extract_tag_text(&xml, "Genre").map(|s| s.to_string());
+    }
+
     Ok(CbrMeta {
-        title,
+        title: comic_title.unwrap_or(title),
         page_count: images.len() as u32,
+        author,
+        year,
+        series,
+        volume,
+        language,
+        publisher,
+        summary,
+        genre,
     })
 }
 

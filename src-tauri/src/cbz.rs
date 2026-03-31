@@ -43,6 +43,8 @@ pub struct CbzMeta {
     pub volume: Option<u32>,
     pub language: Option<String>,
     pub publisher: Option<String>,
+    pub summary: Option<String>,
+    pub genre: Option<String>,
 }
 
 /// Opens a CBZ archive and returns its title (filename stem) and page count.
@@ -67,6 +69,8 @@ pub fn import_cbz(path: &str) -> Result<CbzMeta, String> {
     let mut volume = None;
     let mut language = None;
     let mut publisher = None;
+    let mut summary = None;
+    let mut genre = None;
     if let Ok(mut entry) = archive.by_name("ComicInfo.xml") {
         let mut xml = String::new();
         if std::io::Read::read_to_string(&mut entry, &mut xml).is_ok() {
@@ -84,6 +88,8 @@ pub fn import_cbz(path: &str) -> Result<CbzMeta, String> {
                 crate::epub::extract_tag_text(&xml, "Volume").and_then(|v| v.parse::<u32>().ok());
             language = crate::epub::extract_tag_text(&xml, "LanguageISO").map(|s| s.to_string());
             publisher = crate::epub::extract_tag_text(&xml, "Publisher").map(|s| s.to_string());
+            summary = crate::epub::extract_tag_text(&xml, "Summary").map(|s| s.to_string());
+            genre = crate::epub::extract_tag_text(&xml, "Genre").map(|s| s.to_string());
         }
     }
 
@@ -96,6 +102,8 @@ pub fn import_cbz(path: &str) -> Result<CbzMeta, String> {
         volume,
         language,
         publisher,
+        summary,
+        genre,
     })
 }
 
