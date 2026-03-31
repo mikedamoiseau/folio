@@ -1,3 +1,4 @@
+pub mod comic_vine;
 pub mod google_books;
 pub mod openlibrary;
 
@@ -83,6 +84,7 @@ impl ProviderRegistry {
             providers: vec![
                 Box::new(google_books::GoogleBooksProvider::new()),
                 Box::new(openlibrary::OpenLibraryProvider::new()),
+                Box::new(comic_vine::ComicVineProvider::new()),
             ],
         }
     }
@@ -205,16 +207,19 @@ mod tests {
     fn registry_lists_providers_in_order() {
         let reg = ProviderRegistry::new();
         let providers = reg.list_providers();
-        assert_eq!(providers.len(), 2);
+        assert_eq!(providers.len(), 3);
         assert_eq!(providers[0].id, "google_books");
         assert_eq!(providers[0].name, "Google Books");
         assert_eq!(providers[1].id, "openlibrary");
         assert_eq!(providers[1].name, "OpenLibrary");
+        assert_eq!(providers[2].id, "comic_vine");
+        assert_eq!(providers[2].name, "Comic Vine");
     }
 
     #[test]
     fn registry_get_enabled_providers() {
         let mut reg = ProviderRegistry::new();
+        // Comic Vine is disabled by default (needs API key), so only 2 enabled
         assert_eq!(reg.enabled_providers().len(), 2);
         reg.configure_provider(
             "google_books",
