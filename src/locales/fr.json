@@ -123,7 +123,10 @@
     "previousChapter": "Chapitre pr\u00e9c\u00e9dent",
     "nextChapter": "Chapitre suivant",
     "paginatedDescription": "Lire un chapitre \u00e0 la fois avec navigation pr\u00e9c\u00e9dent/suivant. Passez au d\u00e9filement continu pour une exp\u00e9rience de lecture fluide.",
-    "continuousDescription": "D\u00e9filez \u00e0 travers tous les chapitres d\u2019un seul flux. Les gros livres peuvent prendre un moment \u00e0 charger."
+    "continuousDescription": "D\u00e9filez \u00e0 travers tous les chapitres d\u2019un seul flux. Les gros livres peuvent prendre un moment \u00e0 charger.",
+    "missingFileTitle": "Fichier introuvable",
+    "missingFileMessage": "Le fichier de ce livre est introuvable. Il a peut-\u00eatre \u00e9t\u00e9 d\u00e9plac\u00e9 ou supprim\u00e9.",
+    "removeFromLibrary": "Retirer de la biblioth\u00e8que"
   },
 
   "import": {
@@ -266,6 +269,14 @@
     "dontMoveFiles": "Ne pas d\u00e9placer les fichiers existants \u2014 utiliser le nouveau dossier uniquement pour les futurs imports",
     "moveAndUpdate": "D\u00e9placer et mettre \u00e0 jour",
     "changeFolder2": "Changer de dossier",
+    "checkMissingFiles": "V\u00e9rifier les fichiers manquants",
+    "cleanupConfirmTitle": "Nettoyage de la biblioth\u00e8que",
+    "cleanupConfirmMessage": "Ceci va analyser votre biblioth\u00e8que et supprimer les livres dont les fichiers sont introuvables. Cette action est irr\u00e9versible.",
+    "cleanupConfirmContinue": "Continuer",
+    "cleanupScanning": "Analyse\u2026 {{current}} / {{total}}",
+    "cleanupDoneRemoved": "{{count}} livres avec des fichiers manquants supprim\u00e9s.",
+    "cleanupDoneNone": "Tous les livres sont en ordre. Aucun probl\u00e8me trouv\u00e9.",
+    "cleanupDone": "Termin\u00e9",
     "accent": "Accent",
     "accentHover": "Survol",
     "accentLight": "Fond clair",

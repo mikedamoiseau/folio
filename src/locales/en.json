@@ -123,7 +123,10 @@
     "previousChapter": "Previous chapter",
     "nextChapter": "Next chapter",
     "paginatedDescription": "Read one chapter at a time with prev/next navigation. Switch to continuous scroll for a seamless reading experience.",
-    "continuousDescription": "Scroll through all chapters in one continuous flow. Large books may take a moment to load."
+    "continuousDescription": "Scroll through all chapters in one continuous flow. Large books may take a moment to load.",
+    "missingFileTitle": "File Not Found",
+    "missingFileMessage": "This book\u2019s file could not be found. It may have been moved or deleted.",
+    "removeFromLibrary": "Remove from library"
   },
 
   "import": {
@@ -266,6 +269,14 @@
     "dontMoveFiles": "Don\u2019t move existing files \u2014 only use new folder for future imports",
     "moveAndUpdate": "Move & Update",
     "changeFolder2": "Change Folder",
+    "checkMissingFiles": "Check for missing files",
+    "cleanupConfirmTitle": "Library Cleanup",
+    "cleanupConfirmMessage": "This will scan your library and remove any books whose files can no longer be found. This cannot be undone.",
+    "cleanupConfirmContinue": "Continue",
+    "cleanupScanning": "Scanning\u2026 {{current}} / {{total}}",
+    "cleanupDoneRemoved": "Removed {{count}} books with missing files.",
+    "cleanupDoneNone": "All books are accounted for. No issues found.",
+    "cleanupDone": "Done",
     "accent": "Accent",
     "accentHover": "Hover",
     "accentLight": "Light bg",
