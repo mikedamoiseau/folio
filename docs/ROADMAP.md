@@ -119,11 +119,11 @@ Expand where books come from and how they persist.
 - ~~Missing-file dialog in Reader with "Remove from library" option~~
 - ~~Especially useful alongside linked books (#11b)~~
 
-### 11d. Backup Restore Picker
-- Restore from automated backups via dropdown (lists backups from app data dir)
-- Restore from manual backup via file picker (existing "Import from backup" flow)
-- Show backup date, type (pre-cleanup, manual export), and size
-- *Depends on: Library Cleanup (#11c), Library Export/Backup (#13)*
+### 11d. Backup Restore Picker — **Done**
+- ~~Restore from automated backups via dropdown (lists backups from app data dir)~~
+- ~~Restore from manual backup via file picker (replaces "Import from backup" flow)~~
+- ~~Show backup date, type (pre-cleanup), and size~~
+- ~~*Depends on: Library Cleanup (#11c), Library Export/Backup (#13)*~~
 
 ### 12. Bulk Import — **Done**
 - ~~Scan a folder recursively for supported formats (.epub, .cbz, .cbr, .pdf)~~
