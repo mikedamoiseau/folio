@@ -878,11 +878,14 @@ export default function Library() {
                   <>
                     {sortedGroupNames.map((seriesName) => (
                       <React.Fragment key={seriesName}>
+                        {/* Hide redundant series header when only one group and outer header already shows the name */}
+                        {!(sortedGroupNames.length === 1 && (activeCollection || activeSeries)) && (
                         <div className="col-span-full flex items-center gap-2 pt-4 pb-2">
                           <span className="text-xs font-semibold text-ink-muted uppercase tracking-wider">{seriesName}</span>
                           <span className="text-[10px] text-ink-muted/50">{t("library.booksCount", { count: groups[seriesName].length })}</span>
                           <div className="flex-1 border-t border-warm-border/50" />
                         </div>
+                        )}
                         {groups[seriesName].map((book) => (
                           <div
                             key={book.id}
