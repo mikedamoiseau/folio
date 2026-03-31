@@ -192,13 +192,13 @@ Expand where books come from and how they persist.
 - Extract series/volume data from OpenLibrary and Google Books during enrichment scan
 - Currently series data comes only from book file metadata and manual entry
 
-#### 17b. Comic Vine Enrichment Provider
-- Add Comic Vine (comicvine.gamespot.com) as an enrichment provider
-- Most comprehensive free public API for comics metadata (American, European, manga)
-- Good coverage of BD/Franco-Belgian comics
-- Requires free API key (rate-limited)
-- Search by title+author, return series, volume, description, genres, cover
-- *Depends on: Multi-Provider Enrichment (#17)*
+#### 17b. Comic Vine Enrichment Provider — **Done**
+- ~~Add Comic Vine (comicvine.gamespot.com) as an enrichment provider~~
+- ~~Most comprehensive free public API for comics metadata (American, European, manga)~~
+- ~~Good coverage of BD/Franco-Belgian comics~~
+- ~~Requires free API key (rate-limited), disabled by default~~
+- ~~Two-tier search: volumes first, then issues~~
+- ~~*Depends on: Multi-Provider Enrichment (#17)*~~
 
 #### 17c. BnF (Bibliothèque Nationale de France) Enrichment Provider
 - Add BnF as an enrichment provider via their SRU API
