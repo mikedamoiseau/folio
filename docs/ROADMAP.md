@@ -330,10 +330,10 @@ Tauri v2 supports mobile targets. The React frontend renders in a mobile WebView
 - ~~Designed for readers with dyslexia — weighted letterforms prevent visual rotation/flipping~~
 - ~~WOFF2 files bundled locally (Regular, Bold, Italic, Bold-Italic); 3-button font selector in settings~~
 
-#### 25b. Context-Aware Library Sections
-- Hide "Continue Reading" and "Discover" sections when viewing a collection or series
-- These sections are only relevant in the full library view
-- When filtered to a collection/series, show only the matching books grid
+#### 25b. Context-Aware Library Sections — **Done**
+- ~~Hide "Continue Reading" and "Discover" sections when viewing a collection or series~~
+- ~~These sections are only relevant in the full library view~~
+- ~~When filtered to a collection/series, show only the matching books grid~~
 
 #### 26. Star Ratings — **Done**
 - ~~1-5 star rating per book~~

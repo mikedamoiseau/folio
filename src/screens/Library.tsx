@@ -704,7 +704,7 @@ export default function Library() {
         ) : hasResults ? (
           <>
           {/* Continue Reading — recently opened books */}
-          {!search && !activeCollectionId && recentlyRead.length > 0 && (
+          {!search && !activeCollectionId && !activeSeries && recentlyRead.length > 0 && (
             <div className="mb-6">
               <h2 className="text-sm font-semibold text-ink-muted uppercase tracking-wide mb-3">{t("library.continueReading")}</h2>
               <div className="flex gap-4 overflow-x-auto pb-2">
@@ -743,7 +743,7 @@ export default function Library() {
             </div>
           )}
           {/* Discover — popular/new from catalogs */}
-          {!search && !activeCollectionId && (discoverLoading || discoverBooks.length > 0) && (
+          {!search && !activeCollectionId && !activeSeries && (discoverLoading || discoverBooks.length > 0) && (
             <div className="mb-6">
               <h2 className="text-sm font-semibold text-ink-muted uppercase tracking-wide mb-3">{t("library.discover")}</h2>
               <div className="flex gap-4 overflow-x-auto pb-2">
