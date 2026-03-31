@@ -11,13 +11,12 @@ import {
 } from "../lib/themes";
 import ActivityLog from "./ActivityLog";
 
-function Accordion({ title, children, defaultOpen = false }: { title: string; children: ReactNode; defaultOpen?: boolean }) {
-  const [open, setOpen] = useState(defaultOpen);
+function Accordion({ title, children, open, onToggle }: { title: string; children: ReactNode; open: boolean; onToggle: () => void }) {
   return (
     <section>
       <button
         type="button"
-        onClick={() => setOpen(!open)}
+        onClick={onToggle}
         className="w-full flex items-center justify-between py-1 group"
       >
         <h3 className="text-xs font-semibold uppercase tracking-wider text-ink-muted">
@@ -265,6 +264,8 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
   const { t } = useTranslation();
   const { mode, setMode, customColors, setCustomColors, fontSize, setFontSize, fontFamily, setFontFamily, scrollMode, setScrollMode, typography, setTypography, customCss, setCustomCss, dualPage, setDualPage, mangaMode, setMangaMode } =
     useTheme();
+  const [openSection, setOpenSection] = useState<string | null>("appearance");
+  const toggleSection = (id: string) => setOpenSection((prev) => (prev === id ? null : id));
   const panelRef = useRef<HTMLDivElement>(null);
   const previousFocus = useRef<HTMLElement | null>(null);
 
@@ -729,7 +730,7 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
         {/* Settings content */}
         <div className="flex-1 overflow-y-auto p-5 space-y-7">
           {/* Theme */}
-          <Accordion title={t("settings.appearance")} defaultOpen>
+          <Accordion title={t("settings.appearance")} open={openSection === "appearance"} onToggle={() => toggleSection("appearance")}>
             <div className="space-y-3">
               {/* Preset mode buttons */}
               <div className="flex gap-1 bg-warm-subtle rounded-xl p-1">
@@ -795,7 +796,7 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
           </Accordion>
 
           {/* Text & Typography */}
-          <Accordion title={t("settings.textTypography")}>
+          <Accordion title={t("settings.textTypography")} open={openSection === "text"} onToggle={() => toggleSection("text")}>
             <div className="flex items-center gap-3">
               <button
                 onClick={() => setFontSize(fontSize - 1)}
@@ -1032,7 +1033,7 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
           </Accordion>
 
           {/* Page Layout */}
-          <Accordion title={t("settings.pageLayout")}>
+          <Accordion title={t("settings.pageLayout")} open={openSection === "layout"} onToggle={() => toggleSection("layout")}>
             <div className="flex gap-1 bg-warm-subtle rounded-xl p-1">
               {(["paginated", "continuous"] as const).map((option) => (
                 <button
@@ -1098,7 +1099,7 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
           </Accordion>
 
           {/* Library */}
-          <Accordion title={t("settings.librarySection")}>
+          <Accordion title={t("settings.librarySection")} open={openSection === "library"} onToggle={() => toggleSection("library")}>
             <div className="space-y-2">
               <div className="bg-warm-subtle rounded-xl px-3 py-2.5">
                 <p className="text-xs text-ink-muted mb-0.5">{t("settings.storageFolder")}</p>
@@ -1151,7 +1152,7 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
           </Accordion>
 
           {/* Backup & Restore */}
-          <Accordion title={t("settings.backupRestore")}>
+          <Accordion title={t("settings.backupRestore")} open={openSection === "backup"} onToggle={() => toggleSection("backup")}>
             <div className="space-y-2">
               <label className="flex items-start gap-2.5 cursor-pointer px-1">
                 <input
@@ -1191,7 +1192,7 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
           </Accordion>
 
           {/* Metadata Scan */}
-          <Accordion title={t("settings.metadataScan")}>
+          <Accordion title={t("settings.metadataScan")} open={openSection === "scan"} onToggle={() => toggleSection("scan")}>
             <div className="space-y-2">
               <label className="flex items-start gap-2.5 cursor-pointer px-1">
                 <input type="checkbox" checked={autoScanImport}
@@ -1274,7 +1275,7 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
             </div>
           </Accordion>
 
-          <Accordion title={t("settings.activity")}>
+          <Accordion title={t("settings.activity")} open={openSection === "activity"} onToggle={() => toggleSection("activity")}>
             <button type="button" onClick={() => setShowActivityLog(true)}
               className="w-full px-3 py-2 text-sm text-ink-muted hover:text-ink bg-warm-subtle hover:bg-warm-border rounded-xl transition-colors text-left">
               {t("settings.viewActivityLog")}
@@ -1282,7 +1283,7 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
           </Accordion>
 
           {backupProviders.length > 0 && (
-            <Accordion title={t("settings.remoteBackup")}>
+            <Accordion title={t("settings.remoteBackup")} open={openSection === "remote"} onToggle={() => toggleSection("remote")}>
               <div className="space-y-2">
                 {/* Provider selector */}
                 <div className="bg-warm-subtle rounded-xl px-3 py-2.5">
