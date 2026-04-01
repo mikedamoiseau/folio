@@ -60,22 +60,26 @@ export default function PageViewer({
     spreadRef.current.style.transform = `translate(calc(-50% + ${p.x}px), calc(-50% + ${p.y}px))`;
   }, []);
 
-  const animateSlide = useCallback((): (() => void) | undefined => {
+  // Phase 1: snap offscreen immediately (called synchronously from prevSpread/nextSpread)
+  const snapOffscreen = useCallback(() => {
+    if (!pageAnimation || !slideRef.current) return;
+    const el = slideRef.current;
+    el.style.transition = "none";
+    el.style.transform = directionRef.current === "right"
+      ? "translateX(100%)"
+      : "translateX(-100%)";
+    void el.offsetHeight;
+  }, [pageAnimation]);
+
+  // Phase 2: slide into view (called after new images are loaded)
+  const slideIn = useCallback((): (() => void) | undefined => {
     if (isInitialLoad.current) {
       isInitialLoad.current = false;
       return undefined;
     }
     if (!pageAnimation || !slideRef.current) return undefined;
     const el = slideRef.current;
-    // Step 1: instantly position off-screen (no transition)
-    el.style.transition = "none";
-    el.style.transform = directionRef.current === "right"
-      ? "translateX(100%)"
-      : "translateX(-100%)";
-    // Step 2: force reflow so the browser registers the off-screen position
-    void el.offsetHeight;
-    // Step 3: animate slide to center
-    el.style.transition = "transform 200ms ease-out";
+    el.style.transition = "transform 350ms ease-out";
     el.style.transform = "translateX(0)";
     const onEnd = () => {
       el.style.transition = "none";
@@ -86,8 +90,8 @@ export default function PageViewer({
     return () => { el.removeEventListener("transitionend", onEnd); };
   }, [pageAnimation]);
 
-  const animateSlideRef = useRef(animateSlide);
-  useEffect(() => { animateSlideRef.current = animateSlide; }, [animateSlide]);
+  const slideInRef = useRef(slideIn);
+  useEffect(() => { slideInRef.current = slideIn; }, [slideIn]);
 
   // Quantize zoom to nearest 0.25 so we don't re-render on every tiny change
   const renderZoom = Math.ceil(zoom * 4) / 4;
@@ -114,7 +118,11 @@ export default function PageViewer({
     let cancelled = false;
     let rafId: number | undefined;
     let cleanupAnim: (() => void) | undefined;
-    setLoading(true);
+    // Only show loading spinner on initial load — during navigation, keep old images
+    // visible (they're offscreen via snapOffscreen) so the slide animation works
+    if (!leftImageData) {
+      setLoading(true);
+    }
     setError(null);
 
     const loadSpread = async () => {
@@ -127,9 +135,9 @@ export default function PageViewer({
         if (cancelled) return;
         setLeftImageData(results[0]);
         setRightImageData(results.length > 1 ? results[1] : null);
-        // Trigger slide animation after new images are set
+        // Slide in after new images are set
         rafId = requestAnimationFrame(() => {
-          if (!cancelled) cleanupAnim = animateSlideRef.current();
+          if (!cancelled) cleanupAnim = slideInRef.current();
         });
       } catch (err) {
         if (!cancelled) setError(String(err));
@@ -164,20 +172,26 @@ export default function PageViewer({
     directionRef.current = "left";
     if (dualPage) {
       if (spread.left <= 0) return;
+      snapOffscreen();
       const prevLeft = spread.left <= 2 ? 0 : spread.left - 2;
       goTo(prevLeft);
     } else {
+      if (pageIndex <= 0) return;
+      snapOffscreen();
       goTo(pageIndex - 1);
     }
-  }, [dualPage, spread.left, pageIndex, goTo]);
+  }, [dualPage, spread.left, pageIndex, goTo, snapOffscreen]);
 
   const nextSpread = useCallback(() => {
     directionRef.current = "right";
     if (dualPage) {
       const nextLeft = spread.right !== null ? spread.right + 1 : spread.left + 1;
       if (nextLeft >= totalPages) return;
+      snapOffscreen();
       goTo(nextLeft);
     } else {
+      if (pageIndex >= totalPages - 1) return;
+      snapOffscreen();
       goTo(pageIndex + 1);
     }
   }, [dualPage, spread, pageIndex, totalPages, goTo]);
@@ -325,10 +339,12 @@ export default function PageViewer({
   const handlePageInputSubmit = useCallback(() => {
     const num = parseInt(pageInput, 10);
     if (!isNaN(num) && num >= 1 && num <= totalPages) {
+      directionRef.current = "right";
+      snapOffscreen();
       goTo(num - 1);
     }
     setEditingPage(false);
-  }, [pageInput, totalPages, goTo]);
+  }, [pageInput, totalPages, goTo, snapOffscreen]);
 
   useEffect(() => {
     if (editingPage && pageInputRef.current) {
