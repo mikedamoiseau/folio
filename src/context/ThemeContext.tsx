@@ -54,6 +54,8 @@ interface ThemeContextValue {
   setDualPage: (enabled: boolean) => void;
   mangaMode: boolean;
   setMangaMode: (enabled: boolean) => void;
+  pageAnimation: boolean;
+  setPageAnimation: (enabled: boolean) => void;
 }
 
 const STORAGE_KEYS = {
@@ -66,6 +68,7 @@ const STORAGE_KEYS = {
   customCss: "folio-custom-css",
   dualPage: "folio-dual-page",
   mangaMode: "folio-manga-mode",
+  pageAnimation: "folio-page-animation",
 } as const;
 
 export const MIN_FONT_SIZE = 14;
@@ -170,6 +173,10 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   const [customCss, setCustomCssState] = useState(() => localStorage.getItem(STORAGE_KEYS.customCss) ?? "");
   const [dualPage, setDualPageState] = useState(() => localStorage.getItem(STORAGE_KEYS.dualPage) === "true");
   const [mangaMode, setMangaModeState] = useState(() => localStorage.getItem(STORAGE_KEYS.mangaMode) === "true");
+  const [pageAnimation, setPageAnimationState] = useState(() => {
+    const stored = localStorage.getItem(STORAGE_KEYS.pageAnimation);
+    return stored === null ? true : stored === "true";
+  });
 
   // For dark: variant purposes, sepia and custom resolve to "light"
   const resolved: ResolvedTheme =
@@ -249,6 +256,11 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     localStorage.setItem(STORAGE_KEYS.mangaMode, String(enabled));
   }, []);
 
+  const setPageAnimation = useCallback((enabled: boolean) => {
+    setPageAnimationState(enabled);
+    localStorage.setItem(STORAGE_KEYS.pageAnimation, String(enabled));
+  }, []);
+
   const MAX_CUSTOM_CSS_LENGTH = 10000;
   const cssPersistTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
   const setCustomCss = useCallback((css: string) => {
@@ -270,7 +282,8 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     customCss, setCustomCss,
     dualPage, setDualPage,
     mangaMode, setMangaMode,
-  }), [mode, resolved, setMode, customColors, setCustomColors, fontSize, setFontSize, fontFamily, setFontFamily, scrollMode, setScrollMode, typography, setTypography, customCss, setCustomCss, dualPage, setDualPage, mangaMode, setMangaMode]);
+    pageAnimation, setPageAnimation,
+  }), [mode, resolved, setMode, customColors, setCustomColors, fontSize, setFontSize, fontFamily, setFontFamily, scrollMode, setScrollMode, typography, setTypography, customCss, setCustomCss, dualPage, setDualPage, mangaMode, setMangaMode, pageAnimation, setPageAnimation]);
 
   return (
     <ThemeContext.Provider value={value}>
