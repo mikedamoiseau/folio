@@ -30,6 +30,17 @@ export default function PageViewer({
   pageAnimation = true,
 }: PageViewerProps) {
   const [pageIndex, setPageIndex] = useState(initialPage);
+
+  // Sync with external page changes (e.g. search result navigation)
+  const prevInitialPage = useRef(initialPage);
+  useEffect(() => {
+    if (initialPage !== prevInitialPage.current) {
+      prevInitialPage.current = initialPage;
+      setPageIndex(initialPage);
+      onPageChange?.(initialPage);
+    }
+  }, [initialPage, onPageChange]);
+
   const [leftImageData, setLeftImageData] = useState<string | null>(null);
   const [rightImageData, setRightImageData] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);

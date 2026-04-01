@@ -90,6 +90,7 @@
     "pageOf": "Page {{current}} of {{total}}",
     "chapterLabel": "Ch. {{current}} / {{total}}",
     "chapterDefault": "Chapter {{number}}",
+    "pageNumber": "Page {{number}}",
     "progressSaved": "Progress saved",
     "progressNotSaved": "Progress not saved",
     "page": "Page",

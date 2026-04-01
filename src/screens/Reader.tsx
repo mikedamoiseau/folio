@@ -687,8 +687,8 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
 
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
-      // Cmd/Ctrl+F — open book search (EPUB only)
-      if ((e.metaKey || e.ctrlKey) && e.key === "f" && bookFormat === "epub") {
+      // Cmd/Ctrl+F — open book search (EPUB and PDF)
+      if ((e.metaKey || e.ctrlKey) && e.key === "f" && (bookFormat === "epub" || bookFormat === "pdf")) {
         e.preventDefault();
         setSearchOpen(true);
         setSearchQuery("");
@@ -1080,8 +1080,8 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
             {currentChapterTitle}
           </h1>
 
-          {/* Search button (EPUB only) */}
-          {bookFormat === "epub" && (
+          {/* Search button (EPUB and PDF) */}
+          {(bookFormat === "epub" || bookFormat === "pdf") && (
             <button
               onClick={() => { setSearchOpen(true); setSearchQuery(""); setSearchResults([]); }}
               className={`p-1.5 transition-colors rounded-lg focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 ${searchOpen ? "text-accent bg-accent-light" : "text-ink-muted hover:text-ink hover:bg-warm-subtle"}`}
@@ -1219,7 +1219,7 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
         </header>
 
         {/* Book search panel */}
-        {searchOpen && bookFormat === "epub" && (
+        {searchOpen && (bookFormat === "epub" || bookFormat === "pdf") && (
           <div className="shrink-0 border-b border-warm-border bg-surface px-4 py-2 flex items-center gap-2">
             <svg width="14" height="14" viewBox="0 0 20 20" fill="none" className="text-ink-muted shrink-0">
               <circle cx="9" cy="9" r="6" stroke="currentColor" strokeWidth="2" />
@@ -1276,7 +1276,9 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
         {searchOpen && searchResults.length > 0 && (
           <div className="shrink-0 max-h-48 overflow-y-auto border-b border-warm-border bg-surface/95">
             {searchResults.map((result, i) => {
-              const chapterTitle = toc.find((e) => e.chapter_index === result.chapterIndex)?.label ?? t("reader.chapterDefault", { number: result.chapterIndex + 1 });
+              const chapterTitle = bookFormat === "pdf"
+                ? t("reader.pageNumber", { number: result.chapterIndex + 1 })
+                : toc.find((e) => e.chapter_index === result.chapterIndex)?.label ?? t("reader.chapterDefault", { number: result.chapterIndex + 1 });
               return (
                 <button
                   key={`${result.chapterIndex}-${result.matchOffset}-${i}`}

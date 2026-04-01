@@ -65,7 +65,7 @@ Improve the core activity — actually reading books.
 - ~~Zoom-aware rendering: PDFs re-rendered at current zoom resolution; comics use physical DOM resizing (not CSS scale) for sharp images at any zoom level~~
 - ~~JPEG encoding (90% quality) for ~10x faster PDF page loads and smaller transfers~~
 - ~~In-memory LRU cache (20 entries) for rendered PDF pages~~
-- Remember zoom level per book or per format (TBD)
+- ~~Remember zoom level per book (persisted to localStorage, restored on reopen)~~
 
 ### 8e. Go to Page — **Done**
 - ~~Click the page label in the footer (e.g., "Page 5 / 45") to open an inline number input~~
@@ -348,7 +348,7 @@ Tauri v2 supports mobile targets. The React frontend renders in a mobile WebView
 - ~~Show results with context snippets, click to navigate to match~~
 - ~~Works for EPUB (search chapter HTML); case-insensitive, 200 result cap~~
 - ~~Search term highlighted in chapter content~~
-- PDF text search not yet implemented — needs pdfium text extraction + regex match + highlight (estimate: 2-3 days)
+- ~~PDF text search: uses pdfium text extraction, same UX as EPUB search (Cmd/Ctrl+F, snippets, click-to-navigate)~~
 
 #### 28. Advanced Typography Controls — **Done**
 - ~~Line height / line spacing (1.2-2.4)~~
@@ -590,5 +590,5 @@ Lower priority features — high effort, niche audience, or dependent on other w
 | 6 | Remote Library Access, OPDS Server | Not started | Remote access |
 | 7 | Android & iOS App | Not started | Mobile |
 | 8 | Sepia Theme, OpenDyslexic, Star Ratings, In-Book Search, Typography, Custom Fonts, Continuous Scroll, Time-to-Finish, Bookmark Naming, Series, Activity Log, MOBI, Nav History, Custom CSS, Dual-Page/Manga, Settings Reorg, i18n (EN+FR), PDF Zoom Quality, Go to Page, Animations, Split View | 18 done | Reader & library enhancements |
-| 9 | DB Migration Versioning, Transaction Boundaries, Zip Bomb Protection, PDF Cache Memory Limits, Thread Pool, Backup Secret Atomicity, Structured Errors, Screen Reader Live Regions, Loading Skeletons, Toast System, Search Nav, Bulk Actions, Highlight Positioning | Not started | Hardening & polish |
+| 9 | DB Migration Versioning, Transaction Boundaries, Zip Bomb Protection, PDF Cache Memory Limits, Thread Pool, Backup Secret Atomicity, Structured Errors, Screen Reader Live Regions, Loading Skeletons, Toast System, Search Nav, Bulk Actions, Highlight Positioning | In progress | Hardening & polish |
 | N/H | Dictionary, Vocabulary Builder, TTS, PDF Reflow, Library-Wide Search, Annotation Exports, Plugins/Hooks, User Themes | Not started | Nice to have |

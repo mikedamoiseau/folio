@@ -3,6 +3,8 @@ use pdfium_render::prelude::*;
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
+use crate::epub;
+
 // ---- Data structures ----
 
 pub struct PdfMeta {
@@ -132,6 +134,62 @@ pub fn get_page_image(path: &str, page_index: u32, width: u32) -> Result<String,
 
     let b64 = base64::engine::general_purpose::STANDARD.encode(&jpeg_bytes);
     Ok(format!("data:image/jpeg;base64,{b64}"))
+}
+
+/// Search result from PDF text search — mirrors epub::SearchResult so the
+/// frontend can use the same type for both formats.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PdfSearchResult {
+    pub chapter_index: usize, // page index (reuses "chapter_index" for frontend compat)
+    pub snippet: String,
+    pub match_offset: usize,
+}
+
+const MAX_SEARCH_RESULTS: usize = 200;
+
+/// Search all pages of a PDF for a query string (case-insensitive).
+/// Returns up to MAX_SEARCH_RESULTS matches with surrounding context snippets.
+pub fn search_pdf(path: &str, query: &str) -> Result<Vec<PdfSearchResult>, String> {
+    let query_lower = query.to_lowercase();
+    let mut results = Vec::new();
+
+    let pdfium = bind_pdfium()?;
+    let document = pdfium
+        .load_pdf_from_file(path, None)
+        .map_err(|e| format!("failed to open PDF: {e}"))?;
+
+    let pages = document.pages();
+    let page_count = pages.len();
+
+    for page_idx in 0..page_count {
+        let page = pages
+            .get(page_idx)
+            .map_err(|e| format!("page {page_idx} not found: {e}"))?;
+
+        let text = page
+            .text()
+            .map_err(|e| format!("failed to extract text from page {page_idx}: {e}"))?
+            .all();
+
+        let text_lower = text.to_lowercase();
+        let mut search_from = 0;
+
+        while let Some(pos) = text_lower[search_from..].find(&query_lower) {
+            let match_start = search_from + pos;
+            results.push(PdfSearchResult {
+                chapter_index: page_idx as usize,
+                snippet: epub::extract_snippet(&text, match_start, query_lower.len(), 40),
+                match_offset: match_start,
+            });
+            if results.len() >= MAX_SEARCH_RESULTS {
+                return Ok(results);
+            }
+            search_from = match_start + query_lower.len();
+        }
+    }
+
+    Ok(results)
 }
 
 #[cfg(test)]

@@ -913,22 +913,37 @@ pub async fn search_book_content(
         return Ok(Vec::new());
     }
 
-    let file_path = {
+    let book = {
         let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
         db::get_book(&conn, &book_id)
             .map_err(|e| e.to_string())?
             .ok_or_else(|| format!("Book '{book_id}' not found"))?
-            .file_path
     };
 
-    validate_file_exists(&file_path)?;
+    validate_file_exists(&book.file_path)?;
 
-    let mut cache = state.epub_cache.lock().map_err(|e| e.to_string())?;
-    ensure_epub_cached(&mut cache, &file_path);
-    let cached = cache
-        .get_mut(&file_path)
-        .ok_or("Failed to open EPUB archive")?;
-    epub::search_book(cached, &query).map_err(|e| e.to_string())
+    match book.format {
+        BookFormat::Pdf => {
+            let results = pdf::search_pdf(&book.file_path, &query)?;
+            Ok(results
+                .into_iter()
+                .map(|r| epub::SearchResult {
+                    chapter_index: r.chapter_index,
+                    snippet: r.snippet,
+                    match_offset: r.match_offset,
+                })
+                .collect())
+        }
+        BookFormat::Epub => {
+            let mut cache = state.epub_cache.lock().map_err(|e| e.to_string())?;
+            ensure_epub_cached(&mut cache, &book.file_path);
+            let cached = cache
+                .get_mut(&book.file_path)
+                .ok_or("Failed to open EPUB archive")?;
+            epub::search_book(cached, &query).map_err(|e| e.to_string())
+        }
+        _ => Ok(Vec::new()), // CBZ/CBR are image-only, no text to search
+    }
 }
 
 #[tauri::command]
