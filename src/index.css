@@ -109,6 +109,7 @@ html, body, #root {
   color: var(--ink);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  transition: background-color 200ms ease, color 200ms ease;
 }
 
 /* ── Reader content typography (injected EPUB HTML) ─────────── */

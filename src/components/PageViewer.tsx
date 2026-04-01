@@ -35,8 +35,23 @@ export default function PageViewer({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Zoom & pan state
-  const [zoom, setZoom] = useState(1);
+  // Zoom & pan state — restore persisted zoom level per book
+  const zoomStorageKey = `folio-zoom-${bookId}`;
+  const [zoom, setZoomState] = useState(() => {
+    const stored = localStorage.getItem(zoomStorageKey);
+    if (stored) {
+      const parsed = parseFloat(stored);
+      if (!isNaN(parsed) && parsed >= MIN_ZOOM && parsed <= MAX_ZOOM) return parsed;
+    }
+    return 1;
+  });
+  const setZoom = useCallback((value: number | ((prev: number) => number)) => {
+    setZoomState((prev) => {
+      const next = typeof value === "function" ? value(prev) : value;
+      localStorage.setItem(zoomStorageKey, String(next));
+      return next;
+    });
+  }, [zoomStorageKey]);
   const panRef = useRef({ x: 0, y: 0 });
   const isPanning = useRef(false);
   const panStart = useRef({ x: 0, y: 0 });
@@ -203,7 +218,7 @@ export default function PageViewer({
       panRef.current = { x: 0, y: 0 };
       applyTransform(1, panRef.current);
     },
-    [totalPages, onPageChange, applyTransform]
+    [totalPages, onPageChange, applyTransform, setZoom]
   );
 
   // Navigate by spread: advance to next/prev spread's left page
