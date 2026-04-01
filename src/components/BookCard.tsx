@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
+import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { formatMetadataPills } from "../lib/utils";
@@ -58,14 +59,12 @@ export default function BookCard({
     setConfirming(true);
   };
 
-  const handleConfirm = (e: React.MouseEvent) => {
-    e.stopPropagation();
+  const handleConfirm = () => {
     onDelete?.(id);
     setConfirming(false);
   };
 
-  const handleCancel = (e: React.MouseEvent) => {
-    e.stopPropagation();
+  const handleCancel = () => {
     setConfirming(false);
   };
 
@@ -220,36 +219,14 @@ export default function BookCard({
           </button>
         )}
 
-        {/* Inline delete confirmation */}
-        {confirming && (
-          <div
-            role="alertdialog"
-            aria-modal="true"
-            aria-label={t("bookCard.confirmDeletion")}
-            className="absolute inset-0 flex flex-col items-center justify-center gap-2.5 bg-ink/80 px-4 backdrop-blur-sm"
-            onClick={(e) => e.stopPropagation()}
-            onKeyDown={(e) => { if (e.key === "Escape") { e.stopPropagation(); setConfirming(false); } }}
-          >
-            <p className="text-white text-xs text-center line-clamp-2 font-medium leading-snug">
-              {t("bookCard.confirmDelete", { title })}
-            </p>
-            <div className="flex gap-2">
-              <button
-                type="button"
-                onClick={handleConfirm}
-                className="px-3 py-1 rounded-lg bg-red-600 hover:bg-red-700 text-white text-xs font-medium focus:outline-none focus:ring-2 focus:ring-red-400"
-              >
-                {t("common.remove")}
-              </button>
-              <button
-                type="button"
-                onClick={handleCancel}
-                className="px-3 py-1 rounded-lg bg-paper/20 hover:bg-paper/30 text-paper text-xs font-medium focus:outline-none focus:ring-2 focus:ring-paper/50"
-              >
-                {t("common.cancel")}
-              </button>
-            </div>
-          </div>
+        {/* Delete confirmation — rendered as a centered portal modal */}
+        {confirming && createPortal(
+          <DeleteConfirmModal
+            title={title}
+            onConfirm={handleConfirm}
+            onCancel={handleCancel}
+          />,
+          document.body,
         )}
       </div>
 
@@ -288,5 +265,59 @@ export default function BookCard({
         )}
       </div>
     </button>
+  );
+}
+
+/** Centered modal dialog for confirming book deletion. */
+function DeleteConfirmModal({ title, onConfirm, onCancel }: { title: string; onConfirm: () => void; onCancel: () => void }) {
+  const { t } = useTranslation();
+  const cancelRef = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    cancelRef.current?.focus();
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") { e.stopPropagation(); onCancel(); }
+    };
+    document.addEventListener("keydown", handleKey);
+    return () => document.removeEventListener("keydown", handleKey);
+  }, [onCancel]);
+
+  return (
+    <>
+      <div className="fixed inset-0 bg-ink/40 z-[80]" onClick={onCancel} aria-hidden="true" />
+      <div className="fixed inset-0 z-[90] flex items-center justify-center p-4">
+        <div
+          role="alertdialog"
+          aria-modal="true"
+          aria-labelledby="delete-confirm-title"
+          className="bg-surface rounded-2xl shadow-2xl w-full max-w-sm border border-warm-border p-6 space-y-4"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <h3 id="delete-confirm-title" className="font-serif text-base font-semibold text-ink">
+            {t("bookCard.confirmDeletion")}
+          </h3>
+          <p className="text-sm text-ink-muted">
+            {t("bookCard.confirmDelete", { title })}
+          </p>
+          <div className="flex gap-3 justify-end pt-1">
+            <button
+              ref={cancelRef}
+              type="button"
+              onClick={onCancel}
+              className="px-4 py-2 text-sm text-ink-muted hover:text-ink transition-colors rounded-xl"
+            >
+              {t("common.cancel")}
+            </button>
+            <button
+              type="button"
+              onClick={onConfirm}
+              className="px-4 py-2 text-sm bg-red-600 text-white rounded-xl hover:bg-red-700 transition-colors font-medium"
+            >
+              {t("common.remove")}
+            </button>
+          </div>
+        </div>
+      </div>
+    </>
   );
 }

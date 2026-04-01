@@ -27,6 +27,9 @@ export default function KeyboardShortcutsHelp({ context, onClose }: KeyboardShor
     title: t("shortcuts.readerGroup"),
     shortcuts: [
       { keys: "\u2190 / \u2192", description: t("shortcuts.prevNextChapter") },
+      { keys: "\u2190 / \u2192", description: t("shortcuts.prevNextPage") },
+      { keys: "+ / \u2212", description: t("shortcuts.zoomInOut") },
+      { keys: "0", description: t("shortcuts.resetZoom") },
       { keys: "t", description: t("shortcuts.toggleToc") },
       { keys: "b", description: t("shortcuts.addBookmark") },
       { keys: "d", description: t("shortcuts.toggleFocus") },

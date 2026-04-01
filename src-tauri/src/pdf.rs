@@ -102,6 +102,12 @@ pub fn get_page_image(path: &str, page_index: u32, width: u32) -> Result<String,
         .map_err(|e| format!("failed to open PDF: {e}"))?;
 
     let pages = document.pages();
+    if page_index > u16::MAX as u32 {
+        return Err(format!(
+            "page index {page_index} exceeds maximum supported ({})",
+            u16::MAX
+        ));
+    }
     let page = pages
         .get(page_index as u16)
         .map_err(|e| format!("page {page_index} not found: {e}"))?;

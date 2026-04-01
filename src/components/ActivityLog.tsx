@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useTranslation } from "react-i18next";
+import { useFocusTrap } from "../lib/useFocusTrap";
 
 interface ActivityEntry {
   id: string;
@@ -50,6 +51,7 @@ const LIMIT = 50;
 
 export default function ActivityLog({ onClose }: ActivityLogProps) {
   const { t } = useTranslation();
+  const dialogRef = useFocusTrap(onClose);
   const [entries, setEntries] = useState<ActivityEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [actionFilter, setActionFilter] = useState<string>("");
@@ -114,16 +116,6 @@ export default function ActivityLog({ onClose }: ActivityLogProps) {
     loadEntries(actionFilter, 0, false);
   }, [actionFilter, loadEntries]);
 
-  useEffect(() => {
-    function handleKeyDown(e: KeyboardEvent) {
-      if (e.key === "Escape") {
-        onClose();
-      }
-    }
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [onClose]);
-
   const handleLoadMore = () => {
     const newOffset = offset + LIMIT;
     setOffset(newOffset);
@@ -141,15 +133,16 @@ export default function ActivityLog({ onClose }: ActivityLogProps) {
 
       {/* Modal */}
       <div
+        ref={dialogRef}
         className="fixed inset-0 z-[70] flex items-center justify-center p-4"
         role="dialog"
-        aria-label={t("activity.title")}
+        aria-labelledby="activity-log-title"
         aria-modal="true"
       >
         <div className="bg-surface rounded-2xl shadow-2xl w-full max-w-lg border border-warm-border flex flex-col max-h-[80vh]">
           {/* Header */}
           <div className="px-5 py-4 border-b border-warm-border flex items-center justify-between shrink-0">
-            <h2 className="font-serif text-base font-semibold text-ink">
+            <h2 id="activity-log-title" className="font-serif text-base font-semibold text-ink">
               {t("activity.title")}
             </h2>
             <button

@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useTranslation } from "react-i18next";
+import { useFocusTrap } from "../lib/useFocusTrap";
 
 interface Bookmark {
   id: string;
@@ -32,6 +33,7 @@ export default function BookmarksPanel({
   refreshKey,
 }: BookmarksPanelProps) {
   const { t } = useTranslation();
+  const panelRef = useFocusTrap(onClose);
   const [bookmarks, setBookmarks] = useState<Bookmark[]>([]);
 
   const loadBookmarks = useCallback(async () => {
@@ -124,9 +126,9 @@ export default function BookmarksPanel({
         className="fixed inset-0 bg-ink/20 z-10 animate-fade-in"
         onClick={onClose}
       />
-      <aside className="fixed right-0 top-0 bottom-0 w-80 max-w-[90vw] bg-surface border-l border-warm-border z-20 flex flex-col shadow-[-4px_0_24px_-4px_rgba(44,34,24,0.12)] animate-slide-in-right">
+      <aside ref={panelRef} role="dialog" aria-modal="true" aria-labelledby="bookmarks-panel-title" className="fixed right-0 top-0 bottom-0 w-80 max-w-[90vw] bg-surface border-l border-warm-border z-20 flex flex-col shadow-[-4px_0_24px_-4px_rgba(44,34,24,0.12)] animate-slide-in-right">
         <div className="px-5 py-4 border-b border-warm-border flex items-center justify-between">
-          <h2 className="font-serif text-base font-semibold text-ink">
+          <h2 id="bookmarks-panel-title" className="font-serif text-base font-semibold text-ink">
             {t("bookmarks.title")}
           </h2>
           <button

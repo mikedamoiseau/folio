@@ -707,14 +707,14 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
       <div
         ref={panelRef}
         role="dialog"
-        aria-label={t("settings.title")}
+        aria-labelledby="settings-panel-title"
         aria-modal="true"
         tabIndex={-1}
         className="fixed right-0 top-0 bottom-0 w-80 max-w-[90vw] bg-surface border-l border-warm-border z-50 flex flex-col shadow-[-4px_0_24px_-4px_rgba(44,34,24,0.12)] outline-none animate-slide-in-right"
       >
         {/* Header */}
         <div className="px-5 py-4 border-b border-warm-border flex items-center justify-between">
-          <h2 className="font-serif text-base font-semibold text-ink">
+          <h2 id="settings-panel-title" className="font-serif text-base font-semibold text-ink">
             {t("settings.title")}
           </h2>
           <button

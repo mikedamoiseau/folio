@@ -439,6 +439,11 @@ export default function PageViewer({
         )}
       </div>
 
+      {/* Screen reader announcement for page changes */}
+      <div aria-live="polite" aria-atomic="true" className="sr-only">
+        {!loading && t("reader.pageOf", { current: pageIndex + 1, total: totalPages })}
+      </div>
+
       {/* Navigation bar */}
       <div className="shrink-0 border-t border-warm-border bg-surface px-5 py-3 flex items-center gap-3">
         <button

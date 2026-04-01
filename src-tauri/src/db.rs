@@ -700,11 +700,38 @@ pub fn list_collections(conn: &Connection) -> Result<Vec<Collection>> {
         })?
         .collect::<Result<Vec<_>>>()?;
 
-    let mut result = Vec::with_capacity(collections.len());
-    for mut coll in collections {
-        coll.rules = get_collection_rules(conn, &coll.id)?;
-        result.push(coll);
+    // Fetch ALL rules in one query instead of N+1 per-collection queries.
+    let mut rules_stmt =
+        conn.prepare("SELECT id, collection_id, field, operator, value FROM collection_rules")?;
+    let all_rules: Vec<CollectionRule> = rules_stmt
+        .query_map([], |row| {
+            Ok(CollectionRule {
+                id: row.get(0)?,
+                collection_id: row.get(1)?,
+                field: row.get(2)?,
+                operator: row.get(3)?,
+                value: row.get(4)?,
+            })
+        })?
+        .collect::<Result<Vec<_>>>()?;
+
+    // Group rules by collection_id
+    let mut rules_map: std::collections::HashMap<String, Vec<CollectionRule>> =
+        std::collections::HashMap::new();
+    for rule in all_rules {
+        rules_map
+            .entry(rule.collection_id.clone())
+            .or_default()
+            .push(rule);
     }
+
+    let result = collections
+        .into_iter()
+        .map(|mut coll| {
+            coll.rules = rules_map.remove(&coll.id).unwrap_or_default();
+            coll
+        })
+        .collect();
     Ok(result)
 }
 

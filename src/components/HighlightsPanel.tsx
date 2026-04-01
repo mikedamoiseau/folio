@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useTranslation } from "react-i18next";
+import { useFocusTrap } from "../lib/useFocusTrap";
 
 interface Highlight {
   id: string;
@@ -33,6 +34,7 @@ export type { Highlight };
 
 export default function HighlightsPanel({ bookId, onClose, onGoToChapter }: HighlightsPanelProps) {
   const { t } = useTranslation();
+  const panelRef = useFocusTrap(onClose);
   const [highlights, setHighlights] = useState<Highlight[]>([]);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [editingNote, setEditingNote] = useState<string | null>(null);
@@ -96,9 +98,9 @@ export default function HighlightsPanel({ bookId, onClose, onGoToChapter }: High
         className="fixed inset-0 bg-ink/20 z-10 animate-fade-in"
         onClick={onClose}
       />
-      <aside className="fixed right-0 top-0 bottom-0 w-80 max-w-[90vw] bg-surface border-l border-warm-border z-20 flex flex-col shadow-[-4px_0_24px_-4px_rgba(44,34,24,0.12)] animate-slide-in-right">
+      <aside ref={panelRef} role="dialog" aria-modal="true" aria-labelledby="highlights-panel-title" className="fixed right-0 top-0 bottom-0 w-80 max-w-[90vw] bg-surface border-l border-warm-border z-20 flex flex-col shadow-[-4px_0_24px_-4px_rgba(44,34,24,0.12)] animate-slide-in-right">
         <div className="px-5 py-4 border-b border-warm-border flex items-center justify-between">
-          <h2 className="font-serif text-base font-semibold text-ink">{t("highlights.title")}</h2>
+          <h2 id="highlights-panel-title" className="font-serif text-base font-semibold text-ink">{t("highlights.title")}</h2>
           <div className="flex items-center gap-2">
             {highlights.length > 0 && (
               <button
