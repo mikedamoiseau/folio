@@ -1222,9 +1222,44 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
               </label>
               {enrichmentProviders.length > 0 && (
                 <div className="mt-3">
-                  <h4 className="text-xs font-medium text-ink-muted mb-2">{t("settings.enrichmentSources")}</h4>
-                  {enrichmentProviders.map((provider) => (
+                  <h4 className="text-xs font-medium text-ink-muted mb-1">{t("settings.enrichmentSources")}</h4>
+                  <p className="text-[10px] text-ink-muted mb-2">{t("settings.enrichmentSourcesOrder")}</p>
+                  {enrichmentProviders.map((provider, index) => (
                     <div key={provider.id} className="flex items-start gap-2 py-2 border-b border-warm-border last:border-0">
+                      <div className="flex flex-col items-center gap-0.5 mt-0.5">
+                        <button
+                          onClick={async () => {
+                            if (index === 0) return;
+                            const reordered = [...enrichmentProviders];
+                            [reordered[index - 1], reordered[index]] = [reordered[index], reordered[index - 1]];
+                            setEnrichmentProviders(reordered);
+                            await invoke("set_enrichment_provider_order", {
+                              order: reordered.map((p) => p.id),
+                            }).catch(() => {});
+                          }}
+                          disabled={index === 0}
+                          className="text-[10px] leading-none text-ink-muted hover:text-ink disabled:opacity-30 disabled:cursor-not-allowed"
+                          aria-label={`Move ${provider.name} up`}
+                        >
+                          ▲
+                        </button>
+                        <button
+                          onClick={async () => {
+                            if (index === enrichmentProviders.length - 1) return;
+                            const reordered = [...enrichmentProviders];
+                            [reordered[index], reordered[index + 1]] = [reordered[index + 1], reordered[index]];
+                            setEnrichmentProviders(reordered);
+                            await invoke("set_enrichment_provider_order", {
+                              order: reordered.map((p) => p.id),
+                            }).catch(() => {});
+                          }}
+                          disabled={index === enrichmentProviders.length - 1}
+                          className="text-[10px] leading-none text-ink-muted hover:text-ink disabled:opacity-30 disabled:cursor-not-allowed"
+                          aria-label={`Move ${provider.name} down`}
+                        >
+                          ▼
+                        </button>
+                      </div>
                       <input
                         type="checkbox"
                         checked={provider.config.enabled}
