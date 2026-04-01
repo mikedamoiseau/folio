@@ -182,6 +182,7 @@
     "empty": "Aucun surlignage. S\u00e9lectionnez du texte pendant la lecture pour en cr\u00e9er un.",
     "addNote": "+ Ajouter une note",
     "notePlaceholder": "Ajouter une note\u2026",
+    "noteSaveHint": "\u2318/Ctrl+Entr\u00e9e pour enregistrer",
     "deleteLabel": "Supprimer le surlignage",
     "chapterLabel": "Chapitre {{number}}"
   },

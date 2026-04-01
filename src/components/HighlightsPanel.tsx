@@ -141,26 +141,37 @@ export default function HighlightsPanel({ bookId, onClose, onGoToChapter }: High
                       <div className="flex-1 min-w-0">
                         <p className="text-sm text-ink leading-snug line-clamp-3">&ldquo;{h.text}&rdquo;</p>
                         {editingNote === h.id ? (
-                          <div className="mt-1.5 flex gap-1">
-                            <input
-                              type="text"
+                          <div className="mt-1.5 space-y-1">
+                            <textarea
                               value={noteText}
                               onChange={(e) => setNoteText(e.target.value)}
-                              onKeyDown={(e) => { if (e.key === "Enter") handleSaveNote(h.id); }}
+                              onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) handleSaveNote(h.id); }}
                               autoFocus
+                              rows={3}
                               placeholder={t("highlights.notePlaceholder")}
-                              className="flex-1 text-xs bg-warm-subtle border border-warm-border rounded px-2 py-1 text-ink focus:outline-none focus:border-accent"
+                              className="w-full text-xs bg-warm-subtle border border-warm-border rounded px-2 py-1.5 text-ink focus:outline-none focus:border-accent resize-y"
                             />
-                            <button
-                              onClick={() => handleSaveNote(h.id)}
-                              className="text-xs text-accent hover:text-accent-hover"
-                            >
-                              {t("common.save")}
-                            </button>
+                            <div className="flex items-center justify-between">
+                              <span className="text-[10px] text-ink-muted">{t("highlights.noteSaveHint")}</span>
+                              <div className="flex gap-1.5">
+                                <button
+                                  onClick={() => setEditingNote(null)}
+                                  className="text-xs text-ink-muted hover:text-ink"
+                                >
+                                  {t("common.cancel")}
+                                </button>
+                                <button
+                                  onClick={() => handleSaveNote(h.id)}
+                                  className="text-xs text-accent hover:text-accent-hover"
+                                >
+                                  {t("common.save")}
+                                </button>
+                              </div>
+                            </div>
                           </div>
                         ) : h.note ? (
                           <p
-                            className="text-xs text-ink-muted mt-1 italic cursor-pointer hover:text-ink"
+                            className="text-xs text-ink-muted mt-1 italic cursor-pointer hover:text-ink whitespace-pre-line"
                             onClick={() => { setEditingNote(h.id); setNoteText(h.note ?? ""); }}
                           >
                             {h.note}

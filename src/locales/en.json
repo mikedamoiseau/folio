@@ -182,6 +182,7 @@
     "empty": "No highlights yet. Select text while reading to create one.",
     "addNote": "+ Add note",
     "notePlaceholder": "Add a note\u2026",
+    "noteSaveHint": "\u2318/Ctrl+Enter to save",
     "deleteLabel": "Delete highlight",
     "chapterLabel": "Chapter {{number}}"
   },
