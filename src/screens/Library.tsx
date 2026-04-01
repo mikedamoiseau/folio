@@ -481,8 +481,27 @@ export default function Library() {
 
   if (!loaded) {
     return (
-      <div className="flex items-center justify-center h-full bg-paper">
-        <p className="text-sm text-ink-muted">{t("library.loading")}</p>
+      <div className="flex flex-col h-full bg-paper">
+        {/* Skeleton toolbar */}
+        <div className="shrink-0 h-14 px-6 flex items-center gap-3 border-b border-warm-border bg-surface">
+          <div className="w-8 h-8 rounded-lg bg-warm-subtle animate-shimmer" />
+          <div className="flex-1 h-8 rounded-lg bg-warm-subtle animate-shimmer" />
+          <div className="w-20 h-8 rounded-lg bg-warm-subtle animate-shimmer" />
+        </div>
+        {/* Skeleton book grid */}
+        <div className="flex-1 overflow-y-auto px-8 py-6">
+          <div className="grid grid-cols-[repeat(auto-fill,160px)] justify-center gap-5">
+            {Array.from({ length: 12 }, (_, i) => (
+              <div key={i} className="w-full rounded-xl bg-surface border border-warm-border overflow-hidden">
+                <div className="aspect-[2/3] bg-warm-subtle animate-shimmer" />
+                <div className="p-2.5 space-y-2">
+                  <div className="h-3.5 w-4/5 rounded bg-warm-subtle animate-shimmer" />
+                  <div className="h-3 w-3/5 rounded bg-warm-subtle animate-shimmer" />
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
       </div>
     );
   }

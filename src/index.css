@@ -83,6 +83,12 @@
   --animate-slide-in-left:  slide-in-left  0.22s cubic-bezier(0.22, 1, 0.36, 1) both;
   --animate-slide-in-right: slide-in-right 0.22s cubic-bezier(0.22, 1, 0.36, 1) both;
   --animate-fade-in:        fade-in 0.18s ease both;
+  --animate-shimmer:        shimmer 1.5s ease-in-out infinite;
+}
+
+@keyframes shimmer {
+  0%, 100% { opacity: 0.4; }
+  50%      { opacity: 0.7; }
 }
 
 @keyframes slide-in-left {
