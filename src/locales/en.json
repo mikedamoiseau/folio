@@ -224,6 +224,8 @@
     "dualPageHint": "Show two pages side by side, like an open book.",
     "mangaMode": "Manga mode (right-to-left)",
     "mangaHint": "Swap page order so the right page comes first, for manga and RTL comics.",
+    "pageAnimation": "Page turn animation",
+    "pageAnimationHint": "Slide effect when turning pages in PDF and comic formats.",
     "librarySection": "Library",
     "storageFolder": "Storage folder",
     "bookCount": "{{count}} book",

@@ -224,6 +224,8 @@
     "dualPageHint": "Afficher deux pages c\u00f4te \u00e0 c\u00f4te, comme un livre ouvert.",
     "mangaMode": "Mode manga (droite \u00e0 gauche)",
     "mangaHint": "Inverser l\u2019ordre des pages pour que la page droite vienne en premier, pour les mangas et les BD en lecture droite \u00e0 gauche.",
+    "pageAnimation": "Animation de changement de page",
+    "pageAnimationHint": "Effet de glissement lors du changement de page pour les PDF et les bandes dessinées.",
     "librarySection": "Biblioth\u00e8que",
     "storageFolder": "Dossier de stockage",
     "bookCount": "{{count}} livre",
