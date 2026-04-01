@@ -252,6 +252,7 @@
     "autoScanStartup": "Scan automatique au d\u00e9marrage",
     "autoScanStartupHint": "Scanner les livres non enrichis au d\u00e9marrage de l\u2019application",
     "enrichmentSources": "Sources d\u2019enrichissement",
+    "enrichmentSourcesOrder": "Essayés dans l'ordre de haut en bas",
     "apiKeyPlaceholder": "Cl\u00e9 API (optionnel)",
     "activity": "Activit\u00e9",
     "viewActivityLog": "Voir le journal d\u2019activit\u00e9",

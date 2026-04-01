@@ -252,6 +252,7 @@
     "autoScanStartup": "Auto-scan on startup",
     "autoScanStartupHint": "Scan unenriched books when the app starts",
     "enrichmentSources": "Enrichment Sources",
+    "enrichmentSourcesOrder": "Tried in order from top to bottom",
     "apiKeyPlaceholder": "API key (optional)",
     "activity": "Activity",
     "viewActivityLog": "View activity log",
