@@ -6,6 +6,7 @@
     "delete": "Delete",
     "remove": "Remove",
     "close": "Close",
+    "retry": "Retry",
     "back": "Back",
     "search": "Search",
     "clear": "Clear",
@@ -93,6 +94,8 @@
     "pages": "Pages",
     "goToPage": "Go to page",
     "loadingPages": "Loading pages\u2026",
+    "loadingPage": "Loading page\u2026",
+    "failedToLoadPage": "Failed to load page: {{error}}",
     "loadingChapters": "Loading {{count}} chapters\u2026",
     "failedToLoadChapter": "Failed to load chapter: {{error}}",
     "searchInBook": "Search in book...",
@@ -477,6 +480,10 @@
     "duplicate": "This book is already in your library.",
     "chapterIndex": "Could not load this chapter. Try restarting the reader.",
     "corrupt": "This file appears to be damaged and cannot be opened.",
+    "timeout": "The request timed out. The server may be slow or unreachable.",
+    "networkError": "Could not connect to the server. Check your internet connection.",
+    "urlBlocked": "This URL was blocked for security reasons.",
+    "tooLarge": "The file or response is too large.",
     "generic": "Something went wrong. Please try again."
   },
 

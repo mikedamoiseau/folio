@@ -1,6 +1,63 @@
 use quick_xml::events::Event;
 use quick_xml::Reader;
 use serde::{Deserialize, Serialize};
+use std::time::Duration;
+
+/// Maximum time to wait for an OPDS HTTP response.
+const HTTP_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// Maximum response body size (5 MB) to prevent DoS via large feeds.
+const MAX_RESPONSE_BYTES: usize = 5 * 1024 * 1024;
+
+/// Validate that a URL is safe to fetch (no file://, no private IPs).
+fn is_safe_url(url: &str) -> bool {
+    // Only allow http:// and https:// schemes
+    if !url.starts_with("http://") && !url.starts_with("https://") {
+        return false;
+    }
+    // Extract host portion
+    let after_scheme = if let Some(s) = url.strip_prefix("https://") {
+        s
+    } else if let Some(s) = url.strip_prefix("http://") {
+        s
+    } else {
+        return false;
+    };
+    let host = after_scheme
+        .split('/')
+        .next()
+        .unwrap_or("")
+        .split(':')
+        .next()
+        .unwrap_or("");
+
+    // Block loopback and private network ranges
+    if host == "localhost" || host.ends_with(".localhost") {
+        return false;
+    }
+    if let Ok(ip) = host.parse::<std::net::IpAddr>() {
+        match ip {
+            std::net::IpAddr::V4(v4) => {
+                if v4.is_loopback()
+                    || v4.is_private()
+                    || v4.is_link_local()
+                    || v4.is_broadcast()
+                    || v4.is_unspecified()
+                    || v4.octets()[0] == 169 && v4.octets()[1] == 254
+                // link-local
+                {
+                    return false;
+                }
+            }
+            std::net::IpAddr::V6(v6) => {
+                if v6.is_loopback() || v6.is_unspecified() {
+                    return false;
+                }
+            }
+        }
+    }
+    true
+}
 
 /// A single entry from an OPDS feed (book or navigation link).
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -37,9 +94,21 @@ pub struct OpdsFeed {
     pub search_url: Option<String>,
 }
 
+/// Build a reqwest client with timeout.
+fn http_client() -> Result<reqwest::blocking::Client, String> {
+    reqwest::blocking::Client::builder()
+        .timeout(HTTP_TIMEOUT)
+        .redirect(reqwest::redirect::Policy::limited(5))
+        .build()
+        .map_err(|e| format!("HTTP client error: {e}"))
+}
+
 /// Fetch and parse an OPDS feed from a URL.
 pub fn fetch_feed(url: &str) -> Result<OpdsFeed, String> {
-    let client = reqwest::blocking::Client::new();
+    if !is_safe_url(url) {
+        return Err("URL blocked: only public HTTP/HTTPS URLs are allowed.".to_string());
+    }
+    let client = http_client()?;
     let response = client
         .get(url)
         .header("User-Agent", "Folio/1.2 (OPDS reader)")
@@ -48,7 +117,11 @@ pub fn fetch_feed(url: &str) -> Result<OpdsFeed, String> {
     if !response.status().is_success() {
         return Err(format!("HTTP {}", response.status()));
     }
-    let xml = response.text().map_err(|e| format!("Read error: {e}"))?;
+    let bytes = response.bytes().map_err(|e| format!("Read error: {e}"))?;
+    if bytes.len() > MAX_RESPONSE_BYTES {
+        return Err("Response too large (limit: 5 MB).".to_string());
+    }
+    let xml = String::from_utf8_lossy(&bytes).to_string();
     parse_feed(&xml, url)
 }
 
@@ -78,6 +151,15 @@ fn parse_feed(xml: &str, base_url: &str) -> Result<OpdsFeed, String> {
     let mut in_feed_title = false;
 
     let resolve = |href: &str| -> String {
+        // Reject non-HTTP schemes outright (file://, javascript:, data:, etc.)
+        if !href.is_empty()
+            && !href.starts_with("http://")
+            && !href.starts_with("https://")
+            && !href.starts_with('/')
+            && href.contains(':')
+        {
+            return String::new(); // blocked
+        }
         if href.starts_with("http://") || href.starts_with("https://") {
             return href.to_string();
         }
@@ -503,7 +585,10 @@ pub fn resolve_search_url(url: &str) -> Option<String> {
         return Some(url.to_string());
     }
     // Try fetching as OpenSearch description
-    let client = reqwest::blocking::Client::new();
+    if !is_safe_url(url) {
+        return None;
+    }
+    let client = http_client().ok()?;
     let response = client
         .get(url)
         .header("User-Agent", "Folio/1.2 (OPDS reader)")
@@ -564,7 +649,17 @@ pub fn url_encode(s: &str) -> String {
 
 /// Download a file from a URL to a local path.
 pub fn download_file(url: &str, dest: &str) -> Result<(), String> {
-    let response = reqwest::blocking::get(url).map_err(|e| format!("Download failed: {e}"))?;
+    if !is_safe_url(url) {
+        return Err("URL blocked: only public HTTP/HTTPS URLs are allowed.".to_string());
+    }
+    let client = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(120)) // longer timeout for file downloads
+        .build()
+        .map_err(|e| format!("HTTP client error: {e}"))?;
+    let response = client
+        .get(url)
+        .send()
+        .map_err(|e| format!("Download failed: {e}"))?;
     if !response.status().is_success() {
         return Err(format!("HTTP {}", response.status()));
     }

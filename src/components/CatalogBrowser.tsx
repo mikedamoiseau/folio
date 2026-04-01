@@ -1,6 +1,7 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useTranslation } from "react-i18next";
+import { friendlyError } from "../lib/errors";
 
 interface OpdsCatalog {
   name: string;
@@ -41,6 +42,7 @@ export default function CatalogBrowser({ onClose, onBookImported }: CatalogBrows
   const [feed, setFeed] = useState<OpdsFeed | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const lastActionRef = useRef<(() => void) | null>(null);
   const [history, setHistory] = useState<{ url: string; title: string }[]>([]);
   const [downloading, setDownloading] = useState<string | null>(null);
   const [downloadedIds, setDownloadedIds] = useState<Set<string>>(new Set());
@@ -70,16 +72,17 @@ export default function CatalogBrowser({ onClose, onBookImported }: CatalogBrows
   const browseTo = useCallback(async (url: string, title?: string) => {
     setLoading(true);
     setError(null);
+    lastActionRef.current = () => browseTo(url, title);
     try {
       const f = await invoke<OpdsFeed>("browse_opds", { url });
       setFeed(f);
       setHistory((prev) => [...prev, { url, title: title ?? f.title }]);
     } catch (err) {
-      setError(String(err));
+      setError(friendlyError(String(err), t));
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [t]);
 
   const goBack = useCallback(() => {
     if (history.length <= 1) {
@@ -106,7 +109,7 @@ export default function CatalogBrowser({ onClose, onBookImported }: CatalogBrows
       setFeed(f);
       setHistory((prev) => [...prev, { url, title: `Search: ${searchQuery}` }]);
     } catch (err) {
-      setError(String(err));
+      setError(friendlyError(String(err), t));
     } finally {
       setLoading(false);
     }
@@ -125,7 +128,7 @@ export default function CatalogBrowser({ onClose, onBookImported }: CatalogBrows
       setDownloadedIds((prev) => new Set(prev).add(entry.id));
       onBookImported();
     } catch (err) {
-      setError(t("catalog.downloadFailed", { title: entry.title, error: String(err) }));
+      setError(t("catalog.downloadFailed", { title: entry.title, error: friendlyError(String(err), t) }));
     } finally {
       setDownloading(null);
     }
@@ -140,7 +143,7 @@ export default function CatalogBrowser({ onClose, onBookImported }: CatalogBrows
       setShowAddCatalog(false);
       await loadCatalogs();
     } catch (err) {
-      setError(String(err));
+      setError(friendlyError(String(err), t));
     }
   };
 
@@ -149,7 +152,7 @@ export default function CatalogBrowser({ onClose, onBookImported }: CatalogBrows
       await invoke("remove_opds_catalog", { url });
       await loadCatalogs();
     } catch (err) {
-      setError(String(err));
+      setError(friendlyError(String(err), t));
     }
   };
 
@@ -161,7 +164,7 @@ export default function CatalogBrowser({ onClose, onBookImported }: CatalogBrows
       const results = await invoke<OpdsEntry[]>("search_all_catalogs", { query: unifiedQuery.trim() });
       setUnifiedResults(results);
     } catch (err) {
-      setError(String(err));
+      setError(friendlyError(String(err), t));
     } finally {
       setUnifiedLoading(false);
     }
@@ -343,8 +346,16 @@ export default function CatalogBrowser({ onClose, onBookImported }: CatalogBrows
             </div>
 
             {error && (
-              <div className="px-5 py-2 border-t border-warm-border">
-                <p className="text-xs text-red-600">{error}</p>
+              <div className="px-5 py-2 border-t border-warm-border flex items-center gap-2">
+                <p className="text-xs text-red-600 flex-1">{error}</p>
+                {lastActionRef.current && (
+                  <button
+                    onClick={() => lastActionRef.current?.()}
+                    className="text-xs text-accent hover:text-accent/80 font-medium shrink-0"
+                  >
+                    {t("common.retry")}
+                  </button>
+                )}
               </div>
             )}
           </div>

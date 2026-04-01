@@ -4,6 +4,7 @@ import { listen } from "@tauri-apps/api/event";
 import { open as openFilePicker } from "@tauri-apps/plugin-dialog";
 import { useTranslation } from "react-i18next";
 import { useTheme, MIN_FONT_SIZE, MAX_FONT_SIZE, type ColorTokens } from "../context/ThemeContext";
+import { friendlyError } from "../lib/errors";
 import {
   SEPIA_TOKENS,
   LIGHT_TOKENS,
@@ -518,7 +519,7 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
       setLibraryFolder(migrationDialog.newFolder);
       setMigrationDialog(null);
     } catch (err) {
-      setMigrationError(String(err));
+      setMigrationError(friendlyError(String(err), t));
     } finally {
       setMigrating(false);
     }
@@ -543,7 +544,7 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
       await invoke("export_library", { destPath: path, includeFiles });
       setBackupMessage(t("settings.exportedTo", { path }));
     } catch (err) {
-      setBackupMessage(t("settings.exportFailed", { error: String(err) }));
+      setBackupMessage(t("settings.exportFailed", { error: friendlyError(String(err), t) }));
     } finally {
       setExporting(false);
     }
@@ -589,7 +590,7 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
       setRestoreConfirmPath(null);
       setRestoreModalOpen(false);
     } catch (err) {
-      setBackupMessage(t("settings.importFailed", { error: String(err) }));
+      setBackupMessage(t("settings.importFailed", { error: friendlyError(String(err), t) }));
       setRestoreConfirmPath(null);
     } finally {
       setRestoring(false);
@@ -627,7 +628,7 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
       setSavedBackupConfig(config);
       setRemoteBackupMessage(t("settings.configSaved"));
     } catch (err) {
-      setRemoteBackupMessage(t("settings.saveFailed", { error: String(err) }));
+      setRemoteBackupMessage(t("settings.saveFailed", { error: friendlyError(String(err), t) }));
     } finally {
       setSavingBackupConfig(false);
     }
@@ -660,7 +661,7 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
       const status = await invoke<SyncManifest | null>("get_backup_status");
       setBackupStatus(status);
     } catch (err) {
-      setRemoteBackupMessage(t("settings.backupFailed", { error: String(err) }));
+      setRemoteBackupMessage(t("settings.backupFailed", { error: friendlyError(String(err), t) }));
     } finally {
       unlisten();
       setRunningBackup(false);

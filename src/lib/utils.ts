@@ -152,3 +152,29 @@ export function formatMetadataPills(meta: {
   }
   return pills;
 }
+
+/**
+ * Patterns that are dangerous in user-supplied CSS.
+ * Blocks data exfiltration (url, @import), script execution (expression,
+ * javascript:, -moz-binding), and external resource loading.
+ */
+const DANGEROUS_CSS_PATTERNS = [
+  /url\s*\(/gi,
+  /@import/gi,
+  /expression\s*\(/gi,
+  /javascript\s*:/gi,
+  /-moz-binding/gi,
+  /behavior\s*:/gi,
+  /@font-face/gi,
+  /@namespace/gi,
+  /\\[0-9a-fA-F]/g, // CSS escape sequences used to bypass filters
+];
+
+/** Sanitize user-supplied custom CSS by removing dangerous constructs. */
+export function sanitizeCss(css: string): string {
+  let sanitized = css;
+  for (const pattern of DANGEROUS_CSS_PATTERNS) {
+    sanitized = sanitized.replace(pattern, "/* blocked */");
+  }
+  return sanitized;
+}

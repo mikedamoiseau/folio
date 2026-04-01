@@ -7,9 +7,20 @@ const ERROR_KEYS: Record<string, string> = {
   "book file not found": "errors.fileNotFound",
   "permission denied": "errors.permissionDenied",
   "invalid format": "errors.invalidFormat",
+  "unsupported file format": "errors.invalidFormat",
   duplicate: "errors.duplicate",
   "chapter index": "errors.chapterLoad",
   corrupt: "errors.corrupt",
+  "timed out": "errors.timeout",
+  "request timed out": "errors.timeout",
+  timeout: "errors.timeout",
+  "connection refused": "errors.networkError",
+  "connection reset": "errors.networkError",
+  "network error": "errors.networkError",
+  "http error": "errors.networkError",
+  "dns error": "errors.networkError",
+  "url blocked": "errors.urlBlocked",
+  "too large": "errors.tooLarge",
 };
 
 export function friendlyError(raw: string, t: TFunction): string {

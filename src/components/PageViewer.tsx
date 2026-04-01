@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
 import { getSpreadPages } from "../lib/utils";
+import { friendlyError } from "../lib/errors";
 
 const MIN_ZOOM = 0.5;
 const MAX_ZOOM = 4;
@@ -150,7 +151,7 @@ export default function PageViewer({
           if (!cancelled) slideInRef.current();
         });
       } catch (err) {
-        if (!cancelled) setError(String(err));
+        if (!cancelled) setError(friendlyError(String(err), t));
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -402,12 +403,13 @@ export default function PageViewer({
         onMouseLeave={handleMouseUp}
       >
         {loading ? (
-          <div className="absolute inset-0 flex items-center justify-center">
-            <span className="text-sm text-ink-muted">Loading page…</span>
+          <div className="absolute inset-0 flex items-center justify-center gap-2">
+            <div className="w-5 h-5 border-2 border-accent/30 border-t-accent rounded-full animate-spin" />
+            <span className="text-sm text-ink-muted">{t("reader.loadingPage")}</span>
           </div>
         ) : error ? (
           <div className="absolute inset-0 flex items-center justify-center">
-            <span className="text-sm text-red-500 text-center max-w-sm">Failed to load page: {error}</span>
+            <span className="text-sm text-red-500 text-center max-w-sm">{t("reader.failedToLoadPage", { error })}</span>
           </div>
         ) : (
           <div

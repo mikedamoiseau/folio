@@ -11,7 +11,7 @@ pub mod openlibrary;
 pub mod pdf;
 pub mod providers;
 
-use commands::AppState;
+use commands::{AppState, LruCache, ProfileState};
 use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -111,14 +111,14 @@ pub fn run() {
 
             app.manage(AppState {
                 db: pool,
-                profiles: std::sync::Mutex::new(profiles),
-                active_profile: std::sync::Mutex::new("default".to_string()),
+                profile_state: std::sync::Mutex::new(ProfileState {
+                    active: "default".to_string(),
+                    pools: profiles,
+                }),
                 data_dir,
-                epub_cache: std::sync::Mutex::new(std::collections::HashMap::new()),
-                epub_cache_order: std::sync::Mutex::new(Vec::new()),
+                epub_cache: std::sync::Mutex::new(LruCache::new(5)),
+                pdf_cache: std::sync::Mutex::new(LruCache::new(20)),
                 enrichment_registry,
-                pdf_render_cache: std::sync::Mutex::new(std::collections::HashMap::new()),
-                pdf_render_cache_order: std::sync::Mutex::new(Vec::new()),
             });
             Ok(())
         })

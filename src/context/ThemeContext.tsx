@@ -18,6 +18,7 @@ import {
   applyTokensToRoot,
   clearRootTokens,
 } from "../lib/themes";
+import { sanitizeCss } from "../lib/utils";
 
 export type { ColorMode, ColorTokens };
 
@@ -170,7 +171,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   const [fontFamily, setFontFamilyState] = useState<FontFamily>(loadStoredFontFamily);
   const [scrollMode, setScrollModeState] = useState<ScrollMode>(loadStoredScrollMode);
   const [typography, setTypographyState] = useState<TypographySettings>(loadStoredTypography);
-  const [customCss, setCustomCssState] = useState(() => localStorage.getItem(STORAGE_KEYS.customCss) ?? "");
+  const [customCss, setCustomCssState] = useState(() => sanitizeCss(localStorage.getItem(STORAGE_KEYS.customCss) ?? ""));
   const [dualPage, setDualPageState] = useState(() => localStorage.getItem(STORAGE_KEYS.dualPage) === "true");
   const [mangaMode, setMangaModeState] = useState(() => localStorage.getItem(STORAGE_KEYS.mangaMode) === "true");
   const [pageAnimation, setPageAnimationState] = useState(() => {
@@ -265,10 +266,11 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   const cssPersistTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
   const setCustomCss = useCallback((css: string) => {
     const trimmed = css.length > MAX_CUSTOM_CSS_LENGTH ? css.slice(0, MAX_CUSTOM_CSS_LENGTH) : css;
-    setCustomCssState(trimmed);
+    const safe = sanitizeCss(trimmed);
+    setCustomCssState(safe);
     clearTimeout(cssPersistTimer.current);
     cssPersistTimer.current = setTimeout(() => {
-      localStorage.setItem(STORAGE_KEYS.customCss, trimmed);
+      localStorage.setItem(STORAGE_KEYS.customCss, safe);
     }, 500);
   }, []);
 

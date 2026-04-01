@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useTranslation } from "react-i18next";
+import { friendlyError } from "../lib/errors";
 import StarRating from "./StarRating";
 
 interface Tag {
@@ -141,7 +142,7 @@ export default function EditBookDialog({
       });
       onSaved();
     } catch (err) {
-      setError(String(err));
+      setError(friendlyError(String(err), t));
     } finally {
       setSaving(false);
     }
@@ -157,7 +158,7 @@ export default function EditBookDialog({
       });
       setOlResults(results);
     } catch (err) {
-      setError(String(err));
+      setError(friendlyError(String(err), t));
     } finally {
       setOlSearching(false);
     }
@@ -181,7 +182,7 @@ export default function EditBookDialog({
       setOlEnriched(true);
       setOlResults([]);
     } catch (err) {
-      setError(String(err));
+      setError(friendlyError(String(err), t));
     } finally {
       setSaving(false);
     }
@@ -202,7 +203,7 @@ export default function EditBookDialog({
       });
       onSaved();
     } catch (err) {
-      setError(String(err));
+      setError(friendlyError(String(err), t));
     } finally {
       setSaving(false);
     }
@@ -437,7 +438,7 @@ export default function EditBookDialog({
                     await invoke("copy_to_library", { bookId });
                     onSaved(); // refresh book data and close dialog
                   } catch (err) {
-                    setError(String(err));
+                    setError(friendlyError(String(err), t));
                   } finally {
                     setCopyingToLibrary(false);
                   }

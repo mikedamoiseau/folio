@@ -32,4 +32,24 @@ describe("friendlyError", () => {
     it("returns generic message for unknown errors", () => {
         expect(friendlyError("something unknown", mockT)).toBe("errors.generic");
     });
+
+    it("maps timeout errors", () => {
+        expect(friendlyError("request timed out", mockT)).toBe("errors.timeout");
+    });
+
+    it("maps connection refused errors", () => {
+        expect(friendlyError("connection refused", mockT)).toBe("errors.networkError");
+    });
+
+    it("maps HTTP error messages", () => {
+        expect(friendlyError("HTTP error: connection reset", mockT)).toBe("errors.networkError");
+    });
+
+    it("maps URL blocked errors", () => {
+        expect(friendlyError("URL blocked: only public HTTP/HTTPS URLs are allowed.", mockT)).toBe("errors.urlBlocked");
+    });
+
+    it("maps too large errors", () => {
+        expect(friendlyError("Response too large (limit: 5 MB).", mockT)).toBe("errors.tooLarge");
+    });
 });

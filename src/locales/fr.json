@@ -6,6 +6,7 @@
     "delete": "Supprimer",
     "remove": "Retirer",
     "close": "Fermer",
+    "retry": "R\u00e9essayer",
     "back": "Retour",
     "search": "Rechercher",
     "clear": "Effacer",
@@ -93,6 +94,8 @@
     "pages": "Pages",
     "goToPage": "Aller \u00e0 la page",
     "loadingPages": "Chargement des pages\u2026",
+    "loadingPage": "Chargement de la page\u2026",
+    "failedToLoadPage": "\u00c9chec du chargement de la page : {{error}}",
     "loadingChapters": "Chargement de {{count}} chapitres\u2026",
     "failedToLoadChapter": "\u00c9chec du chargement du chapitre\u00a0: {{error}}",
     "searchInBook": "Rechercher dans le livre...",
@@ -477,6 +480,10 @@
     "duplicate": "Ce livre est d\u00e9j\u00e0 dans votre biblioth\u00e8que.",
     "chapterIndex": "Impossible de charger ce chapitre. Essayez de red\u00e9marrer la liseuse.",
     "corrupt": "Ce fichier semble endommag\u00e9 et ne peut pas \u00eatre ouvert.",
+    "timeout": "La requ\u00eate a expir\u00e9. Le serveur est peut-\u00eatre lent ou inaccessible.",
+    "networkError": "Impossible de se connecter au serveur. V\u00e9rifiez votre connexion internet.",
+    "urlBlocked": "Cette URL a \u00e9t\u00e9 bloqu\u00e9e pour des raisons de s\u00e9curit\u00e9.",
+    "tooLarge": "Le fichier ou la r\u00e9ponse est trop volumineux.",
     "generic": "Une erreur s\u2019est produite. Veuillez r\u00e9essayer."
   },
 

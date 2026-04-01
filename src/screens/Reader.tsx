@@ -1448,6 +1448,11 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
                     <p className="text-sm text-ink-muted">{t("reader.loadingChapters", { count: totalChapters })}</p>
                   </div>
                 )
+              ) : !chapterHtml ? (
+                /* ── Paginated: loading chapter ── */
+                <div className="flex-1 flex items-center justify-center">
+                  <div className="w-5 h-5 border-2 border-accent/30 border-t-accent rounded-full animate-spin" />
+                </div>
               ) : (
                 /* ── Paginated: single chapter ── */
                 <div

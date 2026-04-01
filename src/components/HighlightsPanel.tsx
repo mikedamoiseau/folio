@@ -34,6 +34,7 @@ export type { Highlight };
 export default function HighlightsPanel({ bookId, onClose, onGoToChapter }: HighlightsPanelProps) {
   const { t } = useTranslation();
   const [highlights, setHighlights] = useState<Highlight[]>([]);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
   const [editingNote, setEditingNote] = useState<string | null>(null);
   const [noteText, setNoteText] = useState("");
 
@@ -49,11 +50,14 @@ export default function HighlightsPanel({ bookId, onClose, onGoToChapter }: High
   useEffect(() => { loadHighlights(); }, [loadHighlights]);
 
   const handleDeleteHighlight = async (id: string) => {
+    setDeletingId(id);
     try {
       await invoke("remove_highlight", { highlightId: id });
       await loadHighlights();
     } catch {
       // ignore
+    } finally {
+      setDeletingId(null);
     }
   };
 
@@ -187,12 +191,17 @@ export default function HighlightsPanel({ bookId, onClose, onGoToChapter }: High
                       </div>
                       <button
                         onClick={() => handleDeleteHighlight(h.id)}
-                        className="opacity-0 group-hover:opacity-100 p-0.5 text-ink-muted hover:text-red-500 transition-all shrink-0"
+                        disabled={deletingId === h.id}
+                        className="opacity-0 group-hover:opacity-100 p-0.5 text-ink-muted hover:text-red-500 transition-all shrink-0 disabled:opacity-50"
                         aria-label={t("highlights.deleteLabel")}
                       >
-                        <svg width="12" height="12" viewBox="0 0 20 20" fill="none">
-                          <path d="M15 5L5 15M5 5l10 10" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-                        </svg>
+                        {deletingId === h.id ? (
+                          <div className="w-3 h-3 border border-ink-muted/40 border-t-ink-muted rounded-full animate-spin" />
+                        ) : (
+                          <svg width="12" height="12" viewBox="0 0 20 20" fill="none">
+                            <path d="M15 5L5 15M5 5l10 10" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                          </svg>
+                        )}
                       </button>
                     </div>
                   </div>

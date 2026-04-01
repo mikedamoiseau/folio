@@ -14,72 +14,126 @@ use crate::opds;
 use crate::openlibrary;
 use crate::pdf;
 
-/// Maximum number of EPUB archives kept open in the cache.
-const EPUB_CACHE_MAX: usize = 5;
+/// A simple LRU cache that bundles the data map and access order in a single
+/// structure, so only one Mutex is needed. This eliminates the risk of lock
+/// poisoning or inversion that arises from guarding the map and order with
+/// separate Mutexes.
+pub struct LruCache<V> {
+    entries: std::collections::HashMap<String, V>,
+    order: Vec<String>,
+    capacity: usize,
+}
 
-/// Maximum number of rendered PDF page images kept in the cache.
-const PDF_RENDER_CACHE_MAX: usize = 20;
+impl<V> LruCache<V> {
+    pub fn new(capacity: usize) -> Self {
+        Self {
+            entries: std::collections::HashMap::new(),
+            order: Vec::new(),
+            capacity,
+        }
+    }
+
+    /// Move an existing key to the most-recently-used position.
+    fn touch(&mut self, key: &str) {
+        if let Some(pos) = self.order.iter().position(|k| k == key) {
+            self.order.remove(pos);
+        }
+        self.order.push(key.to_string());
+    }
+
+    /// Insert a key-value pair, evicting the least-recently-used entry when at
+    /// capacity.
+    fn insert(&mut self, key: String, value: V) {
+        if self.entries.contains_key(&key) {
+            self.touch(&key);
+            self.entries.insert(key, value);
+            return;
+        }
+        while self.entries.len() >= self.capacity {
+            if let Some(oldest) = self.order.first().cloned() {
+                self.entries.remove(&oldest);
+                self.order.remove(0);
+            } else {
+                self.entries.clear();
+                break;
+            }
+        }
+        self.entries.insert(key.clone(), value);
+        self.order.push(key);
+    }
+
+    fn get(&self, key: &str) -> Option<&V> {
+        self.entries.get(key)
+    }
+
+    fn get_mut(&mut self, key: &str) -> Option<&mut V> {
+        self.entries.get_mut(key)
+    }
+
+    fn remove(&mut self, key: &str) {
+        self.entries.remove(key);
+        self.order.retain(|k| k != key);
+    }
+}
+
+/// Profile state: active profile name + pool map in a single Mutex.
+/// This prevents the race condition where the active profile changes between
+/// reading the name and looking up the pool.
+///
+/// ## Lock ordering
+///
+/// `AppState` contains multiple Mutexes. To prevent deadlocks, always acquire
+/// them in the order listed below. Never hold a higher-numbered lock while
+/// waiting for a lower-numbered one.
+///
+/// 1. `profile_state` — profile name + pool map
+/// 2. `epub_cache` — EPUB archive LRU cache
+/// 3. `pdf_cache` — PDF render LRU cache
+/// 4. `enrichment_registry` — metadata provider registry
+pub struct ProfileState {
+    pub active: String,
+    pub pools: std::collections::HashMap<String, DbPool>,
+}
 
 pub struct AppState {
     pub db: DbPool,
-    pub profiles: std::sync::Mutex<std::collections::HashMap<String, DbPool>>,
-    pub active_profile: std::sync::Mutex<String>,
+    /// Combined profile name + pool map (lock #1). See lock ordering above.
+    pub profile_state: std::sync::Mutex<ProfileState>,
     pub data_dir: std::path::PathBuf,
-    /// Cache of opened EPUB zip archives keyed by file path, avoiding
-    /// re-opening the zip and re-parsing OPF on every page turn.
-    pub epub_cache: std::sync::Mutex<std::collections::HashMap<String, epub::CachedEpubArchive>>,
-    /// LRU access order for epub_cache keys (most recently used at end).
-    pub epub_cache_order: std::sync::Mutex<Vec<String>>,
+    /// EPUB archive LRU cache (lock #2). Single Mutex replaces the former
+    /// dual-Mutex (epub_cache + epub_cache_order).
+    pub epub_cache: std::sync::Mutex<LruCache<epub::CachedEpubArchive>>,
+    /// PDF render LRU cache (lock #3). Single Mutex replaces the former
+    /// dual-Mutex (pdf_render_cache + pdf_render_cache_order).
+    pub pdf_cache: std::sync::Mutex<LruCache<String>>,
+    /// Metadata provider registry (lock #4).
     pub enrichment_registry: std::sync::Mutex<crate::providers::ProviderRegistry>,
-    /// Cache of rendered PDF page images keyed by "path:page:width".
-    pub pdf_render_cache: std::sync::Mutex<std::collections::HashMap<String, String>>,
-    /// LRU access order for pdf_render_cache keys (most recently used at end).
-    pub pdf_render_cache_order: std::sync::Mutex<Vec<String>>,
 }
 
 impl AppState {
     /// Returns the DB pool for the active profile.
+    /// Uses a single lock to read profile name and look up the pool atomically.
     pub fn active_db(&self) -> Result<DbPool, String> {
-        let profile = self.active_profile.lock().map_err(|e| e.to_string())?;
-        if *profile == "default" {
+        let ps = self.profile_state.lock().map_err(|e| e.to_string())?;
+        if ps.active == "default" {
             return Ok(self.db.clone());
         }
-        let profiles = self.profiles.lock().map_err(|e| e.to_string())?;
-        profiles
-            .get(&*profile)
+        ps.pools
+            .get(&ps.active)
             .cloned()
-            .ok_or_else(|| format!("Profile '{}' not found", profile))
+            .ok_or_else(|| format!("Profile '{}' not found", ps.active))
     }
 }
 
-/// Insert or touch a key in the LRU cache order, evicting the oldest entry if at capacity.
-fn ensure_epub_cached(
-    cache: &mut std::collections::HashMap<String, epub::CachedEpubArchive>,
-    order: &mut Vec<String>,
-    file_path: &str,
-) {
-    if cache.contains_key(file_path) {
-        // Move to end (most recently used)
-        if let Some(pos) = order.iter().position(|k| k == file_path) {
-            order.remove(pos);
-        }
-        order.push(file_path.to_string());
+/// Ensure a file_path is loaded in the EPUB LRU cache. If it's already present,
+/// move it to most-recently-used. Otherwise open the archive and insert it.
+fn ensure_epub_cached(cache: &mut LruCache<epub::CachedEpubArchive>, file_path: &str) {
+    if cache.get(file_path).is_some() {
+        cache.touch(file_path);
         return;
-    }
-    // Evict LRU entry when cache is full
-    while cache.len() >= EPUB_CACHE_MAX {
-        if let Some(oldest) = order.first().cloned() {
-            cache.remove(&oldest);
-            order.remove(0);
-        } else {
-            // Fallback: order out of sync, clear everything
-            cache.clear();
-            break;
-        }
     }
     if let Ok(archive) = epub::CachedEpubArchive::open(file_path) {
         cache.insert(file_path.to_string(), archive);
-        order.push(file_path.to_string());
     }
 }
 
@@ -596,9 +650,6 @@ pub async fn remove_book(book_id: String, state: State<'_, AppState>) -> Result<
         if let Ok(mut cache) = state.epub_cache.lock() {
             cache.remove(path);
         }
-        if let Ok(mut order) = state.epub_cache_order.lock() {
-            order.retain(|k| k != path);
-        }
     }
 
     // Remove the physical file only if it was imported (copied) into the library.
@@ -820,8 +871,7 @@ pub async fn get_chapter_content(
     let data_dir = state.data_dir.to_string_lossy().to_string();
 
     let mut cache = state.epub_cache.lock().map_err(|e| e.to_string())?;
-    let mut order = state.epub_cache_order.lock().map_err(|e| e.to_string())?;
-    ensure_epub_cached(&mut cache, &mut order, &file_path);
+    ensure_epub_cached(&mut cache, &file_path);
     let cached = cache
         .get_mut(&file_path)
         .ok_or("Failed to open EPUB archive")?;
@@ -850,8 +900,7 @@ pub async fn search_book_content(
     validate_file_exists(&file_path)?;
 
     let mut cache = state.epub_cache.lock().map_err(|e| e.to_string())?;
-    let mut order = state.epub_cache_order.lock().map_err(|e| e.to_string())?;
-    ensure_epub_cached(&mut cache, &mut order, &file_path);
+    ensure_epub_cached(&mut cache, &file_path);
     let cached = cache
         .get_mut(&file_path)
         .ok_or("Failed to open EPUB archive")?;
@@ -874,8 +923,7 @@ pub async fn get_chapter_word_counts(
     validate_file_exists(&file_path)?;
 
     let mut cache = state.epub_cache.lock().map_err(|e| e.to_string())?;
-    let mut order = state.epub_cache_order.lock().map_err(|e| e.to_string())?;
-    ensure_epub_cached(&mut cache, &mut order, &file_path);
+    ensure_epub_cached(&mut cache, &file_path);
     let cached = cache
         .get_mut(&file_path)
         .ok_or("Failed to open EPUB archive")?;
@@ -899,8 +947,7 @@ pub async fn get_all_chapters(
     let data_dir = state.data_dir.to_string_lossy().to_string();
 
     let mut cache = state.epub_cache.lock().map_err(|e| e.to_string())?;
-    let mut order = state.epub_cache_order.lock().map_err(|e| e.to_string())?;
-    ensure_epub_cached(&mut cache, &mut order, &file_path);
+    ensure_epub_cached(&mut cache, &file_path);
     let cached = cache
         .get_mut(&file_path)
         .ok_or("Failed to open EPUB archive")?;
@@ -930,8 +977,7 @@ pub async fn get_toc(
     validate_file_exists(&file_path)?;
 
     let mut cache = state.epub_cache.lock().map_err(|e| e.to_string())?;
-    let mut order = state.epub_cache_order.lock().map_err(|e| e.to_string())?;
-    ensure_epub_cached(&mut cache, &mut order, &file_path);
+    ensure_epub_cached(&mut cache, &file_path);
     let cached = cache
         .get_mut(&file_path)
         .ok_or("Failed to open EPUB archive")?;
@@ -950,13 +996,36 @@ pub async fn get_reading_progress(
 }
 
 fn validate_file_exists(file_path: &str) -> Result<(), String> {
-    if !std::path::Path::new(file_path).exists() {
+    let path = std::path::Path::new(file_path);
+    if !path.exists() {
         return Err(format!(
             "Book file not found at '{}'. It may have been moved or deleted.",
             file_path
         ));
     }
+    // Reject symlinks to prevent traversal attacks
+    if path
+        .symlink_metadata()
+        .map(|m| m.file_type().is_symlink())
+        .unwrap_or(false)
+    {
+        return Err("Symbolic links are not supported for book files.".to_string());
+    }
     Ok(())
+}
+
+/// Validate that a path, once canonicalized, lies within an expected parent directory.
+/// Returns the canonical path on success.
+#[allow(dead_code)]
+fn validate_path_within(path: &str, parent: &str) -> Result<std::path::PathBuf, String> {
+    let canonical = std::fs::canonicalize(path)
+        .map_err(|e| format!("Cannot resolve path '{}': {}", path, e))?;
+    let canonical_parent = std::fs::canonicalize(parent)
+        .map_err(|e| format!("Cannot resolve library folder '{}': {}", parent, e))?;
+    if !canonical.starts_with(&canonical_parent) {
+        return Err(format!("Path '{}' is outside the library folder.", path));
+    }
+    Ok(canonical)
 }
 
 fn validate_scroll_position(pos: f64) -> Result<f64, String> {
@@ -1950,20 +2019,15 @@ pub struct Profile {
 
 #[tauri::command]
 pub async fn get_profiles(state: State<'_, AppState>) -> Result<Vec<Profile>, String> {
-    let active = state
-        .active_profile
-        .lock()
-        .map_err(|e| e.to_string())?
-        .clone();
-    let profiles = state.profiles.lock().map_err(|e| e.to_string())?;
+    let ps = state.profile_state.lock().map_err(|e| e.to_string())?;
     let mut result = vec![Profile {
         name: "default".to_string(),
-        is_active: active == "default",
+        is_active: ps.active == "default",
     }];
-    for name in profiles.keys() {
+    for name in ps.pools.keys() {
         result.push(Profile {
             name: name.clone(),
-            is_active: *name == active,
+            is_active: *name == ps.active,
         });
     }
     result.sort_by(|a, b| a.name.cmp(&b.name));
@@ -1989,22 +2053,20 @@ pub async fn create_profile(name: String, state: State<'_, AppState>) -> Result<
     let _ = std::fs::create_dir_all(&profile_folder);
     db::set_setting(&conn, "library_folder", &profile_folder).map_err(|e| e.to_string())?;
 
-    let mut profiles = state.profiles.lock().map_err(|e| e.to_string())?;
-    profiles.insert(name, pool);
+    let mut ps = state.profile_state.lock().map_err(|e| e.to_string())?;
+    ps.pools.insert(name, pool);
     Ok(())
 }
 
 #[tauri::command]
 pub async fn switch_profile(name: String, state: State<'_, AppState>) -> Result<(), String> {
-    if name != "default" {
-        let profiles = state.profiles.lock().map_err(|e| e.to_string())?;
-        if !profiles.contains_key(&name) {
+    {
+        let mut ps = state.profile_state.lock().map_err(|e| e.to_string())?;
+        if name != "default" && !ps.pools.contains_key(&name) {
             return Err(format!("Profile '{name}' not found"));
         }
+        ps.active = name.clone();
     }
-    let mut active = state.active_profile.lock().map_err(|e| e.to_string())?;
-    *active = name.clone();
-    drop(active);
 
     let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
     log_activity(
@@ -2024,18 +2086,13 @@ pub async fn delete_profile(name: String, state: State<'_, AppState>) -> Result<
     if name == "default" {
         return Err("Cannot delete the default profile".to_string());
     }
-    let active = state
-        .active_profile
-        .lock()
-        .map_err(|e| e.to_string())?
-        .clone();
-    if active == name {
+    let mut ps = state.profile_state.lock().map_err(|e| e.to_string())?;
+    if ps.active == name {
         return Err(
             "Cannot delete the active profile. Switch to another profile first.".to_string(),
         );
     }
-    let mut profiles = state.profiles.lock().map_err(|e| e.to_string())?;
-    profiles.remove(&name);
+    ps.pools.remove(&name);
     // Remove DB file
     let db_path = state.data_dir.join(format!("library-{name}.db"));
     let _ = std::fs::remove_file(db_path);
@@ -2117,9 +2174,20 @@ pub async fn set_library_folder(
     move_files: bool,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
+    // Validate the folder path: reject obviously dangerous values.
+    let folder_path = std::path::Path::new(&new_folder);
+    if new_folder.is_empty() || new_folder == "/" || new_folder == "\\" {
+        return Err("Invalid library folder path.".to_string());
+    }
+    // Ensure the folder exists (or can be created) then canonicalize.
+    std::fs::create_dir_all(&new_folder).map_err(|e| e.to_string())?;
+    let canonical = std::fs::canonicalize(folder_path)
+        .map_err(|e| format!("Cannot resolve library folder: {e}"))?;
+    let canonical_str = canonical.to_string_lossy().to_string();
+
     if !move_files {
         let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
-        db::set_setting(&conn, "library_folder", &new_folder).map_err(|e| e.to_string())?;
+        db::set_setting(&conn, "library_folder", &canonical_str).map_err(|e| e.to_string())?;
         return Ok(());
     }
 
@@ -2129,9 +2197,7 @@ pub async fn set_library_folder(
         db::list_books(&conn).map_err(|e| e.to_string())?
     };
 
-    std::fs::create_dir_all(&new_folder).map_err(|e| e.to_string())?;
-
-    // Build (src, dest) pairs.
+    // Build (src, dest) pairs using canonical path.
     let moves: Vec<(String, String)> = books
         .iter()
         .map(|book| {
@@ -2139,7 +2205,7 @@ pub async fn set_library_folder(
                 .extension()
                 .and_then(|e| e.to_str())
                 .unwrap_or("");
-            let dest = format!("{}/{}.{}", new_folder, book.id, ext);
+            let dest = format!("{}/{}.{}", canonical_str, book.id, ext);
             (book.file_path.clone(), dest)
         })
         .collect();
@@ -2186,7 +2252,7 @@ pub async fn set_library_folder(
     for (book, (_, dest)) in books.iter().zip(moves.iter()) {
         db::update_book_file_path(&tx, &book.id, dest).map_err(|e| e.to_string())?;
     }
-    db::set_setting(&tx, "library_folder", &new_folder).map_err(|e| e.to_string())?;
+    db::set_setting(&tx, "library_folder", &canonical_str).map_err(|e| e.to_string())?;
     tx.commit().map_err(|e| e.to_string())?;
 
     Ok(())
@@ -2397,6 +2463,11 @@ pub async fn import_library_backup(
     let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
     let mut imported = 0u32;
 
+    // Helper: validate that a ZIP entry name is safe (no path traversal).
+    let is_safe_zip_entry = |name: &str| -> bool {
+        !name.contains("..") && !name.starts_with('/') && !name.starts_with('\\')
+    };
+
     for book in &books {
         // Skip if book already exists by hash
         if let Some(ref hash) = book.file_hash {
@@ -2414,9 +2485,28 @@ pub async fn import_library_backup(
             .unwrap_or("epub");
         let book_archive_name = format!("books/{}.{}", book.id, ext);
 
-        // Extract book file
+        // Validate ZIP entry name before extraction
+        if !is_safe_zip_entry(&book_archive_name) {
+            continue;
+        }
+
+        // Extract book file — validate destination is within library folder.
         let library_path = format!("{}/{}.{}", library_folder, book.id, ext);
+        // Ensure the destination path doesn't escape the library folder via
+        // a crafted book ID containing path separators.
+        {
+            let dest = std::path::Path::new(&library_path);
+            let parent = dest.parent().unwrap_or(std::path::Path::new(""));
+            let lib = std::path::Path::new(&library_folder);
+            if parent != lib {
+                continue; // path escapes library folder
+            }
+        }
         if let Ok(mut entry) = archive.by_name(&book_archive_name) {
+            // Validate the actual entry name from the archive as well
+            if !is_safe_zip_entry(entry.name()) {
+                continue;
+            }
             let mut buf = Vec::new();
             entry.read_to_end(&mut buf).map_err(|e| e.to_string())?;
             std::fs::write(&library_path, &buf).map_err(|e| e.to_string())?;
@@ -2428,7 +2518,13 @@ pub async fn import_library_backup(
         let mut cover_path = book.cover_path.clone();
         for ext_try in &["jpg", "png", "webp", "gif"] {
             let cover_name = format!("covers/{}/cover.{}", book.id, ext_try);
+            if !is_safe_zip_entry(&cover_name) {
+                continue;
+            }
             if let Ok(mut entry) = archive.by_name(&cover_name) {
+                if !is_safe_zip_entry(entry.name()) {
+                    continue;
+                }
                 let dir = data_dir.join("covers").join(&book.id);
                 std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
                 let dest = dir.join(format!("cover.{ext_try}"));
@@ -2500,44 +2596,23 @@ pub async fn get_pdf_page(
 
     let cache_key = format!("{}:{}:{}", file_path, page_index, render_width);
 
-    // Check cache
+    // Check cache (single lock for both map and LRU order)
     {
-        let cache = state.pdf_render_cache.lock().map_err(|e| e.to_string())?;
+        let mut cache = state.pdf_cache.lock().map_err(|e| e.to_string())?;
         if let Some(data) = cache.get(&cache_key) {
             let result = data.clone();
-            // Update LRU order
-            let mut order = state
-                .pdf_render_cache_order
-                .lock()
-                .map_err(|e| e.to_string())?;
-            if let Some(pos) = order.iter().position(|k| k == &cache_key) {
-                order.remove(pos);
-            }
-            order.push(cache_key);
-            drop(order);
-            drop(cache);
+            cache.touch(&cache_key);
             return Ok(result);
         }
     }
 
-    // Render
+    // Render (outside the lock)
     let data = pdf::get_page_image(&file_path, page_index, render_width)?;
 
     // Store in cache with LRU eviction
     {
-        let mut cache = state.pdf_render_cache.lock().map_err(|e| e.to_string())?;
-        let mut order = state
-            .pdf_render_cache_order
-            .lock()
-            .map_err(|e| e.to_string())?;
-        while order.len() >= PDF_RENDER_CACHE_MAX {
-            if let Some(old_key) = order.first().cloned() {
-                order.remove(0);
-                cache.remove(&old_key);
-            }
-        }
-        cache.insert(cache_key.clone(), data.clone());
-        order.push(cache_key);
+        let mut cache = state.pdf_cache.lock().map_err(|e| e.to_string())?;
+        cache.insert(cache_key, data.clone());
     }
 
     Ok(data)
@@ -3294,9 +3369,6 @@ pub async fn cleanup_library(
         // Evict EPUB cache entry.
         if let Ok(mut cache) = state.epub_cache.lock() {
             cache.remove(&book.file_path);
-        }
-        if let Ok(mut order) = state.epub_cache_order.lock() {
-            order.retain(|k| k != &book.file_path);
         }
 
         // Remove cover directory.
