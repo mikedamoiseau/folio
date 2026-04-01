@@ -60,34 +60,40 @@ export default function PageViewer({
     spreadRef.current.style.transform = `translate(calc(-50% + ${p.x}px), calc(-50% + ${p.y}px))`;
   }, []);
 
+  const SLIDE_OFFSET = "35%";
+  const SLIDE_DURATION = 350;
+  const slideTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
+
   // Phase 1: snap offscreen immediately (called synchronously from prevSpread/nextSpread)
   const snapOffscreen = useCallback(() => {
     if (!pageAnimation || !slideRef.current) return;
+    // Cancel any in-progress slide cleanup
+    clearTimeout(slideTimerRef.current);
     const el = slideRef.current;
     el.style.transition = "none";
     el.style.transform = directionRef.current === "right"
-      ? "translateX(100%)"
-      : "translateX(-100%)";
+      ? `translateX(${SLIDE_OFFSET})`
+      : `translateX(-${SLIDE_OFFSET})`;
     void el.offsetHeight;
   }, [pageAnimation]);
 
   // Phase 2: slide into view (called after new images are loaded)
-  const slideIn = useCallback((): (() => void) | undefined => {
+  const slideIn = useCallback(() => {
     if (isInitialLoad.current) {
       isInitialLoad.current = false;
-      return undefined;
+      return;
     }
-    if (!pageAnimation || !slideRef.current) return undefined;
+    if (!pageAnimation || !slideRef.current) return;
     const el = slideRef.current;
-    el.style.transition = "transform 350ms ease-out";
+    el.style.transition = `transform ${SLIDE_DURATION}ms ease-out`;
     el.style.transform = "translateX(0)";
-    const onEnd = () => {
+    // Use setTimeout instead of transitionend — more reliable when
+    // transitions are interrupted by rapid navigation
+    clearTimeout(slideTimerRef.current);
+    slideTimerRef.current = setTimeout(() => {
       el.style.transition = "none";
       el.style.transform = "";
-      el.removeEventListener("transitionend", onEnd);
-    };
-    el.addEventListener("transitionend", onEnd);
-    return () => { el.removeEventListener("transitionend", onEnd); };
+    }, SLIDE_DURATION + 20);
   }, [pageAnimation]);
 
   const slideInRef = useRef(slideIn);
@@ -117,7 +123,6 @@ export default function PageViewer({
   useEffect(() => {
     let cancelled = false;
     let rafId: number | undefined;
-    let cleanupAnim: (() => void) | undefined;
     // Only show loading spinner on initial load — during navigation, keep old images
     // visible (they're offscreen via snapOffscreen) so the slide animation works
     if (!leftImageData) {
@@ -137,7 +142,7 @@ export default function PageViewer({
         setRightImageData(results.length > 1 ? results[1] : null);
         // Slide in after new images are set
         rafId = requestAnimationFrame(() => {
-          if (!cancelled) cleanupAnim = slideInRef.current();
+          if (!cancelled) slideInRef.current();
         });
       } catch (err) {
         if (!cancelled) setError(String(err));
@@ -150,7 +155,6 @@ export default function PageViewer({
     return () => {
       cancelled = true;
       if (rafId !== undefined) cancelAnimationFrame(rafId);
-      cleanupAnim?.();
     };
   }, [spread.left, spread.right, loadPage, pdfRenderWidth]);
 
