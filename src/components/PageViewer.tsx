@@ -73,11 +73,13 @@ export default function PageViewer({
     if (!pageAnimation || !spreadRef.current) return;
     // Cancel any in-progress animation
     animationRef.current?.cancel();
-    const offset = directionRef.current === "right" ? 80 : -80;
+    // Offset is half the container width — enough to start fully off-page
+    const containerW = containerRef.current?.clientWidth ?? 800;
+    const offset = directionRef.current === "right" ? containerW / 2 : -containerW / 2;
     isAnimating.current = true;
     animationRef.current = spreadRef.current.animate([
-      { transform: `translate(calc(-50% + ${offset}px), calc(-50%))` },
-      { transform: `translate(calc(-50%), calc(-50%))` },
+      { transform: `translate(calc(-50% + ${offset}px), calc(-50%))`, opacity: 0.3 },
+      { transform: `translate(calc(-50%), calc(-50%))`, opacity: 1 },
     ], { duration: 300, easing: "ease-out" });
     animationRef.current.onfinish = () => { isAnimating.current = false; };
     animationRef.current.oncancel = () => { isAnimating.current = false; };
