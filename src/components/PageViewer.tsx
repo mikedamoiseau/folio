@@ -15,6 +15,7 @@ interface PageViewerProps {
   onPageChange?: (pageIndex: number) => void;
   dualPage?: boolean;
   mangaMode?: boolean;
+  pageAnimation?: boolean;
 }
 
 export default function PageViewer({
@@ -25,6 +26,7 @@ export default function PageViewer({
   onPageChange,
   dualPage = false,
   mangaMode = false,
+  pageAnimation = true,
 }: PageViewerProps) {
   const [pageIndex, setPageIndex] = useState(initialPage);
   const [leftImageData, setLeftImageData] = useState<string | null>(null);

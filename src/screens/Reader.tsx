@@ -48,7 +48,7 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
   const { bookId } = useParams<{ bookId: string }>();
   const navigate = useNavigate();
   const { t } = useTranslation();
-  const { fontSize, setFontSize, fontFamily, scrollMode, typography, customCss, dualPage, setDualPage, mangaMode, setMangaMode } = useTheme();
+  const { fontSize, setFontSize, fontFamily, scrollMode, typography, customCss, dualPage, setDualPage, mangaMode, setMangaMode, pageAnimation } = useTheme();
 
   const [bookTitle, setBookTitle] = useState("");
   const [bookFormat, setBookFormat] = useState<"epub" | "cbz" | "cbr" | "pdf">("epub");
@@ -1301,6 +1301,7 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
               onPageChange={(index) => setChapterIndex(index)}
               dualPage={dualPage}
               mangaMode={mangaMode}
+              pageAnimation={pageAnimation}
             />
           ) : (
             <div className="flex-1 flex items-center justify-center">
