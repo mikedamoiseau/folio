@@ -108,6 +108,26 @@ export default function PageViewer({
   const dpr = typeof window !== "undefined" ? window.devicePixelRatio || 1 : 1;
   const pdfRenderWidth = isPdf ? Math.round(1200 * Math.max(renderZoom, 1) * dpr) : undefined;
 
+  // Page cache: preloaded images keyed by "{pageIndex}:{renderWidth}"
+  const pageCacheRef = useRef<Map<string, string>>(new Map());
+
+  const loadPageCached = useCallback(
+    async (index: number, renderWidth?: number): Promise<string> => {
+      const key = `${index}:${renderWidth ?? 0}`;
+      const cached = pageCacheRef.current.get(key);
+      if (cached) return cached;
+      const data = await loadPage(index, renderWidth);
+      pageCacheRef.current.set(key, data);
+      // Keep cache bounded (max 10 entries)
+      if (pageCacheRef.current.size > 10) {
+        const firstKey = pageCacheRef.current.keys().next().value;
+        if (firstKey !== undefined) pageCacheRef.current.delete(firstKey);
+      }
+      return data;
+    },
+    [loadPage]
+  );
+
   // Load spread (one or two pages in parallel)
   useEffect(() => {
     let cancelled = false;
@@ -117,9 +137,9 @@ export default function PageViewer({
 
     const loadSpread = async () => {
       try {
-        const promises: Promise<string>[] = [loadPage(spread.left, pdfRenderWidth)];
+        const promises: Promise<string>[] = [loadPageCached(spread.left, pdfRenderWidth)];
         if (spread.right !== null) {
-          promises.push(loadPage(spread.right, pdfRenderWidth));
+          promises.push(loadPageCached(spread.right, pdfRenderWidth));
         }
         const results = await Promise.all(promises);
         if (cancelled) return;
@@ -141,7 +161,36 @@ export default function PageViewer({
       cancelled = true;
       if (rafId !== undefined) cancelAnimationFrame(rafId);
     };
-  }, [spread.left, spread.right, loadPage, pdfRenderWidth]);
+  }, [spread.left, spread.right, loadPageCached, pdfRenderWidth]);
+
+  // Preload adjacent spreads in the background after current spread renders
+  useEffect(() => {
+    if (loading) return;
+    const toPreload: number[] = [];
+    if (dualPage) {
+      // Previous spread
+      if (spread.left > 0) {
+        const prevLeft = spread.left <= 2 ? 0 : spread.left - 2;
+        toPreload.push(prevLeft);
+        const { right } = getSpreadPages(prevLeft, totalPages);
+        if (right !== null) toPreload.push(right);
+      }
+      // Next spread
+      const nextLeft = spread.right !== null ? spread.right + 1 : spread.left + 1;
+      if (nextLeft < totalPages) {
+        toPreload.push(nextLeft);
+        const { right } = getSpreadPages(nextLeft, totalPages);
+        if (right !== null) toPreload.push(right);
+      }
+    } else {
+      if (spread.left > 0) toPreload.push(spread.left - 1);
+      if (spread.left < totalPages - 1) toPreload.push(spread.left + 1);
+    }
+    // Fire-and-forget — don't block on preloads
+    for (const idx of toPreload) {
+      loadPageCached(idx, pdfRenderWidth);
+    }
+  }, [loading, spread.left, spread.right, dualPage, totalPages, loadPageCached, pdfRenderWidth]);
 
   const goTo = useCallback(
     (index: number) => {
