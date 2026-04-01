@@ -217,13 +217,13 @@ Click the back arrow in the top-left corner or press `Escape`. Your progress is 
 
 Select text while reading to see a color picker popup. Choose from five colors: yellow, green, blue, pink, or orange. The highlighted text is saved with its position.
 
-Open the highlights panel to:
+Open the highlights panel (pen icon in the reader header) to:
 
 - View all highlights grouped by chapter
-- Add or edit notes on any highlight
+- Add or edit notes on any highlight — notes use a multi-line text area, press Cmd/Ctrl+Enter to save
 - Click a highlight to jump to that chapter
 - Delete individual highlights
-- Export all highlights as Markdown
+- Export all highlights as Markdown (copied to clipboard)
 
 ### Bookmarks
 
