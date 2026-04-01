@@ -150,6 +150,7 @@ fn parse_feed(xml: &str, base_url: &str) -> Result<OpdsFeed, String> {
     let mut in_author = false;
     let mut in_feed_title = false;
 
+    let parsed_base = url::Url::parse(base_url).ok();
     let resolve = |href: &str| -> String {
         // Reject non-HTTP schemes outright (file://, javascript:, data:, etc.)
         if !href.is_empty()
@@ -163,23 +164,14 @@ fn parse_feed(xml: &str, base_url: &str) -> Result<OpdsFeed, String> {
         if href.starts_with("http://") || href.starts_with("https://") {
             return href.to_string();
         }
-        // Simple relative URL resolution
-        if href.starts_with('/') {
-            // Absolute path — combine with scheme+host
-            if let Some(idx) = base_url.find("://") {
-                if let Some(slash) = base_url[idx + 3..].find('/') {
-                    return format!("{}{}", &base_url[..idx + 3 + slash], href);
-                }
+        // RFC-compliant URL resolution via the url crate
+        if let Some(ref base) = parsed_base {
+            if let Ok(resolved) = base.join(href) {
+                return resolved.to_string();
             }
-            return format!("{}{}", base_url.trim_end_matches('/'), href);
         }
-        // Relative path — combine with base directory
-        let base_dir = if let Some(idx) = base_url.rfind('/') {
-            &base_url[..idx + 1]
-        } else {
-            base_url
-        };
-        format!("{}{}", base_dir, href)
+        // Fallback: return as-is if base URL couldn't be parsed
+        href.to_string()
     };
 
     let mut buf = Vec::new();

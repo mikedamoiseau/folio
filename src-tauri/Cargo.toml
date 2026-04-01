@@ -42,6 +42,7 @@ opendal = { version = "0.55", features = ["services-s3", "services-fs", "service
 tokio = { version = "1", features = ["rt", "rt-multi-thread"] }
 keyring = "3"
 regex = "1"
+url = "2"
 urlencoding = "2"
 log = "0.4.29"
 tauri-plugin-clipboard-manager = "2.3.2"

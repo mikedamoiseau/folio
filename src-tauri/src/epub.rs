@@ -82,10 +82,40 @@ pub struct CachedEpubArchive {
 // in AppState so this is safe.
 unsafe impl Send for CachedEpubArchive {}
 
+/// Maximum number of entries allowed in an EPUB/CBZ archive.
+pub const MAX_ARCHIVE_ENTRIES: usize = 10_000;
+/// Maximum decompressed size per archive entry (100 MB).
+pub const MAX_ENTRY_SIZE: u64 = 100 * 1024 * 1024;
+
+/// Validate archive bounds: entry count and per-entry decompressed size.
+pub fn validate_archive(archive: &mut ZipArchive<std::fs::File>) -> Result<(), EpubError> {
+    if archive.len() > MAX_ARCHIVE_ENTRIES {
+        return Err(EpubError::MissingFile(format!(
+            "Archive has {} entries (maximum {})",
+            archive.len(),
+            MAX_ARCHIVE_ENTRIES
+        )));
+    }
+    for i in 0..archive.len() {
+        if let Ok(entry) = archive.by_index_raw(i) {
+            if entry.size() > MAX_ENTRY_SIZE {
+                return Err(EpubError::MissingFile(format!(
+                    "Archive entry '{}' decompressed size ({} MB) exceeds limit ({} MB)",
+                    entry.name(),
+                    entry.size() / (1024 * 1024),
+                    MAX_ENTRY_SIZE / (1024 * 1024)
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
 impl CachedEpubArchive {
     pub fn open(file_path: &str) -> Result<Self, EpubError> {
         let file = std::fs::File::open(file_path).map_err(EpubError::Io)?;
         let mut archive = ZipArchive::new(file)?;
+        validate_archive(&mut archive)?;
         let opf_path = find_opf_path(&mut archive)?;
         let opf = read_zip_entry(&mut archive, &opf_path)?;
         let base_dir = opf_base_dir(&opf_path).to_string();

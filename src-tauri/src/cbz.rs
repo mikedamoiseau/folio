@@ -30,7 +30,10 @@ fn collect_image_names(archive: &mut ZipArchive<std::fs::File>) -> Vec<String> {
 
 fn open_archive(path: &str) -> Result<ZipArchive<std::fs::File>, String> {
     let file = std::fs::File::open(path).map_err(|e| format!("Cannot open file: {e}"))?;
-    ZipArchive::new(file).map_err(|e| format!("Not a valid ZIP/CBZ archive: {e}"))
+    let mut archive =
+        ZipArchive::new(file).map_err(|e| format!("Not a valid ZIP/CBZ archive: {e}"))?;
+    crate::epub::validate_archive(&mut archive).map_err(|e| e.to_string())?;
+    Ok(archive)
 }
 
 #[derive(Debug)]

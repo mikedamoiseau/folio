@@ -16,7 +16,8 @@ pub fn secret_keys(provider_type: &ProviderType) -> Vec<&'static str> {
 }
 
 /// Store secret values in the OS keychain. Returns the config with secrets removed.
-pub fn store_secrets(config: &BackupConfig) -> BackupConfig {
+/// Returns an error if any keychain write fails — caller should NOT save config to DB.
+pub fn store_secrets(config: &BackupConfig) -> Result<BackupConfig, String> {
     let secrets = secret_keys(&config.provider_type);
     let mut clean = config.clone();
     for key in &secrets {
@@ -25,13 +26,15 @@ pub fn store_secrets(config: &BackupConfig) -> BackupConfig {
                 continue;
             }
             let service = format!("folio-backup-{:?}-{}", config.provider_type, key);
-            if let Ok(entry) = keyring::Entry::new(&service, "default") {
-                let _ = entry.set_password(value);
-            }
+            let entry = keyring::Entry::new(&service, "default")
+                .map_err(|e| format!("Failed to access keychain for {key}: {e}"))?;
+            entry
+                .set_password(value)
+                .map_err(|e| format!("Failed to store secret '{key}' in keychain: {e}"))?;
             clean.values.remove(*key);
         }
     }
-    clean
+    Ok(clean)
 }
 
 /// Load secret values from the OS keychain into a config.

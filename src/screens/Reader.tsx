@@ -75,6 +75,7 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<{ chapterIndex: number; snippet: string; matchOffset: number }[]>([]);
   const [searching, setSearching] = useState(false);
+  const [activeMatchIndex, setActiveMatchIndex] = useState(-1);
   const searchInputRef = useRef<HTMLInputElement>(null);
 
   // Do Not Disturb mode
@@ -651,6 +652,7 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
   const executeSearch = useCallback(async (query: string) => {
     if (!bookId || !query.trim()) {
       setSearchResults([]);
+      setActiveMatchIndex(-1);
       return;
     }
     setSearching(true);
@@ -659,12 +661,32 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
         "search_book_content", { bookId, query: query.trim() }
       );
       setSearchResults(results);
+      setActiveMatchIndex(results.length > 0 ? 0 : -1);
     } catch {
       setSearchResults([]);
+      setActiveMatchIndex(-1);
     } finally {
       setSearching(false);
     }
   }, [bookId]);
+
+  const navigateToMatch = useCallback((index: number) => {
+    if (index < 0 || index >= searchResults.length) return;
+    setActiveMatchIndex(index);
+    goToChapter(searchResults[index].chapterIndex);
+  }, [searchResults, goToChapter]);
+
+  const prevMatch = useCallback(() => {
+    if (searchResults.length === 0) return;
+    const next = activeMatchIndex <= 0 ? searchResults.length - 1 : activeMatchIndex - 1;
+    navigateToMatch(next);
+  }, [searchResults, activeMatchIndex, navigateToMatch]);
+
+  const nextMatch = useCallback(() => {
+    if (searchResults.length === 0) return;
+    const next = activeMatchIndex >= searchResults.length - 1 ? 0 : activeMatchIndex + 1;
+    navigateToMatch(next);
+  }, [searchResults, activeMatchIndex, navigateToMatch]);
 
   // ---- Keyboard shortcuts ----
 
@@ -698,7 +720,7 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
 
       // Close search panel from any context (including when input is focused)
       if (e.key === "Escape" && searchOpen) {
-        setSearchOpen(false); setSearchQuery(""); setSearchResults([]);
+        setSearchOpen(false); setSearchQuery(""); setSearchResults([]); setActiveMatchIndex(-1);
         return;
       }
 
@@ -1242,6 +1264,9 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
                   setSearchOpen(false);
                   setSearchQuery("");
                   setSearchResults([]);
+                  setActiveMatchIndex(-1);
+                } else if (e.key === "Enter" && searchResults.length > 0) {
+                  e.shiftKey ? prevMatch() : nextMatch();
                 } else if (e.key === "Enter") {
                   executeSearch(searchQuery);
                 }
@@ -1252,11 +1277,21 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
             />
             {searching && <span className="text-xs text-ink-muted">{t("reader.searchingText")}</span>}
             {!searching && searchResults.length > 0 && (
-              <span className="text-xs text-ink-muted tabular-nums">{searchResults.length === 1 ? t("reader.matchCount", { count: searchResults.length }) : t("reader.matchesCount", { count: searchResults.length })}</span>
+              <div className="flex items-center gap-1">
+                <span className="text-xs text-ink-muted tabular-nums">
+                  {t("reader.matchNav", { current: activeMatchIndex + 1, total: searchResults.length })}
+                </span>
+                <button type="button" onClick={prevMatch} className="p-0.5 text-ink-muted hover:text-ink transition-colors" aria-label={t("reader.prevMatch")}>
+                  <svg width="14" height="14" viewBox="0 0 20 20" fill="none"><path d="M12 15l-5-5 5-5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" /></svg>
+                </button>
+                <button type="button" onClick={nextMatch} className="p-0.5 text-ink-muted hover:text-ink transition-colors" aria-label={t("reader.nextMatch")}>
+                  <svg width="14" height="14" viewBox="0 0 20 20" fill="none"><path d="M8 5l5 5-5 5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" /></svg>
+                </button>
+              </div>
             )}
             <button
               type="button"
-              onClick={() => { setSearchOpen(false); setSearchQuery(""); setSearchResults([]); }}
+              onClick={() => { setSearchOpen(false); setSearchQuery(""); setSearchResults([]); setActiveMatchIndex(-1); }}
               className="p-1 text-ink-muted hover:text-ink transition-colors"
               aria-label={t("reader.closeSearch")}
             >
@@ -1284,10 +1319,10 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
                   key={`${result.chapterIndex}-${result.matchOffset}-${i}`}
                   type="button"
                   onClick={() => {
-                    goToChapter(result.chapterIndex);
+                    navigateToMatch(i);
                     setSearchOpen(false);
                   }}
-                  className="w-full text-left px-4 py-2 hover:bg-warm-subtle transition-colors border-b border-warm-border/50 last:border-b-0"
+                  className={`w-full text-left px-4 py-2 hover:bg-warm-subtle transition-colors border-b border-warm-border/50 last:border-b-0 ${i === activeMatchIndex ? "bg-accent-light" : ""}`}
                 >
                   <span className="text-[11px] text-accent font-medium">{chapterTitle}</span>
                   <p className="text-xs text-ink-muted mt-0.5 line-clamp-2">{result.snippet}</p>
@@ -1378,14 +1413,24 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
                 </>
               )}
               {/* Highlight color popup */}
-              {selectionPopup && (
+              {selectionPopup && (() => {
+                const popupW = 200;
+                const popupH = 36;
+                const containerW = contentRef.current?.clientWidth ?? 600;
+                // Clamp X so popup doesn't overflow left/right edges
+                const clampedX = Math.max(popupW / 2, Math.min(selectionPopup.x, containerW - popupW / 2));
+                // If popup would go above the visible area, show below selection instead
+                const showBelow = selectionPopup.y - popupH < (scrollContainerRef.current?.scrollTop ?? 0);
+                const yOffset = showBelow ? 32 : -8;
+                const transformY = showBelow ? "0%" : "-100%";
+                return (
                 <div
                   data-highlight-popup
                   className="absolute z-30 flex items-center gap-1 px-2 py-1.5 bg-ink/90 backdrop-blur-sm rounded-lg shadow-lg"
                   style={{
-                    left: `${selectionPopup.x}px`,
-                    top: `${selectionPopup.y}px`,
-                    transform: "translate(-50%, -100%)",
+                    left: `${clampedX}px`,
+                    top: `${selectionPopup.y + yOffset}px`,
+                    transform: `translate(-50%, ${transformY})`,
                   }}
                 >
                   {HIGHLIGHT_COLORS.map((c) => (
@@ -1418,7 +1463,8 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
                     </svg>
                   </button>
                 </div>
-              )}
+                );
+              })()}
 
               {chapterError ? (
                 <div className="max-w-[680px] mx-auto px-8 py-10">

@@ -333,6 +333,12 @@ pub async fn import_book(
                 }
                 e.to_string()
             })?;
+            epub::validate_archive(&mut archive).map_err(|e| {
+                if should_copy {
+                    let _ = std::fs::remove_file(&final_path);
+                }
+                e.to_string()
+            })?;
 
             let metadata = epub::parse_epub_metadata_from_archive(&mut archive).map_err(|e| {
                 if should_copy {
@@ -582,12 +588,13 @@ pub async fn import_book(
         }
     };
 
-    let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
-    if let Err(e) = db::insert_book(&conn, &book) {
+    let mut conn = state.active_db()?.get().map_err(|e| e.to_string())?;
+    let tx = conn.transaction().map_err(|e| e.to_string())?;
+    if let Err(e) = db::insert_book(&tx, &book) {
         // If the insert failed due to a duplicate hash, clean up the new copy
         // and return the existing book instead of surfacing a cryptic error.
         if let Some(existing) =
-            db::get_book_by_file_hash(&conn, book.file_hash.as_deref().unwrap_or(""))
+            db::get_book_by_file_hash(&tx, book.file_hash.as_deref().unwrap_or(""))
                 .ok()
                 .flatten()
         {
@@ -609,13 +616,24 @@ pub async fn import_book(
     }
 
     log_activity(
-        &conn,
+        &tx,
         "book_imported",
         "book",
         Some(&book.id),
         Some(&book.title),
         Some(&format!("{} by {}", book.format, book.author)),
     );
+
+    tx.commit().map_err(|e| {
+        // Clean up files if commit fails
+        if should_copy {
+            let _ = std::fs::remove_file(&final_path);
+        }
+        if let Some(ref dir) = cover_dir {
+            let _ = std::fs::remove_dir_all(dir);
+        }
+        e.to_string()
+    })?;
 
     Ok(book)
 }
@@ -2708,8 +2726,8 @@ pub async fn save_backup_config(
     config: crate::backup::BackupConfig,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    // Store secrets in OS keychain, save only non-secret values to DB
-    let clean = crate::backup::store_secrets(&config);
+    // Store secrets in OS keychain first — only save config to DB if all secrets stored
+    let clean = crate::backup::store_secrets(&config)?;
     let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
     let json = serde_json::to_string(&clean).map_err(|e| e.to_string())?;
     db::set_setting(&conn, "backup_config", &json).map_err(|e| e.to_string())
