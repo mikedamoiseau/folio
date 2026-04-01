@@ -42,6 +42,9 @@ export default function PageViewer({
   const panOffset = useRef({ x: 0, y: 0 });
   const containerRef = useRef<HTMLDivElement>(null);
   const spreadRef = useRef<HTMLDivElement>(null);
+  const slideRef = useRef<HTMLDivElement>(null);
+  const directionRef = useRef<"left" | "right">("right");
+  const isInitialLoad = useRef(true);
 
   const { t } = useTranslation();
   const isPdf = format === "pdf";
@@ -56,6 +59,35 @@ export default function PageViewer({
     spreadRef.current.style.height = `${z * 100}%`;
     spreadRef.current.style.transform = `translate(calc(-50% + ${p.x}px), calc(-50% + ${p.y}px))`;
   }, []);
+
+  const animateSlide = useCallback((): (() => void) | undefined => {
+    if (isInitialLoad.current) {
+      isInitialLoad.current = false;
+      return undefined;
+    }
+    if (!pageAnimation || !slideRef.current) return undefined;
+    const el = slideRef.current;
+    // Step 1: instantly position off-screen (no transition)
+    el.style.transition = "none";
+    el.style.transform = directionRef.current === "right"
+      ? "translateX(100%)"
+      : "translateX(-100%)";
+    // Step 2: force reflow so the browser registers the off-screen position
+    void el.offsetHeight;
+    // Step 3: animate slide to center
+    el.style.transition = "transform 200ms ease-out";
+    el.style.transform = "translateX(0)";
+    const onEnd = () => {
+      el.style.transition = "none";
+      el.style.transform = "";
+      el.removeEventListener("transitionend", onEnd);
+    };
+    el.addEventListener("transitionend", onEnd);
+    return () => { el.removeEventListener("transitionend", onEnd); };
+  }, [pageAnimation]);
+
+  const animateSlideRef = useRef(animateSlide);
+  useEffect(() => { animateSlideRef.current = animateSlide; }, [animateSlide]);
 
   // Quantize zoom to nearest 0.25 so we don't re-render on every tiny change
   const renderZoom = Math.ceil(zoom * 4) / 4;
@@ -80,6 +112,8 @@ export default function PageViewer({
   // Load spread (one or two pages in parallel)
   useEffect(() => {
     let cancelled = false;
+    let rafId: number | undefined;
+    let cleanupAnim: (() => void) | undefined;
     setLoading(true);
     setError(null);
 
@@ -93,6 +127,10 @@ export default function PageViewer({
         if (cancelled) return;
         setLeftImageData(results[0]);
         setRightImageData(results.length > 1 ? results[1] : null);
+        // Trigger slide animation after new images are set
+        rafId = requestAnimationFrame(() => {
+          if (!cancelled) cleanupAnim = animateSlideRef.current();
+        });
       } catch (err) {
         if (!cancelled) setError(String(err));
       } finally {
@@ -101,7 +139,11 @@ export default function PageViewer({
     };
 
     loadSpread();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+      if (rafId !== undefined) cancelAnimationFrame(rafId);
+      cleanupAnim?.();
+    };
   }, [spread.left, spread.right, loadPage, pdfRenderWidth]);
 
   const goTo = useCallback(
@@ -119,6 +161,7 @@ export default function PageViewer({
 
   // Navigate by spread: advance to next/prev spread's left page
   const prevSpread = useCallback(() => {
+    directionRef.current = "left";
     if (dualPage) {
       if (spread.left <= 0) return;
       const prevLeft = spread.left <= 2 ? 0 : spread.left - 2;
@@ -129,6 +172,7 @@ export default function PageViewer({
   }, [dualPage, spread.left, pageIndex, goTo]);
 
   const nextSpread = useCallback(() => {
+    directionRef.current = "right";
     if (dualPage) {
       const nextLeft = spread.right !== null ? spread.right + 1 : spread.left + 1;
       if (nextLeft >= totalPages) return;
@@ -318,28 +362,33 @@ export default function PageViewer({
           </div>
         ) : (
           <div
-            ref={spreadRef}
-            className={`absolute top-1/2 left-1/2 flex items-center justify-center gap-1 will-change-transform ${mangaMode && dualPage ? "flex-row-reverse" : "flex-row"}`}
-            style={{ width: `${zoom * 100}%`, height: `${zoom * 100}%`, transform: `translate(calc(-50% + ${panRef.current.x}px), calc(-50% + ${panRef.current.y}px))` }}
+            ref={slideRef}
+            className="absolute inset-0"
           >
-            {leftImageData && (
-              <img
-                src={leftImageData}
-                alt={`Page ${spread.left + 1} of ${totalPages}`}
-                className="max-h-full max-w-full object-contain rounded-sm shadow-[0_4px_24px_-4px_rgba(44,34,24,0.18)]"
-                style={dualPage && rightImageData ? { maxWidth: "50%" } : undefined}
-                draggable={false}
-              />
-            )}
-            {rightImageData && (
-              <img
-                src={rightImageData}
-                alt={`Page ${(spread.right ?? 0) + 1} of ${totalPages}`}
-                className="max-h-full object-contain rounded-sm shadow-[0_4px_24px_-4px_rgba(44,34,24,0.18)]"
-                style={{ maxWidth: "50%" }}
-                draggable={false}
-              />
-            )}
+            <div
+              ref={spreadRef}
+              className={`absolute top-1/2 left-1/2 flex items-center justify-center gap-1 will-change-transform ${mangaMode && dualPage ? "flex-row-reverse" : "flex-row"}`}
+              style={{ width: `${zoom * 100}%`, height: `${zoom * 100}%`, transform: `translate(calc(-50% + ${panRef.current.x}px), calc(-50% + ${panRef.current.y}px))` }}
+            >
+              {leftImageData && (
+                <img
+                  src={leftImageData}
+                  alt={`Page ${spread.left + 1} of ${totalPages}`}
+                  className="max-h-full max-w-full object-contain rounded-sm shadow-[0_4px_24px_-4px_rgba(44,34,24,0.18)]"
+                  style={dualPage && rightImageData ? { maxWidth: "50%" } : undefined}
+                  draggable={false}
+                />
+              )}
+              {rightImageData && (
+                <img
+                  src={rightImageData}
+                  alt={`Page ${(spread.right ?? 0) + 1} of ${totalPages}`}
+                  className="max-h-full object-contain rounded-sm shadow-[0_4px_24px_-4px_rgba(44,34,24,0.18)]"
+                  style={{ maxWidth: "50%" }}
+                  draggable={false}
+                />
+              )}
+            </div>
           </div>
         )}
       </div>
