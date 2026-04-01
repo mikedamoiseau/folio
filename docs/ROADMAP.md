@@ -348,7 +348,7 @@ Tauri v2 supports mobile targets. The React frontend renders in a mobile WebView
 - ~~Show results with context snippets, click to navigate to match~~
 - ~~Works for EPUB (search chapter HTML); case-insensitive, 200 result cap~~
 - ~~Search term highlighted in chapter content~~
-- PDF text search not yet implemented (TBD)
+- PDF text search not yet implemented — needs pdfium text extraction + regex match + highlight (estimate: 2-3 days)
 
 #### 28. Advanced Typography Controls — **Done**
 - ~~Line height / line spacing (1.2-2.4)~~
@@ -451,6 +451,91 @@ Tauri v2 supports mobile targets. The React frontend renders in a mobile WebView
 - Useful for reference material alongside primary reading
 - Niche but valuable for academic use
 
+## Phase 9: Hardening & Polish
+
+Improvements identified via codebase audit (April 2026). Security and stability fixes from the audit are already shipped; these are the remaining items that improve robustness, accessibility, and UX polish.
+
+### Robustness
+
+#### 49. Database Migration Versioning
+- Replace current `ALTER TABLE ... let _ =` pattern with a `schema_version` table
+- Track applied migrations by version number
+- Enable safe non-additive schema changes (column renames, type changes)
+- Implement rollback or backup-before-migrate strategy
+
+#### 50. Transaction Boundaries for Import
+- Wrap `import_book()` multi-step flow in an explicit DB transaction
+- Prevents orphaned files in the library folder when DB insert fails after file copy
+- Apply the same pattern to other multi-step commands (backup restore, bulk operations)
+
+#### 51. Archive Decompression Limits (Zip Bomb Protection)
+- Add `MAX_ARCHIVE_ENTRIES` constant (e.g., 10,000 entries)
+- Limit decompressed size per entry (e.g., 100 MB)
+- Stop reading entries if total decompressed size exceeds threshold
+- Prevents memory/disk exhaustion from maliciously crafted EPUB/CBZ/CBR archives
+
+#### 52. PDF Cache Memory Limits
+- Current LRU cache evicts by count (20 entries) but not by memory
+- 20 rendered PDF pages at max resolution could reach 400+ MB
+- Add memory-based eviction (e.g., max 200 MB total cache size)
+- Consider disk-based caching for older pages
+
+#### 53. Thread Pool for Background Operations
+- Enrichment scans and backups currently spawn unbounded threads via `std::thread::spawn`
+- Large batch operations could spawn 1000+ threads
+- Use `rayon::ThreadPool` or Tauri's async runtime with bounded concurrency
+
+#### 54. Backup Secret Atomicity
+- Verify OS keychain write succeeds before saving non-secret config to DB
+- If keychain is inaccessible (user denied access, locked screen), return error
+- Prevents config/secret desync that makes backup permanently broken
+
+#### 55. Structured Error Types (Rust)
+- Replace `Result<T, String>` across all commands with a typed error enum
+- Consistent error categorization: NotFound, PermissionDenied, InvalidInput, Network, Internal
+- Better error messages and frontend mapping
+
+### Accessibility
+
+#### 56. Screen Reader Live Regions
+- Add `aria-live="polite"` regions for dynamic content changes throughout the app
+- Chapter changes in EPUB reader (current chapter title + progress)
+- Bookmark/highlight creation and deletion confirmations
+- Import completion and scan progress updates
+- Toast notifications
+- *PageViewer page changes already have aria-live (added in audit)*
+
+#### 57. Loading Skeletons
+- Replace blank loading states with content-weighted skeleton placeholders
+- Library book grid: skeleton cards matching BookCard dimensions
+- Reader TOC sidebar: skeleton list items while chapters load
+- Book cover images: blur-up or placeholder while loading
+- Improves perceived performance, especially on first launch with large libraries
+
+### UX Polish
+
+#### 58. Unified Toast/Notification System
+- Replace ad-hoc notification patterns with a consistent toast container
+- Currently: BookmarkToast exists, but import completion, network errors, and other notifications use inconsistent patterns (modals, inline text, nothing)
+- Persistent toast area (bottom-center or top-right) for non-blocking notifications
+- Auto-dismiss with pause-on-hover
+
+#### 59. Search Results Navigation
+- Add "1 of 12 matches" counter with prev/next arrows to in-book search (EPUB)
+- Same pattern for OPDS catalog search results
+- Current implementation shows all results as a list; adding navigation improves usability for many matches
+
+#### 60. Bulk Book Actions
+- Checkbox selection mode in library grid (long-press or dedicated toggle)
+- Bulk actions: delete, tag, add to collection, mark as read/unread
+- Select all / deselect all
+- Reduces friction for library organization tasks
+
+#### 61. Highlight Popup Smart Positioning
+- When text selection spans multiple lines, the highlight color picker popup may be offscreen
+- Detect viewport bounds and reposition popup to opposite side when it would be clipped
+- Same pattern for any floating UI anchored to text selections
+
 ## Nice to Have
 
 Lower priority features — high effort, niche audience, or dependent on other work.
@@ -505,4 +590,5 @@ Lower priority features — high effort, niche audience, or dependent on other w
 | 6 | Remote Library Access, OPDS Server | Not started | Remote access |
 | 7 | Android & iOS App | Not started | Mobile |
 | 8 | Sepia Theme, OpenDyslexic, Star Ratings, In-Book Search, Typography, Custom Fonts, Continuous Scroll, Time-to-Finish, Bookmark Naming, Series, Activity Log, MOBI, Nav History, Custom CSS, Dual-Page/Manga, Settings Reorg, i18n (EN+FR), PDF Zoom Quality, Go to Page, Animations, Split View | 18 done | Reader & library enhancements |
+| 9 | DB Migration Versioning, Transaction Boundaries, Zip Bomb Protection, PDF Cache Memory Limits, Thread Pool, Backup Secret Atomicity, Structured Errors, Screen Reader Live Regions, Loading Skeletons, Toast System, Search Nav, Bulk Actions, Highlight Positioning | Not started | Hardening & polish |
 | N/H | Dictionary, Vocabulary Builder, TTS, PDF Reflow, Library-Wide Search, Annotation Exports, Plugins/Hooks, User Themes | Not started | Nice to have |
