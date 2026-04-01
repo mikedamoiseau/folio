@@ -45,20 +45,15 @@ export default function PageViewer({
   const isPdf = format === "pdf";
   const spread = dualPage ? getSpreadPages(pageIndex, totalPages) : { left: pageIndex, right: null };
 
-  // Apply transform directly to the DOM (no React re-render)
+  // Apply transform directly to the DOM (no React re-render).
+  // Use physical resize (width/height %) so the browser resamples images at full resolution
+  // instead of CSS scale() which blurs by upscaling the rasterized paint buffer.
   const applyTransform = useCallback((z: number, p: { x: number; y: number }) => {
     if (!spreadRef.current) return;
-    if (isPdf) {
-      // PDF: physically resize the spread so the browser paints images at full resolution.
-      // CSS scale() would only upscale the rasterized paint buffer, causing blurriness.
-      spreadRef.current.style.width = `${z * 100}%`;
-      spreadRef.current.style.height = `${z * 100}%`;
-      spreadRef.current.style.transform = `translate(calc(-50% + ${p.x}px), calc(-50% + ${p.y}px))`;
-    } else {
-      // Comics: CSS scale + translate (fixed-res images, scale is fine)
-      spreadRef.current.style.transform = `scale(${z}) translate(${p.x / z}px, ${p.y / z}px)`;
-    }
-  }, [isPdf]);
+    spreadRef.current.style.width = `${z * 100}%`;
+    spreadRef.current.style.height = `${z * 100}%`;
+    spreadRef.current.style.transform = `translate(calc(-50% + ${p.x}px), calc(-50% + ${p.y}px))`;
+  }, []);
 
   // Quantize zoom to nearest 0.25 so we don't re-render on every tiny change
   const renderZoom = Math.ceil(zoom * 4) / 4;
@@ -217,24 +212,14 @@ export default function PageViewer({
     if (!containerRef.current) return { x: 0, y: 0 };
     const containerW = containerRef.current.clientWidth;
     const containerH = containerRef.current.clientHeight;
-    if (isPdf) {
-      // PDF: spread is physically zoom-sized, no CSS scale
-      const contentW = containerW * zoom;
-      const contentH = containerH * zoom;
-      return {
-        x: Math.max(0, contentW - containerW),
-        y: Math.max(0, contentH - containerH),
-      };
-    }
-    // Comics: spread is container-sized, CSS scale multiplies
-    if (!spreadRef.current) return { x: 0, y: 0 };
-    const contentW = spreadRef.current.offsetWidth * zoom;
-    const contentH = spreadRef.current.offsetHeight * zoom;
+    // Spread is physically zoom-sized (width/height %), no CSS scale
+    const contentW = containerW * zoom;
+    const contentH = containerH * zoom;
     return {
       x: Math.max(0, contentW - containerW),
       y: Math.max(0, contentH - containerH),
     };
-  }, [zoom, isPdf]);
+  }, [zoom]);
 
   const canPan = useCallback(() => {
     const overflow = getOverflow();
@@ -332,8 +317,8 @@ export default function PageViewer({
         ) : (
           <div
             ref={spreadRef}
-            className={`absolute flex items-center justify-center gap-1 will-change-transform ${isPdf ? "top-1/2 left-1/2" : "inset-0"} ${mangaMode && dualPage ? "flex-row-reverse" : "flex-row"}`}
-            style={isPdf ? { width: `${zoom * 100}%`, height: `${zoom * 100}%`, transform: `translate(calc(-50% + ${panRef.current.x}px), calc(-50% + ${panRef.current.y}px))` } : undefined}
+            className={`absolute top-1/2 left-1/2 flex items-center justify-center gap-1 will-change-transform ${mangaMode && dualPage ? "flex-row-reverse" : "flex-row"}`}
+            style={{ width: `${zoom * 100}%`, height: `${zoom * 100}%`, transform: `translate(calc(-50% + ${panRef.current.x}px), calc(-50% + ${panRef.current.y}px))` }}
           >
             {leftImageData && (
               <img
