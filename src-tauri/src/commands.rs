@@ -3046,6 +3046,23 @@ pub async fn set_enrichment_provider_config(
     Ok(())
 }
 
+#[tauri::command]
+pub async fn set_enrichment_provider_order(
+    order: Vec<String>,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let mut reg = state
+        .enrichment_registry
+        .lock()
+        .map_err(|e| e.to_string())?;
+    reg.reorder(&order);
+    // Persist the order
+    let json = serde_json::to_string(&order).map_err(|e| e.to_string())?;
+    let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
+    crate::db::set_setting(&conn, "enrichment_provider_order", &json).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 // --- Activity log ---
 
 #[tauri::command]

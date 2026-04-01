@@ -98,6 +98,13 @@ pub fn run() {
                             }
                         }
                     }
+                    if let Ok(Some(order_json)) =
+                        crate::db::get_setting(&conn, "enrichment_provider_order")
+                    {
+                        if let Ok(order) = serde_json::from_str::<Vec<String>>(&order_json) {
+                            reg.reorder(&order);
+                        }
+                    }
                 }
                 std::sync::Mutex::new(reg)
             };
@@ -190,6 +197,7 @@ pub fn run() {
             commands::set_setting_value,
             commands::get_enrichment_providers,
             commands::set_enrichment_provider_config,
+            commands::set_enrichment_provider_order,
             commands::get_activity_log,
             commands::preview_collection_rules,
             commands::import_custom_font,
