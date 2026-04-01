@@ -42,9 +42,10 @@ export default function PageViewer({
   const panOffset = useRef({ x: 0, y: 0 });
   const containerRef = useRef<HTMLDivElement>(null);
   const spreadRef = useRef<HTMLDivElement>(null);
-  const slideRef = useRef<HTMLDivElement>(null);
   const directionRef = useRef<"left" | "right">("right");
   const isInitialLoad = useRef(true);
+  const animationRef = useRef<Animation | null>(null);
+  const isAnimating = useRef(false);
 
   const { t } = useTranslation();
   const isPdf = format === "pdf";
@@ -60,40 +61,26 @@ export default function PageViewer({
     spreadRef.current.style.transform = `translate(calc(-50% + ${p.x}px), calc(-50% + ${p.y}px))`;
   }, []);
 
-  const SLIDE_OFFSET = "35%";
-  const SLIDE_DURATION = 350;
-  const slideTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
-
-  // Phase 1: snap offscreen immediately (called synchronously from prevSpread/nextSpread)
-  const snapOffscreen = useCallback(() => {
-    if (!pageAnimation || !slideRef.current) return;
-    // Cancel any in-progress slide cleanup
-    clearTimeout(slideTimerRef.current);
-    const el = slideRef.current;
-    el.style.transition = "none";
-    el.style.transform = directionRef.current === "right"
-      ? `translateX(${SLIDE_OFFSET})`
-      : `translateX(-${SLIDE_OFFSET})`;
-    void el.offsetHeight;
-  }, [pageAnimation]);
-
-  // Phase 2: slide into view (called after new images are loaded)
+  // Animate new page sliding into view using Web Animations API.
+  // Runs on spreadRef directly — the API applies the animation in a separate layer
+  // that overrides inline styles during playback, then reverts when done.
+  // No conflict with applyTransform's inline styles.
   const slideIn = useCallback(() => {
     if (isInitialLoad.current) {
       isInitialLoad.current = false;
       return;
     }
-    if (!pageAnimation || !slideRef.current) return;
-    const el = slideRef.current;
-    el.style.transition = `transform ${SLIDE_DURATION}ms ease-out`;
-    el.style.transform = "translateX(0)";
-    // Use setTimeout instead of transitionend — more reliable when
-    // transitions are interrupted by rapid navigation
-    clearTimeout(slideTimerRef.current);
-    slideTimerRef.current = setTimeout(() => {
-      el.style.transition = "none";
-      el.style.transform = "";
-    }, SLIDE_DURATION + 20);
+    if (!pageAnimation || !spreadRef.current) return;
+    // Cancel any in-progress animation
+    animationRef.current?.cancel();
+    const offset = directionRef.current === "right" ? 80 : -80;
+    isAnimating.current = true;
+    animationRef.current = spreadRef.current.animate([
+      { transform: `translate(calc(-50% + ${offset}px), calc(-50%))` },
+      { transform: `translate(calc(-50%), calc(-50%))` },
+    ], { duration: 300, easing: "ease-out" });
+    animationRef.current.onfinish = () => { isAnimating.current = false; };
+    animationRef.current.oncancel = () => { isAnimating.current = false; };
   }, [pageAnimation]);
 
   const slideInRef = useRef(slideIn);
@@ -123,11 +110,7 @@ export default function PageViewer({
   useEffect(() => {
     let cancelled = false;
     let rafId: number | undefined;
-    // Only show loading spinner on initial load — during navigation, keep old images
-    // visible (they're offscreen via snapOffscreen) so the slide animation works
-    if (!leftImageData) {
-      setLoading(true);
-    }
+    setLoading(true);
     setError(null);
 
     const loadSpread = async () => {
@@ -173,29 +156,25 @@ export default function PageViewer({
 
   // Navigate by spread: advance to next/prev spread's left page
   const prevSpread = useCallback(() => {
+    if (isAnimating.current) return;
     directionRef.current = "left";
     if (dualPage) {
       if (spread.left <= 0) return;
-      snapOffscreen();
       const prevLeft = spread.left <= 2 ? 0 : spread.left - 2;
       goTo(prevLeft);
     } else {
-      if (pageIndex <= 0) return;
-      snapOffscreen();
       goTo(pageIndex - 1);
     }
-  }, [dualPage, spread.left, pageIndex, goTo, snapOffscreen]);
+  }, [dualPage, spread.left, pageIndex, goTo]);
 
   const nextSpread = useCallback(() => {
+    if (isAnimating.current) return;
     directionRef.current = "right";
     if (dualPage) {
       const nextLeft = spread.right !== null ? spread.right + 1 : spread.left + 1;
       if (nextLeft >= totalPages) return;
-      snapOffscreen();
       goTo(nextLeft);
     } else {
-      if (pageIndex >= totalPages - 1) return;
-      snapOffscreen();
       goTo(pageIndex + 1);
     }
   }, [dualPage, spread, pageIndex, totalPages, goTo]);
@@ -344,11 +323,10 @@ export default function PageViewer({
     const num = parseInt(pageInput, 10);
     if (!isNaN(num) && num >= 1 && num <= totalPages) {
       directionRef.current = "right";
-      snapOffscreen();
       goTo(num - 1);
     }
     setEditingPage(false);
-  }, [pageInput, totalPages, goTo, snapOffscreen]);
+  }, [pageInput, totalPages, goTo]);
 
   useEffect(() => {
     if (editingPage && pageInputRef.current) {
@@ -382,33 +360,28 @@ export default function PageViewer({
           </div>
         ) : (
           <div
-            ref={slideRef}
-            className="absolute inset-0"
+            ref={spreadRef}
+            className={`absolute top-1/2 left-1/2 flex items-center justify-center gap-1 will-change-transform ${mangaMode && dualPage ? "flex-row-reverse" : "flex-row"}`}
+            style={{ width: `${zoom * 100}%`, height: `${zoom * 100}%`, transform: `translate(calc(-50% + ${panRef.current.x}px), calc(-50% + ${panRef.current.y}px))` }}
           >
-            <div
-              ref={spreadRef}
-              className={`absolute top-1/2 left-1/2 flex items-center justify-center gap-1 will-change-transform ${mangaMode && dualPage ? "flex-row-reverse" : "flex-row"}`}
-              style={{ width: `${zoom * 100}%`, height: `${zoom * 100}%`, transform: `translate(calc(-50% + ${panRef.current.x}px), calc(-50% + ${panRef.current.y}px))` }}
-            >
-              {leftImageData && (
-                <img
-                  src={leftImageData}
-                  alt={`Page ${spread.left + 1} of ${totalPages}`}
-                  className="max-h-full max-w-full object-contain rounded-sm shadow-[0_4px_24px_-4px_rgba(44,34,24,0.18)]"
-                  style={dualPage && rightImageData ? { maxWidth: "50%" } : undefined}
-                  draggable={false}
-                />
-              )}
-              {rightImageData && (
-                <img
-                  src={rightImageData}
-                  alt={`Page ${(spread.right ?? 0) + 1} of ${totalPages}`}
-                  className="max-h-full object-contain rounded-sm shadow-[0_4px_24px_-4px_rgba(44,34,24,0.18)]"
-                  style={{ maxWidth: "50%" }}
-                  draggable={false}
-                />
-              )}
-            </div>
+            {leftImageData && (
+              <img
+                src={leftImageData}
+                alt={`Page ${spread.left + 1} of ${totalPages}`}
+                className="max-h-full max-w-full object-contain rounded-sm shadow-[0_4px_24px_-4px_rgba(44,34,24,0.18)]"
+                style={dualPage && rightImageData ? { maxWidth: "50%" } : undefined}
+                draggable={false}
+              />
+            )}
+            {rightImageData && (
+              <img
+                src={rightImageData}
+                alt={`Page ${(spread.right ?? 0) + 1} of ${totalPages}`}
+                className="max-h-full object-contain rounded-sm shadow-[0_4px_24px_-4px_rgba(44,34,24,0.18)]"
+                style={{ maxWidth: "50%" }}
+                draggable={false}
+              />
+            )}
           </div>
         )}
       </div>
