@@ -1042,7 +1042,7 @@ export default function Library() {
       </div>
 
       {/* Import progress overlay */}
-      {importing && importProgress && importProgress.total > 1 && (
+      {importing && importProgress && (
         <div className="absolute inset-x-0 bottom-0 z-30 bg-surface border-t border-warm-border px-6 py-4 shadow-[0_-4px_24px_-4px_rgba(44,34,24,0.10)]">
           <div className="flex items-center gap-4">
             <div className="flex-1 min-w-0">

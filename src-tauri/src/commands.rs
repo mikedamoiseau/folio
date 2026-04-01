@@ -755,23 +755,47 @@ pub async fn update_book_metadata(
     let has_cover = cover_image_path.is_some();
     let has_rating = rating.is_some();
 
+    // Normalize and length-limit metadata strings.
+    let normalize = |s: String, max_len: usize| -> String {
+        let trimmed = s.trim().to_string();
+        if trimmed.len() > max_len {
+            trimmed[..max_len].to_string()
+        } else {
+            trimmed
+        }
+    };
+    let normalize_opt = |s: String, max_len: usize| -> Option<String> {
+        let trimmed = s.trim().to_string();
+        if trimmed.is_empty() {
+            None
+        } else if trimmed.len() > max_len {
+            Some(trimmed[..max_len].to_string())
+        } else {
+            Some(trimmed)
+        }
+    };
+
     if let Some(t) = title {
+        let t = normalize(t, 500);
+        if t.is_empty() {
+            return Err("Title cannot be empty.".to_string());
+        }
         book.title = t;
     }
     if let Some(a) = author {
-        book.author = a;
+        book.author = normalize(a, 500);
     }
     if let Some(s) = series {
-        book.series = Some(s);
+        book.series = normalize_opt(s, 500);
     }
     if let Some(v) = volume {
         book.volume = Some(v);
     }
     if let Some(l) = language {
-        book.language = Some(l);
+        book.language = normalize_opt(l, 50);
     }
     if let Some(p) = publisher {
-        book.publisher = Some(p);
+        book.publisher = normalize_opt(p, 500);
     }
     if let Some(y) = publish_year {
         book.publish_year = Some(y);
@@ -1374,6 +1398,38 @@ pub async fn remove_tag_from_book(
 
 // --- Collections ---
 
+/// Valid (field, operator) combinations for collection rules.
+const VALID_RULE_PAIRS: &[(&str, &str)] = &[
+    ("author", "contains"),
+    ("filename", "contains"),
+    ("series", "contains"),
+    ("series", "equals"),
+    ("language", "equals"),
+    ("language", "contains"),
+    ("publisher", "contains"),
+    ("description", "contains"),
+    ("format", "equals"),
+    ("date_added", "last_n_days"),
+    ("tag", "contains"),
+    ("tag", "equals"),
+    ("reading_progress", "equals"),
+];
+
+fn validate_collection_rules(rules: &[NewRuleInput]) -> Result<(), String> {
+    for rule in rules {
+        if !VALID_RULE_PAIRS
+            .iter()
+            .any(|(f, o)| *f == rule.field && *o == rule.operator)
+        {
+            return Err(format!(
+                "Invalid collection rule: field '{}' with operator '{}'",
+                rule.field, rule.operator
+            ));
+        }
+    }
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn create_collection(
     name: String,
@@ -1383,6 +1439,7 @@ pub async fn create_collection(
     rules: Vec<NewRuleInput>,
     state: State<'_, AppState>,
 ) -> Result<Collection, String> {
+    validate_collection_rules(&rules)?;
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
@@ -1442,6 +1499,7 @@ pub async fn update_collection(
     rules: Vec<NewRuleInput>,
     state: State<'_, AppState>,
 ) -> Result<Collection, String> {
+    validate_collection_rules(&rules)?;
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
@@ -2654,18 +2712,23 @@ pub async fn get_backup_config(
     }
 }
 
-static BACKUP_RUNNING: AtomicBool = AtomicBool::new(false);
+static BACKUP_RUNNING: std::sync::LazyLock<std::sync::Mutex<std::collections::HashSet<String>>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashSet::new()));
 
 #[tauri::command]
 pub async fn run_backup(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
 ) -> Result<crate::backup::SyncResult, String> {
-    if BACKUP_RUNNING
-        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-        .is_err()
+    let profile_name = {
+        let ps = state.profile_state.lock().map_err(|e| e.to_string())?;
+        ps.active.clone()
+    };
     {
-        return Err("A backup is already in progress".to_string());
+        let mut running = BACKUP_RUNNING.lock().map_err(|e| e.to_string())?;
+        if !running.insert(profile_name.clone()) {
+            return Err("A backup is already in progress for this profile".to_string());
+        }
     }
     let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
     let json = db::get_setting(&conn, "backup_config")
@@ -2725,7 +2788,9 @@ pub async fn run_backup(
             );
         }
     }
-    BACKUP_RUNNING.store(false, Ordering::SeqCst);
+    if let Ok(mut running) = BACKUP_RUNNING.lock() {
+        running.remove(&profile_name);
+    }
     result
 }
 

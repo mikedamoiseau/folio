@@ -147,7 +147,7 @@ export default function ActivityLog({ onClose }: ActivityLogProps) {
             </h2>
             <button
               onClick={onClose}
-              className="p-1 text-ink-muted hover:text-ink transition-colors rounded focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2"
+              className="p-1 text-ink-muted hover:text-ink transition-colors rounded focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2"
               aria-label={t("activity.closeLabel")}
             >
               <svg width="18" height="18" viewBox="0 0 20 20" fill="none">

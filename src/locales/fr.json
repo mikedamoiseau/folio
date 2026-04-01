@@ -54,7 +54,7 @@
     "noResultsFor": "Aucun r\u00e9sultat pour \u00ab\u00a0{{query}}\u00a0\u00bb. Essayez un autre terme de recherche.",
     "adjustFilters": "Essayez d\u2019ajuster vos filtres de tri, format ou statut.",
     "clearAllFilters": "Effacer tous les filtres",
-    "importingProgress": "Importation de {{current}} sur {{total}}\u2026",
+    "importingProgress": "Traitement de {{current}} sur {{total}}\u2026",
     "dropToAdd": "D\u00e9poser pour ajouter des livres",
     "noSupportedFiles": "Aucun fichier de livre pris en charge (.epub, .pdf, .cbz, .cbr) trouv\u00e9 dans ce dossier.",
     "imported": "{{count}} import\u00e9(s)",
@@ -136,7 +136,7 @@
   "import": {
     "addBooks": "+ Ajouter des livres",
     "importing": "Importation\u2026",
-    "importingProgress": "Importation de {{current}} sur {{total}}\u2026",
+    "importingProgress": "Traitement de {{current}} sur {{total}}\u2026",
     "addFiles": "Ajouter des fichiers",
     "importFolder": "Importer un dossier",
     "importFromUrl": "Importer depuis une URL",

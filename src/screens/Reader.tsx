@@ -1018,7 +1018,7 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
               </h2>
               <button
                 onClick={() => setTocOpen(false)}
-                className="p-1 text-ink-muted hover:text-ink transition-colors rounded focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2"
+                className="p-1 text-ink-muted hover:text-ink transition-colors rounded focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2"
                 aria-label={t("reader.closeToc")}
               >
                 <svg width="18" height="18" viewBox="0 0 20 20" fill="none">
@@ -1058,7 +1058,7 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
         <header className={`flex items-center gap-2 px-4 py-2.5 border-b border-warm-border bg-surface shrink-0 transition-all duration-300 ${showHeader ? "opacity-100 max-h-20" : "opacity-0 max-h-0 overflow-hidden py-0 border-b-0"}`}>
           <button
             onClick={() => navigate("/")}
-            className="p-1.5 text-ink-muted hover:text-ink transition-colors rounded-lg hover:bg-warm-subtle focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2"
+            className="p-1.5 text-ink-muted hover:text-ink transition-colors rounded-lg hover:bg-warm-subtle focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2"
             aria-label={t("reader.backToLibrary")}
           >
             <svg width="18" height="18" viewBox="0 0 20 20" fill="none">
@@ -1068,7 +1068,7 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
 
           <button
             onClick={() => setTocOpen(true)}
-            className="p-1.5 text-ink-muted hover:text-ink transition-colors rounded-lg hover:bg-warm-subtle focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2"
+            className="p-1.5 text-ink-muted hover:text-ink transition-colors rounded-lg hover:bg-warm-subtle focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2"
             aria-label={t("reader.openToc")}
           >
             <svg width="18" height="18" viewBox="0 0 20 20" fill="none">
@@ -1084,7 +1084,7 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
           {bookFormat === "epub" && (
             <button
               onClick={() => { setSearchOpen(true); setSearchQuery(""); setSearchResults([]); }}
-              className={`p-1.5 transition-colors rounded-lg focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 ${searchOpen ? "text-accent bg-accent-light" : "text-ink-muted hover:text-ink hover:bg-warm-subtle"}`}
+              className={`p-1.5 transition-colors rounded-lg focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 ${searchOpen ? "text-accent bg-accent-light" : "text-ink-muted hover:text-ink hover:bg-warm-subtle"}`}
               aria-label={t("reader.searchLabel")}
               title={t("reader.searchShortcut")}
             >
@@ -1098,7 +1098,7 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
           {/* Highlights button */}
           <button
             onClick={() => setHighlightsOpen((prev) => !prev)}
-            className={`p-1.5 transition-colors rounded-lg focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 ${highlightsOpen ? "text-accent bg-accent-light" : "text-ink-muted hover:text-ink hover:bg-warm-subtle"}`}
+            className={`p-1.5 transition-colors rounded-lg focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 ${highlightsOpen ? "text-accent bg-accent-light" : "text-ink-muted hover:text-ink hover:bg-warm-subtle"}`}
             aria-label={t("highlights.title")}
           >
             <svg width="17" height="17" viewBox="0 0 24 24" fill="none">
@@ -1109,7 +1109,7 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
           {/* Bookmarks button */}
           <button
             onClick={() => setBookmarksOpen((prev) => !prev)}
-            className={`p-1.5 transition-colors rounded-lg focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 ${bookmarksOpen ? "text-accent bg-accent-light" : "text-ink-muted hover:text-ink hover:bg-warm-subtle"}`}
+            className={`p-1.5 transition-colors rounded-lg focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 ${bookmarksOpen ? "text-accent bg-accent-light" : "text-ink-muted hover:text-ink hover:bg-warm-subtle"}`}
             aria-label={t("bookmarks.title")}
             title={t("bookmarks.title")}
           >
@@ -1123,7 +1123,7 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
             <button
               onClick={() => setFontSize(fontSize - 2)}
               disabled={fontSize <= MIN_FONT_SIZE}
-              className="px-2 py-1 text-xs text-ink-muted hover:text-ink hover:bg-warm-subtle rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2"
+              className="px-2 py-1 text-xs text-ink-muted hover:text-ink hover:bg-warm-subtle rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2"
               aria-label={t("reader.decreaseFontSize")}
             >
               A−
@@ -1134,7 +1134,7 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
             <button
               onClick={() => setFontSize(fontSize + 2)}
               disabled={fontSize >= MAX_FONT_SIZE}
-              className="px-2 py-1 text-xs text-ink-muted hover:text-ink hover:bg-warm-subtle rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2"
+              className="px-2 py-1 text-xs text-ink-muted hover:text-ink hover:bg-warm-subtle rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2"
               aria-label={t("reader.increaseFontSize")}
             >
               A+
@@ -1146,7 +1146,7 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
             <div className="flex items-center">
               <button
                 onClick={() => setDualPage(!dualPage)}
-                className={`p-1.5 transition-colors rounded-lg focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 ${dualPage ? "text-accent bg-accent-light" : "text-ink-muted hover:text-ink hover:bg-warm-subtle"}`}
+                className={`p-1.5 transition-colors rounded-lg focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 ${dualPage ? "text-accent bg-accent-light" : "text-ink-muted hover:text-ink hover:bg-warm-subtle"}`}
                 aria-label={t("reader.toggleDualPage")}
                 title={t("reader.dualPageSpread")}
               >
@@ -1158,7 +1158,7 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
               {dualPage && (
                 <button
                   onClick={() => setMangaMode(!mangaMode)}
-                  className={`p-1.5 transition-colors rounded-lg focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 ${mangaMode ? "text-accent bg-accent-light" : "text-ink-muted hover:text-ink hover:bg-warm-subtle"}`}
+                  className={`p-1.5 transition-colors rounded-lg focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 ${mangaMode ? "text-accent bg-accent-light" : "text-ink-muted hover:text-ink hover:bg-warm-subtle"}`}
                   aria-label={t("reader.toggleMangaMode")}
                   title={t("reader.mangaMode")}
                 >
@@ -1174,7 +1174,7 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
           {/* DND toggle */}
           <button
             onClick={() => setDndMode((prev) => !prev)}
-            className={`p-1.5 transition-colors rounded-lg focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 ${dndMode ? "text-accent bg-accent-light" : "text-ink-muted hover:text-ink hover:bg-warm-subtle"}`}
+            className={`p-1.5 transition-colors rounded-lg focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 ${dndMode ? "text-accent bg-accent-light" : "text-ink-muted hover:text-ink hover:bg-warm-subtle"}`}
             aria-label={t("reader.toggleFocusMode")}
             title={t("reader.focusMode")}
           >
@@ -1190,7 +1190,7 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
           {/* Settings button */}
           <button
             onClick={onOpenSettings}
-            className="p-1.5 text-ink-muted hover:text-ink transition-colors rounded-lg hover:bg-warm-subtle focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2"
+            className="p-1.5 text-ink-muted hover:text-ink transition-colors rounded-lg hover:bg-warm-subtle focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2"
             aria-label={t("reader.openSettings")}
           >
             <svg width="17" height="17" viewBox="0 0 20 20" fill="none">
@@ -1344,7 +1344,7 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
                   {chapterIndex > 0 && (
                     <button
                       onClick={prevChapter}
-                      className="fixed left-3 top-1/2 -translate-y-1/2 z-20 w-9 h-9 flex items-center justify-center rounded-full bg-surface/90 border border-warm-border shadow-md text-ink-muted hover:text-ink hover:bg-surface transition-all opacity-60 hover:opacity-100 focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2"
+                      className="fixed left-3 top-1/2 -translate-y-1/2 z-20 w-9 h-9 flex items-center justify-center rounded-full bg-surface/90 border border-warm-border shadow-md text-ink-muted hover:text-ink hover:bg-surface transition-all opacity-60 hover:opacity-100 focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2"
                       aria-label={t("reader.previousChapter")}
                     >
                       <svg width="16" height="16" viewBox="0 0 20 20" fill="none">
@@ -1355,7 +1355,7 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
                   {chapterIndex < totalChapters - 1 && (
                     <button
                       onClick={nextChapter}
-                      className="fixed right-3 top-1/2 -translate-y-1/2 z-20 w-9 h-9 flex items-center justify-center rounded-full bg-surface/90 border border-warm-border shadow-md text-ink-muted hover:text-ink hover:bg-surface transition-all opacity-60 hover:opacity-100 focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2"
+                      className="fixed right-3 top-1/2 -translate-y-1/2 z-20 w-9 h-9 flex items-center justify-center rounded-full bg-surface/90 border border-warm-border shadow-md text-ink-muted hover:text-ink hover:bg-surface transition-all opacity-60 hover:opacity-100 focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2"
                       aria-label={t("reader.nextChapter")}
                     >
                       <svg width="16" height="16" viewBox="0 0 20 20" fill="none">
@@ -1469,7 +1469,7 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
                   <button
                     onClick={prevChapter}
                     disabled={chapterIndex <= 0}
-                    className="flex items-center gap-1.5 px-4 py-2 text-sm text-ink-muted bg-warm-subtle hover:bg-warm-border rounded-xl transition-colors disabled:opacity-50 disabled:cursor-not-allowed focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2"
+                    className="flex items-center gap-1.5 px-4 py-2 text-sm text-ink-muted bg-warm-subtle hover:bg-warm-border rounded-xl transition-colors disabled:opacity-50 disabled:cursor-not-allowed focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2"
                   >
                     <svg width="14" height="14" viewBox="0 0 20 20" fill="none">
                       <path d="M12 4l-6 6 6 6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
@@ -1482,7 +1482,7 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
                   <button
                     onClick={nextChapter}
                     disabled={chapterIndex >= totalChapters - 1}
-                    className="flex items-center gap-1.5 px-4 py-2 text-sm text-ink-muted bg-warm-subtle hover:bg-warm-border rounded-xl transition-colors disabled:opacity-50 disabled:cursor-not-allowed focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2"
+                    className="flex items-center gap-1.5 px-4 py-2 text-sm text-ink-muted bg-warm-subtle hover:bg-warm-border rounded-xl transition-colors disabled:opacity-50 disabled:cursor-not-allowed focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2"
                   >
                     {t("common.next")}
                     <svg width="14" height="14" viewBox="0 0 20 20" fill="none">
@@ -1583,7 +1583,7 @@ function TocItem({
     <>
       <button
         onClick={() => onSelect(entry.chapter_index)}
-        className={`w-full text-left py-2 text-sm transition-colors focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-inset ${
+        className={`w-full text-left py-2 text-sm transition-colors focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-inset ${
           isActive
             ? "text-accent font-medium bg-accent-light"
             : "text-ink-muted hover:text-ink hover:bg-warm-subtle"

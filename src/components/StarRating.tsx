@@ -49,7 +49,7 @@ export default function StarRating({ value, onChange, size = "md" }: StarRatingP
           onFocus={() => interactive && setFocused(star)}
           onBlur={() => setFocused(0)}
           onKeyDown={(e) => handleKeyDown(e, star)}
-          className={`${starSize} ${interactive ? "cursor-pointer hover:scale-110" : "cursor-default"} transition-transform disabled:opacity-100 focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:rounded-sm`}
+          className={`${starSize} ${interactive ? "cursor-pointer hover:scale-110" : "cursor-default"} transition-transform disabled:opacity-100 focus-visible:ring-2 focus-visible:ring-accent focus-visible:rounded-sm`}
           aria-label={`${star} star${star > 1 ? "s" : ""}`}
           aria-pressed={interactive ? star <= value : undefined}
         >

@@ -54,7 +54,7 @@
     "noResultsFor": "No results for \"{{query}}\". Try a different search term.",
     "adjustFilters": "Try adjusting your sort, format, or status filters.",
     "clearAllFilters": "Clear all filters",
-    "importingProgress": "Importing {{current}} of {{total}}\u2026",
+    "importingProgress": "Processing {{current}} of {{total}}\u2026",
     "dropToAdd": "Drop to add books",
     "noSupportedFiles": "No supported book files (.epub, .pdf, .cbz, .cbr) found in that folder.",
     "imported": "{{count}} imported",
@@ -136,7 +136,7 @@
   "import": {
     "addBooks": "+ Add books",
     "importing": "Importing\u2026",
-    "importingProgress": "Importing {{current}} of {{total}}\u2026",
+    "importingProgress": "Processing {{current}} of {{total}}\u2026",
     "addFiles": "Add files",
     "importFolder": "Import folder",
     "importFromUrl": "Import from URL",

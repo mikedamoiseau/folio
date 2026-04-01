@@ -177,6 +177,18 @@ fn run_schema(conn: &Connection) -> Result<()> {
     let _ = conn
         .execute_batch("CREATE INDEX IF NOT EXISTS idx_bookmarks_book_id ON bookmarks(book_id);");
 
+    // Indexes for common lookup patterns
+    let _ = conn
+        .execute_batch("CREATE INDEX IF NOT EXISTS idx_highlights_book_id ON highlights(book_id);");
+    let _ = conn
+        .execute_batch("CREATE INDEX IF NOT EXISTS idx_book_tags_book_id ON book_tags(book_id);");
+    let _ = conn.execute_batch(
+        "CREATE INDEX IF NOT EXISTS idx_reading_sessions_book_id ON reading_sessions(book_id);",
+    );
+    let _ = conn.execute_batch(
+        "CREATE INDEX IF NOT EXISTS idx_reading_progress_book_id ON reading_progress(book_id);",
+    );
+
     // Migration: drop CHECK constraint on collection_rules.field (was limited to a fixed set;
     // now validated in application code so new rule fields don't require schema changes).
     let has_check: bool = conn

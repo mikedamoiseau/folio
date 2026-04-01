@@ -38,7 +38,7 @@ function AppShell() {
           <div className="flex-1" />
           <button
             onClick={() => setStatsOpen(true)}
-            className="p-2 text-ink-muted hover:text-ink transition-colors duration-150 rounded-lg hover:bg-warm-subtle"
+            className="p-2 text-ink-muted hover:text-ink transition-colors duration-150 rounded-lg hover:bg-warm-subtle focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2"
             aria-label="Reading stats"
           >
             <svg width="18" height="18" viewBox="0 0 20 20" fill="none">
@@ -47,7 +47,7 @@ function AppShell() {
           </button>
           <button
             onClick={() => setCatalogOpen(true)}
-            className="p-2 text-ink-muted hover:text-ink transition-colors duration-150 rounded-lg hover:bg-warm-subtle"
+            className="p-2 text-ink-muted hover:text-ink transition-colors duration-150 rounded-lg hover:bg-warm-subtle focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2"
             aria-label="Browse catalogs"
             title="Browse book catalogs"
           >
@@ -58,7 +58,7 @@ function AppShell() {
           <LanguageSwitcher />
           <button
             onClick={() => setSettingsOpen(true)}
-            className="p-2 text-ink-muted hover:text-ink transition-colors duration-150 rounded-lg hover:bg-warm-subtle"
+            className="p-2 text-ink-muted hover:text-ink transition-colors duration-150 rounded-lg hover:bg-warm-subtle focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2"
             aria-label="Open settings"
           >
             <svg width="18" height="18" viewBox="0 0 20 20" fill="none">

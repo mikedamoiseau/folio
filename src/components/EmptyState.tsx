@@ -41,7 +41,7 @@ export default function EmptyState({ onImport, onImportFolder }: EmptyStateProps
       <h2 className="font-serif text-2xl font-semibold text-ink mb-2">
         {t("empty.title")}
       </h2>
-      <p className="text-sm text-ink-muted mb-7 leading-relaxed whitespace-nowrap">
+      <p className="text-sm text-ink-muted mb-7 leading-relaxed">
         {t("empty.subtitle")}
       </p>
 

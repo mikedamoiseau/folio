@@ -719,7 +719,7 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
           </h2>
           <button
             onClick={onClose}
-            className="p-1 text-ink-muted hover:text-ink transition-colors rounded focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2"
+            className="p-1 text-ink-muted hover:text-ink transition-colors rounded focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2"
             aria-label={t("settings.closeLabel")}
           >
             <svg width="18" height="18" viewBox="0 0 20 20" fill="none">
@@ -802,7 +802,7 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
               <button
                 onClick={() => setFontSize(fontSize - 1)}
                 disabled={fontSize <= MIN_FONT_SIZE}
-                className="w-8 h-8 flex items-center justify-center rounded-lg bg-warm-subtle text-ink-muted hover:text-ink hover:bg-warm-border transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-sm font-medium focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2"
+                className="w-8 h-8 flex items-center justify-center rounded-lg bg-warm-subtle text-ink-muted hover:text-ink hover:bg-warm-border transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-sm font-medium focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2"
                 aria-label={t("reader.decreaseFontSize")}
               >
                 −
@@ -825,7 +825,7 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
               <button
                 onClick={() => setFontSize(fontSize + 1)}
                 disabled={fontSize >= MAX_FONT_SIZE}
-                className="w-8 h-8 flex items-center justify-center rounded-lg bg-warm-subtle text-ink-muted hover:text-ink hover:bg-warm-border transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-sm font-medium focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2"
+                className="w-8 h-8 flex items-center justify-center rounded-lg bg-warm-subtle text-ink-muted hover:text-ink hover:bg-warm-border transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-sm font-medium focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2"
                 aria-label={t("reader.increaseFontSize")}
               >
                 +
