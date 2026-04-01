@@ -262,7 +262,7 @@ function formatBytes(bytes: number): string {
 
 export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
   const { t } = useTranslation();
-  const { mode, setMode, customColors, setCustomColors, fontSize, setFontSize, fontFamily, setFontFamily, scrollMode, setScrollMode, typography, setTypography, customCss, setCustomCss, dualPage, setDualPage, mangaMode, setMangaMode } =
+  const { mode, setMode, customColors, setCustomColors, fontSize, setFontSize, fontFamily, setFontFamily, scrollMode, setScrollMode, typography, setTypography, customCss, setCustomCss, dualPage, setDualPage, mangaMode, setMangaMode, pageAnimation, setPageAnimation } =
     useTheme();
   const [openSection, setOpenSection] = useState<string | null>("appearance");
   const toggleSection = (id: string) => setOpenSection((prev) => (prev === id ? null : id));
@@ -1092,6 +1092,24 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                 >
                   <span
                     className={`absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full shadow transition-transform ${mangaMode && dualPage ? "translate-x-4" : ""}`}
+                  />
+                </button>
+              </label>
+              {/* Page turn animation toggle */}
+              <label className="flex items-center justify-between gap-3">
+                <div>
+                  <span className="text-sm text-ink">{t("settings.pageAnimation")}</span>
+                  <p className="text-[11px] text-ink-muted/60 mt-0.5">{t("settings.pageAnimationHint")}</p>
+                </div>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={pageAnimation}
+                  onClick={() => setPageAnimation(!pageAnimation)}
+                  className={`relative w-10 h-6 rounded-full transition-colors ${pageAnimation ? "bg-accent" : "bg-warm-border"}`}
+                >
+                  <span
+                    className={`absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full shadow transition-transform ${pageAnimation ? "translate-x-4" : ""}`}
                   />
                 </button>
               </label>
