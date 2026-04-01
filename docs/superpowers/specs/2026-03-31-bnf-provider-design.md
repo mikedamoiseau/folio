@@ -23,7 +23,7 @@ Implements the `EnrichmentProvider` trait following the same pattern as existing
 
 ### API Details
 
-- **Endpoint:** `http://catalogue.bnf.fr/api/SRU`
+- **Endpoint:** `https://catalogue.bnf.fr/api/SRU`
 - **Protocol:** SRU (Search/Retrieve via URL) with CQL query language
 - **Auth:** None required — fully public
 - **Response format:** Dublin Core XML (`recordSchema=dublincore`)
@@ -33,12 +33,12 @@ Implements the `EnrichmentProvider` trait following the same pattern as existing
 
 **`search_by_isbn`:**
 ```
-http://catalogue.bnf.fr/api/SRU?version=1.2&operation=searchRetrieve&query=bib.isbn adj "{isbn}"&recordSchema=dublincore&maximumRecords=3
+https://catalogue.bnf.fr/api/SRU?version=1.2&operation=searchRetrieve&query=bib.isbn adj "{isbn}"&recordSchema=dublincore&maximumRecords=3
 ```
 
 **`search_by_title`:**
 ```
-http://catalogue.bnf.fr/api/SRU?version=1.2&operation=searchRetrieve&query=(bib.title all "{title}") and (bib.author all "{author}") and (bib.doctype any "a")&recordSchema=dublincore&maximumRecords=5
+https://catalogue.bnf.fr/api/SRU?version=1.2&operation=searchRetrieve&query=(bib.title all "{title}") and (bib.author all "{author}") and (bib.doctype any "a")&recordSchema=dublincore&maximumRecords=5
 ```
 If no author provided, omit the `bib.author` clause. The `bib.doctype any "a"` filter restricts to printed text/digital books.
 

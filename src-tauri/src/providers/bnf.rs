@@ -1,6 +1,6 @@
 use super::{EnrichmentData, EnrichmentProvider, ProviderConfig};
 
-const SRU_ENDPOINT: &str = "http://catalogue.bnf.fr/api/SRU";
+const SRU_ENDPOINT: &str = "https://catalogue.bnf.fr/api/SRU";
 
 #[derive(Default)]
 pub struct BnfProvider {
@@ -132,9 +132,14 @@ fn parse_dc_record(xml: &str) -> Option<EnrichmentData> {
 
 /// Extract first occurrence of a Dublin Core tag value.
 fn extract_dc<'a>(tag: &str, xml: &'a str) -> Option<&'a str> {
-    let open = format!("<{}", tag);
+    let open_exact = format!("<{}>", tag);
+    let open_attr = format!("<{} ", tag);
     let close = format!("</{}>", tag);
-    let start = xml.find(&open)?;
+    // Find the first occurrence matching the exact tag name (with > or space after)
+    let start = match (xml.find(&open_exact), xml.find(&open_attr)) {
+        (Some(a), Some(b)) => Some(a.min(b)),
+        (a, b) => a.or(b),
+    }?;
     let after_open = &xml[start..];
     let content_start = after_open.find('>')? + 1;
     let content = &after_open[content_start..];
@@ -149,11 +154,22 @@ fn extract_dc<'a>(tag: &str, xml: &'a str) -> Option<&'a str> {
 
 /// Extract all occurrences of a Dublin Core tag.
 fn extract_all_dc<'a>(tag: &str, xml: &'a str) -> Vec<&'a str> {
-    let open = format!("<{}", tag);
+    let open_exact = format!("<{}>", tag);
+    let open_attr = format!("<{} ", tag);
     let close = format!("</{}>", tag);
     let mut results = Vec::new();
     let mut search_from = 0;
-    while let Some(start) = xml[search_from..].find(&open) {
+    while search_from < xml.len() {
+        let remaining = &xml[search_from..];
+        // Find the next occurrence matching the exact tag name
+        let start = match (remaining.find(&open_exact), remaining.find(&open_attr)) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        };
+        let start = match start {
+            Some(s) => s,
+            None => break,
+        };
         let abs_start = search_from + start;
         let after_open = &xml[abs_start..];
         if let Some(content_start) = after_open.find('>') {
@@ -197,13 +213,18 @@ fn cql_escape(s: &str) -> String {
 }
 
 fn urlencoding(s: &str) -> String {
-    s.replace(' ', "%20")
+    s.replace('%', "%25")
+        .replace(' ', "%20")
         .replace('"', "%22")
         .replace('(', "%28")
         .replace(')', "%29")
         .replace('&', "%26")
         .replace('=', "%3D")
         .replace('#', "%23")
+        .replace('+', "%2B")
+        .replace('?', "%3F")
+        .replace('/', "%2F")
+        .replace(':', "%3A")
 }
 
 #[cfg(test)]
@@ -298,6 +319,20 @@ mod tests {
     }
 
     #[test]
+    fn extract_dc_does_not_match_prefix() {
+        // dc:date must not match dc:dateAccepted or dc:dateSubmitted
+        let xml = r#"<dc:dateAccepted>2024</dc:dateAccepted><dc:date>1961</dc:date>"#;
+        assert_eq!(extract_dc("dc:date", xml), Some("1961"));
+    }
+
+    #[test]
+    fn extract_all_dc_does_not_match_prefix() {
+        let xml = r#"<dc:dateSubmitted>2024</dc:dateSubmitted><dc:date>1961</dc:date><dc:date>1962</dc:date>"#;
+        let dates = extract_all_dc("dc:date", xml);
+        assert_eq!(dates, vec!["1961", "1962"]);
+    }
+
+    #[test]
     fn extract_all_dc_multiple() {
         let xml = r#"
             <dc:identifier>ark:/12148/abc</dc:identifier>
@@ -366,7 +401,7 @@ mod tests {
     #[test]
     fn build_sru_url_format() {
         let url = build_sru_url("bib.isbn adj \"978-2-01-210103-6\"", 3);
-        assert!(url.starts_with("http://catalogue.bnf.fr/api/SRU?"));
+        assert!(url.starts_with("https://catalogue.bnf.fr/api/SRU?"));
         assert!(url.contains("version=1.2"));
         assert!(url.contains("operation=searchRetrieve"));
         assert!(url.contains("recordSchema=dublincore"));

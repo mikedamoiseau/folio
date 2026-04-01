@@ -180,10 +180,14 @@ fn parse_issue(item: &serde_json::Value) -> Option<EnrichmentData> {
 }
 
 fn urlencoding(s: &str) -> String {
-    s.replace(' ', "+")
+    s.replace('%', "%25")
+        .replace(' ', "+")
         .replace('&', "%26")
         .replace('=', "%3D")
         .replace('#', "%23")
+        .replace('?', "%3F")
+        .replace('/', "%2F")
+        .replace(':', "%3A")
 }
 
 #[cfg(test)]

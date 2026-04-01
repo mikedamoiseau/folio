@@ -336,7 +336,7 @@ mod tests {
     fn looks_like_isbn_valid() {
         assert!(looks_like_isbn("978-2-01-210103-6"));
         assert!(looks_like_isbn("9782012101036"));
-        assert!(looks_like_isbn("2-01-210103-X")); // ISBN-10 with X won't match (only 9 digits)
+        assert!(!looks_like_isbn("2-01-210103-X")); // ISBN-10 with X check digit — rejected (digits+hyphens only)
         assert!(looks_like_isbn("0132350882")); // ISBN-10
     }
 

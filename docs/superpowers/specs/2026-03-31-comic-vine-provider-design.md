@@ -26,7 +26,7 @@ Implements the `EnrichmentProvider` trait following the same pattern as `google_
 - **Auth:** API key as query parameter `api_key=KEY`
 - **Format:** JSON via `format=json`
 - **Required:** `User-Agent` header (Comic Vine blocks requests without one)
-- **HTTP client:** `ureq` (already a dependency)
+- **HTTP client:** `reqwest::blocking` (same as other providers)
 
 ### Search Logic
 
@@ -43,7 +43,7 @@ Implements the `EnrichmentProvider` trait following the same pattern as `google_
 **From volume results:**
 | Comic Vine field | EnrichmentData field |
 |-----------------|---------------------|
-| `name` | `title`, `series` |
+| `name` | `title` |
 | `deck` | `description` |
 | `image.medium_url` | `cover_url` |
 | `publisher.name` | `publisher` |
@@ -55,8 +55,6 @@ Implements the `EnrichmentProvider` trait following the same pattern as `google_
 | Comic Vine field | EnrichmentData field |
 |-----------------|---------------------|
 | `volume.name + " #" + issue_number` (or `name` if present) | `title` |
-| `volume.name` | `series` |
-| `issue_number` | `volume` (parsed as u32) |
 | `deck` | `description` |
 | `image.medium_url` | `cover_url` |
 | `cover_date` | `publish_year` (parse year) |
