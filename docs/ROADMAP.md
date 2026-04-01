@@ -441,7 +441,9 @@ Tauri v2 supports mobile targets. The React frontend renders in a mobile WebView
 #### 40. Page Turn Animations — **Done**
 - ~~Optional slide animation when turning pages in PDF/CBZ/CBR formats~~
 - ~~Configurable toggle in Settings > Page Layout (on by default)~~
-- ~~CSS transition on wrapper div, decoupled from zoom/pan transforms~~
+- ~~Web Animations API on spreadRef — no wrapper div, no conflict with zoom/pan~~
+- ~~Adjacent page preloading for instant transitions~~
+- ~~Navigation locked during animation to prevent stuck states~~
 - Future: additional animation styles (fade, curl)
 
 #### 40. Split View / Side-by-Side Reading

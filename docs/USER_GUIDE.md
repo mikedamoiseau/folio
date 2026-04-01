@@ -379,6 +379,16 @@ Show two pages side by side, like an open book. Works for all formats: comics (C
 
 Both settings are global (apply to all books) and persist between sessions. Dual-page is automatically hidden when EPUB is in continuous scroll mode.
 
+### Page turn animation
+
+A slide animation plays when turning pages in PDF and comic (CBZ/CBR) formats. The new page slides in from the side with a brief fade, giving a natural sense of direction when navigating forward or backward.
+
+**Toggle:** Settings > Page Layout > "Page turn animation" — enabled by default. Turn it off for instant page changes with no animation.
+
+**Performance:** Adjacent pages are preloaded in the background, so the animation plays instantly without waiting for page data to load.
+
+This setting does not affect EPUB, which uses its own chapter-based navigation.
+
 ### Full-text search (EPUB)
 
 Search the full text of any EPUB book:
