@@ -257,6 +257,8 @@ Folio can look up metadata from multiple sources. Providers are tried in order �
 | **Comic Vine** | Comics, BD, manga — the most comprehensive free comics database | Free key from comicvine.gamespot.com/api | Disabled (needs key) |
 | **BnF** | French national library — excellent for French editions | None | Enabled |
 
+Providers are tried in the order shown. Use the ▲/▼ buttons next to each provider to change the priority — the first provider to return a match wins.
+
 Click "Search" in the edit dialog to look up your book by title and author. From the results you can pull in description, genres, and ratings.
 
 ### Automatic metadata scanning
