@@ -118,6 +118,22 @@ impl ProviderRegistry {
         }
     }
 
+    /// Reorder providers to match the given ID order.
+    /// IDs not found in the registry are skipped.
+    /// Providers not listed in `order` are appended at the end in their current relative order.
+    pub fn reorder(&mut self, order: &[String]) {
+        let mut ordered: Vec<Box<dyn EnrichmentProvider>> = Vec::new();
+        let mut remaining = std::mem::take(&mut self.providers);
+
+        for id in order {
+            if let Some(pos) = remaining.iter().position(|p| p.id() == id) {
+                ordered.push(remaining.remove(pos));
+            }
+        }
+        ordered.append(&mut remaining);
+        self.providers = ordered;
+    }
+
     /// Search by ISBN across enabled providers. Returns first non-empty result
     /// along with the list of providers that were tried.
     pub fn search_by_isbn(&self, isbn: &str) -> SearchOutcome {
@@ -236,5 +252,58 @@ mod tests {
         assert_eq!(enabled.len(), 2);
         assert_eq!(enabled[0], "openlibrary");
         assert_eq!(enabled[1], "bnf");
+    }
+
+    #[test]
+    fn reorder_changes_provider_order() {
+        let mut reg = ProviderRegistry::new();
+        reg.reorder(&[
+            "bnf".to_string(),
+            "comic_vine".to_string(),
+            "openlibrary".to_string(),
+            "google_books".to_string(),
+        ]);
+        let providers = reg.list_providers();
+        assert_eq!(providers[0].id, "bnf");
+        assert_eq!(providers[1].id, "comic_vine");
+        assert_eq!(providers[2].id, "openlibrary");
+        assert_eq!(providers[3].id, "google_books");
+    }
+
+    #[test]
+    fn reorder_appends_unlisted_providers_at_end() {
+        let mut reg = ProviderRegistry::new();
+        reg.reorder(&["bnf".to_string(), "openlibrary".to_string()]);
+        let providers = reg.list_providers();
+        assert_eq!(providers[0].id, "bnf");
+        assert_eq!(providers[1].id, "openlibrary");
+        assert_eq!(providers[2].id, "google_books");
+        assert_eq!(providers[3].id, "comic_vine");
+    }
+
+    #[test]
+    fn reorder_ignores_unknown_ids() {
+        let mut reg = ProviderRegistry::new();
+        reg.reorder(&[
+            "nonexistent".to_string(),
+            "bnf".to_string(),
+            "google_books".to_string(),
+        ]);
+        let providers = reg.list_providers();
+        assert_eq!(providers[0].id, "bnf");
+        assert_eq!(providers[1].id, "google_books");
+        assert_eq!(providers[2].id, "openlibrary");
+        assert_eq!(providers[3].id, "comic_vine");
+    }
+
+    #[test]
+    fn reorder_with_empty_order_is_noop() {
+        let mut reg = ProviderRegistry::new();
+        reg.reorder(&[]);
+        let providers = reg.list_providers();
+        assert_eq!(providers[0].id, "google_books");
+        assert_eq!(providers[1].id, "openlibrary");
+        assert_eq!(providers[2].id, "comic_vine");
+        assert_eq!(providers[3].id, "bnf");
     }
 }
