@@ -438,10 +438,11 @@ Tauri v2 supports mobile targets. The React frontend renders in a mobile WebView
 - ~~Error messages translated via `friendlyError(raw, t)`~~
 - ~~Architecture supports adding new languages by adding a JSON file~~
 
-#### 40. Page Turn Animations
-- Optional visual effects when turning pages (curl, slide, fade)
-- Configurable or disableable in settings
-- Pure polish feature
+#### 40. Page Turn Animations — **Done**
+- ~~Optional slide animation when turning pages in PDF/CBZ/CBR formats~~
+- ~~Configurable toggle in Settings > Page Layout (on by default)~~
+- ~~CSS transition on wrapper div, decoupled from zoom/pan transforms~~
+- Future: additional animation styles (fade, curl)
 
 #### 40. Split View / Side-by-Side Reading
 - Open two books simultaneously in a split pane
@@ -501,5 +502,5 @@ Lower priority features — high effort, niche audience, or dependent on other w
 | 5 | Multiple Profiles | Done | Multi-user |
 | 6 | Remote Library Access, OPDS Server | Not started | Remote access |
 | 7 | Android & iOS App | Not started | Mobile |
-| 8 | Sepia Theme, OpenDyslexic, Star Ratings, In-Book Search, Typography, Custom Fonts, Continuous Scroll, Time-to-Finish, Bookmark Naming, Series, Activity Log, MOBI, Nav History, Custom CSS, Dual-Page/Manga, Settings Reorg, i18n (EN+FR), PDF Zoom Quality, Go to Page, Animations, Split View | 17 done | Reader & library enhancements |
+| 8 | Sepia Theme, OpenDyslexic, Star Ratings, In-Book Search, Typography, Custom Fonts, Continuous Scroll, Time-to-Finish, Bookmark Naming, Series, Activity Log, MOBI, Nav History, Custom CSS, Dual-Page/Manga, Settings Reorg, i18n (EN+FR), PDF Zoom Quality, Go to Page, Animations, Split View | 18 done | Reader & library enhancements |
 | N/H | Dictionary, Vocabulary Builder, TTS, PDF Reflow, Library-Wide Search, Annotation Exports, Plugins/Hooks, User Themes | Not started | Nice to have |
