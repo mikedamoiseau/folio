@@ -159,6 +159,7 @@ pub fn run() {
             commands::update_bookmark,
             commands::get_comic_page_count,
             commands::get_comic_page,
+            commands::check_pdf_support,
             commands::get_pdf_page_count,
             commands::get_pdf_page,
             commands::create_collection,

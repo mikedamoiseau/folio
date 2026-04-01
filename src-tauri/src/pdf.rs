@@ -21,6 +21,12 @@ pub fn set_pdfium_library_path(path: Option<PathBuf>) {
     let _ = PDFIUM_LIBRARY_PATH.set(path);
 }
 
+/// Check whether pdfium can be loaded. Used at startup so the frontend
+/// can disable PDF-related UI when the library is unavailable.
+pub fn is_available() -> bool {
+    bind_pdfium().is_ok()
+}
+
 // ---- Internal helpers ----
 
 fn bind_pdfium() -> Result<Pdfium, String> {

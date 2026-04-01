@@ -68,6 +68,7 @@
     "scanLibrary": "Scanner la biblioth\u00e8que pour les m\u00e9tadonn\u00e9es",
     "enrichingProgress": "Enrichissement {{current}}/{{total}}\u00a0: {{bookTitle}}",
     "cancelScan": "Annuler le scan",
+    "scanCancelled": "Scan annul\u00e9. {{count}} livres trait\u00e9s.",
     "metadataUpdated": "M\u00e9tadonn\u00e9es mises \u00e0 jour",
     "noMetadataFound": "Aucune m\u00e9tadonn\u00e9e trouv\u00e9e",
     "scanFailed": "\u00c9chec du scan",
@@ -149,7 +150,8 @@
     "subtitle": "Ajoutez votre premier livre et commencez votre parcours de lecture.",
     "addBooks": "Ajouter des livres",
     "importFolder": "Importer un dossier",
-    "dragAndDrop": "ou glissez-d\u00e9posez des fichiers n\u2019importe o\u00f9"
+    "dragAndDrop": "ou glissez-d\u00e9posez des fichiers n\u2019importe o\u00f9",
+    "browseCatalogs": "Parcourir les catalogues en ligne"
   },
 
   "bookCard": {

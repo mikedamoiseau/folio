@@ -1187,6 +1187,16 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
           {/* Language switcher */}
           <LanguageSwitcher />
 
+          {/* Keyboard shortcuts hint */}
+          <button
+            onClick={() => setShowShortcuts(true)}
+            className="p-1.5 text-ink-muted hover:text-ink transition-colors rounded-lg hover:bg-warm-subtle focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 text-xs font-medium w-6 h-6 flex items-center justify-center"
+            aria-label={t("shortcuts.title")}
+            title={t("shortcuts.title")}
+          >
+            ?
+          </button>
+
           {/* Settings button */}
           <button
             onClick={onOpenSettings}

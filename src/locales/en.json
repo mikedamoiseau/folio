@@ -68,6 +68,7 @@
     "scanLibrary": "Scan library for metadata",
     "enrichingProgress": "Enriching {{current}}/{{total}}: {{bookTitle}}",
     "cancelScan": "Cancel scan",
+    "scanCancelled": "Scan cancelled. {{count}} books processed.",
     "metadataUpdated": "Metadata updated",
     "noMetadataFound": "No metadata found",
     "scanFailed": "Scan failed",
@@ -149,7 +150,8 @@
     "subtitle": "Add your first book and begin your reading journey.",
     "addBooks": "Add books",
     "importFolder": "Import folder",
-    "dragAndDrop": "or drag & drop files anywhere"
+    "dragAndDrop": "or drag & drop files anywhere",
+    "browseCatalogs": "Browse online catalogs"
   },
 
   "bookCard": {

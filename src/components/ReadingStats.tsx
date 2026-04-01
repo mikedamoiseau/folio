@@ -76,7 +76,12 @@ export default function ReadingStats({ onClose }: ReadingStatsProps) {
               {stats.dailyReading.length > 0 && (
                 <div>
                   <h3 className="text-xs font-semibold text-ink-muted uppercase tracking-wide mb-3">{t("stats.last30Days")}</h3>
-                  <div className="flex items-end gap-0.5 h-20">
+                  <div className="flex items-end gap-0.5 h-20 relative">
+                    {maxDaily > 0 && (
+                      <span className="absolute -top-4 right-0 text-[10px] text-ink-muted tabular-nums">
+                        {formatDuration(maxDaily)}
+                      </span>
+                    )}
                     {stats.dailyReading.map(([date, secs]) => {
                       const height = maxDaily > 0 ? Math.max(4, (secs / maxDaily) * 100) : 4;
                       return (

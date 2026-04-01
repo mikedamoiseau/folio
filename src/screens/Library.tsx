@@ -443,6 +443,9 @@ export default function Library() {
     listen<{ current: number; total: number; bookTitle: string; status: string }>("scan-progress", (event) => {
       const p = event.payload;
       if (p.status === "done" || p.status === "cancelled") {
+        if (p.status === "cancelled" && p.current > 0) {
+          setScanToast({ message: t("library.scanCancelled", { count: p.current }), isError: false });
+        }
         setScanProgress(null);
         loadBooks(activeCollectionIdRef.current);
       } else {

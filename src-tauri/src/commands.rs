@@ -2620,6 +2620,11 @@ pub async fn import_library_backup(
 // --- PDF ---
 
 #[tauri::command]
+pub async fn check_pdf_support() -> bool {
+    pdf::is_available()
+}
+
+#[tauri::command]
 pub async fn get_pdf_page_count(
     book_id: String,
     state: State<'_, AppState>,

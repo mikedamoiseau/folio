@@ -3,9 +3,10 @@ import { useTranslation } from "react-i18next";
 interface EmptyStateProps {
   onImport: () => void;
   onImportFolder: () => void;
+  onBrowseCatalogs?: () => void;
 }
 
-export default function EmptyState({ onImport, onImportFolder }: EmptyStateProps) {
+export default function EmptyState({ onImport, onImportFolder, onBrowseCatalogs }: EmptyStateProps) {
   const { t } = useTranslation();
   return (
     <div className="flex flex-col items-center justify-center h-full max-w-xs mx-auto text-center gap-0">
@@ -62,7 +63,17 @@ export default function EmptyState({ onImport, onImportFolder }: EmptyStateProps
         </button>
       </div>
 
-      <p className="mt-5 text-xs text-ink-muted">
+      {onBrowseCatalogs && (
+        <button
+          type="button"
+          onClick={onBrowseCatalogs}
+          className="mt-4 text-sm text-accent hover:text-accent-hover transition-colors"
+        >
+          {t("empty.browseCatalogs")}
+        </button>
+      )}
+
+      <p className="mt-4 text-xs text-ink-muted">
         {t("empty.dragAndDrop")}
       </p>
     </div>
