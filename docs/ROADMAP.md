@@ -62,7 +62,7 @@ Improve the core activity — actually reading books.
 - ~~Pan/drag to navigate when zoomed in~~
 - ~~Keyboard: Cmd/Ctrl + / − / 0 to zoom in/out/reset~~
 - ~~Zoom resets on page change~~
-- ~~PDF zoom-aware rendering: re-renders pages at current zoom resolution (physically resizes spread instead of CSS scale) for sharp text at any zoom level~~
+- ~~Zoom-aware rendering: PDFs re-rendered at current zoom resolution; comics use physical DOM resizing (not CSS scale) for sharp images at any zoom level~~
 - ~~JPEG encoding (90% quality) for ~10x faster PDF page loads and smaller transfers~~
 - ~~In-memory LRU cache (20 entries) for rendered PDF pages~~
 - Remember zoom level per book or per format (TBD)

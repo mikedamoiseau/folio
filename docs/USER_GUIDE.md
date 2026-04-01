@@ -197,7 +197,7 @@ These formats use a page-by-page viewer. Navigate with the Previous/Next buttons
 
 **Go to page:** Click the page label (e.g., "Page 5 / 45") in the footer bar. It turns into a number input — type the page you want and press Enter. Press Escape or click away to cancel.
 
-**PDF zoom quality:** When you zoom into a PDF, Folio re-renders the page at the higher resolution so text stays sharp — similar to how native PDF viewers work. Pages are rendered as high-quality JPEG images with an in-memory cache for fast navigation.
+**Zoom quality:** When you zoom into any page-based format, Folio keeps images sharp. PDFs are re-rendered at the target resolution (like native PDF viewers), and comic pages (CBZ/CBR) are displayed using physical DOM resizing so the browser resamples at full resolution instead of blurring. PDF pages are rendered as high-quality JPEG images with an in-memory cache for fast navigation.
 
 ### Reading progress
 
