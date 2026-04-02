@@ -1224,7 +1224,11 @@ pub async fn get_comic_page(
     app: AppHandle,
 ) -> Result<String, String> {
     let start = std::time::Instant::now();
-    page_cache::page_dbg!("get_comic_page called: book={} page={}", book_id, page_index);
+    page_cache::page_dbg!(
+        "get_comic_page called: book={} page={}",
+        book_id,
+        page_index
+    );
 
     let book = {
         let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
@@ -1253,7 +1257,11 @@ pub async fn get_comic_page(
                 );
                 return Ok(format!("data:{mime};base64,{encoded}"));
             }
-            page_cache::page_dbg!("cache MISS: page={} checked in {:?}", page_index, cache_start.elapsed());
+            page_cache::page_dbg!(
+                "cache MISS: page={} checked in {:?}",
+                page_index,
+                cache_start.elapsed()
+            );
         }
     }
 
@@ -1267,7 +1275,12 @@ pub async fn get_comic_page(
             book.format
         )),
     };
-    page_cache::page_dbg!("archive read done: page={} ok={} total={:?}", page_index, result.is_ok(), start.elapsed());
+    page_cache::page_dbg!(
+        "archive read done: page={} ok={} total={:?}",
+        page_index,
+        result.is_ok(),
+        start.elapsed()
+    );
     result
 }
 
@@ -1303,7 +1316,12 @@ pub async fn prepare_comic(
         .map_err(|e| format!("Failed to get cache dir: {e}"))?;
 
     let prep_start = std::time::Instant::now();
-    page_cache::page_dbg!("prepare_comic: book={} format={:?} hash={}", book_id, book.format, book_hash);
+    page_cache::page_dbg!(
+        "prepare_comic: book={} format={:?} hash={}",
+        book_id,
+        book.format,
+        book_hash
+    );
     let manifest = page_cache::ensure_cached(
         &cache_dir,
         &book_id,

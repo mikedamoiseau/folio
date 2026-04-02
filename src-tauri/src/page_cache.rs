@@ -318,12 +318,19 @@ pub fn ensure_cached(
         let last_ok = manifest.pages.last().is_some_and(|p| dir.join(p).exists());
 
         if first_ok && last_ok {
-            page_dbg!("ensure_cached: cache hit for {} ({} pages)", book_hash, manifest.page_count);
+            page_dbg!(
+                "ensure_cached: cache hit for {} ({} pages)",
+                book_hash,
+                manifest.page_count
+            );
             manifest.last_accessed = now_iso();
             let _ = write_manifest(app_cache_dir, book_hash, &manifest);
             return Ok(manifest);
         }
-        page_dbg!("ensure_cached: cache corrupted for {}, re-extracting", book_hash);
+        page_dbg!(
+            "ensure_cached: cache corrupted for {}, re-extracting",
+            book_hash
+        );
         let _ = fs::remove_dir_all(book_cache_dir(app_cache_dir, book_hash));
     }
 
