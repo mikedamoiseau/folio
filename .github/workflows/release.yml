@@ -32,7 +32,7 @@ jobs:
             pdfium_archive: pdfium-mac-x64.tgz
             pdfium_lib: libpdfium.dylib
           - platform: windows-latest
-            args: ''
+            args: '-- --no-default-features'
             pdfium_archive: pdfium-win-x64.tgz
             pdfium_lib: pdfium.dll
 
@@ -66,8 +66,7 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          # Pin to 1.88 on Windows: deps need >=1.88, but openssh TryFrom conflict appears in 1.94+
-          toolchain: ${{ matrix.platform == 'windows-latest' && '1.88.0' || 'stable' }}
+          toolchain: stable
           targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
 
       - name: Rust cache

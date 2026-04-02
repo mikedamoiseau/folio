@@ -332,6 +332,7 @@ pub fn build_operator(config: &BackupConfig) -> Result<Operator, String> {
                 .map_err(|e| format!("Failed to create FTP operator: {e}"))?;
             make_blocking(async_op)
         }
+        #[cfg(feature = "sftp")]
         ProviderType::Sftp => {
             let mut builder = opendal::services::Sftp::default();
             if let Some(v) = config.values.get("endpoint") {
@@ -359,6 +360,10 @@ pub fn build_operator(config: &BackupConfig) -> Result<Operator, String> {
                 .map(|b| b.finish())
                 .map_err(|e| format!("Failed to create SFTP operator: {e}"))?;
             make_blocking(async_op)
+        }
+        #[cfg(not(feature = "sftp"))]
+        ProviderType::Sftp => {
+            return Err("SFTP is not available on this platform".to_string());
         }
         ProviderType::Webdav => {
             let mut builder = opendal::services::Webdav::default();
