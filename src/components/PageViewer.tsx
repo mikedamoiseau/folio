@@ -522,8 +522,34 @@ export default function PageViewer({
         onMouseUp={handleMouseUp}
         onMouseLeave={handleMouseUp}
       >
-        {loading ? (
-          <div className="absolute inset-0 flex flex-col items-center justify-center gap-2">
+        {/* Always render spread so spreadRef stays mounted for animations */}
+        <div
+          ref={spreadRef}
+          className={`absolute top-1/2 left-1/2 flex items-center justify-center gap-1 will-change-transform ${mangaMode && dualPage ? "flex-row-reverse" : "flex-row"}`}
+          style={{ width: `${zoom * 100}%`, height: `${zoom * 100}%`, transform: `translate(calc(-50% + ${panRef.current.x}px), calc(-50% + ${panRef.current.y}px))` }}
+        >
+          {leftImageData && (
+            <img
+              src={leftImageData}
+              alt={`Page ${spread.left + 1} of ${totalPages}`}
+              className="max-h-full max-w-full object-contain rounded-sm shadow-[0_4px_24px_-4px_rgba(44,34,24,0.18)]"
+              style={dualPage && rightImageData ? { maxWidth: "50%" } : undefined}
+              draggable={false}
+            />
+          )}
+          {rightImageData && (
+            <img
+              src={rightImageData}
+              alt={`Page ${(spread.right ?? 0) + 1} of ${totalPages}`}
+              className="max-h-full object-contain rounded-sm shadow-[0_4px_24px_-4px_rgba(44,34,24,0.18)]"
+              style={{ maxWidth: "50%" }}
+              draggable={false}
+            />
+          )}
+        </div>
+        {/* Overlay: loading spinner or error on top of previous/current page */}
+        {loading && (
+          <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-paper/80">
             <div className="flex items-center gap-2">
               <div className="w-5 h-5 border-2 border-accent/30 border-t-accent rounded-full animate-spin" />
               <span className="text-sm text-ink-muted">{t("reader.loadingPage")}</span>
@@ -532,8 +558,9 @@ export default function PageViewer({
               <span className="text-xs text-ink-muted/70 animate-fade-in">{error}</span>
             )}
           </div>
-        ) : error ? (
-          <div className="absolute inset-0 flex flex-col items-center justify-center gap-3">
+        )}
+        {!loading && error && (
+          <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-paper/80">
             <span className="text-sm text-red-500 text-center max-w-sm">{error}</span>
             <button
               onClick={() => {
@@ -552,31 +579,6 @@ export default function PageViewer({
             >
               {t("reader.retryLoadPage")}
             </button>
-          </div>
-        ) : (
-          <div
-            ref={spreadRef}
-            className={`absolute top-1/2 left-1/2 flex items-center justify-center gap-1 will-change-transform ${mangaMode && dualPage ? "flex-row-reverse" : "flex-row"}`}
-            style={{ width: `${zoom * 100}%`, height: `${zoom * 100}%`, transform: `translate(calc(-50% + ${panRef.current.x}px), calc(-50% + ${panRef.current.y}px))` }}
-          >
-            {leftImageData && (
-              <img
-                src={leftImageData}
-                alt={`Page ${spread.left + 1} of ${totalPages}`}
-                className="max-h-full max-w-full object-contain rounded-sm shadow-[0_4px_24px_-4px_rgba(44,34,24,0.18)]"
-                style={dualPage && rightImageData ? { maxWidth: "50%" } : undefined}
-                draggable={false}
-              />
-            )}
-            {rightImageData && (
-              <img
-                src={rightImageData}
-                alt={`Page ${(spread.right ?? 0) + 1} of ${totalPages}`}
-                className="max-h-full object-contain rounded-sm shadow-[0_4px_24px_-4px_rgba(44,34,24,0.18)]"
-                style={{ maxWidth: "50%" }}
-                draggable={false}
-              />
-            )}
           </div>
         )}
       </div>
