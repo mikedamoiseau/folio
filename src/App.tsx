@@ -77,7 +77,11 @@ function AppShell() {
         </nav>
       )}
 
-      <main className="flex-1 overflow-auto min-h-0">
+      <main
+        key={inReader ? "reader" : "library"}
+        className="flex-1 overflow-auto min-h-0"
+        style={{ animation: "route-enter 0.25s ease both" }}
+      >
         <Routes>
           <Route path="/" element={<Library key={profileKey} />} />
           <Route

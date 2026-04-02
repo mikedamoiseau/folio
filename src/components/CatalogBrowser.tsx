@@ -179,7 +179,7 @@ export default function CatalogBrowser({ onClose, onBookImported }: CatalogBrows
   if (!feed) {
     return (
       <>
-        <div className="fixed inset-0 bg-ink/30 z-50 animate-fade-in" onClick={onClose} />
+        <div className="fixed inset-0 bg-ink/40 backdrop-blur-sm z-50 animate-fade-in" onClick={onClose} />
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 pointer-events-none">
           <div className="bg-surface rounded-2xl shadow-xl border border-warm-border w-full max-w-lg pointer-events-auto animate-fade-in max-h-[80vh] flex flex-col">
             <div className="px-5 py-4 border-b border-warm-border flex items-center justify-between shrink-0">
@@ -212,7 +212,16 @@ export default function CatalogBrowser({ onClose, onBookImported }: CatalogBrows
               )}
             </div>
 
-            <div className="flex-1 overflow-y-auto py-2">
+            <div className="flex-1 overflow-y-auto py-2 relative">
+              {/* Loading overlay when browsing to a catalog */}
+              {loading && !feed && (
+                <div className="absolute inset-0 flex items-center justify-center bg-surface/80 z-10">
+                  <div className="flex items-center gap-2">
+                    <div className="w-4 h-4 border-2 border-accent/30 border-t-accent rounded-full animate-spin" />
+                    <span className="text-sm text-ink-muted">{t("common.loading")}</span>
+                  </div>
+                </div>
+              )}
               {/* Unified search results */}
               {unifiedLoading ? (
                 <div className="flex items-center justify-center py-12">
@@ -367,7 +376,7 @@ export default function CatalogBrowser({ onClose, onBookImported }: CatalogBrows
   // Feed browsing view
   return (
     <>
-      <div className="fixed inset-0 bg-ink/30 z-50 animate-fade-in" onClick={onClose} />
+      <div className="fixed inset-0 bg-ink/40 backdrop-blur-sm z-50 animate-fade-in" onClick={onClose} />
       <div className="fixed inset-0 z-50 flex items-center justify-center p-4 pointer-events-none">
         <div className="bg-surface rounded-2xl shadow-xl border border-warm-border w-full max-w-2xl pointer-events-auto animate-fade-in max-h-[85vh] flex flex-col">
           {/* Header */}

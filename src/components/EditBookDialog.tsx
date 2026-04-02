@@ -211,7 +211,7 @@ export default function EditBookDialog({
 
   return (
     <>
-      <div className="fixed inset-0 bg-ink/30 z-50 animate-fade-in" onClick={onClose} />
+      <div className="fixed inset-0 bg-ink/40 backdrop-blur-sm z-50 animate-fade-in" onClick={onClose} />
       <div className="fixed inset-0 z-50 flex items-center justify-center p-4 pointer-events-none">
         <div
           className="bg-surface rounded-2xl shadow-xl border border-warm-border w-full max-w-sm pointer-events-auto animate-fade-in"
@@ -444,7 +444,7 @@ export default function EditBookDialog({
                   }
                 }}
                 disabled={copyingToLibrary}
-                className="w-full py-2 text-sm text-ink-muted bg-warm-subtle hover:bg-warm-border rounded-lg transition-colors disabled:opacity-40"
+                className="w-full py-2 text-sm text-ink-muted bg-warm-subtle hover:bg-warm-border rounded-xl transition-colors disabled:opacity-40"
               >
                 {copyingToLibrary ? t("editor.copyingToLibrary") : t("editor.copyToLibrary")}
               </button>
@@ -455,7 +455,7 @@ export default function EditBookDialog({
             <button
               type="button"
               onClick={onClose}
-              className="flex-1 py-2 text-sm text-ink-muted bg-warm-subtle hover:bg-warm-border rounded-lg transition-colors"
+              className="flex-1 py-2 text-sm text-ink-muted bg-warm-subtle hover:bg-warm-border rounded-xl transition-colors"
             >
               {t("common.cancel")}
             </button>
@@ -463,7 +463,7 @@ export default function EditBookDialog({
               type="button"
               onClick={handleSave}
               disabled={saving || (!title.trim())}
-              className="flex-1 py-2 text-sm font-medium text-white bg-accent hover:bg-accent-hover rounded-lg transition-colors disabled:opacity-40"
+              className="flex-1 py-2 text-sm font-medium text-white bg-accent hover:bg-accent-hover rounded-xl transition-colors disabled:opacity-40"
             >
               {saving ? t("common.saving") : t("common.save")}
             </button>

@@ -126,7 +126,7 @@ export default function ActivityLog({ onClose }: ActivityLogProps) {
     <>
       {/* Backdrop */}
       <div
-        className="fixed inset-0 bg-ink/40 z-[60]"
+        className="fixed inset-0 bg-ink/40 backdrop-blur-sm z-[60]"
         onClick={onClose}
         aria-hidden="true"
       />

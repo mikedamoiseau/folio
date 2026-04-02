@@ -965,7 +965,7 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
         </button>
         {missingFileDialog && (
           <>
-            <div className="fixed inset-0 bg-ink/40 z-[80]" aria-hidden="true" />
+            <div className="fixed inset-0 bg-ink/40 backdrop-blur-sm z-[80]" aria-hidden="true" />
             <div
               role="dialog"
               aria-label={t("reader.missingFileTitle")}
@@ -1072,7 +1072,7 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
         <>
           {/* Backdrop */}
           <div
-            className="fixed inset-0 bg-ink/20 z-10 animate-fade-in"
+            className="fixed inset-0 bg-ink/20 backdrop-blur-sm z-10 animate-fade-in"
             onClick={() => setTocOpen(false)}
           />
           {/* Sidebar */}
@@ -1145,7 +1145,7 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
             aria-label={t("reader.openToc")}
           >
             <svg width="18" height="18" viewBox="0 0 20 20" fill="none">
-              <path d="M3 5h14M3 10h14M3 15h14" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" />
+              <path d="M3 5h14M3 10h14M3 15h14" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
             </svg>
           </button>
 
@@ -1161,7 +1161,7 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
               aria-label={t("reader.searchLabel")}
               title={t("reader.searchShortcut")}
             >
-              <svg width="17" height="17" viewBox="0 0 20 20" fill="none">
+              <svg width="18" height="18" viewBox="0 0 20 20" fill="none">
                 <circle cx="9" cy="9" r="5.5" stroke="currentColor" strokeWidth="1.5" />
                 <path d="M13 13l4 4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
               </svg>
@@ -1174,7 +1174,7 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
             className={`p-1.5 transition-colors rounded-lg focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 ${highlightsOpen ? "text-accent bg-accent-light" : "text-ink-muted hover:text-ink hover:bg-warm-subtle"}`}
             aria-label={t("highlights.title")}
           >
-            <svg width="17" height="17" viewBox="0 0 24 24" fill="none">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
               <path d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
             </svg>
           </button>
@@ -1186,7 +1186,7 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
             aria-label={t("bookmarks.title")}
             title={t("bookmarks.title")}
           >
-            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
               <path d="M19 21l-7-3.5L5 21V5a2 2 0 012-2h10a2 2 0 012 2z" />
             </svg>
           </button>
@@ -1223,7 +1223,7 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
                 aria-label={t("reader.toggleDualPage")}
                 title={t("reader.dualPageSpread")}
               >
-                <svg width="17" height="17" viewBox="0 0 24 24" fill="none">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
                   <rect x="2" y="4" width="8" height="16" rx="1" stroke="currentColor" strokeWidth="1.5" />
                   <rect x="14" y="4" width="8" height="16" rx="1" stroke="currentColor" strokeWidth="1.5" />
                 </svg>
@@ -1235,7 +1235,7 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
                   aria-label={t("reader.toggleMangaMode")}
                   title={t("reader.mangaMode")}
                 >
-                  <svg width="17" height="17" viewBox="0 0 24 24" fill="none">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
                     <path d="M19 12H5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
                     <path d="M10 7l-5 5 5 5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
                   </svg>
@@ -1251,7 +1251,7 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
             aria-label={t("reader.toggleFocusMode")}
             title={t("reader.focusMode")}
           >
-            <svg width="17" height="17" viewBox="0 0 24 24" fill="none">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
               <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="1.5" />
               <path d="M12 8v4l2.5 2.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
             </svg>
@@ -1276,7 +1276,7 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
             className="p-1.5 text-ink-muted hover:text-ink transition-colors rounded-lg hover:bg-warm-subtle focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2"
             aria-label={t("reader.openSettings")}
           >
-            <svg width="17" height="17" viewBox="0 0 20 20" fill="none">
+            <svg width="18" height="18" viewBox="0 0 20 20" fill="none">
               <path
                 d="M10 12.5a2.5 2.5 0 100-5 2.5 2.5 0 000 5z"
                 stroke="currentColor"
@@ -1639,7 +1639,7 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
         )}
       {missingFileDialog && (
         <>
-          <div className="fixed inset-0 bg-ink/40 z-[80]" aria-hidden="true" />
+          <div className="fixed inset-0 bg-ink/40 backdrop-blur-sm z-[80]" aria-hidden="true" />
           <div
             role="dialog"
             aria-label={t("reader.missingFileTitle")}

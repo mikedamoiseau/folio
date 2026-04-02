@@ -527,7 +527,7 @@ export default function Library() {
               <path
                 d="M2 6a2 2 0 012-2h4l2 2h8a2 2 0 012 2v10a2 2 0 01-2 2H4a2 2 0 01-2-2V6z"
                 stroke="currentColor"
-                strokeWidth="1.75"
+                strokeWidth="2"
                 strokeLinejoin="round"
               />
             </svg>
@@ -556,7 +556,7 @@ export default function Library() {
           <select
             value={filterFormat}
             onChange={(e) => setFilterFormat(e.target.value)}
-            className="shrink-0 h-9 px-2 bg-warm-subtle rounded-lg text-xs text-ink border border-transparent focus:border-accent/40 focus:outline-none"
+            className="shrink-0 h-9 px-2 bg-warm-subtle rounded-lg text-xs text-ink border border-transparent focus:border-accent focus:outline-none"
             aria-label={t("library.filterByFormat")}
           >
             <option value="all">{t("library.allFormats")}</option>
@@ -570,7 +570,7 @@ export default function Library() {
           <select
             value={filterStatus}
             onChange={(e) => setFilterStatus(e.target.value)}
-            className="shrink-0 h-9 px-2 bg-warm-subtle rounded-lg text-xs text-ink border border-transparent focus:border-accent/40 focus:outline-none"
+            className="shrink-0 h-9 px-2 bg-warm-subtle rounded-lg text-xs text-ink border border-transparent focus:border-accent focus:outline-none"
             aria-label={t("library.filterByStatus")}
           >
             <option value="all">{t("library.allStatus")}</option>
@@ -583,7 +583,7 @@ export default function Library() {
           <select
             value={filterRating}
             onChange={(e) => setFilterRating(e.target.value)}
-            className="shrink-0 h-9 px-2 bg-warm-subtle rounded-lg text-xs text-ink border border-transparent focus:border-accent/40 focus:outline-none"
+            className="shrink-0 h-9 px-2 bg-warm-subtle rounded-lg text-xs text-ink border border-transparent focus:border-accent focus:outline-none"
             aria-label={t("library.filterByRating")}
           >
             <option value="all">{t("library.allRatings")}</option>
@@ -598,7 +598,7 @@ export default function Library() {
           <select
             value={filterSource}
             onChange={(e) => setFilterSource(e.target.value)}
-            className="shrink-0 h-9 px-2 bg-warm-subtle rounded-lg text-xs text-ink border border-transparent focus:border-accent/40 focus:outline-none"
+            className="shrink-0 h-9 px-2 bg-warm-subtle rounded-lg text-xs text-ink border border-transparent focus:border-accent focus:outline-none"
             aria-label={t("library.filterBySource")}
           >
             <option value="all">{t("library.allBooks")}</option>
@@ -1267,7 +1267,7 @@ export default function Library() {
         }}
       />
       {importing && (
-        <div className="fixed inset-0 bg-black/20 flex items-center justify-center z-50">
+        <div className="fixed inset-0 bg-ink/20 backdrop-blur-sm flex items-center justify-center z-50">
           <div className="bg-white dark:bg-gray-800 rounded-lg p-6 shadow-lg flex flex-col items-center gap-3">
             <div className="animate-spin h-8 w-8 border-2 border-blue-500 border-t-transparent rounded-full" />
             <p className="text-sm text-gray-600 dark:text-gray-300">{t("import.importing")}</p>

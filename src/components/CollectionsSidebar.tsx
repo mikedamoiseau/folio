@@ -698,7 +698,7 @@ export default function CollectionsSidebar({
                   <path
                     d="M3 5h14M3 10h14M3 15h14"
                     stroke="currentColor"
-                    strokeWidth="1.75"
+                    strokeWidth="2"
                     strokeLinecap="round"
                   />
                 </svg>

@@ -95,7 +95,7 @@ export default function HighlightsPanel({ bookId, onClose, onGoToChapter }: High
   return (
     <>
       <div
-        className="fixed inset-0 bg-ink/20 z-10 animate-fade-in"
+        className="fixed inset-0 bg-ink/20 backdrop-blur-sm z-10 animate-fade-in"
         onClick={onClose}
       />
       <aside ref={panelRef} role="dialog" aria-modal="true" aria-labelledby="highlights-panel-title" className="fixed right-0 top-0 bottom-0 w-80 max-w-[90vw] bg-surface border-l border-warm-border z-20 flex flex-col shadow-[-4px_0_24px_-4px_rgba(44,34,24,0.12)] animate-slide-in-right">

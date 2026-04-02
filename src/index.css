@@ -84,6 +84,7 @@
   --animate-slide-in-right: slide-in-right 0.22s cubic-bezier(0.22, 1, 0.36, 1) both;
   --animate-fade-in:        fade-in 0.18s ease both;
   --animate-shimmer:        shimmer 1.5s ease-in-out infinite;
+  --animate-progress-fill:  progress-fill 0.6s ease-out both;
 }
 
 @keyframes shimmer {
@@ -104,6 +105,28 @@
 @keyframes fade-in {
   from { opacity: 0; }
   to   { opacity: 1; }
+}
+
+@keyframes route-enter {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes progress-fill {
+  from { width: 0; }
+  to   { width: var(--progress-width); }
+}
+
+@keyframes empty-book-in {
+  from { opacity: 0; transform: translateY(12px) scale(0.9); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+/* ── Form focus enhancement ─────────────────────────────────── */
+/* Adds a subtle accent glow ring alongside the border change  */
+
+input:focus, select:focus, textarea:focus {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 20%, transparent);
 }
 
 /* ── Global base ────────────────────────────────────────────── */
