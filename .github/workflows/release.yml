@@ -66,6 +66,8 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
+          # Pin to 1.85 on Windows to avoid openssh crate TryFrom conflict with Rust 1.86+
+          toolchain: ${{ matrix.platform == 'windows-latest' && '1.85.0' || 'stable' }}
           targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
 
       - name: Rust cache
