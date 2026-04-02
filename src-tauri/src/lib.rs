@@ -210,6 +210,9 @@ pub fn run() {
             commands::check_file_exists,
             commands::cleanup_library,
             commands::list_auto_backups,
+            commands::prepare_comic,
+            commands::get_cache_stats,
+            commands::clear_page_cache,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
