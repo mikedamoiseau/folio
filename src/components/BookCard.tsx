@@ -256,10 +256,10 @@ export default function BookCard({
           </div>
         )}
         {progress != null && progress > 0 && (
-          <div className="mt-2 h-0.5 rounded-full bg-warm-subtle">
+          <div className="mt-2 h-0.5 rounded-full bg-warm-subtle overflow-hidden">
             <div
-              className="h-full rounded-full bg-accent transition-all duration-300"
-              style={{ width: `${progress}%` }}
+              className="h-full rounded-full bg-accent animate-progress-fill"
+              style={{ "--progress-width": `${progress}%` } as React.CSSProperties}
             />
           </div>
         )}
