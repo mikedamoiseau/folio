@@ -3,6 +3,60 @@
 All notable changes to this project will be documented in this file.
 This project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.3.0] - 2026-04-02
+
+### Added
+- **Comic page cache (CBZ/CBR)** — pages are extracted to a disk cache on first open. Subsequent page loads read from disk (~1-5ms vs ~50-500ms from archive). Three-layer eviction: LRU by book count (5), configurable size cap (default 500 MB), age expiry (7 days). Manage in Settings > Library.
+- **PDF text search** — Cmd/Ctrl+F now works in PDFs using pdfium text extraction, with the same search UI as EPUB (snippets, click-to-navigate, match highlighting).
+- **Page turn animations** — optional slide animation when turning pages in PDF/CBZ/CBR. Configurable in Settings > Page Layout. Adjacent pages preloaded in background for smooth transitions.
+- **Page load timeout with retry** — pages that take too long show a "taking longer than usual" hint at 8s, with a retry button at 30s. Retry is often instant since background rendering continues and caches the result.
+- **Loading skeleton placeholders** — library grid shows shimmer skeletons while books load, replacing the blank loading state.
+- **Provider priority ordering** — drag enrichment providers up/down in Settings to control priority order.
+- **Comic Vine enrichment provider** — comprehensive comics metadata (American, European, manga). Requires free API key.
+- **BnF (Bibliothèque nationale de France) enrichment provider** — excellent coverage for French editions via SRU API, no key needed.
+- **Linked books** — option to reference books at their original location without copying. Link badge on cards, source filter, "Copy to library" action in edit dialog.
+- **Library cleanup** — Settings > Library > "Check for missing files" scans for broken entries and removes them with automatic backup.
+- **Backup restore picker** — restore from automated backups via dropdown or manual backup via file picker.
+- **Multi-language support (i18n)** — English and French translations across all components, with flag dropdown language switcher.
+- **Diagnostic page logging** — enable with `FOLIO_DEBUG_PAGES=1` (backend) or `localStorage.setItem("folio-debug-pages", "1")` (frontend) for page load pipeline debugging.
+- **Route transition animation** — subtle fade + slide-up when navigating between Library and Reader.
+- **Empty state entrance animation** — staggered book stack pop-in when library is empty.
+- **Progress bar fill animation** — BookCard progress bars animate from zero on mount.
+- **Catalog loading spinner** — spinner overlay when browsing to an OPDS catalog.
+
+### Changed
+- **SFTP backup provider** — added alongside existing S3 and FTP providers.
+- **Backup progress** — real-time step and file count reporting during backup.
+- **Context-aware library sections** — "Continue Reading" and "Discover" hidden when viewing a collection or series.
+- **Sharp comic zoom** — physical DOM resizing instead of CSS scale for sharp images at any zoom level.
+- **PDF rendering** — JPEG encoding (quality 90) for faster page loads and smaller transfers.
+
+### Fixed
+- **In-flight request deduplication** — concurrent page requests for the same page share a single IPC invoke, preventing pdfium render queue buildup.
+- **Preload debounce** — adjacent page preloads wait 500ms to prevent queue buildup during fast navigation.
+- **Consistent page turn animation** — spread div stays mounted during loading so animation plays for both cached and uncached pages.
+- **Backdrop blur standardized** — all 16 modal/panel overlays now use consistent `backdrop-blur-sm`.
+- **Button radius standardized** — main action buttons unified to `rounded-xl`.
+- **SVG icon strokes normalized** — strokeWidth 1.75/2.5 → 2, icon sizes 17×17 → 18×18 across 7 files.
+- **BookmarkToast colors** — replaced hardcoded blue with design system accent tokens.
+- **Form input focus glow** — subtle accent ring on focus for better visibility.
+- **Library filter focus contrast** — upgraded from `border-accent/40` to full `border-accent`.
+- Highlight popup smart positioning (viewport-aware clamping).
+- Search results navigation with match counter and prev/next arrows.
+- Archive decompression limits (zip bomb protection for EPUB/CBZ/CBR).
+- Transaction boundaries for book import (prevents orphaned files on DB failure).
+- Backup secret atomicity (keychain errors now propagated instead of silently ignored).
+- OPDS URL resolution via RFC-compliant `url::Url::join()`.
+- Activity log pruning combined count+age query.
+- Scroll-to-match for in-book search results.
+- CBR archive validation (entry count and size limits).
+- PDF search result caching for faster repeated searches.
+
+### Security
+- Archive decompression limits: max 10,000 entries, 100 MB per entry for EPUB/CBZ/CBR.
+- Backup secret atomicity: keychain write failures now return errors instead of creating config/secret desync.
+- OPDS URL resolution hardened against protocol-relative URL injection.
+
 ## [1.2.0] - 2026-03-28
 
 ### Added
