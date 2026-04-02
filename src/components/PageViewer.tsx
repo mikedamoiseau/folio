@@ -167,8 +167,10 @@ export default function PageViewer({
   const dpr = typeof window !== "undefined" ? window.devicePixelRatio || 1 : 1;
   const pdfRenderWidth = isPdf ? Math.round(1200 * Math.max(renderZoom, 1) * dpr) : undefined;
 
-  // Page cache: preloaded images keyed by "{pageIndex}:{renderWidth}"
+  // Page cache: resolved images keyed by "{pageIndex}:{renderWidth}"
   const pageCacheRef = useRef<Map<string, string>>(new Map());
+  // In-flight promises: prevents duplicate invokes for the same page
+  const inflightRef = useRef<Map<string, Promise<string>>>(new Map());
 
   const loadPageCached = useCallback(
     async (index: number, renderWidth?: number): Promise<string> => {
@@ -178,15 +180,28 @@ export default function PageViewer({
         dbg(`frontend cache HIT page=${index}`);
         return cached;
       }
-      dbg(`frontend cache MISS page=${index}, fetching...`);
-      const data = await loadPage(index, renderWidth);
-      pageCacheRef.current.set(key, data);
-      // Keep cache bounded (max 10 entries)
-      if (pageCacheRef.current.size > 10) {
-        const firstKey = pageCacheRef.current.keys().next().value;
-        if (firstKey !== undefined) pageCacheRef.current.delete(firstKey);
+      // Reuse in-flight request if one exists for this key
+      const inflight = inflightRef.current.get(key);
+      if (inflight) {
+        dbg(`frontend cache PENDING page=${index}, reusing in-flight request`);
+        return inflight;
       }
-      return data;
+      dbg(`frontend cache MISS page=${index}, fetching...`);
+      const promise = loadPage(index, renderWidth).then((data) => {
+        pageCacheRef.current.set(key, data);
+        inflightRef.current.delete(key);
+        // Keep cache bounded (max 10 entries)
+        if (pageCacheRef.current.size > 10) {
+          const firstKey = pageCacheRef.current.keys().next().value;
+          if (firstKey !== undefined) pageCacheRef.current.delete(firstKey);
+        }
+        return data;
+      }).catch((err) => {
+        inflightRef.current.delete(key);
+        throw err;
+      });
+      inflightRef.current.set(key, promise);
+      return promise;
     },
     [loadPage]
   );
@@ -490,11 +505,14 @@ export default function PageViewer({
             <span className="text-sm text-red-500 text-center max-w-sm">{error}</span>
             <button
               onClick={() => {
-                // Evict from cache so retry fetches fresh
+                // Evict from cache and in-flight so retry fetches fresh
                 const key = `${spread.left}:${pdfRenderWidth ?? 0}`;
                 pageCacheRef.current.delete(key);
+                inflightRef.current.delete(key);
                 if (spread.right !== null) {
-                  pageCacheRef.current.delete(`${spread.right}:${pdfRenderWidth ?? 0}`);
+                  const rkey = `${spread.right}:${pdfRenderWidth ?? 0}`;
+                  pageCacheRef.current.delete(rkey);
+                  inflightRef.current.delete(rkey);
                 }
                 setRetryCount((c) => c + 1);
               }}
