@@ -105,6 +105,7 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
   const startChapterRef = useRef<number>(0);
   const restoringScroll = useRef<number | null>(null);
   const savedScrollPosition = useRef<number | null>(null);
+  const targetMatchOffset = useRef<number | null>(null);
 
   const isFileNotFound = (err: unknown): boolean => {
     const msg = String(err).toLowerCase();
@@ -285,7 +286,7 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
         if (!cancelled) {
           setChapterHtml(html);
           setChapterError(null);
-          if (restoringScroll.current !== chapterIndex && scrollContainerRef.current) {
+          if (restoringScroll.current !== chapterIndex && targetMatchOffset.current === null && scrollContainerRef.current) {
             scrollContainerRef.current.scrollTop = 0;
           }
         }
@@ -324,6 +325,18 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
       savedScrollPosition.current = null;
     }
   }, [chapterHtml, bookId, chapterIndex]);
+
+  // ---- Scroll to search match after chapter loads ----
+  useEffect(() => {
+    if (targetMatchOffset.current === null || !chapterHtml || !scrollContainerRef.current) return;
+    const container = scrollContainerRef.current;
+    const offset = targetMatchOffset.current;
+    targetMatchOffset.current = null;
+    requestAnimationFrame(() => {
+      const textLen = container.textContent?.length || 1;
+      container.scrollTop = (offset / textLen) * container.scrollHeight;
+    });
+  }, [chapterHtml]);
 
   // ---- Save reading progress ----
 
@@ -672,9 +685,31 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
 
   const navigateToMatch = useCallback((index: number) => {
     if (index < 0 || index >= searchResults.length) return;
+    const result = searchResults[index];
     setActiveMatchIndex(index);
-    goToChapter(searchResults[index].chapterIndex);
-  }, [searchResults, goToChapter]);
+
+    if (bookFormat !== "epub") {
+      // PDF/CBZ/CBR: page-level navigation only
+      goToChapter(result.chapterIndex);
+      return;
+    }
+
+    // EPUB: store match offset for scroll-after-load
+    targetMatchOffset.current = result.matchOffset;
+
+    if (result.chapterIndex === chapterIndex && scrollContainerRef.current) {
+      // Same chapter — scroll immediately
+      requestAnimationFrame(() => {
+        const container = scrollContainerRef.current;
+        if (!container || targetMatchOffset.current === null) return;
+        const textLen = container.textContent?.length || 1;
+        container.scrollTop = (targetMatchOffset.current / textLen) * container.scrollHeight;
+        targetMatchOffset.current = null;
+      });
+    } else {
+      goToChapter(result.chapterIndex);
+    }
+  }, [searchResults, goToChapter, bookFormat, chapterIndex]);
 
   const prevMatch = useCallback(() => {
     if (searchResults.length === 0) return;

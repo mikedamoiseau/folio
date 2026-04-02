@@ -1,9 +1,18 @@
 use base64::Engine;
 use pdfium_render::prelude::*;
+use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::OnceLock;
+use std::sync::{LazyLock, Mutex, OnceLock};
 
 use crate::epub;
+
+// ---- PDF text cache ----
+
+/// Maximum number of books whose extracted text we keep in memory.
+const TEXT_CACHE_MAX_BOOKS: usize = 5;
+
+static PDF_TEXT_CACHE: LazyLock<Mutex<HashMap<String, Vec<String>>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
 
 // ---- Data structures ----
 
@@ -148,12 +157,8 @@ pub struct PdfSearchResult {
 
 const MAX_SEARCH_RESULTS: usize = 200;
 
-/// Search all pages of a PDF for a query string (case-insensitive).
-/// Returns up to MAX_SEARCH_RESULTS matches with surrounding context snippets.
-pub fn search_pdf(path: &str, query: &str) -> Result<Vec<PdfSearchResult>, String> {
-    let query_lower = query.to_lowercase();
-    let mut results = Vec::new();
-
+/// Extract text from every page of a PDF and return as a Vec (one entry per page).
+fn extract_all_page_texts(path: &str) -> Result<Vec<String>, String> {
     let pdfium = bind_pdfium()?;
     let document = pdfium
         .load_pdf_from_file(path, None)
@@ -161,25 +166,70 @@ pub fn search_pdf(path: &str, query: &str) -> Result<Vec<PdfSearchResult>, Strin
 
     let pages = document.pages();
     let page_count = pages.len();
+    let mut texts = Vec::with_capacity(page_count as usize);
 
     for page_idx in 0..page_count {
         let page = pages
             .get(page_idx)
             .map_err(|e| format!("page {page_idx} not found: {e}"))?;
-
         let text = page
             .text()
             .map_err(|e| format!("failed to extract text from page {page_idx}: {e}"))?
             .all();
+        texts.push(text);
+    }
 
+    Ok(texts)
+}
+
+/// Return cached page texts for a PDF, extracting and caching if needed.
+fn get_cached_page_texts(path: &str) -> Result<Vec<String>, String> {
+    {
+        let cache = PDF_TEXT_CACHE
+            .lock()
+            .map_err(|e| format!("text cache lock poisoned: {e}"))?;
+
+        if let Some(texts) = cache.get(path) {
+            return Ok(texts.clone());
+        }
+    }
+
+    // Extract text without holding the lock (I/O-heavy).
+    let texts = extract_all_page_texts(path)?;
+
+    {
+        let mut cache = PDF_TEXT_CACHE
+            .lock()
+            .map_err(|e| format!("text cache lock poisoned: {e}"))?;
+
+        // Evict all entries if the cache is at capacity.
+        if cache.len() >= TEXT_CACHE_MAX_BOOKS && !cache.contains_key(path) {
+            cache.clear();
+        }
+
+        cache.insert(path.to_string(), texts.clone());
+    }
+
+    Ok(texts)
+}
+
+/// Search all pages of a PDF for a query string (case-insensitive).
+/// Returns up to MAX_SEARCH_RESULTS matches with surrounding context snippets.
+pub fn search_pdf(path: &str, query: &str) -> Result<Vec<PdfSearchResult>, String> {
+    let query_lower = query.to_lowercase();
+    let mut results = Vec::new();
+
+    let page_texts = get_cached_page_texts(path)?;
+
+    for (page_idx, text) in page_texts.iter().enumerate() {
         let text_lower = text.to_lowercase();
         let mut search_from = 0;
 
         while let Some(pos) = text_lower[search_from..].find(&query_lower) {
             let match_start = search_from + pos;
             results.push(PdfSearchResult {
-                chapter_index: page_idx as usize,
-                snippet: epub::extract_snippet(&text, match_start, query_lower.len(), 40),
+                chapter_index: page_idx,
+                snippet: epub::extract_snippet(text, match_start, query_lower.len(), 40),
                 match_offset: match_start,
             });
             if results.len() >= MAX_SEARCH_RESULTS {

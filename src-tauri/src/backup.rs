@@ -38,19 +38,21 @@ pub fn store_secrets(config: &BackupConfig) -> Result<BackupConfig, String> {
 }
 
 /// Load secret values from the OS keychain into a config.
-pub fn load_secrets(config: &mut BackupConfig) {
+pub fn load_secrets(config: &mut BackupConfig) -> Result<(), String> {
     let secrets = secret_keys(&config.provider_type);
     for key in &secrets {
         if config.values.contains_key(*key) {
             continue; // already populated (e.g. test config)
         }
         let service = format!("folio-backup-{:?}-{}", config.provider_type, key);
-        if let Ok(entry) = keyring::Entry::new(&service, "default") {
-            if let Ok(pw) = entry.get_password() {
-                config.values.insert(key.to_string(), pw);
-            }
-        }
+        let entry = keyring::Entry::new(&service, "default")
+            .map_err(|e| format!("Failed to access keychain for {key}: {e}"))?;
+        let pw = entry
+            .get_password()
+            .map_err(|e| format!("Failed to load secret '{key}' from keychain: {e}"))?;
+        config.values.insert(key.to_string(), pw);
     }
+    Ok(())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

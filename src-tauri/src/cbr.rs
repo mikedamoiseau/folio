@@ -1,6 +1,39 @@
 use base64::{engine::general_purpose, Engine as _};
 use std::path::Path;
 
+/// Maximum number of entries allowed in a CBR archive.
+const MAX_ARCHIVE_ENTRIES: usize = 10_000;
+/// Maximum decompressed size per archive entry (100 MB).
+const MAX_ENTRY_SIZE: u64 = 100 * 1024 * 1024;
+
+/// Validate a RAR archive: reject archives with too many entries or oversized entries.
+fn validate_archive(path: &str) -> Result<(), String> {
+    let archive = unrar::Archive::new(path)
+        .open_for_listing()
+        .map_err(|e| format!("Cannot open RAR archive: {e}"))?;
+
+    let mut count: usize = 0;
+    for result in archive {
+        let entry = result.map_err(|e| format!("Error reading RAR entry: {e}"))?;
+        count += 1;
+        if count > MAX_ARCHIVE_ENTRIES {
+            return Err(format!(
+                "Archive has more than {} entries (maximum {})",
+                MAX_ARCHIVE_ENTRIES, MAX_ARCHIVE_ENTRIES
+            ));
+        }
+        if entry.unpacked_size > MAX_ENTRY_SIZE {
+            return Err(format!(
+                "Archive entry '{}' decompressed size ({} MB) exceeds limit ({} MB)",
+                entry.filename.to_string_lossy(),
+                entry.unpacked_size / (1024 * 1024),
+                MAX_ENTRY_SIZE / (1024 * 1024)
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn is_image(name: &str) -> bool {
     let lower = name.to_lowercase();
     lower.ends_with(".jpg")
@@ -79,6 +112,7 @@ fn extract_comic_info(path: &str) -> Option<String> {
 }
 
 pub fn import_cbr(path: &str) -> Result<CbrMeta, String> {
+    validate_archive(path)?;
     let images = collect_image_names(path)?;
     if images.is_empty() {
         return Err("CBR archive contains no supported image files".to_string());

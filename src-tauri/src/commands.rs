@@ -2743,7 +2743,7 @@ pub async fn get_backup_config(
             let mut config: crate::backup::BackupConfig =
                 serde_json::from_str(&j).map_err(|e| e.to_string())?;
             // Load secrets from OS keychain
-            crate::backup::load_secrets(&mut config);
+            crate::backup::load_secrets(&mut config)?;
             Ok(Some(config))
         }
         None => Ok(None),
@@ -2774,7 +2774,7 @@ pub async fn run_backup(
         .ok_or_else(|| "No backup provider configured".to_string())?;
     let mut config: crate::backup::BackupConfig =
         serde_json::from_str(&json).map_err(|e| e.to_string())?;
-    crate::backup::load_secrets(&mut config);
+    crate::backup::load_secrets(&mut config)?;
     let provider_name = config.provider_type.clone();
     let op = crate::backup::build_operator(&config)?;
     let (tx, rx) = std::sync::mpsc::channel();
@@ -2843,7 +2843,7 @@ pub async fn get_backup_status(
     };
     let mut config: crate::backup::BackupConfig =
         serde_json::from_str(&json).map_err(|e| e.to_string())?;
-    crate::backup::load_secrets(&mut config);
+    crate::backup::load_secrets(&mut config)?;
     let op = crate::backup::build_operator(&config)?;
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
