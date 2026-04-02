@@ -25,11 +25,11 @@ jobs:
             pdfium_lib: libpdfium.so
           - platform: macos-latest
             args: '--target aarch64-apple-darwin'
-            pdfium_archive: pdfium-mac-arm64.tgz
+            pdfium_archive: pdfium-mac-univ.tgz
             pdfium_lib: libpdfium.dylib
           - platform: macos-latest
             args: '--target x86_64-apple-darwin'
-            pdfium_archive: pdfium-mac-x64.tgz
+            pdfium_archive: pdfium-mac-univ.tgz
             pdfium_lib: libpdfium.dylib
           - platform: windows-latest
             args: '-- --no-default-features'
