@@ -212,7 +212,16 @@ export default function CatalogBrowser({ onClose, onBookImported }: CatalogBrows
               )}
             </div>
 
-            <div className="flex-1 overflow-y-auto py-2">
+            <div className="flex-1 overflow-y-auto py-2 relative">
+              {/* Loading overlay when browsing to a catalog */}
+              {loading && !feed && (
+                <div className="absolute inset-0 flex items-center justify-center bg-surface/80 z-10">
+                  <div className="flex items-center gap-2">
+                    <div className="w-4 h-4 border-2 border-accent/30 border-t-accent rounded-full animate-spin" />
+                    <span className="text-sm text-ink-muted">{t("common.loading")}</span>
+                  </div>
+                </div>
+              )}
               {/* Unified search results */}
               {unifiedLoading ? (
                 <div className="flex items-center justify-center py-12">
