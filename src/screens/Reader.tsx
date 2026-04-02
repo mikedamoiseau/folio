@@ -1311,6 +1311,9 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
               autoFocus
             />
             {searching && <span className="text-xs text-ink-muted">{t("reader.searchingText")}</span>}
+            {!searching && searchQuery.length > 0 && searchQuery.trim().length < 2 && (
+              <span className="text-xs text-ink-muted/60">{t("reader.searchMinChars")}</span>
+            )}
             {!searching && searchResults.length > 0 && (
               <div className="flex items-center gap-1">
                 <span className="text-xs text-ink-muted tabular-nums">
@@ -1449,11 +1452,11 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
               )}
               {/* Highlight color popup */}
               {selectionPopup && (() => {
-                const popupW = 200;
-                const popupH = 36;
                 const containerW = contentRef.current?.clientWidth ?? 600;
+                const popupW = Math.min(200, containerW - 16);
+                const popupH = 36;
                 // Clamp X so popup doesn't overflow left/right edges
-                const clampedX = Math.max(popupW / 2, Math.min(selectionPopup.x, containerW - popupW / 2));
+                const clampedX = Math.max(popupW / 2 + 8, Math.min(selectionPopup.x, containerW - popupW / 2 - 8));
                 // If popup would go above the visible area, show below selection instead
                 const showBelow = selectionPopup.y - popupH < (scrollContainerRef.current?.scrollTop ?? 0);
                 const yOffset = showBelow ? 32 : -8;
@@ -1466,6 +1469,7 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
                     left: `${clampedX}px`,
                     top: `${selectionPopup.y + yOffset}px`,
                     transform: `translate(-50%, ${transformY})`,
+                    maxWidth: `${containerW - 16}px`,
                   }}
                 >
                   {HIGHLIGHT_COLORS.map((c) => (

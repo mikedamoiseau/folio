@@ -88,6 +88,24 @@ pub const MAX_ARCHIVE_ENTRIES: usize = 10_000;
 pub const MAX_ENTRY_SIZE: u64 = 100 * 1024 * 1024;
 
 /// Validate archive bounds: entry count and per-entry decompressed size.
+///
+/// Defense-in-depth strategy:
+///
+/// 1. **Pre-filter (this function):** Reject archives whose central directory claims any
+///    single entry exceeds `MAX_ENTRY_SIZE` (100 MB). This is a fast O(n) scan over
+///    metadata and catches honest or accidental oversized files without decompressing.
+///
+/// 2. **Runtime protection (zip crate internals):** When entries are actually read via
+///    `ZipFile::read()`, the zip crate validates that decompressed output matches the
+///    declared size. A malicious archive that lies in its headers will trigger an error
+///    during decompression, not silently produce oversized output.
+///
+/// We use `by_index()` rather than `by_index_raw()` so that sizes are read from the
+/// central directory (which the zip crate cross-checks against local headers) instead
+/// of only from local file headers, which are easier to forge.
+///
+/// Full decompression validation at import time is intentionally avoided — it would be
+/// prohibitively slow for large archives with many entries.
 pub fn validate_archive(archive: &mut ZipArchive<std::fs::File>) -> Result<(), EpubError> {
     if archive.len() > MAX_ARCHIVE_ENTRIES {
         return Err(EpubError::MissingFile(format!(
@@ -97,7 +115,7 @@ pub fn validate_archive(archive: &mut ZipArchive<std::fs::File>) -> Result<(), E
         )));
     }
     for i in 0..archive.len() {
-        if let Ok(entry) = archive.by_index_raw(i) {
+        if let Ok(entry) = archive.by_index(i) {
             if entry.size() > MAX_ENTRY_SIZE {
                 return Err(EpubError::MissingFile(format!(
                     "Archive entry '{}' decompressed size ({} MB) exceeds limit ({} MB)",
