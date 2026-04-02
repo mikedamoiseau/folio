@@ -9,7 +9,7 @@ on:
 env:
   # Pin to a specific chromium build. Update to latest from:
   # https://github.com/bblanchon/pdfium-binaries/releases
-  PDFIUM_VERSION: "6954"
+  PDFIUM_VERSION: "7763"
 
 jobs:
   test:
