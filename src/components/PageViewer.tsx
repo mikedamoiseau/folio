@@ -8,6 +8,13 @@ const MIN_ZOOM = 0.5;
 const MAX_ZOOM = 4;
 const ZOOM_STEP = 0.25;
 
+// Enable with: localStorage.setItem("folio-debug-pages", "1")
+// Disable with: localStorage.removeItem("folio-debug-pages")
+const pageDebug = typeof window !== "undefined" && localStorage.getItem("folio-debug-pages") === "1";
+function dbg(...args: unknown[]) {
+  if (pageDebug) console.debug("[page-load]", ...args);
+}
+
 interface PageViewerProps {
   bookId: string;
   format: "cbz" | "cbr" | "pdf";
@@ -145,7 +152,10 @@ export default function PageViewer({
       if (isPdf && renderWidth) {
         params.width = renderWidth;
       }
+      dbg(`invoke ${command} page=${index}`, renderWidth ? `width=${renderWidth}` : "");
+      const t0 = performance.now();
       const data = await invoke<string>(command, params);
+      dbg(`invoke ${command} page=${index} done in ${(performance.now() - t0).toFixed(0)}ms size=${(data.length / 1024).toFixed(0)}KB`);
       return data;
     },
     [bookId, isPdf]
@@ -162,7 +172,11 @@ export default function PageViewer({
     async (index: number, renderWidth?: number): Promise<string> => {
       const key = `${index}:${renderWidth ?? 0}`;
       const cached = pageCacheRef.current.get(key);
-      if (cached) return cached;
+      if (cached) {
+        dbg(`frontend cache HIT page=${index}`);
+        return cached;
+      }
+      dbg(`frontend cache MISS page=${index}, fetching...`);
       const data = await loadPage(index, renderWidth);
       pageCacheRef.current.set(key, data);
       // Keep cache bounded (max 10 entries)
@@ -184,6 +198,8 @@ export default function PageViewer({
     setError(null);
 
     const loadSpread = async () => {
+      dbg(`loadSpread: left=${spread.left} right=${spread.right} retry=${retryCount}`);
+      const t0 = performance.now();
       try {
         const timeout = new Promise<never>((_, reject) => {
           timeoutId = setTimeout(() => reject(new Error("timeout")), 15000);
@@ -194,6 +210,7 @@ export default function PageViewer({
         }
         const results = await Promise.race([Promise.all(promises), timeout]);
         clearTimeout(timeoutId);
+        dbg(`loadSpread complete in ${(performance.now() - t0).toFixed(0)}ms`);
         if (cancelled) return;
         setLeftImageData(results[0]);
         setRightImageData(results.length > 1 ? results[1] : null);
@@ -203,6 +220,7 @@ export default function PageViewer({
         });
       } catch (err) {
         clearTimeout(timeoutId);
+        dbg(`loadSpread FAILED after ${(performance.now() - t0).toFixed(0)}ms:`, err);
         if (!cancelled) {
           const msg = err instanceof Error && err.message === "timeout"
             ? t("reader.pageLoadTimeout")

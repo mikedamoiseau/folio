@@ -300,18 +300,24 @@ pub fn ensure_cached(
         let last_ok = manifest.pages.last().is_some_and(|p| dir.join(p).exists());
 
         if first_ok && last_ok {
+            log::debug!("[page-load] ensure_cached: cache hit for {book_hash} ({} pages)", manifest.page_count);
             manifest.last_accessed = now_iso();
             let _ = write_manifest(app_cache_dir, book_hash, &manifest);
             return Ok(manifest);
         }
+        log::debug!("[page-load] ensure_cached: cache corrupted for {book_hash}, re-extracting");
         let _ = fs::remove_dir_all(book_cache_dir(app_cache_dir, book_hash));
     }
 
-    match format {
+    log::debug!("[page-load] ensure_cached: extracting {format:?} {book_hash}");
+    let start = std::time::Instant::now();
+    let result = match format {
         BookFormat::Cbz => extract_cbz(app_cache_dir, book_id, book_hash, file_path),
         BookFormat::Cbr => extract_cbr(app_cache_dir, book_id, book_hash, file_path),
         _ => Err(format!("Page cache not supported for format: {:?}", format)),
-    }
+    };
+    log::debug!("[page-load] ensure_cached: extraction took {:?}", start.elapsed());
+    result
 }
 
 // ---------------------------------------------------------------------------
