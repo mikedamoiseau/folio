@@ -45,6 +45,7 @@ export default function PageViewer({
   const [rightImageData, setRightImageData] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [retryCount, setRetryCount] = useState(0);
 
   // Zoom & pan state — restore persisted zoom level per book
   const zoomStorageKey = `folio-zoom-${bookId}`;
@@ -174,20 +175,25 @@ export default function PageViewer({
     [loadPage]
   );
 
-  // Load spread (one or two pages in parallel)
+  // Load spread (one or two pages in parallel) with timeout
   useEffect(() => {
     let cancelled = false;
     let rafId: number | undefined;
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
     setLoading(true);
     setError(null);
 
     const loadSpread = async () => {
       try {
+        const timeout = new Promise<never>((_, reject) => {
+          timeoutId = setTimeout(() => reject(new Error("timeout")), 15000);
+        });
         const promises: Promise<string>[] = [loadPageCached(spread.left, pdfRenderWidth)];
         if (spread.right !== null) {
           promises.push(loadPageCached(spread.right, pdfRenderWidth));
         }
-        const results = await Promise.all(promises);
+        const results = await Promise.race([Promise.all(promises), timeout]);
+        clearTimeout(timeoutId);
         if (cancelled) return;
         setLeftImageData(results[0]);
         setRightImageData(results.length > 1 ? results[1] : null);
@@ -196,7 +202,13 @@ export default function PageViewer({
           if (!cancelled) slideInRef.current();
         });
       } catch (err) {
-        if (!cancelled) setError(friendlyError(String(err), t));
+        clearTimeout(timeoutId);
+        if (!cancelled) {
+          const msg = err instanceof Error && err.message === "timeout"
+            ? t("reader.pageLoadTimeout")
+            : friendlyError(String(err), t);
+          setError(msg);
+        }
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -205,9 +217,10 @@ export default function PageViewer({
     loadSpread();
     return () => {
       cancelled = true;
+      clearTimeout(timeoutId);
       if (rafId !== undefined) cancelAnimationFrame(rafId);
     };
-  }, [spread.left, spread.right, loadPageCached, pdfRenderWidth]);
+  }, [spread.left, spread.right, loadPageCached, pdfRenderWidth, retryCount]);
 
   // Preload adjacent spreads in the background after current spread renders
   useEffect(() => {
@@ -453,8 +466,22 @@ export default function PageViewer({
             <span className="text-sm text-ink-muted">{t("reader.loadingPage")}</span>
           </div>
         ) : error ? (
-          <div className="absolute inset-0 flex items-center justify-center">
-            <span className="text-sm text-red-500 text-center max-w-sm">{t("reader.failedToLoadPage", { error })}</span>
+          <div className="absolute inset-0 flex flex-col items-center justify-center gap-3">
+            <span className="text-sm text-red-500 text-center max-w-sm">{error}</span>
+            <button
+              onClick={() => {
+                // Evict from cache so retry fetches fresh
+                const key = `${spread.left}:${pdfRenderWidth ?? 0}`;
+                pageCacheRef.current.delete(key);
+                if (spread.right !== null) {
+                  pageCacheRef.current.delete(`${spread.right}:${pdfRenderWidth ?? 0}`);
+                }
+                setRetryCount((c) => c + 1);
+              }}
+              className="px-4 py-1.5 text-sm bg-accent text-white rounded-lg hover:bg-accent/90 transition-colors"
+            >
+              {t("reader.retryLoadPage")}
+            </button>
           </div>
         ) : (
           <div
