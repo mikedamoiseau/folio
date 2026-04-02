@@ -446,6 +446,18 @@ Tauri v2 supports mobile targets. The React frontend renders in a mobile WebView
 - ~~Navigation locked during animation to prevent stuck states~~
 - Future: additional animation styles (fade, curl)
 
+#### 62. Comic Page Cache (CBZ/CBR Performance) — **Done**
+- ~~Extract-on-open: extract all pages from archive to disk cache on first open~~
+- ~~Subsequent page loads read from disk (~1-5ms vs ~50-500ms from archive)~~
+- ~~Three-layer eviction: LRU by book count (5), total size cap (user-configurable, default 500MB), age expiry (7 days)~~
+- ~~Settings UI: cache size limit dropdown, current usage display, clear cache button~~
+- ~~New `prepare_comic` command for explicit extraction with loading indicator~~
+- Future: thumbnail strip — scrollable page preview bar using cached full-res pages as source
+- Future: extract-on-demand with prefetch — lazy extraction if upfront cost too high for 100+ page comics
+- Future: image resizing/compression — serve at screen resolution, switch base64 to blob URLs
+- Future: PDF disk cache — extend page_cache module for rendered PDF pages
+- Future: frontend cache tuning — increase 10-entry LRU or make size-aware
+
 #### 40. Split View / Side-by-Side Reading
 - Open two books simultaneously in a split pane
 - Useful for reference material alongside primary reading
