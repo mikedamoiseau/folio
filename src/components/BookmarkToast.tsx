@@ -75,7 +75,7 @@ export default function BookmarkToast({
           Bookmark saved
           <button
             onClick={handleAddName}
-            className="text-blue-300 hover:text-blue-200 text-xs ml-1 transition-colors"
+            className="text-accent-light hover:text-accent text-xs ml-1 transition-colors"
           >
             Add name...
           </button>
@@ -91,7 +91,7 @@ export default function BookmarkToast({
             onBlur={saveName}
             maxLength={100}
             placeholder="Bookmark name..."
-            className="bg-white/10 border border-white/20 text-white placeholder-white/40 px-2 py-0.5 rounded text-sm w-44 outline-none focus:border-blue-400"
+            className="bg-white/10 border border-white/20 text-white placeholder-white/40 px-2 py-0.5 rounded text-sm w-44 outline-none focus:border-accent"
           />
           <span className="text-white/30 text-[10px]">↵</span>
         </>
