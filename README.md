@@ -2,6 +2,8 @@
 
 A local-first desktop app for people who want to read and organize the books they already own.
 
+![Folio library](screenshots/01-library-light.png)
+
 Folio is a cross-platform reader for EPUB, PDF, CBZ, and CBR. It keeps your library on your machine and gives you the tools to actually use it well: solid reading controls, sensible organization, metadata cleanup, highlights, profiles, backup, and OPDS catalog support.
 
 ## Why Folio?
@@ -55,7 +57,57 @@ Folio is for the opposite case: you already have the files, and you want a bette
 - Activity log for imports, edits, deletes, collection changes, and more
 - Reading stats dashboard
 
-## Screens / product docs
+## Screenshots
+
+<details open>
+<summary>Dark mode</summary>
+
+![Library in dark mode](screenshots/03-library-dark.png)
+</details>
+
+<details>
+<summary>EPUB reader</summary>
+
+![Reading an EPUB](screenshots/10-reader-epub.png)
+</details>
+
+<details>
+<summary>Highlights & annotations</summary>
+
+![Highlights panel](screenshots/12-reader-highlights.png)
+</details>
+
+<details>
+<summary>Reading stats</summary>
+
+![Reading statistics](screenshots/07-reading-stats.png)
+</details>
+
+<details>
+<summary>Collections</summary>
+
+![Collections sidebar](screenshots/09-collections.png)
+</details>
+
+<details>
+<summary>Book details</summary>
+
+![Book detail modal](screenshots/15-book-detail.png)
+</details>
+
+<details>
+<summary>OPDS catalogs</summary>
+
+![Book catalogs](screenshots/08-catalogs.png)
+</details>
+
+<details>
+<summary>Keyboard shortcuts</summary>
+
+![Keyboard shortcuts](screenshots/14-keyboard-shortcuts.png)
+</details>
+
+## Docs
 
 - User guide: [`docs/USER_GUIDE.md`](docs/USER_GUIDE.md)
 - Roadmap: [`docs/ROADMAP.md`](docs/ROADMAP.md)
