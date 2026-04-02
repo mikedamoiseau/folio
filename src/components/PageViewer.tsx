@@ -214,6 +214,18 @@ export default function PageViewer({
     setLoading(true);
     setError(null);
 
+    // Clear stale in-flight entries for pages we no longer need.
+    // This prevents abandoned renders from blocking the pdfium queue.
+    const keep = new Set<string>();
+    keep.add(`${spread.left}:${pdfRenderWidth ?? 0}`);
+    if (spread.right !== null) keep.add(`${spread.right}:${pdfRenderWidth ?? 0}`);
+    for (const key of inflightRef.current.keys()) {
+      if (!keep.has(key)) {
+        dbg(`clearing stale inflight: ${key}`);
+        inflightRef.current.delete(key);
+      }
+    }
+
     const loadSpread = async () => {
       dbg(`loadSpread: left=${spread.left} right=${spread.right} retry=${retryCount}`);
       const t0 = performance.now();
@@ -257,33 +269,38 @@ export default function PageViewer({
     };
   }, [spread.left, spread.right, loadPageCached, pdfRenderWidth, retryCount]);
 
-  // Preload adjacent spreads in the background after current spread renders
+  // Preload adjacent spreads in the background after current spread renders.
+  // Debounced by 500ms to prevent queue buildup during fast navigation.
   useEffect(() => {
     if (loading) return;
-    const toPreload: number[] = [];
-    if (dualPage) {
-      // Previous spread
-      if (spread.left > 0) {
-        const prevLeft = spread.left <= 2 ? 0 : spread.left - 2;
-        toPreload.push(prevLeft);
-        const { right } = getSpreadPages(prevLeft, totalPages);
-        if (right !== null) toPreload.push(right);
+    const timerId = setTimeout(() => {
+      const toPreload: number[] = [];
+      if (dualPage) {
+        // Previous spread
+        if (spread.left > 0) {
+          const prevLeft = spread.left <= 2 ? 0 : spread.left - 2;
+          toPreload.push(prevLeft);
+          const { right } = getSpreadPages(prevLeft, totalPages);
+          if (right !== null) toPreload.push(right);
+        }
+        // Next spread
+        const nextLeft = spread.right !== null ? spread.right + 1 : spread.left + 1;
+        if (nextLeft < totalPages) {
+          toPreload.push(nextLeft);
+          const { right } = getSpreadPages(nextLeft, totalPages);
+          if (right !== null) toPreload.push(right);
+        }
+      } else {
+        if (spread.left > 0) toPreload.push(spread.left - 1);
+        if (spread.left < totalPages - 1) toPreload.push(spread.left + 1);
       }
-      // Next spread
-      const nextLeft = spread.right !== null ? spread.right + 1 : spread.left + 1;
-      if (nextLeft < totalPages) {
-        toPreload.push(nextLeft);
-        const { right } = getSpreadPages(nextLeft, totalPages);
-        if (right !== null) toPreload.push(right);
+      // Fire-and-forget — don't block on preloads
+      for (const idx of toPreload) {
+        dbg(`preload page=${idx}`);
+        loadPageCached(idx, pdfRenderWidth);
       }
-    } else {
-      if (spread.left > 0) toPreload.push(spread.left - 1);
-      if (spread.left < totalPages - 1) toPreload.push(spread.left + 1);
-    }
-    // Fire-and-forget — don't block on preloads
-    for (const idx of toPreload) {
-      loadPageCached(idx, pdfRenderWidth);
-    }
+    }, 500);
+    return () => clearTimeout(timerId);
   }, [loading, spread.left, spread.right, dualPage, totalPages, loadPageCached, pdfRenderWidth]);
 
   const goTo = useCallback(
