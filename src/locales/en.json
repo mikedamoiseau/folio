@@ -315,7 +315,14 @@
     "importMode": "Import mode",
     "importModeCopy": "Copy to library",
     "importModeLink": "Link to original file",
-    "importModeHelp": "Copied books are self-contained. Linked books save disk space but require the original file to remain accessible."
+    "importModeHelp": "Copied books are self-contained. Linked books save disk space but require the original file to remain accessible.",
+    "pageCacheSection": "Page Cache",
+    "pageCacheLimit": "Cache size limit",
+    "pageCacheLimitHelp": "Maximum disk space for cached comic pages. Older books are evicted when the limit is exceeded.",
+    "pageCacheUsage": "Using {{size}} ({{count}} books)",
+    "pageCacheUsageEmpty": "Cache is empty",
+    "clearPageCache": "Clear cache",
+    "clearPageCacheConfirm": "Cache cleared"
   },
 
   "collections": {

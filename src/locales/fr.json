@@ -315,7 +315,14 @@
     "importMode": "Mode d'importation",
     "importModeCopy": "Copier dans la biblioth\u00e8que",
     "importModeLink": "Lier au fichier original",
-    "importModeHelp": "Les livres copi\u00e9s sont autonomes. Les livres li\u00e9s \u00e9conomisent de l'espace disque mais n\u00e9cessitent que le fichier original reste accessible."
+    "importModeHelp": "Les livres copi\u00e9s sont autonomes. Les livres li\u00e9s \u00e9conomisent de l'espace disque mais n\u00e9cessitent que le fichier original reste accessible.",
+    "pageCacheSection": "Cache des pages",
+    "pageCacheLimit": "Limite de taille du cache",
+    "pageCacheLimitHelp": "Espace disque maximal pour les pages de BD en cache. Les livres les plus anciens sont supprim\u00e9s lorsque la limite est d\u00e9pass\u00e9e.",
+    "pageCacheUsage": "Utilisation : {{size}} ({{count}} livres)",
+    "pageCacheUsageEmpty": "Le cache est vide",
+    "clearPageCache": "Vider le cache",
+    "clearPageCacheConfirm": "Cache vid\u00e9"
   },
 
   "collections": {
