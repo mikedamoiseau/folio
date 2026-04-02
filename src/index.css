@@ -111,6 +111,13 @@
   to   { opacity: 1; transform: translateY(0); }
 }
 
+/* ── Form focus enhancement ─────────────────────────────────── */
+/* Adds a subtle accent glow ring alongside the border change  */
+
+input:focus, select:focus, textarea:focus {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 20%, transparent);
+}
+
 /* ── Global base ────────────────────────────────────────────── */
 
 html, body, #root {

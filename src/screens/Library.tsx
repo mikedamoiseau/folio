@@ -556,7 +556,7 @@ export default function Library() {
           <select
             value={filterFormat}
             onChange={(e) => setFilterFormat(e.target.value)}
-            className="shrink-0 h-9 px-2 bg-warm-subtle rounded-lg text-xs text-ink border border-transparent focus:border-accent/40 focus:outline-none"
+            className="shrink-0 h-9 px-2 bg-warm-subtle rounded-lg text-xs text-ink border border-transparent focus:border-accent focus:outline-none"
             aria-label={t("library.filterByFormat")}
           >
             <option value="all">{t("library.allFormats")}</option>
@@ -570,7 +570,7 @@ export default function Library() {
           <select
             value={filterStatus}
             onChange={(e) => setFilterStatus(e.target.value)}
-            className="shrink-0 h-9 px-2 bg-warm-subtle rounded-lg text-xs text-ink border border-transparent focus:border-accent/40 focus:outline-none"
+            className="shrink-0 h-9 px-2 bg-warm-subtle rounded-lg text-xs text-ink border border-transparent focus:border-accent focus:outline-none"
             aria-label={t("library.filterByStatus")}
           >
             <option value="all">{t("library.allStatus")}</option>
@@ -583,7 +583,7 @@ export default function Library() {
           <select
             value={filterRating}
             onChange={(e) => setFilterRating(e.target.value)}
-            className="shrink-0 h-9 px-2 bg-warm-subtle rounded-lg text-xs text-ink border border-transparent focus:border-accent/40 focus:outline-none"
+            className="shrink-0 h-9 px-2 bg-warm-subtle rounded-lg text-xs text-ink border border-transparent focus:border-accent focus:outline-none"
             aria-label={t("library.filterByRating")}
           >
             <option value="all">{t("library.allRatings")}</option>
@@ -598,7 +598,7 @@ export default function Library() {
           <select
             value={filterSource}
             onChange={(e) => setFilterSource(e.target.value)}
-            className="shrink-0 h-9 px-2 bg-warm-subtle rounded-lg text-xs text-ink border border-transparent focus:border-accent/40 focus:outline-none"
+            className="shrink-0 h-9 px-2 bg-warm-subtle rounded-lg text-xs text-ink border border-transparent focus:border-accent focus:outline-none"
             aria-label={t("library.filterBySource")}
           >
             <option value="all">{t("library.allBooks")}</option>
