@@ -8,6 +8,7 @@ pub mod epub;
 pub mod models;
 pub mod opds;
 pub mod openlibrary;
+pub mod page_cache;
 pub mod pdf;
 pub mod providers;
 
