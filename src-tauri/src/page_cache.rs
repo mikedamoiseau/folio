@@ -3,9 +3,27 @@ use std::collections::HashMap;
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 use zip::ZipArchive;
 
 use crate::models::BookFormat;
+
+/// Enable with: FOLIO_DEBUG_PAGES=1
+/// Prints to stderr so it shows in the terminal running `npm run tauri dev`.
+pub fn page_debug_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var("FOLIO_DEBUG_PAGES").unwrap_or_default() == "1")
+}
+
+macro_rules! page_dbg {
+    ($($arg:tt)*) => {
+        if $crate::page_cache::page_debug_enabled() {
+            eprintln!("[page-load] {}", format!($($arg)*));
+        }
+    };
+}
+
+pub(crate) use page_dbg;
 
 const MAX_CACHED_BOOKS: usize = 5;
 pub const DEFAULT_MAX_CACHE_SIZE_MB: u64 = 500;
@@ -300,23 +318,23 @@ pub fn ensure_cached(
         let last_ok = manifest.pages.last().is_some_and(|p| dir.join(p).exists());
 
         if first_ok && last_ok {
-            log::debug!("[page-load] ensure_cached: cache hit for {book_hash} ({} pages)", manifest.page_count);
+            page_dbg!("ensure_cached: cache hit for {} ({} pages)", book_hash, manifest.page_count);
             manifest.last_accessed = now_iso();
             let _ = write_manifest(app_cache_dir, book_hash, &manifest);
             return Ok(manifest);
         }
-        log::debug!("[page-load] ensure_cached: cache corrupted for {book_hash}, re-extracting");
+        page_dbg!("ensure_cached: cache corrupted for {}, re-extracting", book_hash);
         let _ = fs::remove_dir_all(book_cache_dir(app_cache_dir, book_hash));
     }
 
-    log::debug!("[page-load] ensure_cached: extracting {format:?} {book_hash}");
+    page_dbg!("ensure_cached: extracting {:?} {}", format, book_hash);
     let start = std::time::Instant::now();
     let result = match format {
         BookFormat::Cbz => extract_cbz(app_cache_dir, book_id, book_hash, file_path),
         BookFormat::Cbr => extract_cbr(app_cache_dir, book_id, book_hash, file_path),
         _ => Err(format!("Page cache not supported for format: {:?}", format)),
     };
-    log::debug!("[page-load] ensure_cached: extraction took {:?}", start.elapsed());
+    page_dbg!("ensure_cached: extraction took {:?}", start.elapsed());
     result
 }
 

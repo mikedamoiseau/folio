@@ -10,9 +10,11 @@ const ZOOM_STEP = 0.25;
 
 // Enable with: localStorage.setItem("folio-debug-pages", "1")
 // Disable with: localStorage.removeItem("folio-debug-pages")
-const pageDebug = typeof window !== "undefined" && localStorage.getItem("folio-debug-pages") === "1";
+// Takes effect immediately — no reload needed.
 function dbg(...args: unknown[]) {
-  if (pageDebug) console.debug("[page-load]", ...args);
+  if (localStorage.getItem("folio-debug-pages") === "1") {
+    console.warn("[page-load]", ...args);
+  }
 }
 
 interface PageViewerProps {

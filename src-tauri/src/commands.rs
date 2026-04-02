@@ -1224,7 +1224,7 @@ pub async fn get_comic_page(
     app: AppHandle,
 ) -> Result<String, String> {
     let start = std::time::Instant::now();
-    log::debug!("[page-load] get_comic_page called: book={book_id} page={page_index}");
+    page_cache::page_dbg!("get_comic_page called: book={} page={}", book_id, page_index);
 
     let book = {
         let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
@@ -1232,7 +1232,7 @@ pub async fn get_comic_page(
             .map_err(|e| e.to_string())?
             .ok_or_else(|| format!("Book '{book_id}' not found"))?
     };
-    log::debug!("[page-load] DB lookup: {:?}", start.elapsed());
+    page_cache::page_dbg!("DB lookup: {:?}", start.elapsed());
 
     validate_file_exists(&book.file_path)?;
 
@@ -1244,21 +1244,21 @@ pub async fn get_comic_page(
             {
                 use base64::{engine::general_purpose, Engine as _};
                 let encoded = general_purpose::STANDARD.encode(&data);
-                log::debug!(
-                    "[page-load] cache HIT: page={page_index} read={:?} encode={:?} size={}KB total={:?}",
+                page_cache::page_dbg!(
+                    "cache HIT: page={} read={:?} size={}KB total={:?}",
+                    page_index,
                     cache_start.elapsed(),
-                    start.elapsed(),
                     data.len() / 1024,
                     start.elapsed()
                 );
                 return Ok(format!("data:{mime};base64,{encoded}"));
             }
-            log::debug!("[page-load] cache MISS: page={page_index} checked in {:?}", cache_start.elapsed());
+            page_cache::page_dbg!("cache MISS: page={} checked in {:?}", page_index, cache_start.elapsed());
         }
     }
 
     // Fallback to direct archive read
-    log::debug!("[page-load] falling back to archive read: format={:?}", book.format);
+    page_cache::page_dbg!("falling back to archive read: format={:?}", book.format);
     let result = match book.format {
         BookFormat::Cbz => cbz::get_page_image(&book.file_path, page_index),
         BookFormat::Cbr => cbr::get_page_image(&book.file_path, page_index),
@@ -1267,7 +1267,7 @@ pub async fn get_comic_page(
             book.format
         )),
     };
-    log::debug!("[page-load] archive read done: page={page_index} ok={} total={:?}", result.is_ok(), start.elapsed());
+    page_cache::page_dbg!("archive read done: page={} ok={} total={:?}", page_index, result.is_ok(), start.elapsed());
     result
 }
 
@@ -1303,7 +1303,7 @@ pub async fn prepare_comic(
         .map_err(|e| format!("Failed to get cache dir: {e}"))?;
 
     let prep_start = std::time::Instant::now();
-    log::debug!("[page-load] prepare_comic: book={book_id} format={:?} hash={book_hash}", book.format);
+    page_cache::page_dbg!("prepare_comic: book={} format={:?} hash={}", book_id, book.format, book_hash);
     let manifest = page_cache::ensure_cached(
         &cache_dir,
         &book_id,
@@ -1311,8 +1311,8 @@ pub async fn prepare_comic(
         &book.file_path,
         &book.format,
     )?;
-    log::debug!(
-        "[page-load] prepare_comic done: pages={} size={}KB elapsed={:?}",
+    page_cache::page_dbg!(
+        "prepare_comic done: pages={} size={}KB elapsed={:?}",
         manifest.page_count,
         manifest.total_size_bytes / 1024,
         prep_start.elapsed()
