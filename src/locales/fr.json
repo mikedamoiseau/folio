@@ -137,7 +137,9 @@
     "continuousDescription": "D\u00e9filez \u00e0 travers tous les chapitres d\u2019un seul flux. Les gros livres peuvent prendre un moment \u00e0 charger.",
     "missingFileTitle": "Fichier introuvable",
     "missingFileMessage": "Le fichier de ce livre est introuvable. Il a peut-\u00eatre \u00e9t\u00e9 d\u00e9plac\u00e9 ou supprim\u00e9.",
-    "removeFromLibrary": "Retirer de la biblioth\u00e8que"
+    "removeFromLibrary": "Retirer de la biblioth\u00e8que",
+    "preparingPages": "Pr\u00e9paration des pages...",
+    "preparingPagesDetail": "Extraction des pages pour une lecture plus rapide"
   },
 
   "import": {

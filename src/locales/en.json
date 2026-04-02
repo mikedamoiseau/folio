@@ -137,7 +137,9 @@
     "continuousDescription": "Scroll through all chapters in one continuous flow. Large books may take a moment to load.",
     "missingFileTitle": "File Not Found",
     "missingFileMessage": "This book\u2019s file could not be found. It may have been moved or deleted.",
-    "removeFromLibrary": "Remove from library"
+    "removeFromLibrary": "Remove from library",
+    "preparingPages": "Preparing pages...",
+    "preparingPagesDetail": "Extracting pages for faster reading"
   },
 
   "import": {

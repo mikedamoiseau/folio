@@ -134,6 +134,14 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
           if (!cancelled) setToc(tocEntries);
         }
 
+        if (bookInfo.format === "cbz" || bookInfo.format === "cbr") {
+          try {
+            await invoke("prepare_comic", { bookId });
+          } catch (e) {
+            console.warn("Cache preparation failed, falling back to direct read:", e);
+          }
+        }
+
         if (bookInfo.format !== "epub") {
           try {
             const command =
