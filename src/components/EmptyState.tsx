@@ -10,14 +10,14 @@ export default function EmptyState({ onImport, onImportFolder, onBrowseCatalogs 
   const { t } = useTranslation();
   return (
     <div className="flex flex-col items-center justify-center h-full max-w-xs mx-auto text-center gap-0">
-      {/* Book stack illustration */}
+      {/* Book stack illustration — staggered entrance */}
       <div className="mb-8 relative w-28 h-28 flex items-end justify-center">
         {/* Back book */}
-        <div className="absolute bottom-0 left-3 w-16 h-20 rounded-sm bg-warm-subtle border border-warm-border shadow-sm rotate-[-8deg] origin-bottom" />
+        <div className="absolute bottom-0 left-3 w-16 h-20 rounded-sm bg-warm-subtle border border-warm-border shadow-sm rotate-[-8deg] origin-bottom" style={{ animation: "empty-book-in 0.4s cubic-bezier(0.22, 1, 0.36, 1) 0.1s both" }} />
         {/* Middle book */}
-        <div className="absolute bottom-0 left-6 w-16 h-[72px] rounded-sm bg-warm-border shadow-sm rotate-[3deg] origin-bottom" />
+        <div className="absolute bottom-0 left-6 w-16 h-[72px] rounded-sm bg-warm-border shadow-sm rotate-[3deg] origin-bottom" style={{ animation: "empty-book-in 0.4s cubic-bezier(0.22, 1, 0.36, 1) 0.25s both" }} />
         {/* Front book */}
-        <div className="relative w-16 h-[84px] rounded-sm bg-accent-light border border-accent/30 shadow-md flex flex-col items-center justify-center gap-2">
+        <div className="relative w-16 h-[84px] rounded-sm bg-accent-light border border-accent/30 shadow-md flex flex-col items-center justify-center gap-2" style={{ animation: "empty-book-in 0.4s cubic-bezier(0.22, 1, 0.36, 1) 0.4s both" }}>
           <div className="w-8 h-px bg-accent/40 rounded" />
           <div className="w-6 h-px bg-accent/30 rounded" />
           <div className="w-8 h-px bg-accent/40 rounded" />
@@ -39,14 +39,14 @@ export default function EmptyState({ onImport, onImportFolder, onBrowseCatalogs 
         </div>
       </div>
 
-      <h2 className="font-serif text-2xl font-semibold text-ink mb-2">
+      <h2 className="font-serif text-2xl font-semibold text-ink mb-2" style={{ animation: "fade-in 0.3s ease 0.55s both" }}>
         {t("empty.title")}
       </h2>
-      <p className="text-sm text-ink-muted mb-7 leading-relaxed">
+      <p className="text-sm text-ink-muted mb-7 leading-relaxed" style={{ animation: "fade-in 0.3s ease 0.65s both" }}>
         {t("empty.subtitle")}
       </p>
 
-      <div className="flex items-center gap-3">
+      <div className="flex items-center gap-3" style={{ animation: "fade-in 0.3s ease 0.75s both" }}>
         <button
           type="button"
           onClick={onImport}
