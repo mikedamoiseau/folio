@@ -284,7 +284,7 @@ function DeleteConfirmModal({ title, onConfirm, onCancel }: { title: string; onC
 
   return (
     <>
-      <div className="fixed inset-0 bg-ink/40 z-[80]" onClick={onCancel} aria-hidden="true" />
+      <div className="fixed inset-0 bg-ink/40 backdrop-blur-sm z-[80]" onClick={onCancel} aria-hidden="true" />
       <div className="fixed inset-0 z-[90] flex items-center justify-center p-4">
         <div
           role="alertdialog"

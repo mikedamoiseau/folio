@@ -965,7 +965,7 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
         </button>
         {missingFileDialog && (
           <>
-            <div className="fixed inset-0 bg-ink/40 z-[80]" aria-hidden="true" />
+            <div className="fixed inset-0 bg-ink/40 backdrop-blur-sm z-[80]" aria-hidden="true" />
             <div
               role="dialog"
               aria-label={t("reader.missingFileTitle")}
@@ -1072,7 +1072,7 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
         <>
           {/* Backdrop */}
           <div
-            className="fixed inset-0 bg-ink/20 z-10 animate-fade-in"
+            className="fixed inset-0 bg-ink/20 backdrop-blur-sm z-10 animate-fade-in"
             onClick={() => setTocOpen(false)}
           />
           {/* Sidebar */}
@@ -1639,7 +1639,7 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
         )}
       {missingFileDialog && (
         <>
-          <div className="fixed inset-0 bg-ink/40 z-[80]" aria-hidden="true" />
+          <div className="fixed inset-0 bg-ink/40 backdrop-blur-sm z-[80]" aria-hidden="true" />
           <div
             role="dialog"
             aria-label={t("reader.missingFileTitle")}

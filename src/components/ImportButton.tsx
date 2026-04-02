@@ -146,7 +146,7 @@ export default function ImportButton({
       {urlDialogOpen && (
         <>
           <div
-            className="fixed inset-0 bg-ink/20 z-40 animate-fade-in"
+            className="fixed inset-0 bg-ink/20 backdrop-blur-sm z-40 animate-fade-in"
             onClick={() => setUrlDialogOpen(false)}
           />
           <div className="fixed top-1/3 left-1/2 -translate-x-1/2 w-[420px] max-w-[90vw] bg-surface border border-warm-border rounded-2xl shadow-xl z-50 p-6 animate-fade-in">

@@ -1267,7 +1267,7 @@ export default function Library() {
         }}
       />
       {importing && (
-        <div className="fixed inset-0 bg-black/20 flex items-center justify-center z-50">
+        <div className="fixed inset-0 bg-ink/20 backdrop-blur-sm flex items-center justify-center z-50">
           <div className="bg-white dark:bg-gray-800 rounded-lg p-6 shadow-lg flex flex-col items-center gap-3">
             <div className="animate-spin h-8 w-8 border-2 border-blue-500 border-t-transparent rounded-full" />
             <p className="text-sm text-gray-600 dark:text-gray-300">{t("import.importing")}</p>

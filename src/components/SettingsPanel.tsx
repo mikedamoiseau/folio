@@ -732,7 +732,7 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
     <>
       {/* Backdrop */}
       <div
-        className="fixed inset-0 bg-ink/20 z-40"
+        className="fixed inset-0 bg-ink/20 backdrop-blur-sm z-40"
         onClick={onClose}
         aria-hidden="true"
       />
@@ -1536,7 +1536,7 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
       {migrationDialog && (
         <>
           <div
-            className="fixed inset-0 bg-ink/40 z-[60]"
+            className="fixed inset-0 bg-ink/40 backdrop-blur-sm z-[60]"
             onClick={handleCancelMigration}
             aria-hidden="true"
           />
@@ -1638,7 +1638,7 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
       {cleanupState !== "idle" && (
         <>
           <div
-            className="fixed inset-0 bg-ink/40 z-[60]"
+            className="fixed inset-0 bg-ink/40 backdrop-blur-sm z-[60]"
             onClick={() => cleanupState !== "scanning" && setCleanupState("idle")}
             aria-hidden="true"
           />
@@ -1716,7 +1716,7 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
       {restoreModalOpen && !restoreConfirmPath && (
         <>
           <div
-            className="fixed inset-0 bg-ink/40 z-[60]"
+            className="fixed inset-0 bg-ink/40 backdrop-blur-sm z-[60]"
             onClick={() => !restoring && setRestoreModalOpen(false)}
             aria-hidden="true"
           />
@@ -1788,7 +1788,7 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
 
       {restoreConfirmPath && (
         <>
-          <div className="fixed inset-0 bg-ink/40 z-[80]" aria-hidden="true" />
+          <div className="fixed inset-0 bg-ink/40 backdrop-blur-sm z-[80]" aria-hidden="true" />
           <div
             role="dialog"
             aria-label={t("settings.restoreTitle")}
