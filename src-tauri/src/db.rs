@@ -1260,16 +1260,10 @@ pub fn get_activity_log(
 }
 
 pub fn prune_activity_log(conn: &Connection, keep: u32) -> Result<()> {
-    // Count-based: keep the most recent N entries
-    conn.execute(
-        "DELETE FROM activity_log WHERE id NOT IN (SELECT id FROM activity_log ORDER BY timestamp DESC LIMIT ?1)",
-        params![keep],
-    )?;
-    // Age-based: remove entries older than 90 days
     let cutoff = chrono::Utc::now().timestamp() - 90 * 24 * 60 * 60;
     conn.execute(
-        "DELETE FROM activity_log WHERE timestamp < ?1",
-        params![cutoff],
+        "DELETE FROM activity_log WHERE id NOT IN (SELECT id FROM activity_log ORDER BY timestamp DESC LIMIT ?1) AND timestamp < ?2",
+        params![keep, cutoff],
     )?;
     Ok(())
 }
@@ -1803,7 +1797,19 @@ mod tests {
     fn test_activity_log_pruning() {
         let (_dir, conn) = setup();
         let now = chrono::Utc::now().timestamp();
-        for i in 0..5 {
+        // 2 old entries (>90 days) that will fall outside top 3
+        insert_activity(
+            &conn,
+            &sample_activity("act-p0", "import", now - 100 * 86400),
+        )
+        .unwrap();
+        insert_activity(
+            &conn,
+            &sample_activity("act-p1", "import", now - 95 * 86400),
+        )
+        .unwrap();
+        // 3 recent entries that will be in the top 3
+        for i in 2..5 {
             insert_activity(
                 &conn,
                 &sample_activity(&format!("act-p{i}"), "import", now - 60 + i as i64),
@@ -1847,8 +1853,8 @@ mod tests {
         )
         .unwrap();
 
-        // Keep all 4 by count, but age-based should remove old ones
-        prune_activity_log(&conn, 100).unwrap();
+        // keep=2 means old entries outside top 2 AND older than 90 days are pruned
+        prune_activity_log(&conn, 2).unwrap();
 
         let results = get_activity_log(&conn, 100, 0, None).unwrap();
         assert_eq!(results.len(), 2);

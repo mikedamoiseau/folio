@@ -170,8 +170,7 @@ fn parse_feed(xml: &str, base_url: &str) -> Result<OpdsFeed, String> {
                 return resolved.to_string();
             }
         }
-        // Fallback: return as-is if base URL couldn't be parsed
-        href.to_string()
+        String::new()
     };
 
     let mut buf = Vec::new();

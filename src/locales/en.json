@@ -109,6 +109,7 @@
     "prevMatch": "Previous match",
     "nextMatch": "Next match",
     "searchMinChars": "Type at least 2 characters",
+    "searchNavHint": "Enter = next, Shift+Enter = previous",
     "noMatchesFor": "No matches found for \u201c{{query}}\u201d",
     "resultsCapped": "Results capped at 200. Try a more specific query.",
     "timeLeft": "{{time}} left",

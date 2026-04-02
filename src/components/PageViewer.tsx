@@ -48,6 +48,7 @@ export default function PageViewer({
 
   // Zoom & pan state — restore persisted zoom level per book
   const zoomStorageKey = `folio-zoom-${bookId}`;
+  const zoomPersistTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
   const [zoom, setZoomState] = useState(() => {
     const stored = localStorage.getItem(zoomStorageKey);
     if (stored) {
@@ -56,12 +57,30 @@ export default function PageViewer({
     }
     return 1;
   });
+  const [zoomRestored, setZoomRestored] = useState(() => {
+    const stored = localStorage.getItem(zoomStorageKey);
+    if (stored) {
+      const parsed = parseFloat(stored);
+      return !isNaN(parsed) && parsed >= MIN_ZOOM && parsed <= MAX_ZOOM && parsed !== 1;
+    }
+    return false;
+  });
+  // Auto-hide zoom-restored indicator after 2s
+  useEffect(() => {
+    if (!zoomRestored) return;
+    const t = setTimeout(() => setZoomRestored(false), 2000);
+    return () => clearTimeout(t);
+  }, [zoomRestored]);
   const setZoom = useCallback((value: number | ((prev: number) => number)) => {
     setZoomState((prev) => {
       const next = typeof value === "function" ? value(prev) : value;
-      localStorage.setItem(zoomStorageKey, String(next));
+      clearTimeout(zoomPersistTimer.current);
+      zoomPersistTimer.current = setTimeout(() => {
+        localStorage.setItem(zoomStorageKey, String(next));
+      }, 500);
       return next;
     });
+    setZoomRestored(false);
   }, [zoomStorageKey]);
   const panRef = useRef({ x: 0, y: 0 });
   const isPanning = useRef(false);
@@ -526,7 +545,7 @@ export default function PageViewer({
           </button>
           <button
             onClick={zoomReset}
-            className={`px-2 h-7 text-[11px] tabular-nums rounded-lg transition-colors ${zoom !== 1 ? "text-accent bg-accent-light hover:bg-accent-light/80 font-medium" : "text-ink-muted bg-warm-subtle"}`}
+            className={`px-2 h-7 text-[11px] tabular-nums rounded-lg transition-colors ${zoom !== 1 ? "text-accent bg-accent-light hover:bg-accent-light/80 font-medium" : "text-ink-muted bg-warm-subtle"} ${zoomRestored ? "animate-fade-in ring-1 ring-accent" : ""}`}
             title="Reset zoom"
           >
             {Math.round(zoom * 100)}%

@@ -1095,7 +1095,7 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
               className="flex-1 overflow-y-auto py-2"
               aria-label="Table of contents"
             >
-              {toc.map((entry) => (
+              {toc.length > 0 ? toc.map((entry) => (
                 <TocItem
                   key={`${entry.chapter_index}-${entry.label}`}
                   entry={entry}
@@ -1103,7 +1103,15 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
                   onSelect={goToChapter}
                   depth={0}
                 />
-              ))}
+              )) : (
+                <div className="px-5 py-2 space-y-3">
+                  {Array.from({ length: 8 }, (_, i) => (
+                    <div key={i} className="flex flex-col gap-1.5">
+                      <div className="h-3 rounded bg-warm-subtle animate-shimmer" style={{ width: `${60 + (i * 7) % 30}%` }} />
+                    </div>
+                  ))}
+                </div>
+              )}
             </nav>
           </aside>
         </>
@@ -1319,10 +1327,10 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
                 <span className="text-xs text-ink-muted tabular-nums">
                   {t("reader.matchNav", { current: activeMatchIndex + 1, total: searchResults.length })}
                 </span>
-                <button type="button" onClick={prevMatch} className="p-0.5 text-ink-muted hover:text-ink transition-colors" aria-label={t("reader.prevMatch")}>
+                <button type="button" onClick={prevMatch} className="p-0.5 text-ink-muted hover:text-ink transition-colors" aria-label={t("reader.prevMatch")} title={t("reader.searchNavHint")}>
                   <svg width="14" height="14" viewBox="0 0 20 20" fill="none"><path d="M12 15l-5-5 5-5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" /></svg>
                 </button>
-                <button type="button" onClick={nextMatch} className="p-0.5 text-ink-muted hover:text-ink transition-colors" aria-label={t("reader.nextMatch")}>
+                <button type="button" onClick={nextMatch} className="p-0.5 text-ink-muted hover:text-ink transition-colors" aria-label={t("reader.nextMatch")} title={t("reader.searchNavHint")}>
                   <svg width="14" height="14" viewBox="0 0 20 20" fill="none"><path d="M8 5l5 5-5 5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" /></svg>
                 </button>
               </div>
@@ -1372,6 +1380,15 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
                 {t("reader.resultsCapped")}
               </div>
             )}
+          </div>
+        )}
+
+        {/* Screen reader announcement for search state */}
+        {searchOpen && (
+          <div aria-live="polite" aria-atomic="true" className="sr-only">
+            {searching && t("reader.searchingText")}
+            {!searching && searchResults.length > 0 && t("reader.matchNav", { current: activeMatchIndex + 1, total: searchResults.length })}
+            {!searching && searchQuery.trim().length >= 2 && searchResults.length === 0 && t("reader.noMatchesFor", { query: searchQuery.trim() })}
           </div>
         )}
 
