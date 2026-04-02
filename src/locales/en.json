@@ -99,6 +99,7 @@
     "loadingPages": "Loading pages\u2026",
     "loadingPage": "Loading page\u2026",
     "failedToLoadPage": "Failed to load page: {{error}}",
+    "pageLoadSlow": "This page is taking longer than usual\u2026",
     "pageLoadTimeout": "Page took too long to load. Try again?",
     "retryLoadPage": "Retry",
     "loadingChapters": "Loading {{count}} chapters\u2026",

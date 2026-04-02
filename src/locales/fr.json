@@ -99,6 +99,7 @@
     "loadingPages": "Chargement des pages\u2026",
     "loadingPage": "Chargement de la page\u2026",
     "failedToLoadPage": "\u00c9chec du chargement de la page : {{error}}",
+    "pageLoadSlow": "Cette page prend plus de temps que pr\u00e9vu\u2026",
     "pageLoadTimeout": "Le chargement de la page a pris trop de temps. R\u00e9essayer ?",
     "retryLoadPage": "R\u00e9essayer",
     "loadingChapters": "Chargement de {{count}} chapitres\u2026",

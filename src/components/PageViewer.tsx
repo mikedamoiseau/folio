@@ -226,12 +226,18 @@ export default function PageViewer({
       }
     }
 
+    // Show "taking longer than expected" after 8s while still waiting
+    let slowTimerId: ReturnType<typeof setTimeout> | undefined;
+
     const loadSpread = async () => {
       dbg(`loadSpread: left=${spread.left} right=${spread.right} retry=${retryCount}`);
       const t0 = performance.now();
+      slowTimerId = setTimeout(() => {
+        if (!cancelled) setError(t("reader.pageLoadSlow"));
+      }, 8000);
       try {
         const timeout = new Promise<never>((_, reject) => {
-          timeoutId = setTimeout(() => reject(new Error("timeout")), 15000);
+          timeoutId = setTimeout(() => reject(new Error("timeout")), 30000);
         });
         const promises: Promise<string>[] = [loadPageCached(spread.left, pdfRenderWidth)];
         if (spread.right !== null) {
@@ -239,8 +245,10 @@ export default function PageViewer({
         }
         const results = await Promise.race([Promise.all(promises), timeout]);
         clearTimeout(timeoutId);
+        clearTimeout(slowTimerId);
         dbg(`loadSpread complete in ${(performance.now() - t0).toFixed(0)}ms`);
         if (cancelled) return;
+        setError(null);
         setLeftImageData(results[0]);
         setRightImageData(results.length > 1 ? results[1] : null);
         // Slide in after new images are set
@@ -249,6 +257,7 @@ export default function PageViewer({
         });
       } catch (err) {
         clearTimeout(timeoutId);
+        clearTimeout(slowTimerId);
         dbg(`loadSpread FAILED after ${(performance.now() - t0).toFixed(0)}ms:`, err);
         if (!cancelled) {
           const msg = err instanceof Error && err.message === "timeout"
@@ -265,6 +274,7 @@ export default function PageViewer({
     return () => {
       cancelled = true;
       clearTimeout(timeoutId);
+      clearTimeout(slowTimerId);
       if (rafId !== undefined) cancelAnimationFrame(rafId);
     };
   }, [spread.left, spread.right, loadPageCached, pdfRenderWidth, retryCount]);
@@ -513,9 +523,14 @@ export default function PageViewer({
         onMouseLeave={handleMouseUp}
       >
         {loading ? (
-          <div className="absolute inset-0 flex items-center justify-center gap-2">
-            <div className="w-5 h-5 border-2 border-accent/30 border-t-accent rounded-full animate-spin" />
-            <span className="text-sm text-ink-muted">{t("reader.loadingPage")}</span>
+          <div className="absolute inset-0 flex flex-col items-center justify-center gap-2">
+            <div className="flex items-center gap-2">
+              <div className="w-5 h-5 border-2 border-accent/30 border-t-accent rounded-full animate-spin" />
+              <span className="text-sm text-ink-muted">{t("reader.loadingPage")}</span>
+            </div>
+            {error && (
+              <span className="text-xs text-ink-muted/70 animate-fade-in">{error}</span>
+            )}
           </div>
         ) : error ? (
           <div className="absolute inset-0 flex flex-col items-center justify-center gap-3">
