@@ -296,6 +296,10 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
   // Import mode setting
   const [importMode, setImportMode] = useState<string>("import");
 
+  // Page cache settings
+  const [pageCacheLimit, setPageCacheLimit] = useState("500");
+  const [cacheStats, setCacheStats] = useState<{ total_size_bytes: number; book_count: number } | null>(null);
+
   // Metadata scan settings
   const [autoScanImport, setAutoScanImport] = useState(true);
   const [autoScanStartup, setAutoScanStartup] = useState(false);
@@ -400,6 +404,17 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
     }
   }, []);
 
+  const loadCacheInfo = useCallback(async () => {
+    try {
+      const limit = await invoke<string | null>("get_setting_value", { key: "page_cache_max_size_mb" });
+      if (limit) setPageCacheLimit(limit);
+      const stats = await invoke<{ total_size_bytes: number; book_count: number }>("get_cache_stats");
+      setCacheStats(stats);
+    } catch {
+      // Cache stats unavailable
+    }
+  }, []);
+
   const loadBackupSettings = useCallback(async () => {
     try {
       const providers = await invoke<ProviderInfo[]>("get_backup_providers");
@@ -431,6 +446,7 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
       loadLibraryFolder();
       loadBackupSettings();
       loadProviders();
+      loadCacheInfo();
       (async () => {
         const scanImport = await invoke<string | null>("get_setting_value", { key: "auto_scan_import" });
         setAutoScanImport(scanImport !== "false");
@@ -440,7 +456,7 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
         if (importModeVal) setImportMode(importModeVal);
       })().catch(() => {});
     }
-  }, [open, loadLibraryFolder, loadBackupSettings, loadProviders]);
+  }, [open, loadLibraryFolder, loadBackupSettings, loadProviders, loadCacheInfo]);
 
   useEffect(() => {
     if (!open) return;
@@ -484,6 +500,24 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
       previousFocus.current?.focus();
     };
   }, [open, onClose, migrationDialog]);
+
+  const handleCacheLimitChange = useCallback(async (value: string) => {
+    setPageCacheLimit(value);
+    try {
+      await invoke("set_setting_value", { key: "page_cache_max_size_mb", value });
+    } catch {
+      // Setting save failed
+    }
+  }, []);
+
+  const handleClearCache = useCallback(async () => {
+    try {
+      await invoke("clear_page_cache");
+      setCacheStats({ total_size_bytes: 0, book_count: 0 });
+    } catch {
+      // Clear failed
+    }
+  }, []);
 
   const handleChangeFolder = async () => {
     try {
@@ -1166,6 +1200,44 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                   ))}
                 </div>
                 <p className="mt-2 text-xs text-ink-muted">{t("settings.importModeHelp")}</p>
+              </div>
+
+              {/* Page Cache */}
+              <div className="mt-3 pt-3 border-t border-warm-border/50">
+                <label className="text-xs font-medium text-ink-muted mb-2 block">{t("settings.pageCacheSection")}</label>
+
+                <label className="block text-xs text-ink-muted mb-1">
+                  {t("settings.pageCacheLimit")}
+                </label>
+                <select
+                  value={pageCacheLimit}
+                  onChange={(e) => handleCacheLimitChange(e.target.value)}
+                  className="w-full rounded-xl border border-warm-border bg-warm-subtle px-3 py-2 text-sm text-ink"
+                >
+                  <option value="250">250 MB</option>
+                  <option value="500">500 MB</option>
+                  <option value="1024">1 GB</option>
+                  <option value="2048">2 GB</option>
+                </select>
+                <p className="mt-1 text-xs text-ink-muted">{t("settings.pageCacheLimitHelp")}</p>
+
+                <div className="mt-2 text-sm text-ink-muted">
+                  {cacheStats && cacheStats.book_count > 0
+                    ? t("settings.pageCacheUsage", {
+                        size: formatBytes(cacheStats.total_size_bytes),
+                        count: cacheStats.book_count,
+                      })
+                    : t("settings.pageCacheUsageEmpty")}
+                </div>
+
+                {cacheStats && cacheStats.book_count > 0 && (
+                  <button
+                    onClick={handleClearCache}
+                    className="w-full mt-2 px-3 py-2 text-sm text-ink-muted hover:text-ink bg-warm-subtle hover:bg-warm-border rounded-xl transition-colors text-left"
+                  >
+                    {t("settings.clearPageCache")}
+                  </button>
+                )}
               </div>
             </div>
           </Accordion>

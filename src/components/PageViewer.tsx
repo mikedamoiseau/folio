@@ -8,6 +8,15 @@ const MIN_ZOOM = 0.5;
 const MAX_ZOOM = 4;
 const ZOOM_STEP = 0.25;
 
+// Enable with: localStorage.setItem("folio-debug-pages", "1")
+// Disable with: localStorage.removeItem("folio-debug-pages")
+// Takes effect immediately — no reload needed.
+function dbg(...args: unknown[]) {
+  if (localStorage.getItem("folio-debug-pages") === "1") {
+    console.warn("[page-load]", ...args);
+  }
+}
+
 interface PageViewerProps {
   bookId: string;
   format: "cbz" | "cbr" | "pdf";
@@ -45,6 +54,7 @@ export default function PageViewer({
   const [rightImageData, setRightImageData] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [retryCount, setRetryCount] = useState(0);
 
   // Zoom & pan state — restore persisted zoom level per book
   const zoomStorageKey = `folio-zoom-${bookId}`;
@@ -144,7 +154,10 @@ export default function PageViewer({
       if (isPdf && renderWidth) {
         params.width = renderWidth;
       }
+      dbg(`invoke ${command} page=${index}`, renderWidth ? `width=${renderWidth}` : "");
+      const t0 = performance.now();
       const data = await invoke<string>(command, params);
+      dbg(`invoke ${command} page=${index} done in ${(performance.now() - t0).toFixed(0)}ms size=${(data.length / 1024).toFixed(0)}KB`);
       return data;
     },
     [bookId, isPdf]
@@ -154,41 +167,88 @@ export default function PageViewer({
   const dpr = typeof window !== "undefined" ? window.devicePixelRatio || 1 : 1;
   const pdfRenderWidth = isPdf ? Math.round(1200 * Math.max(renderZoom, 1) * dpr) : undefined;
 
-  // Page cache: preloaded images keyed by "{pageIndex}:{renderWidth}"
+  // Page cache: resolved images keyed by "{pageIndex}:{renderWidth}"
   const pageCacheRef = useRef<Map<string, string>>(new Map());
+  // In-flight promises: prevents duplicate invokes for the same page
+  const inflightRef = useRef<Map<string, Promise<string>>>(new Map());
 
   const loadPageCached = useCallback(
     async (index: number, renderWidth?: number): Promise<string> => {
       const key = `${index}:${renderWidth ?? 0}`;
       const cached = pageCacheRef.current.get(key);
-      if (cached) return cached;
-      const data = await loadPage(index, renderWidth);
-      pageCacheRef.current.set(key, data);
-      // Keep cache bounded (max 10 entries)
-      if (pageCacheRef.current.size > 10) {
-        const firstKey = pageCacheRef.current.keys().next().value;
-        if (firstKey !== undefined) pageCacheRef.current.delete(firstKey);
+      if (cached) {
+        dbg(`frontend cache HIT page=${index}`);
+        return cached;
       }
-      return data;
+      // Reuse in-flight request if one exists for this key
+      const inflight = inflightRef.current.get(key);
+      if (inflight) {
+        dbg(`frontend cache PENDING page=${index}, reusing in-flight request`);
+        return inflight;
+      }
+      dbg(`frontend cache MISS page=${index}, fetching...`);
+      const promise = loadPage(index, renderWidth).then((data) => {
+        pageCacheRef.current.set(key, data);
+        inflightRef.current.delete(key);
+        // Keep cache bounded (max 10 entries)
+        if (pageCacheRef.current.size > 10) {
+          const firstKey = pageCacheRef.current.keys().next().value;
+          if (firstKey !== undefined) pageCacheRef.current.delete(firstKey);
+        }
+        return data;
+      }).catch((err) => {
+        inflightRef.current.delete(key);
+        throw err;
+      });
+      inflightRef.current.set(key, promise);
+      return promise;
     },
     [loadPage]
   );
 
-  // Load spread (one or two pages in parallel)
+  // Load spread (one or two pages in parallel) with timeout
   useEffect(() => {
     let cancelled = false;
     let rafId: number | undefined;
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
     setLoading(true);
     setError(null);
 
+    // Clear stale in-flight entries for pages we no longer need.
+    // This prevents abandoned renders from blocking the pdfium queue.
+    const keep = new Set<string>();
+    keep.add(`${spread.left}:${pdfRenderWidth ?? 0}`);
+    if (spread.right !== null) keep.add(`${spread.right}:${pdfRenderWidth ?? 0}`);
+    for (const key of inflightRef.current.keys()) {
+      if (!keep.has(key)) {
+        dbg(`clearing stale inflight: ${key}`);
+        inflightRef.current.delete(key);
+      }
+    }
+
+    // Show "taking longer than expected" after 8s while still waiting
+    let slowTimerId: ReturnType<typeof setTimeout> | undefined;
+
     const loadSpread = async () => {
+      dbg(`loadSpread: left=${spread.left} right=${spread.right} retry=${retryCount}`);
+      const t0 = performance.now();
+      slowTimerId = setTimeout(() => {
+        if (!cancelled) setError(t("reader.pageLoadSlow"));
+      }, 8000);
       try {
+        const timeout = new Promise<never>((_, reject) => {
+          timeoutId = setTimeout(() => reject(new Error("timeout")), 30000);
+        });
         const promises: Promise<string>[] = [loadPageCached(spread.left, pdfRenderWidth)];
         if (spread.right !== null) {
           promises.push(loadPageCached(spread.right, pdfRenderWidth));
         }
-        const results = await Promise.all(promises);
+        const results = await Promise.race([Promise.all(promises), timeout]);
+        clearTimeout(timeoutId);
+        clearTimeout(slowTimerId);
+        dbg(`loadSpread complete in ${(performance.now() - t0).toFixed(0)}ms`);
         if (cancelled) return;
+        setError(null);
         setLeftImageData(results[0]);
         setRightImageData(results.length > 1 ? results[1] : null);
         // Slide in after new images are set
@@ -196,7 +256,15 @@ export default function PageViewer({
           if (!cancelled) slideInRef.current();
         });
       } catch (err) {
-        if (!cancelled) setError(friendlyError(String(err), t));
+        clearTimeout(timeoutId);
+        clearTimeout(slowTimerId);
+        dbg(`loadSpread FAILED after ${(performance.now() - t0).toFixed(0)}ms:`, err);
+        if (!cancelled) {
+          const msg = err instanceof Error && err.message === "timeout"
+            ? t("reader.pageLoadTimeout")
+            : friendlyError(String(err), t);
+          setError(msg);
+        }
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -205,37 +273,44 @@ export default function PageViewer({
     loadSpread();
     return () => {
       cancelled = true;
+      clearTimeout(timeoutId);
+      clearTimeout(slowTimerId);
       if (rafId !== undefined) cancelAnimationFrame(rafId);
     };
-  }, [spread.left, spread.right, loadPageCached, pdfRenderWidth]);
+  }, [spread.left, spread.right, loadPageCached, pdfRenderWidth, retryCount]);
 
-  // Preload adjacent spreads in the background after current spread renders
+  // Preload adjacent spreads in the background after current spread renders.
+  // Debounced by 500ms to prevent queue buildup during fast navigation.
   useEffect(() => {
     if (loading) return;
-    const toPreload: number[] = [];
-    if (dualPage) {
-      // Previous spread
-      if (spread.left > 0) {
-        const prevLeft = spread.left <= 2 ? 0 : spread.left - 2;
-        toPreload.push(prevLeft);
-        const { right } = getSpreadPages(prevLeft, totalPages);
-        if (right !== null) toPreload.push(right);
+    const timerId = setTimeout(() => {
+      const toPreload: number[] = [];
+      if (dualPage) {
+        // Previous spread
+        if (spread.left > 0) {
+          const prevLeft = spread.left <= 2 ? 0 : spread.left - 2;
+          toPreload.push(prevLeft);
+          const { right } = getSpreadPages(prevLeft, totalPages);
+          if (right !== null) toPreload.push(right);
+        }
+        // Next spread
+        const nextLeft = spread.right !== null ? spread.right + 1 : spread.left + 1;
+        if (nextLeft < totalPages) {
+          toPreload.push(nextLeft);
+          const { right } = getSpreadPages(nextLeft, totalPages);
+          if (right !== null) toPreload.push(right);
+        }
+      } else {
+        if (spread.left > 0) toPreload.push(spread.left - 1);
+        if (spread.left < totalPages - 1) toPreload.push(spread.left + 1);
       }
-      // Next spread
-      const nextLeft = spread.right !== null ? spread.right + 1 : spread.left + 1;
-      if (nextLeft < totalPages) {
-        toPreload.push(nextLeft);
-        const { right } = getSpreadPages(nextLeft, totalPages);
-        if (right !== null) toPreload.push(right);
+      // Fire-and-forget — don't block on preloads
+      for (const idx of toPreload) {
+        dbg(`preload page=${idx}`);
+        loadPageCached(idx, pdfRenderWidth);
       }
-    } else {
-      if (spread.left > 0) toPreload.push(spread.left - 1);
-      if (spread.left < totalPages - 1) toPreload.push(spread.left + 1);
-    }
-    // Fire-and-forget — don't block on preloads
-    for (const idx of toPreload) {
-      loadPageCached(idx, pdfRenderWidth);
-    }
+    }, 500);
+    return () => clearTimeout(timerId);
   }, [loading, spread.left, spread.right, dualPage, totalPages, loadPageCached, pdfRenderWidth]);
 
   const goTo = useCallback(
@@ -447,39 +522,63 @@ export default function PageViewer({
         onMouseUp={handleMouseUp}
         onMouseLeave={handleMouseUp}
       >
-        {loading ? (
-          <div className="absolute inset-0 flex items-center justify-center gap-2">
-            <div className="w-5 h-5 border-2 border-accent/30 border-t-accent rounded-full animate-spin" />
-            <span className="text-sm text-ink-muted">{t("reader.loadingPage")}</span>
-          </div>
-        ) : error ? (
-          <div className="absolute inset-0 flex items-center justify-center">
-            <span className="text-sm text-red-500 text-center max-w-sm">{t("reader.failedToLoadPage", { error })}</span>
-          </div>
-        ) : (
-          <div
-            ref={spreadRef}
-            className={`absolute top-1/2 left-1/2 flex items-center justify-center gap-1 will-change-transform ${mangaMode && dualPage ? "flex-row-reverse" : "flex-row"}`}
-            style={{ width: `${zoom * 100}%`, height: `${zoom * 100}%`, transform: `translate(calc(-50% + ${panRef.current.x}px), calc(-50% + ${panRef.current.y}px))` }}
-          >
-            {leftImageData && (
-              <img
-                src={leftImageData}
-                alt={`Page ${spread.left + 1} of ${totalPages}`}
-                className="max-h-full max-w-full object-contain rounded-sm shadow-[0_4px_24px_-4px_rgba(44,34,24,0.18)]"
-                style={dualPage && rightImageData ? { maxWidth: "50%" } : undefined}
-                draggable={false}
-              />
+        {/* Always render spread so spreadRef stays mounted for animations */}
+        <div
+          ref={spreadRef}
+          className={`absolute top-1/2 left-1/2 flex items-center justify-center gap-1 will-change-transform ${mangaMode && dualPage ? "flex-row-reverse" : "flex-row"}`}
+          style={{ width: `${zoom * 100}%`, height: `${zoom * 100}%`, transform: `translate(calc(-50% + ${panRef.current.x}px), calc(-50% + ${panRef.current.y}px))` }}
+        >
+          {leftImageData && (
+            <img
+              src={leftImageData}
+              alt={`Page ${spread.left + 1} of ${totalPages}`}
+              className="max-h-full max-w-full object-contain rounded-sm shadow-[0_4px_24px_-4px_rgba(44,34,24,0.18)]"
+              style={dualPage && rightImageData ? { maxWidth: "50%" } : undefined}
+              draggable={false}
+            />
+          )}
+          {rightImageData && (
+            <img
+              src={rightImageData}
+              alt={`Page ${(spread.right ?? 0) + 1} of ${totalPages}`}
+              className="max-h-full object-contain rounded-sm shadow-[0_4px_24px_-4px_rgba(44,34,24,0.18)]"
+              style={{ maxWidth: "50%" }}
+              draggable={false}
+            />
+          )}
+        </div>
+        {/* Overlay: loading spinner or error on top of previous/current page */}
+        {loading && (
+          <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-paper/80">
+            <div className="flex items-center gap-2">
+              <div className="w-5 h-5 border-2 border-accent/30 border-t-accent rounded-full animate-spin" />
+              <span className="text-sm text-ink-muted">{t("reader.loadingPage")}</span>
+            </div>
+            {error && (
+              <span className="text-xs text-ink-muted/70 animate-fade-in">{error}</span>
             )}
-            {rightImageData && (
-              <img
-                src={rightImageData}
-                alt={`Page ${(spread.right ?? 0) + 1} of ${totalPages}`}
-                className="max-h-full object-contain rounded-sm shadow-[0_4px_24px_-4px_rgba(44,34,24,0.18)]"
-                style={{ maxWidth: "50%" }}
-                draggable={false}
-              />
-            )}
+          </div>
+        )}
+        {!loading && error && (
+          <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-paper/80">
+            <span className="text-sm text-red-500 text-center max-w-sm">{error}</span>
+            <button
+              onClick={() => {
+                // Evict from cache and in-flight so retry fetches fresh
+                const key = `${spread.left}:${pdfRenderWidth ?? 0}`;
+                pageCacheRef.current.delete(key);
+                inflightRef.current.delete(key);
+                if (spread.right !== null) {
+                  const rkey = `${spread.right}:${pdfRenderWidth ?? 0}`;
+                  pageCacheRef.current.delete(rkey);
+                  inflightRef.current.delete(rkey);
+                }
+                setRetryCount((c) => c + 1);
+              }}
+              className="px-4 py-1.5 text-sm bg-accent text-white rounded-lg hover:bg-accent/90 transition-colors"
+            >
+              {t("reader.retryLoadPage")}
+            </button>
           </div>
         )}
       </div>

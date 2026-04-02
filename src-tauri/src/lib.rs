@@ -8,6 +8,7 @@ pub mod epub;
 pub mod models;
 pub mod opds;
 pub mod openlibrary;
+pub mod page_cache;
 pub mod pdf;
 pub mod providers;
 
@@ -209,6 +210,9 @@ pub fn run() {
             commands::check_file_exists,
             commands::cleanup_library,
             commands::list_auto_backups,
+            commands::prepare_comic,
+            commands::get_cache_stats,
+            commands::clear_page_cache,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

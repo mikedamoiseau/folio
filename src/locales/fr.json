@@ -99,6 +99,9 @@
     "loadingPages": "Chargement des pages\u2026",
     "loadingPage": "Chargement de la page\u2026",
     "failedToLoadPage": "\u00c9chec du chargement de la page : {{error}}",
+    "pageLoadSlow": "Cette page prend plus de temps que pr\u00e9vu\u2026",
+    "pageLoadTimeout": "Le chargement de la page a pris trop de temps. R\u00e9essayer ?",
+    "retryLoadPage": "R\u00e9essayer",
     "loadingChapters": "Chargement de {{count}} chapitres\u2026",
     "failedToLoadChapter": "\u00c9chec du chargement du chapitre\u00a0: {{error}}",
     "searchInBook": "Rechercher dans le livre...",
@@ -137,7 +140,9 @@
     "continuousDescription": "D\u00e9filez \u00e0 travers tous les chapitres d\u2019un seul flux. Les gros livres peuvent prendre un moment \u00e0 charger.",
     "missingFileTitle": "Fichier introuvable",
     "missingFileMessage": "Le fichier de ce livre est introuvable. Il a peut-\u00eatre \u00e9t\u00e9 d\u00e9plac\u00e9 ou supprim\u00e9.",
-    "removeFromLibrary": "Retirer de la biblioth\u00e8que"
+    "removeFromLibrary": "Retirer de la biblioth\u00e8que",
+    "preparingPages": "Pr\u00e9paration des pages...",
+    "preparingPagesDetail": "Extraction des pages pour une lecture plus rapide"
   },
 
   "import": {
@@ -313,7 +318,14 @@
     "importMode": "Mode d'importation",
     "importModeCopy": "Copier dans la biblioth\u00e8que",
     "importModeLink": "Lier au fichier original",
-    "importModeHelp": "Les livres copi\u00e9s sont autonomes. Les livres li\u00e9s \u00e9conomisent de l'espace disque mais n\u00e9cessitent que le fichier original reste accessible."
+    "importModeHelp": "Les livres copi\u00e9s sont autonomes. Les livres li\u00e9s \u00e9conomisent de l'espace disque mais n\u00e9cessitent que le fichier original reste accessible.",
+    "pageCacheSection": "Cache des pages",
+    "pageCacheLimit": "Limite de taille du cache",
+    "pageCacheLimitHelp": "Espace disque maximal pour les pages de BD en cache. Les livres les plus anciens sont supprim\u00e9s lorsque la limite est d\u00e9pass\u00e9e.",
+    "pageCacheUsage": "Utilisation : {{size}} ({{count}} livres)",
+    "pageCacheUsageEmpty": "Le cache est vide",
+    "clearPageCache": "Vider le cache",
+    "clearPageCacheConfirm": "Cache vid\u00e9"
   },
 
   "collections": {

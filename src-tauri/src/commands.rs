@@ -12,6 +12,7 @@ use crate::models::{
 };
 use crate::opds;
 use crate::openlibrary;
+use crate::page_cache;
 use crate::pdf;
 
 /// A simple LRU cache that bundles the data map and access order in a single
@@ -1220,23 +1221,146 @@ pub async fn get_comic_page(
     book_id: String,
     page_index: u32,
     state: State<'_, AppState>,
+    app: AppHandle,
 ) -> Result<String, String> {
+    let start = std::time::Instant::now();
+    page_cache::page_dbg!(
+        "get_comic_page called: book={} page={}",
+        book_id,
+        page_index
+    );
+
     let book = {
         let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
         db::get_book(&conn, &book_id)
             .map_err(|e| e.to_string())?
             .ok_or_else(|| format!("Book '{book_id}' not found"))?
     };
+    page_cache::page_dbg!("DB lookup: {:?}", start.elapsed());
 
     validate_file_exists(&book.file_path)?;
-    match book.format {
+
+    // Try cache first
+    if let Ok(cache_dir) = app.path().app_cache_dir() {
+        if let Some(ref book_hash) = book.file_hash {
+            let cache_start = std::time::Instant::now();
+            if let Ok((data, mime)) = page_cache::get_cached_page(&cache_dir, book_hash, page_index)
+            {
+                use base64::{engine::general_purpose, Engine as _};
+                let encoded = general_purpose::STANDARD.encode(&data);
+                page_cache::page_dbg!(
+                    "cache HIT: page={} read={:?} size={}KB total={:?}",
+                    page_index,
+                    cache_start.elapsed(),
+                    data.len() / 1024,
+                    start.elapsed()
+                );
+                return Ok(format!("data:{mime};base64,{encoded}"));
+            }
+            page_cache::page_dbg!(
+                "cache MISS: page={} checked in {:?}",
+                page_index,
+                cache_start.elapsed()
+            );
+        }
+    }
+
+    // Fallback to direct archive read
+    page_cache::page_dbg!("falling back to archive read: format={:?}", book.format);
+    let result = match book.format {
         BookFormat::Cbz => cbz::get_page_image(&book.file_path, page_index),
         BookFormat::Cbr => cbr::get_page_image(&book.file_path, page_index),
         _ => Err(format!(
             "get_comic_page is not supported for {:?}",
             book.format
         )),
+    };
+    page_cache::page_dbg!(
+        "archive read done: page={} ok={} total={:?}",
+        page_index,
+        result.is_ok(),
+        start.elapsed()
+    );
+    result
+}
+
+#[tauri::command]
+pub async fn prepare_comic(
+    book_id: String,
+    state: State<'_, AppState>,
+    app: AppHandle,
+) -> Result<page_cache::CacheManifest, String> {
+    let (book, max_size_mb) = {
+        let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
+        let book = db::get_book(&conn, &book_id)
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| format!("Book '{book_id}' not found"))?;
+        let max_size_mb = db::get_setting(&conn, "page_cache_max_size_mb")
+            .ok()
+            .flatten()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(page_cache::DEFAULT_MAX_CACHE_SIZE_MB);
+        (book, max_size_mb)
+    };
+
+    validate_file_exists(&book.file_path)?;
+
+    if book.format != BookFormat::Cbz && book.format != BookFormat::Cbr {
+        return Err("prepare_comic only supports CBZ/CBR formats".to_string());
     }
+
+    let book_hash = book.file_hash.as_deref().ok_or("Book has no file hash")?;
+    let cache_dir = app
+        .path()
+        .app_cache_dir()
+        .map_err(|e| format!("Failed to get cache dir: {e}"))?;
+
+    let prep_start = std::time::Instant::now();
+    page_cache::page_dbg!(
+        "prepare_comic: book={} format={:?} hash={}",
+        book_id,
+        book.format,
+        book_hash
+    );
+    let manifest = page_cache::ensure_cached(
+        &cache_dir,
+        &book_id,
+        book_hash,
+        &book.file_path,
+        &book.format,
+    )?;
+    page_cache::page_dbg!(
+        "prepare_comic done: pages={} size={}KB elapsed={:?}",
+        manifest.page_count,
+        manifest.total_size_bytes / 1024,
+        prep_start.elapsed()
+    );
+
+    // Run eviction in background
+    let evict_cache_dir = cache_dir.clone();
+    std::thread::spawn(move || {
+        let _ = page_cache::run_eviction(&evict_cache_dir, max_size_mb);
+    });
+
+    Ok(manifest)
+}
+
+#[tauri::command]
+pub async fn get_cache_stats(app: AppHandle) -> Result<page_cache::CacheStats, String> {
+    let cache_dir = app
+        .path()
+        .app_cache_dir()
+        .map_err(|e| format!("Failed to get cache dir: {e}"))?;
+    Ok(page_cache::get_cache_stats(&cache_dir))
+}
+
+#[tauri::command]
+pub async fn clear_page_cache(app: AppHandle) -> Result<(), String> {
+    let cache_dir = app
+        .path()
+        .app_cache_dir()
+        .map_err(|e| format!("Failed to get cache dir: {e}"))?;
+    page_cache::clear_cache(&cache_dir)
 }
 
 // --- Reading Stats ---

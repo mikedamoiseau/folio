@@ -99,6 +99,9 @@
     "loadingPages": "Loading pages\u2026",
     "loadingPage": "Loading page\u2026",
     "failedToLoadPage": "Failed to load page: {{error}}",
+    "pageLoadSlow": "This page is taking longer than usual\u2026",
+    "pageLoadTimeout": "Page took too long to load. Try again?",
+    "retryLoadPage": "Retry",
     "loadingChapters": "Loading {{count}} chapters\u2026",
     "failedToLoadChapter": "Failed to load chapter: {{error}}",
     "searchInBook": "Search in book...",
@@ -137,7 +140,9 @@
     "continuousDescription": "Scroll through all chapters in one continuous flow. Large books may take a moment to load.",
     "missingFileTitle": "File Not Found",
     "missingFileMessage": "This book\u2019s file could not be found. It may have been moved or deleted.",
-    "removeFromLibrary": "Remove from library"
+    "removeFromLibrary": "Remove from library",
+    "preparingPages": "Preparing pages...",
+    "preparingPagesDetail": "Extracting pages for faster reading"
   },
 
   "import": {
@@ -313,7 +318,14 @@
     "importMode": "Import mode",
     "importModeCopy": "Copy to library",
     "importModeLink": "Link to original file",
-    "importModeHelp": "Copied books are self-contained. Linked books save disk space but require the original file to remain accessible."
+    "importModeHelp": "Copied books are self-contained. Linked books save disk space but require the original file to remain accessible.",
+    "pageCacheSection": "Page Cache",
+    "pageCacheLimit": "Cache size limit",
+    "pageCacheLimitHelp": "Maximum disk space for cached comic pages. Older books are evicted when the limit is exceeded.",
+    "pageCacheUsage": "Using {{size}} ({{count}} books)",
+    "pageCacheUsageEmpty": "Cache is empty",
+    "clearPageCache": "Clear cache",
+    "clearPageCacheConfirm": "Cache cleared"
   },
 
   "collections": {
