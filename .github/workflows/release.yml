@@ -52,11 +52,16 @@ jobs:
             librsvg2-dev \
             patchelf
 
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: npm
+          cache: pnpm
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -99,7 +104,7 @@ jobs:
           Copy-Item "$tmp\bin\${{ matrix.pdfium_lib }}" src-tauri/resources/
 
       - name: Install frontend dependencies
-        run: npm ci
+        run: pnpm install
 
       - name: Build and publish Tauri app
         uses: tauri-apps/tauri-action@v0
