@@ -10,6 +10,8 @@
 
 **Spec:** `docs/superpowers/specs/2026-04-04-progress-sync-design.md`
 
+**Implementation note:** This plan contains code snippets that serve as **implementation sketches**, not mandatory literal code. Follow the task order, sync invariants, architectural boundaries, and test discipline — but simplify or adjust the exact implementation where repo realities suggest a cleaner equivalent. In particular, Tasks 8 and 10 describe **behavioral requirements** (timeouts, non-blocking, fire-and-forget, event-driven refresh) — the threading/React patterns shown are one way to achieve them, not the only way.
+
 ---
 
 ## File Structure
@@ -17,9 +19,9 @@
 | File | Action | Responsibility |
 |------|--------|---------------|
 | `src-tauri/src/models.rs` | Modify | Add `updated_at`/`deleted_at` to Bookmark and Highlight structs |
-| `src-tauri/src/db.rs` | Modify | Migration, backfill, soft-delete queries, sync-inclusive queries |
+| `src-tauri/src/db.rs` | Modify | Migration, backfill, soft-delete queries, sync-inclusive queries, device_id + sync_enabled helpers |
 | `src-tauri/src/sync.rs` | Create | Sync structs, error types, merge engine, orchestration helpers |
-| `src-tauri/src/commands.rs` | Modify | Soft-delete commands, sync entry points, device_id helper |
+| `src-tauri/src/commands.rs` | Modify | Soft-delete commands, sync entry points (thin wiring only) |
 | `src-tauri/src/lib.rs` | Modify | Register new commands, add `pub mod sync;` |
 | `src/components/SettingsPanel.tsx` | Modify | Sync toggle + status display in Remote Backup section |
 | `src/screens/Reader.tsx` | Modify | Listen for `sync-applied` and `sync-progress-updated` events |
@@ -360,6 +362,13 @@ Expected: PASS
 
 - [ ] **Step 5: Write test — backfill sets updated_at from created_at**
 
+**Important:** The backfill SQL already exists in `run_schema()` at lines 170-174 of `db.rs`:
+```sql
+UPDATE bookmarks SET updated_at = created_at WHERE updated_at = 0;
+UPDATE highlights SET updated_at = created_at WHERE updated_at = 0;
+```
+This test validates the existing backfill works correctly. Do NOT add duplicate backfill SQL.
+
 ```rust
 #[test]
 fn test_backfill_updated_at_from_created_at() {
@@ -374,7 +383,7 @@ fn test_backfill_updated_at_from_created_at() {
         [],
     ).unwrap();
 
-    // Re-run the backfill (idempotent)
+    // Re-run the backfill (idempotent — already in run_schema, but verify it works)
     conn.execute_batch("UPDATE bookmarks SET updated_at = created_at WHERE updated_at = 0;").unwrap();
 
     let updated_at: i64 = conn.query_row(
@@ -387,8 +396,6 @@ fn test_backfill_updated_at_from_created_at() {
 ```
 
 - [ ] **Step 6: Run test to verify it passes**
-
-The backfill already exists in `run_schema` (lines 171-174). This test validates it works.
 
 Run: `cd src-tauri && cargo test test_backfill_updated_at_from_created_at -- --nocapture 2>&1 | tail -10`
 Expected: PASS
@@ -629,7 +636,7 @@ UI queries filter deleted_at IS NULL; rows persist as tombstones for sync."
 ## Task 4: Device identity and sync_enabled setting
 
 **Files:**
-- Modify: `src-tauri/src/commands.rs`
+- Modify: `src-tauri/src/db.rs` (helpers live here — these are database/settings functions, not command handlers)
 - Test: `src-tauri/src/db.rs` (tests module)
 
 - [ ] **Step 1: Write failing test — get_or_create_device_id**
@@ -1687,6 +1694,16 @@ push_remote_sync writes JSON to .folio-sync/books/{hash}.json."
 - Modify: `src-tauri/src/commands.rs` (add sync commands)
 - Modify: `src-tauri/src/lib.rs` (register new commands)
 
+**Note:** The threading/async code below is **behavioral guidance**, not mandatory implementation. The important invariants are:
+- Pull must not block reader startup
+- Pull must have a 5-second timeout
+- Push must be background / fire-and-forget
+- Sync business logic stays in `sync.rs`
+- `commands.rs` only wires the Tauri command surface, guard checks, logging, diagnostics, and events
+- Both commands must check `is_sync_enabled` + backup provider configured before doing anything
+
+If the repo offers a cleaner way to structure the async/runtime/threading boundary (e.g. `tokio::time::timeout`, Tauri's async runtime directly, etc.), use that instead of the `mpsc::channel` + `recv_timeout` pattern shown here.
+
 - [ ] **Step 1: Add orchestration helpers to sync.rs**
 
 ```rust
@@ -2038,79 +2055,40 @@ Default off (opt-in)."
 **Files:**
 - Modify: `src/screens/Reader.tsx`
 
-- [ ] **Step 1: Add event listener imports and sync handling**
+**Note:** The code snippets below are behavioral guidance, not mandatory literal implementation. The existing Reader component may have different state variable names, ref patterns, or effect structures. Choose the cleanest React-safe implementation that satisfies the invariants. Watch for stale closure risks — the event callbacks reference values like `chapterIndex` that may change during the reader session.
 
-In `Reader.tsx`, add import:
+**Required invariants:**
+1. `invoke("sync_pull_book", { bookId })` fires on reader mount (non-blocking, catch errors silently)
+2. `invoke("sync_push_book", { bookId })` fires on reader unmount (fire-and-forget)
+3. Listen for `sync-applied` event — refresh visible bookmarks/highlights from DB when received
+4. Listen for `sync-progress-updated` event — apply remote progress only if user has not navigated or scrolled since mount
+5. Clean up event listeners on unmount
+
+- [ ] **Step 1: Add event listener imports**
+
+In `Reader.tsx`, add import for Tauri event listening:
 
 ```typescript
 import { listen } from "@tauri-apps/api/event";
 ```
 
-- [ ] **Step 2: Fire sync pull on mount, listen for events**
+- [ ] **Step 2: Add sync pull on mount and event listeners**
 
-Add a new `useEffect` after the existing mount effect (~after line 189). Add a ref to track user interaction:
+Add a ref to track whether the user has interacted (navigated or scrolled) since mount. Set it to `true` in the existing chapter navigation and scroll handlers.
 
-```typescript
-const userHasInteracted = useRef(false);
-```
+Add a `useEffect` that:
+- Fires `sync_pull_book` on mount
+- Listens for `sync-applied` to refresh bookmarks/highlights
+- Listens for `sync-progress-updated` to apply remote progress (only if `userHasInteracted` is still false)
+- Cleans up listeners on unmount
 
-Set it to true on any user-initiated navigation or scroll. Add to the existing chapter change handler and scroll tracking:
+Be careful with stale closures — use refs for values that change during the reader session (like `chapterIndex`) if they are referenced inside event callbacks.
 
-```typescript
-// In the chapter navigation handler (where chapterIndex changes from user action):
-userHasInteracted.current = true;
+- [ ] **Step 3: Add sync push on unmount**
 
-// In the scroll handler (where scroll position changes from user action):
-userHasInteracted.current = true;
-```
-
-Add the sync effect:
+In the existing cleanup effect (where `saveProgress` and `record_reading_session` are called), add:
 
 ```typescript
-// Sync: pull on book open, listen for sync results
-useEffect(() => {
-  if (!bookId) return;
-  let cancelled = false;
-
-  // Fire sync pull (non-blocking — reader already loaded local data)
-  invoke("sync_pull_book", { bookId }).catch(() => {});
-
-  // Listen for sync results
-  const unlistenApplied = listen<string>("sync-applied", (event) => {
-    if (!cancelled && event.payload === bookId) {
-      // Refresh bookmarks and highlights from DB
-      invoke<Bookmark[]>("get_bookmarks", { bookId }).then(setBookmarks).catch(() => {});
-      invoke<Highlight[]>("get_chapter_highlights", { bookId, chapterIndex }).then(setHighlights).catch(() => {});
-    }
-  });
-
-  const unlistenProgress = listen<string>("sync-progress-updated", (event) => {
-    if (!cancelled && event.payload === bookId && !userHasInteracted.current) {
-      // Apply remote progress only if user hasn't interacted yet
-      invoke<ReadingProgress | null>("get_reading_progress", { bookId }).then((progress) => {
-        if (progress && !userHasInteracted.current) {
-          setChapterIndex(progress.chapterIndex);
-          savedScrollRef.current = progress.scrollPosition;
-          setRestoringScroll(true);
-        }
-      }).catch(() => {});
-    }
-  });
-
-  return () => {
-    cancelled = true;
-    unlistenApplied.then((f) => f());
-    unlistenProgress.then((f) => f());
-  };
-}, [bookId]); // eslint-disable-line react-hooks/exhaustive-deps
-```
-
-- [ ] **Step 3: Fire sync push on unmount**
-
-In the existing cleanup effect (~line 410-425), add after the `record_reading_session` call:
-
-```typescript
-// Push sync state in background (fire-and-forget)
 invoke("sync_push_book", { bookId }).catch(() => {});
 ```
 
