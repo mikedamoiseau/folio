@@ -158,11 +158,23 @@ Expand where books come from and how they persist.
 - ~~Allow users to add custom OPDS catalog URLs (for self-hosted Calibre servers, etc.)~~
 - ~~Show available formats per result, prefer EPUB when available~~
 
-### 15. Reading Position Sync / Multi-Device Sync
-- Sync progress, bookmarks, and highlights across devices
-- Current remote backup is single-device (overwrites remote metadata)
-- Multi-device support: per-device files or merge-on-push to avoid data loss
-- Conflict resolution for divergent progress (last-write-wins or manual merge)
+### 15. Reading Position Sync / Multi-Device Sync — **Done**
+- ~~Sync reading progress, bookmarks, and highlights across devices~~
+- ~~Local-first design: sync uses the same remote provider configured for backup (S3, FTP, SFTP, WebDAV)~~
+- ~~Per-book sync files at `.folio-sync/books/{file_hash}.json` — books identified by content hash so the same file on different devices syncs correctly~~
+- ~~Pull on book open (non-blocking, 5-second timeout) — merges remote changes into local DB~~
+- ~~Push on book close (fire-and-forget background thread) — uploads local state to remote~~
+- ~~Last-write-wins merge with per-item `updated_at` timestamps; equal timestamps prefer remote for convergence~~
+- ~~Soft delete with tombstone propagation — deleted bookmarks/highlights sync correctly across devices~~
+- ~~Settings toggle: "Sync reading progress across devices" (disabled by default, requires backup provider)~~
+- ~~Sync status display in Settings: last successful sync timestamp, user-friendly error messages~~
+- ~~Activity log integration: sync_pull_success, sync_pull_failed, sync_push_success, sync_push_failed~~
+- ~~Local-first device identity (UUID stored in settings, never depends on remote)~~
+- ~~Schema-versioned sync files with forward-compatibility (unknown fields ignored, future schema versions rejected gracefully)~~
+- Does not sync book files (that's what backup is for)
+- No conflict resolution UI (LWW is deterministic)
+- No scheduled sync or retry queue (v1 limitation — sync on open/close only)
+- No tombstone garbage collection (soft-deleted rows accumulate; acceptable for v1)
 - *Depends on: Remote Backup (Phase 3)*
 
 ## Phase 4: Discovery & Social
@@ -596,7 +608,7 @@ Lower priority features — high effort, niche audience, or dependent on other w
 |-------|----------|--------|-------|
 | 1 | Copy-on-Import, Multi-File Picker, Collections, Sort/Filter, Tags | 5 done | Storage & organization |
 | 2 | Highlights, Metadata Edit, Keyboard Shortcuts, Focus Mode, Zoom | Done | Reading experience |
-| 3 | Remote Files, Bulk Import, Backup, Book Discovery, Linked Books, Position Sync | 4 done, 2 partial, 1 not started | Import & sync |
+| 3 | Remote Files, Bulk Import, Backup, Book Discovery, Linked Books, Position Sync | 5 done, 2 partial | Import & sync |
 | 4 | Stats, Goodreads, Recents, Share, Recommendations | 4 done, 1 partial | Discovery & social |
 | 5 | Multiple Profiles | Done | Multi-user |
 | 6 | Remote Library Access, OPDS Server | Not started | Remote access |
