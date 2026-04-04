@@ -458,6 +458,19 @@ pub fn set_setting(conn: &Connection, key: &str, value: &str) -> Result<()> {
     Ok(())
 }
 
+pub fn get_or_create_device_id(conn: &Connection) -> Result<String> {
+    if let Some(id) = get_setting(conn, "device_id")? {
+        return Ok(id);
+    }
+    let id = uuid::Uuid::new_v4().to_string();
+    set_setting(conn, "device_id", &id)?;
+    Ok(id)
+}
+
+pub fn is_sync_enabled(conn: &Connection) -> bool {
+    get_setting(conn, "sync_enabled").ok().flatten().as_deref() == Some("true")
+}
+
 // --- ReadingProgress CRUD ---
 
 pub fn upsert_reading_progress(conn: &Connection, progress: &ReadingProgress) -> Result<()> {
@@ -2379,5 +2392,38 @@ mod tests {
             "deleted_at and updated_at should match"
         );
         assert!(updated_at > 1700000000, "updated_at should be bumped");
+    }
+
+    #[test]
+    fn test_get_or_create_device_id() {
+        let (_dir, conn) = setup();
+
+        // First call creates a UUID
+        let id1 = get_or_create_device_id(&conn).unwrap();
+        assert_eq!(id1.len(), 36, "UUID v4 string should be 36 chars");
+
+        // Second call returns the same ID
+        let id2 = get_or_create_device_id(&conn).unwrap();
+        assert_eq!(id1, id2, "device_id should be stable across calls");
+    }
+
+    #[test]
+    fn test_is_sync_enabled() {
+        let (_dir, conn) = setup();
+
+        // Missing key → false
+        assert!(!is_sync_enabled(&conn));
+
+        // "true" → true
+        set_setting(&conn, "sync_enabled", "true").unwrap();
+        assert!(is_sync_enabled(&conn));
+
+        // "false" → false
+        set_setting(&conn, "sync_enabled", "false").unwrap();
+        assert!(!is_sync_enabled(&conn));
+
+        // "yes" → false (only exact "true" is truthy)
+        set_setting(&conn, "sync_enabled", "yes").unwrap();
+        assert!(!is_sync_enabled(&conn));
     }
 }
