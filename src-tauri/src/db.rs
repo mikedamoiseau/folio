@@ -516,7 +516,7 @@ pub fn insert_bookmark(conn: &Connection, bookmark: &Bookmark) -> Result<()> {
             bookmark.name,
             bookmark.note,
             bookmark.created_at,
-            bookmark.created_at,
+            bookmark.updated_at,
         ],
     )?;
     Ok(())
@@ -524,7 +524,7 @@ pub fn insert_bookmark(conn: &Connection, bookmark: &Bookmark) -> Result<()> {
 
 pub fn list_bookmarks(conn: &Connection, book_id: &str) -> Result<Vec<Bookmark>> {
     let mut stmt = conn.prepare(
-        "SELECT id, book_id, chapter_index, scroll_position, name, note, created_at
+        "SELECT id, book_id, chapter_index, scroll_position, name, note, created_at, updated_at
          FROM bookmarks WHERE book_id = ?1 ORDER BY created_at ASC",
     )?;
     let rows = stmt.query_map(params![book_id], |row| {
@@ -536,6 +536,8 @@ pub fn list_bookmarks(conn: &Connection, book_id: &str) -> Result<Vec<Bookmark>>
             name: row.get(4)?,
             note: row.get(5)?,
             created_at: row.get(6)?,
+            updated_at: row.get(7)?,
+            deleted_at: None,
         })
     })?;
     rows.collect()
@@ -899,14 +901,14 @@ pub fn insert_highlight(conn: &Connection, h: &crate::models::Highlight) -> Resu
     conn.execute(
         "INSERT INTO highlights (id, book_id, chapter_index, text, color, note, start_offset, end_offset, created_at, updated_at)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
-        params![h.id, h.book_id, h.chapter_index, h.text, h.color, h.note, h.start_offset, h.end_offset, h.created_at, h.created_at],
+        params![h.id, h.book_id, h.chapter_index, h.text, h.color, h.note, h.start_offset, h.end_offset, h.created_at, h.updated_at],
     )?;
     Ok(())
 }
 
 pub fn list_highlights(conn: &Connection, book_id: &str) -> Result<Vec<crate::models::Highlight>> {
     let mut stmt = conn.prepare(
-        "SELECT id, book_id, chapter_index, text, color, note, start_offset, end_offset, created_at
+        "SELECT id, book_id, chapter_index, text, color, note, start_offset, end_offset, created_at, updated_at
          FROM highlights WHERE book_id = ?1 ORDER BY chapter_index ASC, start_offset ASC",
     )?;
     let rows = stmt.query_map(params![book_id], |row| {
@@ -920,6 +922,8 @@ pub fn list_highlights(conn: &Connection, book_id: &str) -> Result<Vec<crate::mo
             start_offset: row.get(6)?,
             end_offset: row.get(7)?,
             created_at: row.get(8)?,
+            updated_at: row.get(9)?,
+            deleted_at: None,
         })
     })?;
     rows.collect()
@@ -931,7 +935,7 @@ pub fn get_chapter_highlights(
     chapter_index: u32,
 ) -> Result<Vec<crate::models::Highlight>> {
     let mut stmt = conn.prepare(
-        "SELECT id, book_id, chapter_index, text, color, note, start_offset, end_offset, created_at
+        "SELECT id, book_id, chapter_index, text, color, note, start_offset, end_offset, created_at, updated_at
          FROM highlights WHERE book_id = ?1 AND chapter_index = ?2 ORDER BY start_offset ASC",
     )?;
     let rows = stmt.query_map(params![book_id, chapter_index], |row| {
@@ -945,6 +949,8 @@ pub fn get_chapter_highlights(
             start_offset: row.get(6)?,
             end_offset: row.get(7)?,
             created_at: row.get(8)?,
+            updated_at: row.get(9)?,
+            deleted_at: None,
         })
     })?;
     rows.collect()
@@ -1473,6 +1479,8 @@ mod tests {
             name: None,
             note: Some("Great quote".to_string()),
             created_at: 1700000200,
+            updated_at: 1700000200,
+            deleted_at: None,
         };
         insert_bookmark(&conn, &bookmark).unwrap();
 
@@ -1499,6 +1507,8 @@ mod tests {
             name: None,
             note: None,
             created_at: 1700000400,
+            updated_at: 1700000400,
+            deleted_at: None,
         };
         insert_bookmark(&conn, &bookmark).unwrap();
 
@@ -1528,6 +1538,8 @@ mod tests {
             name: None,
             note: None,
             created_at: 1700000300,
+            updated_at: 1700000300,
+            deleted_at: None,
         };
         insert_bookmark(&conn, &bookmark).unwrap();
 

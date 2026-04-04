@@ -1148,6 +1148,10 @@ pub async fn add_bookmark(
     note: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<Bookmark, String> {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64;
     let bookmark = Bookmark {
         id: Uuid::new_v4().to_string(),
         book_id,
@@ -1155,10 +1159,9 @@ pub async fn add_bookmark(
         scroll_position,
         name: None,
         note,
-        created_at: std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs() as i64,
+        created_at: now,
+        updated_at: now,
+        deleted_at: None,
     };
 
     let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
@@ -1402,6 +1405,10 @@ pub async fn add_highlight(
     note: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<Highlight, String> {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64;
     let highlight = Highlight {
         id: Uuid::new_v4().to_string(),
         book_id,
@@ -1411,10 +1418,9 @@ pub async fn add_highlight(
         note,
         start_offset,
         end_offset,
-        created_at: std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs() as i64,
+        created_at: now,
+        updated_at: now,
+        deleted_at: None,
     };
     let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
     db::insert_highlight(&conn, &highlight).map_err(|e| e.to_string())?;
