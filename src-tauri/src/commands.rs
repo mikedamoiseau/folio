@@ -3714,6 +3714,22 @@ fn merge_result_summary(r: &crate::sync::MergeResult) -> String {
     }
 }
 
+fn friendly_sync_error(e: &crate::sync::SyncError) -> String {
+    match e {
+        crate::sync::SyncError::Timeout => {
+            "Remote server did not respond within 5 seconds".to_string()
+        }
+        crate::sync::SyncError::Transport(_) => {
+            "Could not reach remote storage. Check your internet connection and backup settings."
+                .to_string()
+        }
+        crate::sync::SyncError::Malformed(_) => {
+            "Remote sync data is unreadable. It may have been created by a newer version of Folio."
+                .to_string()
+        }
+    }
+}
+
 fn now_unix_secs() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -3753,27 +3769,26 @@ pub async fn sync_pull_book(
     };
     let device_id = db::get_or_create_device_id(&conn).map_err(|e| e.to_string())?;
 
-    // Run sync with a 5-second timeout using a thread + channel
-    let bid = book_id.clone();
+    // Spawn thread for network fetch only — keep DB connection on main thread
+    let fh = file_hash.clone();
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
-        let result = crate::sync::sync_book_on_open(&conn, &op, &bid, &file_hash, &device_id);
+        let result = crate::sync::fetch_remote_sync(&op, &fh);
         let _ = tx.send(result);
     });
 
-    let log_conn = state.active_db()?.get().map_err(|e| e.to_string())?;
     let timeout = std::time::Duration::from_secs(5);
     match rx.recv_timeout(timeout) {
-        Ok(Ok(merge_result)) => {
-            let _ = db::set_setting(
-                &log_conn,
-                "last_sync_success_at",
-                &now_unix_secs().to_string(),
-            );
+        Ok(Ok(Some(remote))) => {
+            // Merge on main thread using the existing connection
+            let local = crate::sync::build_sync_payload(&conn, &book_id, &file_hash, &device_id);
+            let merge_result =
+                crate::sync::merge_remote_into_local(&conn, &book_id, &local, &remote);
+            let _ = db::set_setting(&conn, "last_sync_success_at", &now_unix_secs().to_string());
             if merge_result.has_changes() {
                 let summary = merge_result_summary(&merge_result);
                 log_activity(
-                    &log_conn,
+                    &conn,
                     "sync_pull_success",
                     "book",
                     Some(&book_id),
@@ -3786,39 +3801,35 @@ pub async fn sync_pull_book(
                 }
             }
         }
+        Ok(Ok(None)) => {
+            // No remote file — success (nothing to merge)
+            let _ = db::set_setting(&conn, "last_sync_success_at", &now_unix_secs().to_string());
+        }
         Ok(Err(e)) => {
-            let msg = e.to_string();
-            let _ = db::set_setting(
-                &log_conn,
-                "last_sync_error_at",
-                &now_unix_secs().to_string(),
-            );
-            let _ = db::set_setting(&log_conn, "last_sync_error_message", &msg);
+            let msg = friendly_sync_error(&e);
+            let _ = db::set_setting(&conn, "last_sync_error_at", &now_unix_secs().to_string());
+            let _ = db::set_setting(&conn, "last_sync_error_message", &msg);
             log_activity(
-                &log_conn,
+                &conn,
                 "sync_pull_failed",
                 "book",
                 Some(&book_id),
                 Some(&book.title),
-                Some(&msg),
+                Some(&e.to_string()),
             );
         }
         Err(_) => {
             // Timeout
-            let msg = "timeout after 5s";
-            let _ = db::set_setting(
-                &log_conn,
-                "last_sync_error_at",
-                &now_unix_secs().to_string(),
-            );
-            let _ = db::set_setting(&log_conn, "last_sync_error_message", msg);
+            let msg = "Remote server did not respond within 5 seconds";
+            let _ = db::set_setting(&conn, "last_sync_error_at", &now_unix_secs().to_string());
+            let _ = db::set_setting(&conn, "last_sync_error_message", msg);
             log_activity(
-                &log_conn,
+                &conn,
                 "sync_pull_failed",
                 "book",
                 Some(&book_id),
                 Some(&book.title),
-                Some(msg),
+                Some("timeout after 5s"),
             );
         }
     }
@@ -3855,43 +3866,54 @@ pub async fn sync_push_book(book_id: String, state: State<'_, AppState>) -> Resu
     let device_id = db::get_or_create_device_id(&conn).map_err(|e| e.to_string())?;
     let book_title = book.title.clone();
 
-    // Get a second DB connection for background logging
-    let bg_conn = state.active_db()?.get().map_err(|e| e.to_string())?;
+    // Build payload on main thread, then drop the connection back to the pool
+    let payload = crate::sync::build_sync_payload(&conn, &book_id, &file_hash, &device_id);
+    drop(conn);
 
-    // Fire-and-forget: spawn background thread
-    std::thread::spawn(move || {
-        match crate::sync::sync_book_on_close(&conn, &op, &book_id, &file_hash, &device_id) {
+    // Clone the pool handle for the background thread (Pool is Arc-based, cheap to clone)
+    let pool = state.active_db()?;
+
+    // Fire-and-forget: spawn background thread with only network I/O + logging
+    std::thread::spawn(
+        move || match crate::sync::push_remote_sync(&op, &file_hash, &payload) {
             Ok(()) => {
-                let _ = db::set_setting(
-                    &bg_conn,
-                    "last_sync_success_at",
-                    &now_unix_secs().to_string(),
-                );
-                log_activity(
-                    &bg_conn,
-                    "sync_push_success",
-                    "book",
-                    Some(&book_id),
-                    Some(&book_title),
-                    Some("progress and annotations pushed"),
-                );
+                if let Ok(log_conn) = pool.get() {
+                    let _ = db::set_setting(
+                        &log_conn,
+                        "last_sync_success_at",
+                        &now_unix_secs().to_string(),
+                    );
+                    log_activity(
+                        &log_conn,
+                        "sync_push_success",
+                        "book",
+                        Some(&book_id),
+                        Some(&book_title),
+                        Some("progress and annotations pushed"),
+                    );
+                }
             }
             Err(e) => {
-                let msg = e.to_string();
-                let _ =
-                    db::set_setting(&bg_conn, "last_sync_error_at", &now_unix_secs().to_string());
-                let _ = db::set_setting(&bg_conn, "last_sync_error_message", &msg);
-                log_activity(
-                    &bg_conn,
-                    "sync_push_failed",
-                    "book",
-                    Some(&book_id),
-                    Some(&book_title),
-                    Some(&msg),
-                );
+                if let Ok(log_conn) = pool.get() {
+                    let msg = friendly_sync_error(&e);
+                    let _ = db::set_setting(
+                        &log_conn,
+                        "last_sync_error_at",
+                        &now_unix_secs().to_string(),
+                    );
+                    let _ = db::set_setting(&log_conn, "last_sync_error_message", &msg);
+                    log_activity(
+                        &log_conn,
+                        "sync_push_failed",
+                        "book",
+                        Some(&book_id),
+                        Some(&book_title),
+                        Some(&e.to_string()),
+                    );
+                }
             }
-        }
-    });
+        },
+    );
 
     Ok(())
 }

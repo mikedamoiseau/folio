@@ -522,8 +522,12 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
         // Remote progress arrived and user hasn't navigated — apply it
         invoke<ReadingProgress | null>("get_reading_progress", { bookId })
           .then((progress) => {
-            if (progress) {
+            if (progress && progress.chapter_index !== chapterIndex) {
+              console.info(`[sync] Applying remote reading position: chapter ${progress.chapter_index}`);
               setChapterIndex(progress.chapter_index);
+              savedScrollPosition.current = progress.scroll_position;
+              restoringScroll.current = progress.chapter_index;
+            } else if (progress) {
               savedScrollPosition.current = progress.scroll_position;
               restoringScroll.current = progress.chapter_index;
             }

@@ -523,8 +523,8 @@ pub fn get_recently_read_books(conn: &Connection, limit: u32) -> Result<Vec<Book
 
 pub fn insert_bookmark(conn: &Connection, bookmark: &Bookmark) -> Result<()> {
     conn.execute(
-        "INSERT INTO bookmarks (id, book_id, chapter_index, scroll_position, name, note, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        "INSERT INTO bookmarks (id, book_id, chapter_index, scroll_position, name, note, created_at, updated_at, deleted_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
         params![
             bookmark.id,
             bookmark.book_id,
@@ -534,6 +534,7 @@ pub fn insert_bookmark(conn: &Connection, bookmark: &Bookmark) -> Result<()> {
             bookmark.note,
             bookmark.created_at,
             bookmark.updated_at,
+            bookmark.deleted_at,
         ],
     )?;
     Ok(())
@@ -928,9 +929,9 @@ pub fn get_reading_stats(conn: &Connection) -> Result<ReadingStats> {
 
 pub fn insert_highlight(conn: &Connection, h: &crate::models::Highlight) -> Result<()> {
     conn.execute(
-        "INSERT INTO highlights (id, book_id, chapter_index, text, color, note, start_offset, end_offset, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
-        params![h.id, h.book_id, h.chapter_index, h.text, h.color, h.note, h.start_offset, h.end_offset, h.created_at, h.updated_at],
+        "INSERT INTO highlights (id, book_id, chapter_index, text, color, note, start_offset, end_offset, created_at, updated_at, deleted_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+        params![h.id, h.book_id, h.chapter_index, h.text, h.color, h.note, h.start_offset, h.end_offset, h.created_at, h.updated_at, h.deleted_at],
     )?;
     Ok(())
 }

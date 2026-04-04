@@ -686,8 +686,13 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
   };
 
   const handleToggleSync = async (enabled: boolean) => {
+    const prev = syncEnabled;
     setSyncEnabled(enabled);
-    await invoke("set_setting_value", { key: "sync_enabled", value: enabled ? "true" : "false" });
+    try {
+      await invoke("set_setting_value", { key: "sync_enabled", value: enabled ? "true" : "false" });
+    } catch {
+      setSyncEnabled(prev);
+    }
   };
 
   const handleRunBackup = async () => {
@@ -1559,11 +1564,13 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                       </p>
                     </div>
                     <input
+                      id="sync-toggle"
                       type="checkbox"
                       checked={syncEnabled}
                       disabled={!savedBackupConfig}
                       onChange={(e) => handleToggleSync(e.target.checked)}
                       className="ml-3 h-4 w-4 rounded accent-accent"
+                      aria-label={!savedBackupConfig ? "Sync disabled: configure a remote backup destination first" : "Sync reading progress across devices"}
                     />
                   </label>
 
@@ -1572,7 +1579,7 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                       {lastSyncSuccess ? (
                         <p>Last successful sync: {new Date(lastSyncSuccess * 1000).toLocaleString()}</p>
                       ) : (
-                        <p>No successful sync yet</p>
+                        <p>Sync will run automatically when you open a book</p>
                       )}
                       {lastSyncError && (!lastSyncSuccess || lastSyncError.at > lastSyncSuccess) && (
                         <p className="text-red-500">Last sync error: {lastSyncError.message}</p>
