@@ -3692,6 +3692,210 @@ pub async fn get_series(state: State<'_, AppState>) -> Result<Vec<SeriesInfo>, S
     db::list_series(&conn).map_err(|e| e.to_string())
 }
 
+// --- Sync orchestration ---
+
+fn merge_result_summary(r: &crate::sync::MergeResult) -> String {
+    let mut parts = Vec::new();
+    if r.progress_updated {
+        parts.push("progress synced".to_string());
+    }
+    let bm = r.bookmarks_added + r.bookmarks_updated;
+    if bm > 0 {
+        parts.push(format!("{bm} bookmarks updated"));
+    }
+    let hl = r.highlights_added + r.highlights_updated;
+    if hl > 0 {
+        parts.push(format!("{hl} highlights updated"));
+    }
+    if parts.is_empty() {
+        "no changes".to_string()
+    } else {
+        parts.join(", ")
+    }
+}
+
+fn now_unix_secs() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64
+}
+
+#[tauri::command]
+pub async fn sync_pull_book(
+    book_id: String,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
+
+    // Guard: sync must be enabled and backup provider configured
+    if !db::is_sync_enabled(&conn) {
+        return Ok(());
+    }
+    let config_json = match db::get_setting(&conn, "backup_config").map_err(|e| e.to_string())? {
+        Some(j) => j,
+        None => return Ok(()),
+    };
+
+    let mut config: crate::backup::BackupConfig =
+        serde_json::from_str(&config_json).map_err(|e| e.to_string())?;
+    crate::backup::load_secrets(&mut config)?;
+    let op = crate::backup::build_operator(&config)?;
+
+    let book = match db::get_book(&conn, &book_id).map_err(|e| e.to_string())? {
+        Some(b) => b,
+        None => return Err(format!("Book not found: {book_id}")),
+    };
+    let file_hash = match &book.file_hash {
+        Some(h) => h.clone(),
+        None => return Ok(()),
+    };
+    let device_id = db::get_or_create_device_id(&conn).map_err(|e| e.to_string())?;
+
+    // Run sync with a 5-second timeout using a thread + channel
+    let bid = book_id.clone();
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let result = crate::sync::sync_book_on_open(&conn, &op, &bid, &file_hash, &device_id);
+        let _ = tx.send(result);
+    });
+
+    let log_conn = state.active_db()?.get().map_err(|e| e.to_string())?;
+    let timeout = std::time::Duration::from_secs(5);
+    match rx.recv_timeout(timeout) {
+        Ok(Ok(merge_result)) => {
+            let _ = db::set_setting(
+                &log_conn,
+                "last_sync_success_at",
+                &now_unix_secs().to_string(),
+            );
+            if merge_result.has_changes() {
+                let summary = merge_result_summary(&merge_result);
+                log_activity(
+                    &log_conn,
+                    "sync_pull_success",
+                    "book",
+                    Some(&book_id),
+                    Some(&book.title),
+                    Some(&summary),
+                );
+                let _ = app.emit("sync-applied", &book_id);
+                if merge_result.progress_updated {
+                    let _ = app.emit("sync-progress-updated", &book_id);
+                }
+            }
+        }
+        Ok(Err(e)) => {
+            let msg = e.to_string();
+            let _ = db::set_setting(
+                &log_conn,
+                "last_sync_error_at",
+                &now_unix_secs().to_string(),
+            );
+            let _ = db::set_setting(&log_conn, "last_sync_error_message", &msg);
+            log_activity(
+                &log_conn,
+                "sync_pull_failed",
+                "book",
+                Some(&book_id),
+                Some(&book.title),
+                Some(&msg),
+            );
+        }
+        Err(_) => {
+            // Timeout
+            let msg = "timeout after 5s";
+            let _ = db::set_setting(
+                &log_conn,
+                "last_sync_error_at",
+                &now_unix_secs().to_string(),
+            );
+            let _ = db::set_setting(&log_conn, "last_sync_error_message", msg);
+            log_activity(
+                &log_conn,
+                "sync_pull_failed",
+                "book",
+                Some(&book_id),
+                Some(&book.title),
+                Some(msg),
+            );
+        }
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn sync_push_book(book_id: String, state: State<'_, AppState>) -> Result<(), String> {
+    let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
+
+    // Guard: sync must be enabled and backup provider configured
+    if !db::is_sync_enabled(&conn) {
+        return Ok(());
+    }
+    let config_json = match db::get_setting(&conn, "backup_config").map_err(|e| e.to_string())? {
+        Some(j) => j,
+        None => return Ok(()),
+    };
+
+    let mut config: crate::backup::BackupConfig =
+        serde_json::from_str(&config_json).map_err(|e| e.to_string())?;
+    crate::backup::load_secrets(&mut config)?;
+    let op = crate::backup::build_operator(&config)?;
+
+    let book = match db::get_book(&conn, &book_id).map_err(|e| e.to_string())? {
+        Some(b) => b,
+        None => return Err(format!("Book not found: {book_id}")),
+    };
+    let file_hash = match &book.file_hash {
+        Some(h) => h.clone(),
+        None => return Ok(()),
+    };
+    let device_id = db::get_or_create_device_id(&conn).map_err(|e| e.to_string())?;
+    let book_title = book.title.clone();
+
+    // Get a second DB connection for background logging
+    let bg_conn = state.active_db()?.get().map_err(|e| e.to_string())?;
+
+    // Fire-and-forget: spawn background thread
+    std::thread::spawn(move || {
+        match crate::sync::sync_book_on_close(&conn, &op, &book_id, &file_hash, &device_id) {
+            Ok(()) => {
+                let _ = db::set_setting(
+                    &bg_conn,
+                    "last_sync_success_at",
+                    &now_unix_secs().to_string(),
+                );
+                log_activity(
+                    &bg_conn,
+                    "sync_push_success",
+                    "book",
+                    Some(&book_id),
+                    Some(&book_title),
+                    Some("progress and annotations pushed"),
+                );
+            }
+            Err(e) => {
+                let msg = e.to_string();
+                let _ =
+                    db::set_setting(&bg_conn, "last_sync_error_at", &now_unix_secs().to_string());
+                let _ = db::set_setting(&bg_conn, "last_sync_error_message", &msg);
+                log_activity(
+                    &bg_conn,
+                    "sync_push_failed",
+                    "book",
+                    Some(&book_id),
+                    Some(&book_title),
+                    Some(&msg),
+                );
+            }
+        }
+    });
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

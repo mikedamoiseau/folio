@@ -290,6 +290,36 @@ pub fn push_remote_sync(
     Ok(())
 }
 
+/// Pull remote sync data for a book and merge into local DB.
+/// Returns the merge result (may be empty if no remote data exists).
+pub fn sync_book_on_open(
+    conn: &Connection,
+    op: &Operator,
+    book_id: &str,
+    file_hash: &str,
+    device_id: &str,
+) -> Result<MergeResult, SyncError> {
+    let remote = fetch_remote_sync(op, file_hash)?;
+    let remote = match remote {
+        Some(r) => r,
+        None => return Ok(MergeResult::default()),
+    };
+    let local = build_sync_payload(conn, book_id, file_hash, device_id);
+    Ok(merge_remote_into_local(conn, book_id, &local, &remote))
+}
+
+/// Build local sync payload and push to remote storage.
+pub fn sync_book_on_close(
+    conn: &Connection,
+    op: &Operator,
+    book_id: &str,
+    file_hash: &str,
+    device_id: &str,
+) -> Result<(), SyncError> {
+    let payload = build_sync_payload(conn, book_id, file_hash, device_id);
+    push_remote_sync(op, file_hash, &payload)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
