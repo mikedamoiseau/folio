@@ -1176,7 +1176,7 @@ pub async fn remove_bookmark(
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
-    db::delete_bookmark(&conn, &bookmark_id).map_err(|e| e.to_string())
+    db::soft_delete_bookmark(&conn, &bookmark_id).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -1462,7 +1462,7 @@ pub async fn remove_highlight(
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
-    db::delete_highlight(&conn, &highlight_id).map_err(|e| e.to_string())
+    db::soft_delete_highlight(&conn, &highlight_id).map_err(|e| e.to_string())
 }
 
 #[tauri::command]

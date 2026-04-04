@@ -552,6 +552,18 @@ pub fn delete_bookmark(conn: &Connection, id: &str) -> Result<()> {
     Ok(())
 }
 
+pub fn soft_delete_bookmark(conn: &Connection, id: &str) -> Result<()> {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64;
+    conn.execute(
+        "UPDATE bookmarks SET deleted_at = ?1, updated_at = ?1 WHERE id = ?2 AND deleted_at IS NULL",
+        params![now, id],
+    )?;
+    Ok(())
+}
+
 pub fn update_bookmark_name(conn: &Connection, id: &str, name: Option<&str>) -> Result<()> {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -974,6 +986,18 @@ pub fn update_highlight_note(conn: &Connection, id: &str, note: Option<&str>) ->
 
 pub fn delete_highlight(conn: &Connection, id: &str) -> Result<()> {
     conn.execute("DELETE FROM highlights WHERE id = ?1", params![id])?;
+    Ok(())
+}
+
+pub fn soft_delete_highlight(conn: &Connection, id: &str) -> Result<()> {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64;
+    conn.execute(
+        "UPDATE highlights SET deleted_at = ?1, updated_at = ?1 WHERE id = ?2 AND deleted_at IS NULL",
+        params![now, id],
+    )?;
     Ok(())
 }
 
@@ -2201,5 +2225,159 @@ mod tests {
             hl_updated, 400,
             "highlight updated_at should be backfilled to created_at"
         );
+    }
+
+    #[test]
+    fn test_soft_delete_bookmark() {
+        let (_dir, conn) = setup();
+        let book = sample_book("book-sdb");
+        insert_book(&conn, &book).unwrap();
+
+        let bm = Bookmark {
+            id: "bm-soft-1".to_string(),
+            book_id: "book-sdb".to_string(),
+            chapter_index: 1,
+            scroll_position: 0.5,
+            name: None,
+            note: Some("test note".to_string()),
+            created_at: 1700000000,
+            updated_at: 1700000000,
+            deleted_at: None,
+        };
+        insert_bookmark(&conn, &bm).unwrap();
+
+        // Bookmark visible before soft delete
+        let before = list_bookmarks(&conn, "book-sdb").unwrap();
+        assert_eq!(before.len(), 1);
+
+        // Soft delete
+        soft_delete_bookmark(&conn, "bm-soft-1").unwrap();
+
+        // Not returned by list_bookmarks
+        let after = list_bookmarks(&conn, "book-sdb").unwrap();
+        assert!(
+            after.is_empty(),
+            "soft-deleted bookmark should not appear in list"
+        );
+
+        // Row still exists in DB with deleted_at set
+        let (deleted_at, updated_at): (Option<i64>, i64) = conn
+            .query_row(
+                "SELECT deleted_at, updated_at FROM bookmarks WHERE id = 'bm-soft-1'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert!(deleted_at.is_some(), "deleted_at should be set");
+        assert_eq!(
+            deleted_at,
+            Some(updated_at),
+            "deleted_at and updated_at should match"
+        );
+        assert!(updated_at > 1700000000, "updated_at should be bumped");
+    }
+
+    #[test]
+    fn test_soft_delete_bookmark_idempotent() {
+        let (_dir, conn) = setup();
+        let book = sample_book("book-sdb-idem");
+        insert_book(&conn, &book).unwrap();
+
+        let bm = Bookmark {
+            id: "bm-idem-1".to_string(),
+            book_id: "book-sdb-idem".to_string(),
+            chapter_index: 0,
+            scroll_position: 0.0,
+            name: None,
+            note: None,
+            created_at: 1700000000,
+            updated_at: 1700000000,
+            deleted_at: None,
+        };
+        insert_bookmark(&conn, &bm).unwrap();
+
+        // First soft delete
+        soft_delete_bookmark(&conn, "bm-idem-1").unwrap();
+        let first_deleted_at: i64 = conn
+            .query_row(
+                "SELECT deleted_at FROM bookmarks WHERE id = 'bm-idem-1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+
+        // Second soft delete should not change deleted_at
+        soft_delete_bookmark(&conn, "bm-idem-1").unwrap();
+        let second_deleted_at: i64 = conn
+            .query_row(
+                "SELECT deleted_at FROM bookmarks WHERE id = 'bm-idem-1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+
+        assert_eq!(
+            first_deleted_at, second_deleted_at,
+            "deleted_at should not change on second soft delete"
+        );
+    }
+
+    #[test]
+    fn test_soft_delete_highlight() {
+        let (_dir, conn) = setup();
+        let book = sample_book("book-sdh2");
+        insert_book(&conn, &book).unwrap();
+
+        let hl = crate::models::Highlight {
+            id: "hl-soft-1".to_string(),
+            book_id: "book-sdh2".to_string(),
+            chapter_index: 2,
+            text: "highlighted text".to_string(),
+            color: "#ff0".to_string(),
+            note: None,
+            start_offset: 10,
+            end_offset: 26,
+            created_at: 1700000000,
+            updated_at: 1700000000,
+            deleted_at: None,
+        };
+        insert_highlight(&conn, &hl).unwrap();
+
+        // Highlight visible before soft delete
+        let before = list_highlights(&conn, "book-sdh2").unwrap();
+        assert_eq!(before.len(), 1);
+
+        // Soft delete
+        soft_delete_highlight(&conn, "hl-soft-1").unwrap();
+
+        // Not returned by list_highlights
+        let after = list_highlights(&conn, "book-sdh2").unwrap();
+        assert!(
+            after.is_empty(),
+            "soft-deleted highlight should not appear in list"
+        );
+
+        // Not returned by get_chapter_highlights either
+        let ch_after = get_chapter_highlights(&conn, "book-sdh2", 2).unwrap();
+        assert!(
+            ch_after.is_empty(),
+            "soft-deleted highlight should not appear in chapter list"
+        );
+
+        // Row still exists in DB with deleted_at set
+        let (deleted_at, updated_at): (Option<i64>, i64) = conn
+            .query_row(
+                "SELECT deleted_at, updated_at FROM highlights WHERE id = 'hl-soft-1'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert!(deleted_at.is_some(), "deleted_at should be set");
+        assert_eq!(
+            deleted_at,
+            Some(updated_at),
+            "deleted_at and updated_at should match"
+        );
+        assert!(updated_at > 1700000000, "updated_at should be bumped");
     }
 }
