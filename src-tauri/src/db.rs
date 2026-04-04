@@ -1014,6 +1014,115 @@ pub fn soft_delete_highlight(conn: &Connection, id: &str) -> Result<()> {
     Ok(())
 }
 
+// --- Sync-inclusive queries ---
+
+pub fn list_all_bookmarks_for_sync(conn: &Connection, book_id: &str) -> Result<Vec<Bookmark>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, book_id, chapter_index, scroll_position, name, note, created_at, updated_at, deleted_at
+         FROM bookmarks WHERE book_id = ?1 ORDER BY created_at ASC",
+    )?;
+    let rows = stmt.query_map(params![book_id], |row| {
+        Ok(Bookmark {
+            id: row.get(0)?,
+            book_id: row.get(1)?,
+            chapter_index: row.get(2)?,
+            scroll_position: row.get(3)?,
+            name: row.get(4)?,
+            note: row.get(5)?,
+            created_at: row.get(6)?,
+            updated_at: row.get(7)?,
+            deleted_at: row.get(8)?,
+        })
+    })?;
+    rows.collect()
+}
+
+pub fn list_all_highlights_for_sync(
+    conn: &Connection,
+    book_id: &str,
+) -> Result<Vec<crate::models::Highlight>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, book_id, chapter_index, text, color, note, start_offset, end_offset, created_at, updated_at, deleted_at
+         FROM highlights WHERE book_id = ?1 ORDER BY chapter_index ASC, start_offset ASC",
+    )?;
+    let rows = stmt.query_map(params![book_id], |row| {
+        Ok(crate::models::Highlight {
+            id: row.get(0)?,
+            book_id: row.get(1)?,
+            chapter_index: row.get(2)?,
+            text: row.get(3)?,
+            color: row.get(4)?,
+            note: row.get(5)?,
+            start_offset: row.get(6)?,
+            end_offset: row.get(7)?,
+            created_at: row.get(8)?,
+            updated_at: row.get(9)?,
+            deleted_at: row.get(10)?,
+        })
+    })?;
+    rows.collect()
+}
+
+pub fn upsert_bookmark_from_sync(conn: &Connection, bookmark: &Bookmark) -> Result<()> {
+    conn.execute(
+        "INSERT INTO bookmarks (id, book_id, chapter_index, scroll_position, name, note, created_at, updated_at, deleted_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+         ON CONFLICT(id) DO UPDATE SET
+           book_id=excluded.book_id,
+           chapter_index=excluded.chapter_index,
+           scroll_position=excluded.scroll_position,
+           name=excluded.name,
+           note=excluded.note,
+           created_at=excluded.created_at,
+           updated_at=excluded.updated_at,
+           deleted_at=excluded.deleted_at",
+        params![
+            bookmark.id,
+            bookmark.book_id,
+            bookmark.chapter_index,
+            bookmark.scroll_position,
+            bookmark.name,
+            bookmark.note,
+            bookmark.created_at,
+            bookmark.updated_at,
+            bookmark.deleted_at,
+        ],
+    )?;
+    Ok(())
+}
+
+pub fn upsert_highlight_from_sync(conn: &Connection, h: &crate::models::Highlight) -> Result<()> {
+    conn.execute(
+        "INSERT INTO highlights (id, book_id, chapter_index, text, color, note, start_offset, end_offset, created_at, updated_at, deleted_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+         ON CONFLICT(id) DO UPDATE SET
+           book_id=excluded.book_id,
+           chapter_index=excluded.chapter_index,
+           text=excluded.text,
+           color=excluded.color,
+           note=excluded.note,
+           start_offset=excluded.start_offset,
+           end_offset=excluded.end_offset,
+           created_at=excluded.created_at,
+           updated_at=excluded.updated_at,
+           deleted_at=excluded.deleted_at",
+        params![
+            h.id,
+            h.book_id,
+            h.chapter_index,
+            h.text,
+            h.color,
+            h.note,
+            h.start_offset,
+            h.end_offset,
+            h.created_at,
+            h.updated_at,
+            h.deleted_at,
+        ],
+    )?;
+    Ok(())
+}
+
 // --- Tags CRUD ---
 
 pub fn list_tags(conn: &Connection) -> Result<Vec<(String, String)>> {
