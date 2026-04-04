@@ -1,3 +1,4 @@
+use opendal::blocking::Operator;
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -249,6 +250,44 @@ pub fn merge_remote_into_local(
     }
 
     result
+}
+
+fn sync_path(file_hash: &str) -> String {
+    format!(".folio-sync/books/{file_hash}.json")
+}
+
+pub fn fetch_remote_sync(
+    op: &Operator,
+    file_hash: &str,
+) -> Result<Option<BookSyncFile>, SyncError> {
+    let path = sync_path(file_hash);
+    let data = match op.read(&path) {
+        Ok(buf) => buf,
+        Err(e) if e.kind() == opendal::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(SyncError::Transport(format!("Failed to read {path}: {e}"))),
+    };
+    let file: BookSyncFile = serde_json::from_slice(&data.to_vec())
+        .map_err(|e| SyncError::Malformed(format!("Failed to parse {path}: {e}")))?;
+    if file.schema_version > CURRENT_SCHEMA_VERSION {
+        return Err(SyncError::Malformed(format!(
+            "Unsupported schema version {} (max {})",
+            file.schema_version, CURRENT_SCHEMA_VERSION
+        )));
+    }
+    Ok(Some(file))
+}
+
+pub fn push_remote_sync(
+    op: &Operator,
+    file_hash: &str,
+    payload: &BookSyncFile,
+) -> Result<(), SyncError> {
+    let path = sync_path(file_hash);
+    let json = serde_json::to_string(payload)
+        .map_err(|e| SyncError::Malformed(format!("Failed to serialize sync payload: {e}")))?;
+    op.write(&path, json.into_bytes())
+        .map_err(|e| SyncError::Transport(format!("Failed to write {path}: {e}")))?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -655,5 +694,95 @@ mod tests {
         let all = db::list_all_bookmarks_for_sync(&conn, &book_id).unwrap();
         assert_eq!(all.len(), 1);
         assert!(all[0].deleted_at.is_some());
+    }
+
+    fn make_fs_operator(dir: &std::path::Path) -> Operator {
+        use crate::backup::{BackupConfig, ProviderType};
+        let config = BackupConfig {
+            provider_type: ProviderType::Fs,
+            values: [("root".to_string(), dir.to_string_lossy().to_string())].into(),
+        };
+        crate::backup::build_operator(&config).unwrap()
+    }
+
+    fn sample_sync_file() -> BookSyncFile {
+        BookSyncFile {
+            schema_version: CURRENT_SCHEMA_VERSION,
+            book_hash: "testhash123".to_string(),
+            device_id: "device-1".to_string(),
+            progress: Some(SyncProgress {
+                chapter_index: 5,
+                scroll_position: 0.42,
+                updated_at: 1700001000,
+            }),
+            bookmarks: vec![SyncBookmark {
+                id: "bm-1".to_string(),
+                chapter_index: 2,
+                scroll_position: 0.5,
+                name: Some("Test BM".to_string()),
+                note: None,
+                created_at: 1700000000,
+                updated_at: 1700000001,
+                deleted_at: None,
+            }],
+            highlights: vec![SyncHighlight {
+                id: "hl-1".to_string(),
+                chapter_index: 1,
+                start_offset: 10,
+                end_offset: 50,
+                text: "highlighted text".to_string(),
+                color: "#ffff00".to_string(),
+                note: None,
+                created_at: 1700000000,
+                updated_at: 1700000002,
+                deleted_at: None,
+            }],
+        }
+    }
+
+    #[test]
+    fn test_fetch_push_roundtrip_fs() {
+        let dir = tempdir().unwrap();
+        let op = make_fs_operator(dir.path());
+        let payload = sample_sync_file();
+
+        push_remote_sync(&op, "testhash123", &payload).unwrap();
+        let fetched = fetch_remote_sync(&op, "testhash123").unwrap().unwrap();
+
+        assert_eq!(fetched.schema_version, CURRENT_SCHEMA_VERSION);
+        assert_eq!(fetched.book_hash, "testhash123");
+        assert_eq!(fetched.device_id, "device-1");
+        let p = fetched.progress.unwrap();
+        assert_eq!(p.chapter_index, 5);
+        assert!((p.scroll_position - 0.42).abs() < f64::EPSILON);
+        assert_eq!(fetched.bookmarks.len(), 1);
+        assert_eq!(fetched.bookmarks[0].id, "bm-1");
+        assert_eq!(fetched.highlights.len(), 1);
+        assert_eq!(fetched.highlights[0].id, "hl-1");
+    }
+
+    #[test]
+    fn test_fetch_missing_file() {
+        let dir = tempdir().unwrap();
+        let op = make_fs_operator(dir.path());
+
+        let result = fetch_remote_sync(&op, "nonexistent_hash").unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_fetch_malformed_json() {
+        let dir = tempdir().unwrap();
+        let op = make_fs_operator(dir.path());
+
+        let path = sync_path("badhash");
+        op.write(&path, b"not valid json{{{".to_vec()).unwrap();
+
+        let result = fetch_remote_sync(&op, "badhash");
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            SyncError::Malformed(msg) => assert!(msg.contains("parse"), "got: {msg}"),
+            other => panic!("Expected Malformed, got: {other:?}"),
+        }
     }
 }
