@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { useTranslation } from "react-i18next";
 import { useTheme, MIN_FONT_SIZE, MAX_FONT_SIZE } from "../context/ThemeContext";
 import PageViewer from "../components/PageViewer";
@@ -106,6 +107,7 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
   const restoringScroll = useRef<number | null>(null);
   const savedScrollPosition = useRef<number | null>(null);
   const targetMatchOffset = useRef<number | null>(null);
+  const userHasInteracted = useRef(false);
 
   const isFileNotFound = (err: unknown): boolean => {
     const msg = String(err).toLowerCase();
@@ -258,6 +260,7 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
 
     function updateVisibleChapter() {
       if (!container) return;
+      userHasInteracted.current = true;
       const containerTop = container.scrollTop;
       const containerMid = containerTop + container.clientHeight / 3;
 
@@ -393,6 +396,7 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
 
     function handleScroll() {
       if (!container || restoringScroll.current === chapterIndex) return;
+      userHasInteracted.current = true;
       const { scrollTop, scrollHeight, clientHeight } = container;
       const maxScroll = scrollHeight - clientHeight;
       const progress = maxScroll > 0 ? scrollTop / maxScroll : 0;
@@ -420,6 +424,10 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
           durationSecs: duration,
           pagesRead: Math.abs(chapterIndex - startChapterRef.current) + 1,
         }).catch(() => {});
+      }
+      // Push local changes to sync remote on reader close
+      if (bookId) {
+        invoke("sync_push_book", { bookId }).catch(() => {});
       }
     };
   }, [saveProgress, bookId, chapterIndex]);
@@ -491,6 +499,44 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
   useEffect(() => {
     loadHighlights();
   }, [loadHighlights]);
+
+  // ---- Sync: pull on mount, listen for remote updates ----
+
+  useEffect(() => {
+    if (!bookId) return;
+
+    // Pull latest remote state on reader open (non-blocking)
+    invoke("sync_pull_book", { bookId }).catch(() => {});
+
+    // Listen for sync events targeting this book
+    const unlistenApplied = listen<string>("sync-applied", (event) => {
+      if (event.payload === bookId) {
+        // Remote bookmarks/highlights were merged — refresh from DB
+        loadHighlights();
+        setBookmarkRefreshKey((k) => k + 1);
+      }
+    });
+
+    const unlistenProgress = listen<string>("sync-progress-updated", (event) => {
+      if (event.payload === bookId && !userHasInteracted.current) {
+        // Remote progress arrived and user hasn't navigated — apply it
+        invoke<ReadingProgress | null>("get_reading_progress", { bookId })
+          .then((progress) => {
+            if (progress) {
+              setChapterIndex(progress.chapter_index);
+              savedScrollPosition.current = progress.scroll_position;
+              restoringScroll.current = progress.chapter_index;
+            }
+          })
+          .catch(() => {});
+      }
+    });
+
+    return () => {
+      unlistenApplied.then((fn) => fn());
+      unlistenProgress.then((fn) => fn());
+    };
+  }, [bookId, loadHighlights]);
 
   // Inject highlight <mark> tags into the sanitized HTML string.
   // This survives React re-renders (unlike DOM manipulation).
@@ -620,6 +666,7 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
   const goToChapter = useCallback(
     (index: number) => {
       if (index >= 0 && index < totalChapters) {
+        userHasInteracted.current = true;
         if (isContinuous) {
           // Scroll to the chapter div
           const chapterDiv = chapterDivRefs.current[index];
