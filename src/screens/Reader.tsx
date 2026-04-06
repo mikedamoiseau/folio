@@ -244,8 +244,13 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
         const chapterHeight = chapterDiv.offsetHeight;
         container.scrollTop = chapterTop + (scrollPos ?? 0) * chapterHeight;
       }
-      restoringScroll.current = null;
       savedScrollPosition.current = null;
+      // Defer clearing restoringScroll until after the scroll event from the
+      // programmatic scrollTop has been dispatched, so the continuous-scroll
+      // listener sees restoringScroll !== null and skips setting userHasInteracted.
+      requestAnimationFrame(() => {
+        restoringScroll.current = null;
+      });
     });
   }, [allChaptersLoaded, isContinuous]); // eslint-disable-line react-hooks/exhaustive-deps
   // Note: chapterIndex intentionally excluded — including it would re-fire
