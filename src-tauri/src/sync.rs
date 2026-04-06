@@ -145,6 +145,24 @@ pub fn build_sync_payload(
     }
 }
 
+fn bookmark_content_eq(a: &SyncBookmark, b: &SyncBookmark) -> bool {
+    a.chapter_index == b.chapter_index
+        && (a.scroll_position - b.scroll_position).abs() < f64::EPSILON
+        && a.name == b.name
+        && a.note == b.note
+        && a.deleted_at == b.deleted_at
+}
+
+fn highlight_content_eq(a: &SyncHighlight, b: &SyncHighlight) -> bool {
+    a.chapter_index == b.chapter_index
+        && a.start_offset == b.start_offset
+        && a.end_offset == b.end_offset
+        && a.text == b.text
+        && a.color == b.color
+        && a.note == b.note
+        && a.deleted_at == b.deleted_at
+}
+
 pub fn merge_remote_into_local(
     conn: &Connection,
     book_id: &str,
@@ -166,7 +184,22 @@ pub fn merge_remote_into_local(
                 result.progress_updated = true;
             }
         }
-        (Some(lp), Some(rp)) if rp.updated_at >= lp.updated_at => {
+        (Some(lp), Some(rp)) if rp.updated_at > lp.updated_at => {
+            let progress = ReadingProgress {
+                book_id: book_id.to_string(),
+                chapter_index: rp.chapter_index,
+                scroll_position: rp.scroll_position,
+                last_read_at: rp.updated_at,
+            };
+            if db::upsert_reading_progress(conn, &progress).is_ok() {
+                result.progress_updated = true;
+            }
+        }
+        (Some(lp), Some(rp))
+            if rp.updated_at == lp.updated_at
+                && (rp.chapter_index != lp.chapter_index
+                    || (rp.scroll_position - lp.scroll_position).abs() > f64::EPSILON) =>
+        {
             let progress = ReadingProgress {
                 book_id: book_id.to_string(),
                 chapter_index: rp.chapter_index,
@@ -203,7 +236,12 @@ pub fn merge_remote_into_local(
                     result.bookmarks_added += 1;
                 }
             }
-            Some(lb) if rb.updated_at >= lb.updated_at => {
+            Some(lb) if rb.updated_at > lb.updated_at => {
+                if db::upsert_bookmark_from_sync(conn, &bookmark).is_ok() {
+                    result.bookmarks_updated += 1;
+                }
+            }
+            Some(lb) if rb.updated_at == lb.updated_at && !bookmark_content_eq(rb, lb) => {
                 if db::upsert_bookmark_from_sync(conn, &bookmark).is_ok() {
                     result.bookmarks_updated += 1;
                 }
@@ -240,7 +278,12 @@ pub fn merge_remote_into_local(
                     result.highlights_added += 1;
                 }
             }
-            Some(lh) if rh.updated_at >= lh.updated_at => {
+            Some(lh) if rh.updated_at > lh.updated_at => {
+                if db::upsert_highlight_from_sync(conn, &highlight).is_ok() {
+                    result.highlights_updated += 1;
+                }
+            }
+            Some(lh) if rh.updated_at == lh.updated_at && !highlight_content_eq(rh, lh) => {
                 if db::upsert_highlight_from_sync(conn, &highlight).is_ok() {
                     result.highlights_updated += 1;
                 }
@@ -308,7 +351,8 @@ pub fn sync_book_on_open(
     Ok(merge_remote_into_local(conn, book_id, &local, &remote))
 }
 
-/// Build local sync payload and push to remote storage.
+/// Pull remote, merge into local DB, rebuild payload from merged state, then push.
+/// This ensures remote-only changes from other devices are preserved.
 pub fn sync_book_on_close(
     conn: &Connection,
     op: &Operator,
@@ -316,6 +360,13 @@ pub fn sync_book_on_close(
     file_hash: &str,
     device_id: &str,
 ) -> Result<(), SyncError> {
+    // Step 1: Pull and merge remote changes into local DB
+    if let Some(remote) = fetch_remote_sync(op, file_hash)? {
+        let local = build_sync_payload(conn, book_id, file_hash, device_id);
+        merge_remote_into_local(conn, book_id, &local, &remote);
+    }
+
+    // Step 2: Build fresh payload from merged local state and push
     let payload = build_sync_payload(conn, book_id, file_hash, device_id);
     push_remote_sync(op, file_hash, &payload)
 }

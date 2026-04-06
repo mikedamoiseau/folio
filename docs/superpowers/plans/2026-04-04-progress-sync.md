@@ -1447,7 +1447,9 @@ pub fn merge_remote_into_local(
             Some(local_bm) => {
                 // Both sides exist — newer updated_at wins.
                 // Equal timestamps + different payloads -> prefer remote for convergence.
-                if remote_bm.updated_at >= local_bm.updated_at {
+                // Equal timestamps + identical payloads -> skip (no-op).
+                if remote_bm.updated_at > local_bm.updated_at
+                    || (remote_bm.updated_at == local_bm.updated_at && /* content differs */) {
                     let bm = crate::models::Bookmark {
                         id: remote_bm.id.clone(),
                         book_id: book_id.to_string(),
@@ -1541,7 +1543,8 @@ git commit -m "feat(sync): implement build_sync_payload and merge_remote_into_lo
 
 build_sync_payload assembles local state including soft-deleted rows.
 merge_remote_into_local applies true LWW merge per item.
-Equal timestamps prefer remote for deterministic convergence."
+Equal timestamps + different payloads prefer remote for convergence.
+Equal timestamps + identical payloads skip write (no-op optimization)."
 ```
 
 ---
@@ -1698,6 +1701,7 @@ push_remote_sync writes JSON to .folio-sync/books/{hash}.json."
 - Pull must not block reader startup
 - Pull must have a 5-second timeout
 - Push must be background / fire-and-forget
+- Push must pull-merge before pushing to avoid overwriting remote-only changes
 - Sync business logic stays in `sync.rs`
 - `commands.rs` only wires the Tauri command surface, guard checks, logging, diagnostics, and events
 - Both commands must check `is_sync_enabled` + backup provider configured before doing anything
@@ -1724,7 +1728,8 @@ pub fn sync_book_on_open(
     Ok(merge_remote_into_local(conn, book_id, &local, &remote))
 }
 
-/// Orchestrate sync push for a book on close.
+/// Pull remote, merge into local DB, rebuild payload from merged state, then push.
+/// This ensures remote-only changes from other devices are preserved.
 pub fn sync_book_on_close(
     conn: &Connection,
     op: &Operator,
@@ -1732,6 +1737,13 @@ pub fn sync_book_on_close(
     file_hash: &str,
     device_id: &str,
 ) -> Result<(), SyncError> {
+    // Step 1: Pull and merge remote changes into local DB
+    if let Some(remote) = fetch_remote_sync(op, file_hash)? {
+        let local = build_sync_payload(conn, book_id, file_hash, device_id);
+        merge_remote_into_local(conn, book_id, &local, &remote);
+    }
+
+    // Step 2: Build fresh payload from merged local state and push
     let payload = build_sync_payload(conn, book_id, file_hash, device_id);
     push_remote_sync(op, file_hash, &payload)
 }
@@ -2076,20 +2088,28 @@ import { listen } from "@tauri-apps/api/event";
 
 Add a ref to track whether the user has interacted (navigated or scrolled) since mount. Set it to `true` in the existing chapter navigation and scroll handlers.
 
-Add a `useEffect` that:
-- Fires `sync_pull_book` on mount
-- Listens for `sync-applied` to refresh bookmarks/highlights
-- Listens for `sync-progress-updated` to apply remote progress (only if `userHasInteracted` is still false)
-- Cleans up listeners on unmount
+Add a `useEffect` that depends only on `[bookId]` (not `loadHighlights` or `chapterIndex`):
+1. Registers event listeners for `sync-applied` and `sync-progress-updated` FIRST
+2. Then fires `sync_pull_book` (so events are never missed due to a race)
+3. `sync-applied` callback uses a `loadHighlightsRef` to refresh bookmarks/highlights without causing the effect to re-run on chapter changes
+4. `sync-progress-updated` callback reads `chapterIndexRef.current` (not a closure-captured value) to avoid stale comparison
+5. Cleans up listeners on unmount
 
-Be careful with stale closures — use refs for values that change during the reader session (like `chapterIndex`) if they are referenced inside event callbacks.
+Be careful with stale closures — use refs for values that change during the reader session (like `chapterIndex`, `loadHighlights`) if they are referenced inside event callbacks.
 
 - [ ] **Step 3: Add sync push on unmount**
 
-In the existing cleanup effect (where `saveProgress` and `record_reading_session` are called), add:
+Add a **separate** `useEffect` with `[]` deps for the sync push. Do NOT place it in the existing cleanup effect (which depends on `saveProgress`, `bookId`, `chapterIndex`) — that cleanup runs on every chapter change, not just unmount. Use a `bookIdRef` to read the current book ID without adding a dependency:
 
 ```typescript
-invoke("sync_push_book", { bookId }).catch(() => {});
+useEffect(() => {
+  return () => {
+    const id = bookIdRef.current;
+    if (id) {
+      invoke("sync_push_book", { bookId: id }).catch(() => {});
+    }
+  };
+}, []);
 ```
 
 - [ ] **Step 4: Type-check**

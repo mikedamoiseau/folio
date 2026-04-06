@@ -407,6 +407,11 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
     return () => container.removeEventListener("scroll", handleScroll);
   }, [chapterHtml, chapterIndex]);
 
+  const bookIdRef = useRef(bookId);
+  const chapterIndexRef = useRef(chapterIndex);
+  useEffect(() => { bookIdRef.current = bookId; }, [bookId]);
+  useEffect(() => { chapterIndexRef.current = chapterIndex; }, [chapterIndex]);
+
   useEffect(() => {
     startChapterRef.current = chapterIndex;
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
@@ -425,12 +430,18 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
           pagesRead: Math.abs(chapterIndex - startChapterRef.current) + 1,
         }).catch(() => {});
       }
-      // Push local changes to sync remote on reader close
-      if (bookId) {
-        invoke("sync_push_book", { bookId }).catch(() => {});
-      }
     };
   }, [saveProgress, bookId, chapterIndex]);
+
+  // Push local changes to sync remote only on reader unmount (not on chapter change)
+  useEffect(() => {
+    return () => {
+      const id = bookIdRef.current;
+      if (id) {
+        invoke("sync_push_book", { bookId: id }).catch(() => {});
+      }
+    };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Text selection handler for highlights
   useEffect(() => {
@@ -496,23 +507,26 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
     }
   }, [bookId, chapterIndex]);
 
+  const loadHighlightsRef = useRef(loadHighlights);
+  useEffect(() => { loadHighlightsRef.current = loadHighlights; }, [loadHighlights]);
+
   useEffect(() => {
     loadHighlights();
   }, [loadHighlights]);
 
   // ---- Sync: pull on mount, listen for remote updates ----
+  // Listeners are registered before the pull to avoid a race where the backend
+  // emits events before the frontend is listening. Dependencies are only [bookId]
+  // so this effect runs once per book, not on every chapter change.
 
   useEffect(() => {
     if (!bookId) return;
-
-    // Pull latest remote state on reader open (non-blocking)
-    invoke("sync_pull_book", { bookId }).catch(() => {});
 
     // Listen for sync events targeting this book
     const unlistenApplied = listen<string>("sync-applied", (event) => {
       if (event.payload === bookId) {
         // Remote bookmarks/highlights were merged — refresh from DB
-        loadHighlights();
+        loadHighlightsRef.current();
         setBookmarkRefreshKey((k) => k + 1);
       }
     });
@@ -522,7 +536,7 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
         // Remote progress arrived and user hasn't navigated — apply it
         invoke<ReadingProgress | null>("get_reading_progress", { bookId })
           .then((progress) => {
-            if (progress && progress.chapter_index !== chapterIndex) {
+            if (progress && progress.chapter_index !== chapterIndexRef.current) {
               console.info(`[sync] Applying remote reading position: chapter ${progress.chapter_index}`);
               setChapterIndex(progress.chapter_index);
               savedScrollPosition.current = progress.scroll_position;
@@ -536,11 +550,15 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
       }
     });
 
+    // Pull latest remote state on reader open (non-blocking)
+    // Invoked AFTER listeners are registered so events are never missed.
+    invoke("sync_pull_book", { bookId }).catch(() => {});
+
     return () => {
       unlistenApplied.then((fn) => fn());
       unlistenProgress.then((fn) => fn());
     };
-  }, [bookId, loadHighlights]);
+  }, [bookId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Inject highlight <mark> tags into the sanitized HTML string.
   // This survives React re-renders (unlike DOM manipulation).

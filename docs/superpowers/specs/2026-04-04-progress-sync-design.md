@@ -228,8 +228,8 @@ enum SyncError {
 
 ### Merge rules
 
-- **Progress:** Compare `updated_at`. Remote newer -> apply. Local newer -> keep. Equal -> prefer remote for convergence.
-- **Bookmarks:** Per-item by `id`. Only one side exists -> keep. Both sides -> newer `updated_at` wins. Equal timestamps + different payloads -> prefer remote for convergence.
+- **Progress:** Compare `updated_at`. Remote newer -> apply. Local newer -> keep. Equal timestamps + different content -> prefer remote for convergence. Equal timestamps + identical content -> skip (no-op).
+- **Bookmarks:** Per-item by `id`. Only one side exists -> keep. Both sides -> newer `updated_at` wins. Equal timestamps + different payloads -> prefer remote for convergence. Equal timestamps + identical payloads -> skip (no-op).
 - **Highlights:** Same rules as bookmarks.
 
 These tie-break rules must be documented in code comments. The "prefer remote on equal timestamps" rule is a deterministic convergence choice, not a correctness guarantee.
@@ -255,12 +255,13 @@ The reader never waits for sync. Sync results arrive opportunistically.
 
 ### Push-on-close strategy
 
-Fire-and-forget via `tauri::async_runtime::spawn`:
+Fire-and-forget via background thread:
 
 1. Reader unmount calls `save_reading_progress` (existing behavior).
-2. After local save completes, spawns async task: build payload -> push to remote.
-3. Push failures logged to activity log.
-4. No retry queue in v1 — next book open/close will naturally re-sync.
+2. After local save completes, spawns background thread: pull remote -> merge into local DB -> rebuild payload from merged state -> push to remote.
+3. The pull-merge step before pushing ensures remote-only changes from other devices are preserved. Without it, a blind push would overwrite remote annotations that arrived while the reader was open, defeating per-entity convergence.
+4. Push failures logged to activity log.
+5. No retry queue in v1 — next book open/close will naturally re-sync.
 
 A push can still be lost if the app exits during the in-flight background write. This is an accepted v1 limitation.
 

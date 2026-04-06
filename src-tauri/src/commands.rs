@@ -3866,54 +3866,49 @@ pub async fn sync_push_book(book_id: String, state: State<'_, AppState>) -> Resu
     let device_id = db::get_or_create_device_id(&conn).map_err(|e| e.to_string())?;
     let book_title = book.title.clone();
 
-    // Build payload on main thread, then drop the connection back to the pool
-    let payload = crate::sync::build_sync_payload(&conn, &book_id, &file_hash, &device_id);
     drop(conn);
 
     // Clone the pool handle for the background thread (Pool is Arc-based, cheap to clone)
     let pool = state.active_db()?;
 
-    // Fire-and-forget: spawn background thread with only network I/O + logging
-    std::thread::spawn(
-        move || match crate::sync::push_remote_sync(&op, &file_hash, &payload) {
+    // Fire-and-forget: spawn background thread that pull-merges then pushes
+    std::thread::spawn(move || {
+        let bg_conn = match pool.get() {
+            Ok(c) => c,
+            Err(_) => return,
+        };
+        match crate::sync::sync_book_on_close(&bg_conn, &op, &book_id, &file_hash, &device_id) {
             Ok(()) => {
-                if let Ok(log_conn) = pool.get() {
-                    let _ = db::set_setting(
-                        &log_conn,
-                        "last_sync_success_at",
-                        &now_unix_secs().to_string(),
-                    );
-                    log_activity(
-                        &log_conn,
-                        "sync_push_success",
-                        "book",
-                        Some(&book_id),
-                        Some(&book_title),
-                        Some("progress and annotations pushed"),
-                    );
-                }
+                let _ = db::set_setting(
+                    &bg_conn,
+                    "last_sync_success_at",
+                    &now_unix_secs().to_string(),
+                );
+                log_activity(
+                    &bg_conn,
+                    "sync_push_success",
+                    "book",
+                    Some(&book_id),
+                    Some(&book_title),
+                    Some("progress and annotations pushed"),
+                );
             }
             Err(e) => {
-                if let Ok(log_conn) = pool.get() {
-                    let msg = friendly_sync_error(&e);
-                    let _ = db::set_setting(
-                        &log_conn,
-                        "last_sync_error_at",
-                        &now_unix_secs().to_string(),
-                    );
-                    let _ = db::set_setting(&log_conn, "last_sync_error_message", &msg);
-                    log_activity(
-                        &log_conn,
-                        "sync_push_failed",
-                        "book",
-                        Some(&book_id),
-                        Some(&book_title),
-                        Some(&e.to_string()),
-                    );
-                }
+                let msg = friendly_sync_error(&e);
+                let _ =
+                    db::set_setting(&bg_conn, "last_sync_error_at", &now_unix_secs().to_string());
+                let _ = db::set_setting(&bg_conn, "last_sync_error_message", &msg);
+                log_activity(
+                    &bg_conn,
+                    "sync_push_failed",
+                    "book",
+                    Some(&book_id),
+                    Some(&book_title),
+                    Some(&e.to_string()),
+                );
             }
-        },
-    );
+        }
+    });
 
     Ok(())
 }
