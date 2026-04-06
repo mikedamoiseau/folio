@@ -260,7 +260,11 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
 
     function updateVisibleChapter() {
       if (!container) return;
-      userHasInteracted.current = true;
+      // Don't mark as user-interacted during programmatic scroll restore —
+      // that would suppress applying valid remote progress updates.
+      if (restoringScroll.current === null) {
+        userHasInteracted.current = true;
+      }
       const containerTop = container.scrollTop;
       const containerMid = containerTop + container.clientHeight / 3;
 
@@ -433,13 +437,25 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
     };
   }, [saveProgress, bookId, chapterIndex]);
 
-  // Push local changes to sync remote only on reader unmount (not on chapter change)
+  // Push local changes to sync remote only on reader unmount (not on chapter change).
+  // Chains after an explicit save_reading_progress to guarantee the final position
+  // is in the DB before the sync payload is built.
+  const getScrollPosRef = useRef(getChapterScrollPosition);
+  useEffect(() => { getScrollPosRef.current = getChapterScrollPosition; }, [getChapterScrollPosition]);
+
   useEffect(() => {
     return () => {
       const id = bookIdRef.current;
-      if (id) {
-        invoke("sync_push_book", { bookId: id }).catch(() => {});
-      }
+      if (!id) return;
+      invoke("save_reading_progress", {
+        bookId: id,
+        chapterIndex: chapterIndexRef.current,
+        scrollPosition: getScrollPosRef.current(),
+      })
+        .catch(() => {})
+        .finally(() => {
+          invoke("sync_push_book", { bookId: id }).catch(() => {});
+        });
     };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
