@@ -508,6 +508,41 @@ Folio can sync your library to a remote storage provider for off-site backup. Co
 - Both successful and failed backups are logged in the activity log
 - Only one backup can run at a time (a second click is blocked while one is in progress)
 
+### Multi-device sync
+
+Folio can sync your reading progress, bookmarks, and highlights across multiple devices. Sync uses the same remote storage provider you configure for backup.
+
+**Enabling sync:**
+
+1. Configure a remote backup destination (S3, FTP, SFTP, or WebDAV) as described above
+2. In **Settings > Remote Backup**, toggle **"Sync reading progress across devices"** on
+
+**How it works:**
+
+- **When you open a book:** Folio silently checks the remote storage for sync data from other devices. If another device has newer reading progress, bookmarks, or highlights, they are merged into your local library. This happens in the background with a 5-second timeout — your book opens immediately regardless.
+- **When you close a book:** Folio pushes your current reading state to the remote storage in the background. Other devices will pick up these changes next time they open the same book.
+- **Book matching:** Books are matched by content hash (SHA-256), so the same file on different devices syncs correctly even if the filenames differ.
+
+**What syncs:**
+
+- Reading position (chapter and scroll position)
+- Bookmarks (including names and notes)
+- Highlights (including colors and notes)
+- Deletions — if you remove a bookmark or highlight on one device, it's removed on others too
+
+**What does not sync:**
+
+- Book files themselves (use backup for that)
+- Collections, tags, or star ratings
+- Reading statistics
+- Settings or theme preferences
+
+**Conflict resolution:** When the same item is edited on two devices, the most recent edit wins (based on timestamps). If timestamps are equal, the remote version is preferred. This is automatic — there's no manual conflict resolution.
+
+**Sync status:** When sync is enabled, the Settings panel shows the time of the last successful sync. If a sync fails (network issues, server unreachable), a user-friendly error message is displayed. Errors clear automatically after the next successful sync.
+
+**Sync and backup are independent:** Sync is a lightweight, per-book data exchange for reading state. Backup is a full library export. You can use one without the other, though both require a remote storage provider. Enabling sync does not trigger a backup and vice versa.
+
 ---
 
 ## 11. Reading Stats

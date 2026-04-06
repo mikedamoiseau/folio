@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { useTranslation } from "react-i18next";
 import { useTheme, MIN_FONT_SIZE, MAX_FONT_SIZE } from "../context/ThemeContext";
 import PageViewer from "../components/PageViewer";
@@ -106,6 +107,7 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
   const restoringScroll = useRef<number | null>(null);
   const savedScrollPosition = useRef<number | null>(null);
   const targetMatchOffset = useRef<number | null>(null);
+  const userHasInteracted = useRef(false);
 
   const isFileNotFound = (err: unknown): boolean => {
     const msg = String(err).toLowerCase();
@@ -242,8 +244,13 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
         const chapterHeight = chapterDiv.offsetHeight;
         container.scrollTop = chapterTop + (scrollPos ?? 0) * chapterHeight;
       }
-      restoringScroll.current = null;
       savedScrollPosition.current = null;
+      // Defer clearing restoringScroll until after the scroll event from the
+      // programmatic scrollTop has been dispatched, so the continuous-scroll
+      // listener sees restoringScroll !== null and skips setting userHasInteracted.
+      requestAnimationFrame(() => {
+        restoringScroll.current = null;
+      });
     });
   }, [allChaptersLoaded, isContinuous]); // eslint-disable-line react-hooks/exhaustive-deps
   // Note: chapterIndex intentionally excluded — including it would re-fire
@@ -258,6 +265,11 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
 
     function updateVisibleChapter() {
       if (!container) return;
+      // Don't mark as user-interacted during programmatic scroll restore —
+      // that would suppress applying valid remote progress updates.
+      if (restoringScroll.current === null) {
+        userHasInteracted.current = true;
+      }
       const containerTop = container.scrollTop;
       const containerMid = containerTop + container.clientHeight / 3;
 
@@ -393,6 +405,7 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
 
     function handleScroll() {
       if (!container || restoringScroll.current === chapterIndex) return;
+      userHasInteracted.current = true;
       const { scrollTop, scrollHeight, clientHeight } = container;
       const maxScroll = scrollHeight - clientHeight;
       const progress = maxScroll > 0 ? scrollTop / maxScroll : 0;
@@ -402,6 +415,11 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
     container.addEventListener("scroll", handleScroll, { passive: true });
     return () => container.removeEventListener("scroll", handleScroll);
   }, [chapterHtml, chapterIndex]);
+
+  const bookIdRef = useRef(bookId);
+  const chapterIndexRef = useRef(chapterIndex);
+  useEffect(() => { bookIdRef.current = bookId; }, [bookId]);
+  useEffect(() => { chapterIndexRef.current = chapterIndex; }, [chapterIndex]);
 
   useEffect(() => {
     startChapterRef.current = chapterIndex;
@@ -423,6 +441,28 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
       }
     };
   }, [saveProgress, bookId, chapterIndex]);
+
+  // Push local changes to sync remote only on reader unmount (not on chapter change).
+  // Chains after an explicit save_reading_progress to guarantee the final position
+  // is in the DB before the sync payload is built.
+  const getScrollPosRef = useRef(getChapterScrollPosition);
+  useEffect(() => { getScrollPosRef.current = getChapterScrollPosition; }, [getChapterScrollPosition]);
+
+  useEffect(() => {
+    return () => {
+      const id = bookIdRef.current;
+      if (!id) return;
+      invoke("save_reading_progress", {
+        bookId: id,
+        chapterIndex: chapterIndexRef.current,
+        scrollPosition: getScrollPosRef.current(),
+      })
+        .catch(() => {})
+        .finally(() => {
+          invoke("sync_push_book", { bookId: id }).catch(() => {});
+        });
+    };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Text selection handler for highlights
   useEffect(() => {
@@ -488,9 +528,58 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
     }
   }, [bookId, chapterIndex]);
 
+  const loadHighlightsRef = useRef(loadHighlights);
+  useEffect(() => { loadHighlightsRef.current = loadHighlights; }, [loadHighlights]);
+
   useEffect(() => {
     loadHighlights();
   }, [loadHighlights]);
+
+  // ---- Sync: pull on mount, listen for remote updates ----
+  // Listeners are registered before the pull to avoid a race where the backend
+  // emits events before the frontend is listening. Dependencies are only [bookId]
+  // so this effect runs once per book, not on every chapter change.
+
+  useEffect(() => {
+    if (!bookId) return;
+
+    // Listen for sync events targeting this book
+    const unlistenApplied = listen<string>("sync-applied", (event) => {
+      if (event.payload === bookId) {
+        // Remote bookmarks/highlights were merged — refresh from DB
+        loadHighlightsRef.current();
+        setBookmarkRefreshKey((k) => k + 1);
+      }
+    });
+
+    const unlistenProgress = listen<string>("sync-progress-updated", (event) => {
+      if (event.payload === bookId && !userHasInteracted.current) {
+        // Remote progress arrived and user hasn't navigated — apply it
+        invoke<ReadingProgress | null>("get_reading_progress", { bookId })
+          .then((progress) => {
+            if (progress && progress.chapter_index !== chapterIndexRef.current) {
+              console.info(`[sync] Applying remote reading position: chapter ${progress.chapter_index}`);
+              setChapterIndex(progress.chapter_index);
+              savedScrollPosition.current = progress.scroll_position;
+              restoringScroll.current = progress.chapter_index;
+            } else if (progress) {
+              savedScrollPosition.current = progress.scroll_position;
+              restoringScroll.current = progress.chapter_index;
+            }
+          })
+          .catch(() => {});
+      }
+    });
+
+    // Pull latest remote state on reader open (non-blocking)
+    // Invoked AFTER listeners are registered so events are never missed.
+    invoke("sync_pull_book", { bookId }).catch(() => {});
+
+    return () => {
+      unlistenApplied.then((fn) => fn());
+      unlistenProgress.then((fn) => fn());
+    };
+  }, [bookId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Inject highlight <mark> tags into the sanitized HTML string.
   // This survives React re-renders (unlike DOM manipulation).
@@ -620,6 +709,7 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
   const goToChapter = useCallback(
     (index: number) => {
       if (index >= 0 && index < totalChapters) {
+        userHasInteracted.current = true;
         if (isContinuous) {
           // Scroll to the chapter div
           const chapterDiv = chapterDivRefs.current[index];

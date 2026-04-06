@@ -166,6 +166,10 @@ fn run_schema(conn: &Connection) -> Result<()> {
     let _ =
         conn.execute_batch("ALTER TABLE books ADD COLUMN is_imported INTEGER NOT NULL DEFAULT 1;");
 
+    // Sync: add deleted_at for soft-delete support
+    let _ = conn.execute_batch("ALTER TABLE bookmarks ADD COLUMN deleted_at INTEGER;");
+    let _ = conn.execute_batch("ALTER TABLE highlights ADD COLUMN deleted_at INTEGER;");
+
     // Backfill: set updated_at = added_at or created_at for existing rows
     let _ = conn.execute_batch("UPDATE books SET updated_at = added_at WHERE updated_at = 0;");
     let _ =
@@ -454,6 +458,19 @@ pub fn set_setting(conn: &Connection, key: &str, value: &str) -> Result<()> {
     Ok(())
 }
 
+pub fn get_or_create_device_id(conn: &Connection) -> Result<String> {
+    if let Some(id) = get_setting(conn, "device_id")? {
+        return Ok(id);
+    }
+    let id = uuid::Uuid::new_v4().to_string();
+    set_setting(conn, "device_id", &id)?;
+    Ok(id)
+}
+
+pub fn is_sync_enabled(conn: &Connection) -> bool {
+    get_setting(conn, "sync_enabled").ok().flatten().as_deref() == Some("true")
+}
+
 // --- ReadingProgress CRUD ---
 
 pub fn upsert_reading_progress(conn: &Connection, progress: &ReadingProgress) -> Result<()> {
@@ -506,8 +523,8 @@ pub fn get_recently_read_books(conn: &Connection, limit: u32) -> Result<Vec<Book
 
 pub fn insert_bookmark(conn: &Connection, bookmark: &Bookmark) -> Result<()> {
     conn.execute(
-        "INSERT INTO bookmarks (id, book_id, chapter_index, scroll_position, name, note, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        "INSERT INTO bookmarks (id, book_id, chapter_index, scroll_position, name, note, created_at, updated_at, deleted_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
         params![
             bookmark.id,
             bookmark.book_id,
@@ -516,7 +533,8 @@ pub fn insert_bookmark(conn: &Connection, bookmark: &Bookmark) -> Result<()> {
             bookmark.name,
             bookmark.note,
             bookmark.created_at,
-            bookmark.created_at,
+            bookmark.updated_at,
+            bookmark.deleted_at,
         ],
     )?;
     Ok(())
@@ -524,8 +542,8 @@ pub fn insert_bookmark(conn: &Connection, bookmark: &Bookmark) -> Result<()> {
 
 pub fn list_bookmarks(conn: &Connection, book_id: &str) -> Result<Vec<Bookmark>> {
     let mut stmt = conn.prepare(
-        "SELECT id, book_id, chapter_index, scroll_position, name, note, created_at
-         FROM bookmarks WHERE book_id = ?1 ORDER BY created_at ASC",
+        "SELECT id, book_id, chapter_index, scroll_position, name, note, created_at, updated_at, deleted_at
+         FROM bookmarks WHERE book_id = ?1 AND deleted_at IS NULL ORDER BY created_at ASC",
     )?;
     let rows = stmt.query_map(params![book_id], |row| {
         Ok(Bookmark {
@@ -536,6 +554,8 @@ pub fn list_bookmarks(conn: &Connection, book_id: &str) -> Result<Vec<Bookmark>>
             name: row.get(4)?,
             note: row.get(5)?,
             created_at: row.get(6)?,
+            updated_at: row.get(7)?,
+            deleted_at: row.get(8)?,
         })
     })?;
     rows.collect()
@@ -543,6 +563,18 @@ pub fn list_bookmarks(conn: &Connection, book_id: &str) -> Result<Vec<Bookmark>>
 
 pub fn delete_bookmark(conn: &Connection, id: &str) -> Result<()> {
     conn.execute("DELETE FROM bookmarks WHERE id = ?1", params![id])?;
+    Ok(())
+}
+
+pub fn soft_delete_bookmark(conn: &Connection, id: &str) -> Result<()> {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64;
+    conn.execute(
+        "UPDATE bookmarks SET deleted_at = ?1, updated_at = ?1 WHERE id = ?2 AND deleted_at IS NULL",
+        params![now, id],
+    )?;
     Ok(())
 }
 
@@ -897,17 +929,17 @@ pub fn get_reading_stats(conn: &Connection) -> Result<ReadingStats> {
 
 pub fn insert_highlight(conn: &Connection, h: &crate::models::Highlight) -> Result<()> {
     conn.execute(
-        "INSERT INTO highlights (id, book_id, chapter_index, text, color, note, start_offset, end_offset, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
-        params![h.id, h.book_id, h.chapter_index, h.text, h.color, h.note, h.start_offset, h.end_offset, h.created_at, h.created_at],
+        "INSERT INTO highlights (id, book_id, chapter_index, text, color, note, start_offset, end_offset, created_at, updated_at, deleted_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+        params![h.id, h.book_id, h.chapter_index, h.text, h.color, h.note, h.start_offset, h.end_offset, h.created_at, h.updated_at, h.deleted_at],
     )?;
     Ok(())
 }
 
 pub fn list_highlights(conn: &Connection, book_id: &str) -> Result<Vec<crate::models::Highlight>> {
     let mut stmt = conn.prepare(
-        "SELECT id, book_id, chapter_index, text, color, note, start_offset, end_offset, created_at
-         FROM highlights WHERE book_id = ?1 ORDER BY chapter_index ASC, start_offset ASC",
+        "SELECT id, book_id, chapter_index, text, color, note, start_offset, end_offset, created_at, updated_at, deleted_at
+         FROM highlights WHERE book_id = ?1 AND deleted_at IS NULL ORDER BY chapter_index ASC, start_offset ASC",
     )?;
     let rows = stmt.query_map(params![book_id], |row| {
         Ok(crate::models::Highlight {
@@ -920,6 +952,8 @@ pub fn list_highlights(conn: &Connection, book_id: &str) -> Result<Vec<crate::mo
             start_offset: row.get(6)?,
             end_offset: row.get(7)?,
             created_at: row.get(8)?,
+            updated_at: row.get(9)?,
+            deleted_at: row.get(10)?,
         })
     })?;
     rows.collect()
@@ -931,8 +965,8 @@ pub fn get_chapter_highlights(
     chapter_index: u32,
 ) -> Result<Vec<crate::models::Highlight>> {
     let mut stmt = conn.prepare(
-        "SELECT id, book_id, chapter_index, text, color, note, start_offset, end_offset, created_at
-         FROM highlights WHERE book_id = ?1 AND chapter_index = ?2 ORDER BY start_offset ASC",
+        "SELECT id, book_id, chapter_index, text, color, note, start_offset, end_offset, created_at, updated_at, deleted_at
+         FROM highlights WHERE book_id = ?1 AND chapter_index = ?2 AND deleted_at IS NULL ORDER BY start_offset ASC",
     )?;
     let rows = stmt.query_map(params![book_id, chapter_index], |row| {
         Ok(crate::models::Highlight {
@@ -945,6 +979,8 @@ pub fn get_chapter_highlights(
             start_offset: row.get(6)?,
             end_offset: row.get(7)?,
             created_at: row.get(8)?,
+            updated_at: row.get(9)?,
+            deleted_at: row.get(10)?,
         })
     })?;
     rows.collect()
@@ -964,6 +1000,127 @@ pub fn update_highlight_note(conn: &Connection, id: &str, note: Option<&str>) ->
 
 pub fn delete_highlight(conn: &Connection, id: &str) -> Result<()> {
     conn.execute("DELETE FROM highlights WHERE id = ?1", params![id])?;
+    Ok(())
+}
+
+pub fn soft_delete_highlight(conn: &Connection, id: &str) -> Result<()> {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64;
+    conn.execute(
+        "UPDATE highlights SET deleted_at = ?1, updated_at = ?1 WHERE id = ?2 AND deleted_at IS NULL",
+        params![now, id],
+    )?;
+    Ok(())
+}
+
+// --- Sync-inclusive queries ---
+
+pub fn list_all_bookmarks_for_sync(conn: &Connection, book_id: &str) -> Result<Vec<Bookmark>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, book_id, chapter_index, scroll_position, name, note, created_at, updated_at, deleted_at
+         FROM bookmarks WHERE book_id = ?1 ORDER BY created_at ASC",
+    )?;
+    let rows = stmt.query_map(params![book_id], |row| {
+        Ok(Bookmark {
+            id: row.get(0)?,
+            book_id: row.get(1)?,
+            chapter_index: row.get(2)?,
+            scroll_position: row.get(3)?,
+            name: row.get(4)?,
+            note: row.get(5)?,
+            created_at: row.get(6)?,
+            updated_at: row.get(7)?,
+            deleted_at: row.get(8)?,
+        })
+    })?;
+    rows.collect()
+}
+
+pub fn list_all_highlights_for_sync(
+    conn: &Connection,
+    book_id: &str,
+) -> Result<Vec<crate::models::Highlight>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, book_id, chapter_index, text, color, note, start_offset, end_offset, created_at, updated_at, deleted_at
+         FROM highlights WHERE book_id = ?1 ORDER BY chapter_index ASC, start_offset ASC",
+    )?;
+    let rows = stmt.query_map(params![book_id], |row| {
+        Ok(crate::models::Highlight {
+            id: row.get(0)?,
+            book_id: row.get(1)?,
+            chapter_index: row.get(2)?,
+            text: row.get(3)?,
+            color: row.get(4)?,
+            note: row.get(5)?,
+            start_offset: row.get(6)?,
+            end_offset: row.get(7)?,
+            created_at: row.get(8)?,
+            updated_at: row.get(9)?,
+            deleted_at: row.get(10)?,
+        })
+    })?;
+    rows.collect()
+}
+
+pub fn upsert_bookmark_from_sync(conn: &Connection, bookmark: &Bookmark) -> Result<()> {
+    conn.execute(
+        "INSERT INTO bookmarks (id, book_id, chapter_index, scroll_position, name, note, created_at, updated_at, deleted_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+         ON CONFLICT(id) DO UPDATE SET
+           book_id=excluded.book_id,
+           chapter_index=excluded.chapter_index,
+           scroll_position=excluded.scroll_position,
+           name=excluded.name,
+           note=excluded.note,
+           created_at=excluded.created_at,
+           updated_at=excluded.updated_at,
+           deleted_at=excluded.deleted_at",
+        params![
+            bookmark.id,
+            bookmark.book_id,
+            bookmark.chapter_index,
+            bookmark.scroll_position,
+            bookmark.name,
+            bookmark.note,
+            bookmark.created_at,
+            bookmark.updated_at,
+            bookmark.deleted_at,
+        ],
+    )?;
+    Ok(())
+}
+
+pub fn upsert_highlight_from_sync(conn: &Connection, h: &crate::models::Highlight) -> Result<()> {
+    conn.execute(
+        "INSERT INTO highlights (id, book_id, chapter_index, text, color, note, start_offset, end_offset, created_at, updated_at, deleted_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+         ON CONFLICT(id) DO UPDATE SET
+           book_id=excluded.book_id,
+           chapter_index=excluded.chapter_index,
+           text=excluded.text,
+           color=excluded.color,
+           note=excluded.note,
+           start_offset=excluded.start_offset,
+           end_offset=excluded.end_offset,
+           created_at=excluded.created_at,
+           updated_at=excluded.updated_at,
+           deleted_at=excluded.deleted_at",
+        params![
+            h.id,
+            h.book_id,
+            h.chapter_index,
+            h.text,
+            h.color,
+            h.note,
+            h.start_offset,
+            h.end_offset,
+            h.created_at,
+            h.updated_at,
+            h.deleted_at,
+        ],
+    )?;
     Ok(())
 }
 
@@ -1473,6 +1630,8 @@ mod tests {
             name: None,
             note: Some("Great quote".to_string()),
             created_at: 1700000200,
+            updated_at: 1700000200,
+            deleted_at: None,
         };
         insert_bookmark(&conn, &bookmark).unwrap();
 
@@ -1499,6 +1658,8 @@ mod tests {
             name: None,
             note: None,
             created_at: 1700000400,
+            updated_at: 1700000400,
+            deleted_at: None,
         };
         insert_bookmark(&conn, &bookmark).unwrap();
 
@@ -1528,6 +1689,8 @@ mod tests {
             name: None,
             note: None,
             created_at: 1700000300,
+            updated_at: 1700000300,
+            deleted_at: None,
         };
         insert_bookmark(&conn, &bookmark).unwrap();
 
@@ -1986,5 +2149,391 @@ mod tests {
             .unwrap();
         assert_eq!(path, "/library/b1.epub");
         assert_eq!(imported, 1);
+    }
+
+    #[test]
+    fn test_soft_deleted_bookmark_excluded_from_list() {
+        let (_dir, conn) = setup();
+        let book = sample_book("book-sd");
+        insert_book(&conn, &book).unwrap();
+
+        let bm = Bookmark {
+            id: "bm-sd-1".to_string(),
+            book_id: "book-sd".to_string(),
+            chapter_index: 0,
+            scroll_position: 0.0,
+            name: None,
+            note: None,
+            created_at: 1700000000,
+            updated_at: 1700000000,
+            deleted_at: None,
+        };
+        insert_bookmark(&conn, &bm).unwrap();
+
+        // Verify it appears before soft-delete
+        let before = list_bookmarks(&conn, "book-sd").unwrap();
+        assert_eq!(before.len(), 1);
+
+        // Soft-delete via raw SQL
+        conn.execute(
+            "UPDATE bookmarks SET deleted_at = 1700001000 WHERE id = 'bm-sd-1'",
+            [],
+        )
+        .unwrap();
+
+        // Should be excluded from list
+        let after = list_bookmarks(&conn, "book-sd").unwrap();
+        assert!(after.is_empty(), "soft-deleted bookmark should be excluded");
+    }
+
+    #[test]
+    fn test_soft_deleted_highlight_excluded_from_list() {
+        let (_dir, conn) = setup();
+        let book = sample_book("book-sdh");
+        insert_book(&conn, &book).unwrap();
+
+        let hl = crate::models::Highlight {
+            id: "hl-sd-1".to_string(),
+            book_id: "book-sdh".to_string(),
+            chapter_index: 1,
+            text: "some text".to_string(),
+            color: "#ff0".to_string(),
+            note: None,
+            start_offset: 0,
+            end_offset: 9,
+            created_at: 1700000000,
+            updated_at: 1700000000,
+            deleted_at: None,
+        };
+        insert_highlight(&conn, &hl).unwrap();
+
+        // Verify it appears before soft-delete
+        let before = list_highlights(&conn, "book-sdh").unwrap();
+        assert_eq!(before.len(), 1);
+
+        // Also check get_chapter_highlights
+        let ch_before = get_chapter_highlights(&conn, "book-sdh", 1).unwrap();
+        assert_eq!(ch_before.len(), 1);
+
+        // Soft-delete via raw SQL
+        conn.execute(
+            "UPDATE highlights SET deleted_at = 1700001000 WHERE id = 'hl-sd-1'",
+            [],
+        )
+        .unwrap();
+
+        // Should be excluded from both queries
+        let after = list_highlights(&conn, "book-sdh").unwrap();
+        assert!(
+            after.is_empty(),
+            "soft-deleted highlight should be excluded from list_highlights"
+        );
+
+        let ch_after = get_chapter_highlights(&conn, "book-sdh", 1).unwrap();
+        assert!(
+            ch_after.is_empty(),
+            "soft-deleted highlight should be excluded from get_chapter_highlights"
+        );
+    }
+
+    #[test]
+    fn test_deleted_at_column_exists_after_migration() {
+        let dir = tempfile::tempdir().unwrap();
+        let conn = init_db(dir.path().join("test.db").as_path()).unwrap();
+
+        // Verify deleted_at column exists on bookmarks by inserting a value
+        conn.execute(
+            "INSERT INTO books (id, title, author, file_path, total_chapters, added_at, format) VALUES ('b1', 'T', 'A', '/t', 0, 100, 'epub')",
+            [],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO bookmarks (id, book_id, chapter_index, scroll_position, created_at, updated_at, deleted_at) VALUES ('bm1', 'b1', 0, 0.0, 100, 100, 999)",
+            [],
+        ).unwrap();
+        let val: Option<i64> = conn
+            .query_row(
+                "SELECT deleted_at FROM bookmarks WHERE id = 'bm1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(val, Some(999));
+
+        // Verify deleted_at column exists on highlights
+        conn.execute(
+            "INSERT INTO highlights (id, book_id, chapter_index, text, color, start_offset, end_offset, created_at, updated_at, deleted_at) VALUES ('h1', 'b1', 0, 'hi', '#fff', 0, 2, 100, 100, 888)",
+            [],
+        ).unwrap();
+        let val: Option<i64> = conn
+            .query_row(
+                "SELECT deleted_at FROM highlights WHERE id = 'h1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(val, Some(888));
+
+        // NULL by default when not set
+        conn.execute(
+            "INSERT INTO bookmarks (id, book_id, chapter_index, scroll_position, created_at, updated_at) VALUES ('bm2', 'b1', 0, 0.0, 100, 100)",
+            [],
+        ).unwrap();
+        let null_val: Option<i64> = conn
+            .query_row(
+                "SELECT deleted_at FROM bookmarks WHERE id = 'bm2'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(null_val.is_none(), "deleted_at should default to NULL");
+    }
+
+    #[test]
+    fn test_updated_at_backfill() {
+        // Simulate a pre-migration database: create schema, insert rows with updated_at=0,
+        // then run schema again to trigger backfill.
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("test.db");
+        let conn = Connection::open(&db_path).unwrap();
+        conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
+        run_schema(&conn).unwrap();
+
+        // Insert book with updated_at = 0 (simulating pre-migration row)
+        conn.execute(
+            "INSERT INTO books (id, title, author, file_path, total_chapters, added_at, format, updated_at) VALUES ('b1', 'T', 'A', '/t', 0, 500, 'epub', 0)",
+            [],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO bookmarks (id, book_id, chapter_index, scroll_position, created_at, updated_at) VALUES ('bm1', 'b1', 0, 0.0, 300, 0)",
+            [],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO highlights (id, book_id, chapter_index, text, color, start_offset, end_offset, created_at, updated_at) VALUES ('h1', 'b1', 0, 'x', '#000', 0, 1, 400, 0)",
+            [],
+        ).unwrap();
+
+        // Re-run schema to trigger backfill
+        run_schema(&conn).unwrap();
+
+        let book_updated: i64 = conn
+            .query_row("SELECT updated_at FROM books WHERE id = 'b1'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(
+            book_updated, 500,
+            "book updated_at should be backfilled to added_at"
+        );
+
+        let bm_updated: i64 = conn
+            .query_row(
+                "SELECT updated_at FROM bookmarks WHERE id = 'bm1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            bm_updated, 300,
+            "bookmark updated_at should be backfilled to created_at"
+        );
+
+        let hl_updated: i64 = conn
+            .query_row(
+                "SELECT updated_at FROM highlights WHERE id = 'h1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            hl_updated, 400,
+            "highlight updated_at should be backfilled to created_at"
+        );
+    }
+
+    #[test]
+    fn test_soft_delete_bookmark() {
+        let (_dir, conn) = setup();
+        let book = sample_book("book-sdb");
+        insert_book(&conn, &book).unwrap();
+
+        let bm = Bookmark {
+            id: "bm-soft-1".to_string(),
+            book_id: "book-sdb".to_string(),
+            chapter_index: 1,
+            scroll_position: 0.5,
+            name: None,
+            note: Some("test note".to_string()),
+            created_at: 1700000000,
+            updated_at: 1700000000,
+            deleted_at: None,
+        };
+        insert_bookmark(&conn, &bm).unwrap();
+
+        // Bookmark visible before soft delete
+        let before = list_bookmarks(&conn, "book-sdb").unwrap();
+        assert_eq!(before.len(), 1);
+
+        // Soft delete
+        soft_delete_bookmark(&conn, "bm-soft-1").unwrap();
+
+        // Not returned by list_bookmarks
+        let after = list_bookmarks(&conn, "book-sdb").unwrap();
+        assert!(
+            after.is_empty(),
+            "soft-deleted bookmark should not appear in list"
+        );
+
+        // Row still exists in DB with deleted_at set
+        let (deleted_at, updated_at): (Option<i64>, i64) = conn
+            .query_row(
+                "SELECT deleted_at, updated_at FROM bookmarks WHERE id = 'bm-soft-1'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert!(deleted_at.is_some(), "deleted_at should be set");
+        assert_eq!(
+            deleted_at,
+            Some(updated_at),
+            "deleted_at and updated_at should match"
+        );
+        assert!(updated_at > 1700000000, "updated_at should be bumped");
+    }
+
+    #[test]
+    fn test_soft_delete_bookmark_idempotent() {
+        let (_dir, conn) = setup();
+        let book = sample_book("book-sdb-idem");
+        insert_book(&conn, &book).unwrap();
+
+        let bm = Bookmark {
+            id: "bm-idem-1".to_string(),
+            book_id: "book-sdb-idem".to_string(),
+            chapter_index: 0,
+            scroll_position: 0.0,
+            name: None,
+            note: None,
+            created_at: 1700000000,
+            updated_at: 1700000000,
+            deleted_at: None,
+        };
+        insert_bookmark(&conn, &bm).unwrap();
+
+        // First soft delete
+        soft_delete_bookmark(&conn, "bm-idem-1").unwrap();
+        let first_deleted_at: i64 = conn
+            .query_row(
+                "SELECT deleted_at FROM bookmarks WHERE id = 'bm-idem-1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+
+        // Second soft delete should not change deleted_at
+        soft_delete_bookmark(&conn, "bm-idem-1").unwrap();
+        let second_deleted_at: i64 = conn
+            .query_row(
+                "SELECT deleted_at FROM bookmarks WHERE id = 'bm-idem-1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+
+        assert_eq!(
+            first_deleted_at, second_deleted_at,
+            "deleted_at should not change on second soft delete"
+        );
+    }
+
+    #[test]
+    fn test_soft_delete_highlight() {
+        let (_dir, conn) = setup();
+        let book = sample_book("book-sdh2");
+        insert_book(&conn, &book).unwrap();
+
+        let hl = crate::models::Highlight {
+            id: "hl-soft-1".to_string(),
+            book_id: "book-sdh2".to_string(),
+            chapter_index: 2,
+            text: "highlighted text".to_string(),
+            color: "#ff0".to_string(),
+            note: None,
+            start_offset: 10,
+            end_offset: 26,
+            created_at: 1700000000,
+            updated_at: 1700000000,
+            deleted_at: None,
+        };
+        insert_highlight(&conn, &hl).unwrap();
+
+        // Highlight visible before soft delete
+        let before = list_highlights(&conn, "book-sdh2").unwrap();
+        assert_eq!(before.len(), 1);
+
+        // Soft delete
+        soft_delete_highlight(&conn, "hl-soft-1").unwrap();
+
+        // Not returned by list_highlights
+        let after = list_highlights(&conn, "book-sdh2").unwrap();
+        assert!(
+            after.is_empty(),
+            "soft-deleted highlight should not appear in list"
+        );
+
+        // Not returned by get_chapter_highlights either
+        let ch_after = get_chapter_highlights(&conn, "book-sdh2", 2).unwrap();
+        assert!(
+            ch_after.is_empty(),
+            "soft-deleted highlight should not appear in chapter list"
+        );
+
+        // Row still exists in DB with deleted_at set
+        let (deleted_at, updated_at): (Option<i64>, i64) = conn
+            .query_row(
+                "SELECT deleted_at, updated_at FROM highlights WHERE id = 'hl-soft-1'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert!(deleted_at.is_some(), "deleted_at should be set");
+        assert_eq!(
+            deleted_at,
+            Some(updated_at),
+            "deleted_at and updated_at should match"
+        );
+        assert!(updated_at > 1700000000, "updated_at should be bumped");
+    }
+
+    #[test]
+    fn test_get_or_create_device_id() {
+        let (_dir, conn) = setup();
+
+        // First call creates a UUID
+        let id1 = get_or_create_device_id(&conn).unwrap();
+        assert_eq!(id1.len(), 36, "UUID v4 string should be 36 chars");
+
+        // Second call returns the same ID
+        let id2 = get_or_create_device_id(&conn).unwrap();
+        assert_eq!(id1, id2, "device_id should be stable across calls");
+    }
+
+    #[test]
+    fn test_is_sync_enabled() {
+        let (_dir, conn) = setup();
+
+        // Missing key → false
+        assert!(!is_sync_enabled(&conn));
+
+        // "true" → true
+        set_setting(&conn, "sync_enabled", "true").unwrap();
+        assert!(is_sync_enabled(&conn));
+
+        // "false" → false
+        set_setting(&conn, "sync_enabled", "false").unwrap();
+        assert!(!is_sync_enabled(&conn));
+
+        // "yes" → false (only exact "true" is truthy)
+        set_setting(&conn, "sync_enabled", "yes").unwrap();
+        assert!(!is_sync_enabled(&conn));
     }
 }

@@ -631,7 +631,7 @@ pub fn run_incremental_backup_with_progress(
     let bookmarks: Vec<crate::models::Bookmark> = {
         let mut stmt = conn
             .prepare(
-                "SELECT id, book_id, chapter_index, scroll_position, name, note, created_at FROM bookmarks",
+                "SELECT id, book_id, chapter_index, scroll_position, name, note, created_at, updated_at, deleted_at FROM bookmarks WHERE deleted_at IS NULL",
             )
             .map_err(|e| e.to_string())?;
         let rows = stmt
@@ -644,6 +644,8 @@ pub fn run_incremental_backup_with_progress(
                     name: row.get(4)?,
                     note: row.get(5)?,
                     created_at: row.get(6)?,
+                    updated_at: row.get(7)?,
+                    deleted_at: row.get(8)?,
                 })
             })
             .map_err(|e| e.to_string())?;
@@ -659,7 +661,7 @@ pub fn run_incremental_backup_with_progress(
     let highlights: Vec<crate::models::Highlight> = {
         let mut stmt = conn
             .prepare(
-                "SELECT id, book_id, chapter_index, text, color, note, start_offset, end_offset, created_at FROM highlights",
+                "SELECT id, book_id, chapter_index, text, color, note, start_offset, end_offset, created_at, updated_at, deleted_at FROM highlights WHERE deleted_at IS NULL",
             )
             .map_err(|e| e.to_string())?;
         let rows = stmt
@@ -674,6 +676,8 @@ pub fn run_incremental_backup_with_progress(
                     start_offset: row.get(6)?,
                     end_offset: row.get(7)?,
                     created_at: row.get(8)?,
+                    updated_at: row.get(9)?,
+                    deleted_at: row.get(10)?,
                 })
             })
             .map_err(|e| e.to_string())?;

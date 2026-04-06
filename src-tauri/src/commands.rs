@@ -1148,6 +1148,10 @@ pub async fn add_bookmark(
     note: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<Bookmark, String> {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64;
     let bookmark = Bookmark {
         id: Uuid::new_v4().to_string(),
         book_id,
@@ -1155,10 +1159,9 @@ pub async fn add_bookmark(
         scroll_position,
         name: None,
         note,
-        created_at: std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs() as i64,
+        created_at: now,
+        updated_at: now,
+        deleted_at: None,
     };
 
     let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
@@ -1173,7 +1176,7 @@ pub async fn remove_bookmark(
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
-    db::delete_bookmark(&conn, &bookmark_id).map_err(|e| e.to_string())
+    db::soft_delete_bookmark(&conn, &bookmark_id).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -1402,6 +1405,10 @@ pub async fn add_highlight(
     note: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<Highlight, String> {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64;
     let highlight = Highlight {
         id: Uuid::new_v4().to_string(),
         book_id,
@@ -1411,10 +1418,9 @@ pub async fn add_highlight(
         note,
         start_offset,
         end_offset,
-        created_at: std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs() as i64,
+        created_at: now,
+        updated_at: now,
+        deleted_at: None,
     };
     let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
     db::insert_highlight(&conn, &highlight).map_err(|e| e.to_string())?;
@@ -1456,7 +1462,7 @@ pub async fn remove_highlight(
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
-    db::delete_highlight(&conn, &highlight_id).map_err(|e| e.to_string())
+    db::soft_delete_highlight(&conn, &highlight_id).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -3684,6 +3690,227 @@ pub async fn list_auto_backups(state: State<'_, AppState>) -> Result<Vec<AutoBac
 pub async fn get_series(state: State<'_, AppState>) -> Result<Vec<SeriesInfo>, String> {
     let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
     db::list_series(&conn).map_err(|e| e.to_string())
+}
+
+// --- Sync orchestration ---
+
+fn merge_result_summary(r: &crate::sync::MergeResult) -> String {
+    let mut parts = Vec::new();
+    if r.progress_updated {
+        parts.push("progress synced".to_string());
+    }
+    let bm = r.bookmarks_added + r.bookmarks_updated;
+    if bm > 0 {
+        parts.push(format!("{bm} bookmarks updated"));
+    }
+    let hl = r.highlights_added + r.highlights_updated;
+    if hl > 0 {
+        parts.push(format!("{hl} highlights updated"));
+    }
+    if parts.is_empty() {
+        "no changes".to_string()
+    } else {
+        parts.join(", ")
+    }
+}
+
+fn friendly_sync_error(e: &crate::sync::SyncError) -> String {
+    match e {
+        crate::sync::SyncError::Timeout => {
+            "Remote server did not respond within 5 seconds".to_string()
+        }
+        crate::sync::SyncError::Transport(_) => {
+            "Could not reach remote storage. Check your internet connection and backup settings."
+                .to_string()
+        }
+        crate::sync::SyncError::Malformed(_) => {
+            "Remote sync data is unreadable. It may have been created by a newer version of Folio."
+                .to_string()
+        }
+    }
+}
+
+fn now_unix_secs() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64
+}
+
+#[tauri::command]
+pub async fn sync_pull_book(
+    book_id: String,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
+
+    // Guard: sync must be enabled and backup provider configured
+    if !db::is_sync_enabled(&conn) {
+        return Ok(());
+    }
+    let config_json = match db::get_setting(&conn, "backup_config").map_err(|e| e.to_string())? {
+        Some(j) => j,
+        None => return Ok(()),
+    };
+
+    let mut config: crate::backup::BackupConfig =
+        serde_json::from_str(&config_json).map_err(|e| e.to_string())?;
+    crate::backup::load_secrets(&mut config)?;
+    let op = crate::backup::build_operator(&config)?;
+
+    let book = match db::get_book(&conn, &book_id).map_err(|e| e.to_string())? {
+        Some(b) => b,
+        None => return Err(format!("Book not found: {book_id}")),
+    };
+    let file_hash = match &book.file_hash {
+        Some(h) => h.clone(),
+        None => return Ok(()),
+    };
+    let device_id = db::get_or_create_device_id(&conn).map_err(|e| e.to_string())?;
+
+    // Spawn thread for network fetch only — keep DB connection on main thread
+    let fh = file_hash.clone();
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let result = crate::sync::fetch_remote_sync(&op, &fh);
+        let _ = tx.send(result);
+    });
+
+    let timeout = std::time::Duration::from_secs(5);
+    match rx.recv_timeout(timeout) {
+        Ok(Ok(Some(remote))) => {
+            // Merge on main thread using the existing connection
+            let local = crate::sync::build_sync_payload(&conn, &book_id, &file_hash, &device_id);
+            let merge_result =
+                crate::sync::merge_remote_into_local(&conn, &book_id, &local, &remote);
+            let _ = db::set_setting(&conn, "last_sync_success_at", &now_unix_secs().to_string());
+            if merge_result.has_changes() {
+                let summary = merge_result_summary(&merge_result);
+                log_activity(
+                    &conn,
+                    "sync_pull_success",
+                    "book",
+                    Some(&book_id),
+                    Some(&book.title),
+                    Some(&summary),
+                );
+                let _ = app.emit("sync-applied", &book_id);
+                if merge_result.progress_updated {
+                    let _ = app.emit("sync-progress-updated", &book_id);
+                }
+            }
+        }
+        Ok(Ok(None)) => {
+            // No remote file — success (nothing to merge)
+            let _ = db::set_setting(&conn, "last_sync_success_at", &now_unix_secs().to_string());
+        }
+        Ok(Err(e)) => {
+            let msg = friendly_sync_error(&e);
+            let _ = db::set_setting(&conn, "last_sync_error_at", &now_unix_secs().to_string());
+            let _ = db::set_setting(&conn, "last_sync_error_message", &msg);
+            log_activity(
+                &conn,
+                "sync_pull_failed",
+                "book",
+                Some(&book_id),
+                Some(&book.title),
+                Some(&e.to_string()),
+            );
+        }
+        Err(_) => {
+            // Timeout
+            let msg = "Remote server did not respond within 5 seconds";
+            let _ = db::set_setting(&conn, "last_sync_error_at", &now_unix_secs().to_string());
+            let _ = db::set_setting(&conn, "last_sync_error_message", msg);
+            log_activity(
+                &conn,
+                "sync_pull_failed",
+                "book",
+                Some(&book_id),
+                Some(&book.title),
+                Some("timeout after 5s"),
+            );
+        }
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn sync_push_book(book_id: String, state: State<'_, AppState>) -> Result<(), String> {
+    let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
+
+    // Guard: sync must be enabled and backup provider configured
+    if !db::is_sync_enabled(&conn) {
+        return Ok(());
+    }
+    let config_json = match db::get_setting(&conn, "backup_config").map_err(|e| e.to_string())? {
+        Some(j) => j,
+        None => return Ok(()),
+    };
+
+    let mut config: crate::backup::BackupConfig =
+        serde_json::from_str(&config_json).map_err(|e| e.to_string())?;
+    crate::backup::load_secrets(&mut config)?;
+    let op = crate::backup::build_operator(&config)?;
+
+    let book = match db::get_book(&conn, &book_id).map_err(|e| e.to_string())? {
+        Some(b) => b,
+        None => return Err(format!("Book not found: {book_id}")),
+    };
+    let file_hash = match &book.file_hash {
+        Some(h) => h.clone(),
+        None => return Ok(()),
+    };
+    let device_id = db::get_or_create_device_id(&conn).map_err(|e| e.to_string())?;
+    let book_title = book.title.clone();
+
+    drop(conn);
+
+    // Clone the pool handle for the background thread (Pool is Arc-based, cheap to clone)
+    let pool = state.active_db()?;
+
+    // Fire-and-forget: spawn background thread that pull-merges then pushes
+    std::thread::spawn(move || {
+        let bg_conn = match pool.get() {
+            Ok(c) => c,
+            Err(_) => return,
+        };
+        match crate::sync::sync_book_on_close(&bg_conn, &op, &book_id, &file_hash, &device_id) {
+            Ok(()) => {
+                let _ = db::set_setting(
+                    &bg_conn,
+                    "last_sync_success_at",
+                    &now_unix_secs().to_string(),
+                );
+                log_activity(
+                    &bg_conn,
+                    "sync_push_success",
+                    "book",
+                    Some(&book_id),
+                    Some(&book_title),
+                    Some("progress and annotations pushed"),
+                );
+            }
+            Err(e) => {
+                let msg = friendly_sync_error(&e);
+                let _ =
+                    db::set_setting(&bg_conn, "last_sync_error_at", &now_unix_secs().to_string());
+                let _ = db::set_setting(&bg_conn, "last_sync_error_message", &msg);
+                log_activity(
+                    &bg_conn,
+                    "sync_push_failed",
+                    "book",
+                    Some(&book_id),
+                    Some(&book_title),
+                    Some(&e.to_string()),
+                );
+            }
+        }
+    });
+
+    Ok(())
 }
 
 #[cfg(test)]

@@ -320,6 +320,9 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
   const [backupProgressText, setBackupProgressText] = useState("");
   const [backupStatus, setBackupStatus] = useState<SyncManifest | null>(null);
   const [remoteBackupMessage, setRemoteBackupMessage] = useState<string | null>(null);
+  const [syncEnabled, setSyncEnabled] = useState(false);
+  const [lastSyncSuccess, setLastSyncSuccess] = useState<number | null>(null);
+  const [lastSyncError, setLastSyncError] = useState<{ at: number; message: string } | null>(null);
 
   // Custom fonts
   interface CustomFont {
@@ -429,6 +432,20 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
       }
       const status = await invoke<SyncManifest | null>("get_backup_status");
       setBackupStatus(status);
+
+      const syncSetting = await invoke<string | null>("get_setting_value", { key: "sync_enabled" });
+      setSyncEnabled(syncSetting === "true");
+
+      const successAt = await invoke<string | null>("get_setting_value", { key: "last_sync_success_at" });
+      setLastSyncSuccess(successAt ? parseInt(successAt, 10) : null);
+
+      const errorAt = await invoke<string | null>("get_setting_value", { key: "last_sync_error_at" });
+      const errorMsg = await invoke<string | null>("get_setting_value", { key: "last_sync_error_message" });
+      if (errorAt) {
+        setLastSyncError({ at: parseInt(errorAt, 10), message: errorMsg || "Unknown error" });
+      } else {
+        setLastSyncError(null);
+      }
     } catch (e) {
       console.error('Failed to load backup settings:', e);
     }
@@ -665,6 +682,16 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
       setRemoteBackupMessage(t("settings.saveFailed", { error: friendlyError(String(err), t) }));
     } finally {
       setSavingBackupConfig(false);
+    }
+  };
+
+  const handleToggleSync = async (enabled: boolean) => {
+    const prev = syncEnabled;
+    setSyncEnabled(enabled);
+    try {
+      await invoke("set_setting_value", { key: "sync_enabled", value: enabled ? "true" : "false" });
+    } catch {
+      setSyncEnabled(prev);
     }
   };
 
@@ -1524,6 +1551,42 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                 {remoteBackupMessage && (
                   <p className="text-xs text-ink-muted px-1">{remoteBackupMessage}</p>
                 )}
+
+                {/* Sync toggle */}
+                <div className="bg-warm-subtle rounded-xl px-3 py-2.5 mt-2">
+                  <label className="flex items-center justify-between cursor-pointer">
+                    <div>
+                      <span className="text-sm font-medium text-ink">Sync reading progress across devices</span>
+                      <p className="text-xs text-ink-muted mt-0.5">
+                        {savedBackupConfig
+                          ? "Syncs reading progress, bookmarks, and highlights across devices using your configured remote backup destination. Does not sync book files."
+                          : "Configure a remote backup destination to enable sync."}
+                      </p>
+                    </div>
+                    <input
+                      id="sync-toggle"
+                      type="checkbox"
+                      checked={syncEnabled}
+                      disabled={!savedBackupConfig}
+                      onChange={(e) => handleToggleSync(e.target.checked)}
+                      className="ml-3 h-4 w-4 rounded accent-accent"
+                      aria-label={!savedBackupConfig ? "Sync disabled: configure a remote backup destination first" : "Sync reading progress across devices"}
+                    />
+                  </label>
+
+                  {syncEnabled && savedBackupConfig && (
+                    <div className="mt-2 text-xs text-ink-muted space-y-0.5">
+                      {lastSyncSuccess ? (
+                        <p>Last successful sync: {new Date(lastSyncSuccess * 1000).toLocaleString()}</p>
+                      ) : (
+                        <p>Sync will run automatically when you open a book</p>
+                      )}
+                      {lastSyncError && (!lastSyncSuccess || lastSyncError.at > lastSyncSuccess) && (
+                        <p className="text-red-500">Last sync error: {lastSyncError.message}</p>
+                      )}
+                    </div>
+                  )}
+                </div>
               </div>
             </Accordion>
           )}

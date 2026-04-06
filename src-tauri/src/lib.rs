@@ -11,6 +11,7 @@ pub mod openlibrary;
 pub mod page_cache;
 pub mod pdf;
 pub mod providers;
+pub mod sync;
 
 use commands::{AppState, LruCache, ProfileState};
 use tauri::Manager;
@@ -213,6 +214,8 @@ pub fn run() {
             commands::prepare_comic,
             commands::get_cache_stats,
             commands::clear_page_cache,
+            commands::sync_pull_book,
+            commands::sync_push_book,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

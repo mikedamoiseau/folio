@@ -76,6 +76,8 @@ pub struct Bookmark {
     pub name: Option<String>,
     pub note: Option<String>,
     pub created_at: i64,
+    pub updated_at: i64,
+    pub deleted_at: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -90,6 +92,8 @@ pub struct Highlight {
     pub start_offset: u32,
     pub end_offset: u32,
     pub created_at: i64,
+    pub updated_at: i64,
+    pub deleted_at: Option<i64>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -230,6 +234,64 @@ mod tests {
         assert_eq!(json, "\"epub\"");
         let back: BookFormat = serde_json::from_str(&json).unwrap();
         assert_eq!(back, BookFormat::Epub);
+    }
+
+    #[test]
+    fn bookmark_serde_with_timestamps() {
+        let bookmark = Bookmark {
+            id: "bm-1".to_string(),
+            book_id: "book-1".to_string(),
+            chapter_index: 3,
+            scroll_position: 0.5,
+            name: Some("My Bookmark".to_string()),
+            note: None,
+            created_at: 1700000000,
+            updated_at: 1700000000,
+            deleted_at: None,
+        };
+        let json = serde_json::to_string(&bookmark).unwrap();
+        let back: Bookmark = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.updated_at, 1700000000);
+        assert_eq!(back.deleted_at, None);
+
+        // With deleted_at set
+        let deleted_bookmark = Bookmark {
+            deleted_at: Some(1700001000),
+            ..bookmark
+        };
+        let json2 = serde_json::to_string(&deleted_bookmark).unwrap();
+        let back2: Bookmark = serde_json::from_str(&json2).unwrap();
+        assert_eq!(back2.deleted_at, Some(1700001000));
+    }
+
+    #[test]
+    fn highlight_serde_with_timestamps() {
+        let highlight = Highlight {
+            id: "hl-1".to_string(),
+            book_id: "book-1".to_string(),
+            chapter_index: 2,
+            text: "highlighted text".to_string(),
+            color: "yellow".to_string(),
+            note: Some("A note".to_string()),
+            start_offset: 10,
+            end_offset: 26,
+            created_at: 1700000000,
+            updated_at: 1700000000,
+            deleted_at: None,
+        };
+        let json = serde_json::to_string(&highlight).unwrap();
+        let back: Highlight = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.updated_at, 1700000000);
+        assert_eq!(back.deleted_at, None);
+
+        // With deleted_at set
+        let deleted_highlight = Highlight {
+            deleted_at: Some(1700002000),
+            ..highlight
+        };
+        let json2 = serde_json::to_string(&deleted_highlight).unwrap();
+        let back2: Highlight = serde_json::from_str(&json2).unwrap();
+        assert_eq!(back2.deleted_at, Some(1700002000));
     }
 
     #[test]
