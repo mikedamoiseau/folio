@@ -12,6 +12,7 @@ pub mod page_cache;
 pub mod pdf;
 pub mod providers;
 pub mod sync;
+pub mod web_server;
 
 use commands::{AppState, LruCache, ProfileState};
 use tauri::Manager;
