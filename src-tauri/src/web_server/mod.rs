@@ -4,7 +4,7 @@ pub mod opds_feed;
 pub mod web_ui;
 
 use crate::db::DbPool;
-use axum::Router;
+use axum::{middleware, Router};
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -64,6 +64,10 @@ pub fn build_router(state: WebState) -> Router {
         .nest("/api", api_routes)
         .nest("/opds", opds_routes)
         .merge(ui_routes)
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            auth::auth_middleware,
+        ))
         .with_state(state)
 }
 

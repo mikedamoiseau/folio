@@ -131,16 +131,5 @@ pub async fn auth_middleware(
         }
     }
 
-    // Check query param token (for simple browser links)
-    if let Some(query) = req.uri().query() {
-        for pair in query.split('&') {
-            if let Some(token) = pair.strip_prefix("token=") {
-                if validate_session(&state, token) {
-                    return next.run(req).await;
-                }
-            }
-        }
-    }
-
     (StatusCode::UNAUTHORIZED, "Authentication required").into_response()
 }
