@@ -54,3 +54,50 @@ Both look correct.
 
 ---
 
+
+## [Codex — Reviewer] Round 2
+
+NEEDS_FIX: `/api/auth` still allows cheap online PIN brute-forcing, and the stored PIN hash is still trivial to crack offline if exposed.
+
+1. **File:** [src-tauri/src/web_server/auth.rs](/Users/mike/Documents/www/private/ebook-reader/src-tauri/src/web_server/auth.rs#L15), [src-tauri/src/web_server/auth.rs](/Users/mike/Documents/www/private/ebook-reader/src-tauri/src/web_server/auth.rs#L37), [src-tauri/src/web_server/api.rs](/Users/mike/Documents/www/private/ebook-reader/src-tauri/src/web_server/api.rs#L27), [src-tauri/src/web_server/mod.rs](/Users/mike/Documents/www/private/ebook-reader/src-tauri/src/web_server/mod.rs#L75)  
+**What:** A machine on the same network can script repeated `POST /api/auth` attempts until it guesses the PIN, and if the keychain-stored hash is ever disclosed, the PIN can be cracked offline cheaply.  
+**Why:** `hash_pin()` uses plain unsalted SHA-256 for a low-entropy secret, `verify_pin()` just recomputes that fast hash, and `login()` performs no throttling, backoff, or lockout before minting a session. The server is also started on `0.0.0.0`, so this endpoint is reachable from the LAN.  
+**Impact:** An attacker can recover the PIN and obtain a valid session token, bypassing the intended access control for the LAN-exposed web server.  
+**Fix:** Replace the PIN storage/verification path with a password KDF such as Argon2id using a per-PIN random salt, perform constant-time verification through that library, and add rate limiting or lockout on `/api/auth` keyed to client identity.  
+**Severity:** BLOCKING  
+**Fixable:** NO
+
+---
+
+
+## [Claude Code — Implementer] Round 2
+
+## Round 2 Analysis
+
+### Finding 1: SHA-256 PIN hashing + no rate limiting on `/api/auth`
+
+**Verdict: Acknowledged — NOT fixing (Fixable: NO)**
+
+This is the exact same finding as Round 1 #3, re-raised verbatim. Codex has again marked it **Fixable: NO** (requires human judgment), so per the review protocol I will not attempt to fix it.
+
+My technical perspective:
+
+- **The concern is technically valid.** SHA-256 is a fast hash, and a 4–6 digit PIN has negligible entropy against offline brute-force. Argon2id with a random salt would be the correct choice for production.
+- **However, the threat model is bounded.** This server is LAN-only (not internet-exposed), user-initiated (not always-on), and the PIN hash lives in the OS keychain — not in a file or database that's easily exfiltrated. Offline cracking requires the attacker to already have compromised the keychain, at which point they likely have broader access anyway.
+- **Rate limiting is a fair ask** and would be straightforward to add (an in-memory counter per IP with exponential backoff). This should go in the auth-hardening step.
+- **This is a skeleton commit.** The branch name is literally `feat/web-server-step1-skeleton`. Swapping to Argon2id means adding a new crate dependency (`argon2`), changing the stored format (salt+hash), updating `store_pin`/`load_pin_hash`/`verify_pin`, and handling migration of any existing keychain entries. That's real work that belongs in a dedicated auth-hardening step, not shoehorned into a skeleton PR.
+
+**Recommendation for the human reviewer:** Schedule Argon2id + rate limiting as a follow-up before this feature ships to users. Do not merge to `main` without it. But it doesn't need to block this skeleton PR from being reviewed for its structural correctness.
+
+---
+
+## Round 2 Summary
+
+| # | Finding | Severity | Fixable | Verdict | Action |
+|---|---------|----------|---------|---------|--------|
+| 1 | SHA-256 + no rate limiting on PIN (re-raise of R1 #3) | BLOCKING | NO | **Acknowledged — not fixing in this PR** | Deferred to auth-hardening step. LAN-only threat model + skeleton scope. Recommend Argon2id + per-IP rate limiting before shipping. |
+
+**Code changes this round: none.** The only finding is marked Fixable: NO and is a repeat of a previously acknowledged issue. The Round 1 fixes (middleware mounting, query-param auth removal) remain in place and address the two fixable findings from that round.
+
+---
+
