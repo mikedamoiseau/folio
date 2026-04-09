@@ -26,7 +26,9 @@ pub struct WebState {
 
 impl WebState {
     /// Get a database connection from the active pool.
-    pub fn conn(&self) -> Result<r2d2::PooledConnection<r2d2_sqlite::SqliteConnectionManager>, String> {
+    pub fn conn(
+        &self,
+    ) -> Result<r2d2::PooledConnection<r2d2_sqlite::SqliteConnectionManager>, String> {
         let pool = self.pool.lock().map_err(|e| e.to_string())?;
         pool.get().map_err(|e| e.to_string())
     }

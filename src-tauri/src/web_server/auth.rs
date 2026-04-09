@@ -23,8 +23,7 @@ pub fn hash_pin(pin: &str) -> String {
 /// Store the PIN hash in the OS keychain.
 pub fn store_pin(pin: &str) -> Result<(), String> {
     let hash = hash_pin(pin);
-    let entry =
-        keyring::Entry::new(KEYRING_SERVICE, KEYRING_USER).map_err(|e| e.to_string())?;
+    let entry = keyring::Entry::new(KEYRING_SERVICE, KEYRING_USER).map_err(|e| e.to_string())?;
     entry.set_password(&hash).map_err(|e| e.to_string())
 }
 

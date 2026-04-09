@@ -31,12 +31,7 @@ async fn login(
     let valid = state
         .pin_hash
         .lock()
-        .map_err(|e| {
-            (
-                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                e.to_string(),
-            )
-        })?
+        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
         .as_ref()
         .map(|hash| super::auth::verify_pin(&body.pin, hash))
         .unwrap_or(false);
