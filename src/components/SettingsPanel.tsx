@@ -324,6 +324,14 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
   const [lastSyncSuccess, setLastSyncSuccess] = useState<number | null>(null);
   const [lastSyncError, setLastSyncError] = useState<{ at: number; message: string } | null>(null);
 
+  // Web server state
+  const [webServerRunning, setWebServerRunning] = useState(false);
+  const [webServerUrl, setWebServerUrl] = useState<string | null>(null);
+  const [webServerPort, setWebServerPort] = useState("7788");
+  const [webServerPin, setWebServerPin] = useState("");
+  const [webServerQr, setWebServerQr] = useState<string | null>(null);
+  const [webServerError, setWebServerError] = useState<string | null>(null);
+
   // Custom fonts
   interface CustomFont {
     id: string;
@@ -471,6 +479,16 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
         setAutoScanStartup(scanStartup === "true");
         const importModeVal = await invoke<string | null>("get_setting_value", { key: "import_mode" });
         if (importModeVal) setImportMode(importModeVal);
+        // Load web server status
+        try {
+          const status = await invoke<{ running: boolean; url: string | null; port: number }>("web_server_status");
+          setWebServerRunning(status.running);
+          setWebServerUrl(status.url);
+          setWebServerPort(String(status.port));
+          if (status.running) {
+            try { const qr = await invoke<string>("web_server_get_qr"); setWebServerQr(qr); } catch {}
+          }
+        } catch {}
       })().catch(() => {});
     }
   }, [open, loadLibraryFolder, loadBackupSettings, loadProviders, loadCacheInfo]);
@@ -1433,6 +1451,98 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
               className="w-full px-3 py-2 text-sm text-ink-muted hover:text-ink bg-warm-subtle hover:bg-warm-border rounded-xl transition-colors text-left">
               {t("settings.viewActivityLog")}
             </button>
+          </Accordion>
+
+          <Accordion title="Remote Access" open={openSection === "webserver"} onToggle={() => toggleSection("webserver")}>
+            <div className="space-y-2">
+              {/* PIN input */}
+              <div className="bg-warm-subtle rounded-xl px-3 py-2.5">
+                <label className="text-xs text-ink-muted mb-1 block">PIN</label>
+                <input
+                  type="password"
+                  value={webServerPin}
+                  onChange={(e) => setWebServerPin(e.target.value)}
+                  placeholder="Set a PIN for web access"
+                  maxLength={8}
+                  className="w-full bg-transparent text-sm text-ink focus:outline-none"
+                />
+                {webServerPin && (
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      try {
+                        await invoke("web_server_set_pin", { pin: webServerPin });
+                        setWebServerError(null);
+                      } catch (e) { setWebServerError(friendlyError(String(e), t)); }
+                    }}
+                    className="mt-1 text-xs text-accent hover:underline"
+                  >
+                    Save PIN
+                  </button>
+                )}
+              </div>
+
+              {/* Port input */}
+              <div className="bg-warm-subtle rounded-xl px-3 py-2.5">
+                <label className="text-xs text-ink-muted mb-1 block">Port</label>
+                <input
+                  type="number"
+                  value={webServerPort}
+                  onChange={(e) => setWebServerPort(e.target.value)}
+                  className="w-full bg-transparent text-sm text-ink focus:outline-none"
+                  min={1024}
+                  max={65535}
+                  disabled={webServerRunning}
+                />
+              </div>
+
+              {/* Start/Stop button */}
+              <button
+                type="button"
+                onClick={async () => {
+                  setWebServerError(null);
+                  try {
+                    if (webServerRunning) {
+                      await invoke("web_server_stop");
+                      setWebServerRunning(false);
+                      setWebServerUrl(null);
+                      setWebServerQr(null);
+                    } else {
+                      const url = await invoke<string>("web_server_start", { port: parseInt(webServerPort) || 7788 });
+                      setWebServerRunning(true);
+                      setWebServerUrl(url);
+                      try { const qr = await invoke<string>("web_server_get_qr"); setWebServerQr(qr); } catch {}
+                    }
+                  } catch (e) { setWebServerError(friendlyError(String(e), t)); }
+                }}
+                className={`w-full px-3 py-2 text-sm font-medium rounded-xl transition-colors ${
+                  webServerRunning
+                    ? "bg-red-500/20 text-red-400 hover:bg-red-500/30"
+                    : "bg-accent/20 text-accent hover:bg-accent/30"
+                }`}
+              >
+                {webServerRunning ? "Stop Server" : "Start Server"}
+              </button>
+
+              {/* Status */}
+              {webServerRunning && webServerUrl && (
+                <div className="bg-warm-subtle rounded-xl px-3 py-2.5 space-y-2">
+                  <p className="text-xs text-ink-muted">
+                    Server running at{" "}
+                    <a href={webServerUrl} target="_blank" rel="noopener noreferrer" className="text-accent hover:underline">
+                      {webServerUrl}
+                    </a>
+                  </p>
+                  {webServerQr && (
+                    <div className="flex justify-center" dangerouslySetInnerHTML={{ __html: webServerQr }} />
+                  )}
+                </div>
+              )}
+
+              {webServerError && (
+                <p className="text-xs text-red-500 px-1">{webServerError}</p>
+              )}
+            </div>
           </Accordion>
 
           {backupProviders.length > 0 && (
