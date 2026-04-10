@@ -112,6 +112,8 @@ pub struct AppState {
     pub enrichment_registry: std::sync::Mutex<crate::providers::ProviderRegistry>,
     /// DB pool shared with the web server, swapped on profile switch.
     pub shared_active_pool: std::sync::Arc<std::sync::Mutex<DbPool>>,
+    /// PIN hash shared with the web server, updated by `web_server_set_pin`.
+    pub shared_pin_hash: std::sync::Arc<std::sync::Mutex<Option<String>>>,
     /// Handle to the running web server (lock #5).
     pub web_server_handle: std::sync::Mutex<Option<crate::web_server::WebServerHandle>>,
 }
@@ -3942,13 +3944,17 @@ pub async fn web_server_start(
         }
     }
 
-    // Load PIN hash from keychain
-    let pin_hash = crate::web_server::auth::load_pin_hash();
+    // Sync the shared PIN hash from keychain before starting
+    {
+        let fresh = crate::web_server::auth::load_pin_hash();
+        let mut ph = state.shared_pin_hash.lock().map_err(|e| e.to_string())?;
+        *ph = fresh;
+    }
 
     let web_state = crate::web_server::WebState {
         pool: state.shared_active_pool.clone(),
         data_dir: state.data_dir.clone(),
-        pin_hash: std::sync::Arc::new(std::sync::Mutex::new(pin_hash)),
+        pin_hash: state.shared_pin_hash.clone(),
         sessions: std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
     };
 
@@ -4011,11 +4017,18 @@ pub async fn web_server_status(
 }
 
 #[tauri::command]
-pub async fn web_server_set_pin(pin: String) -> Result<(), String> {
+pub async fn web_server_set_pin(pin: String, state: State<'_, AppState>) -> Result<(), String> {
     if pin.is_empty() {
         return Err("PIN cannot be empty".to_string());
     }
-    crate::web_server::auth::store_pin(&pin)
+    crate::web_server::auth::store_pin(&pin)?;
+
+    // Propagate new hash to the running web server (if any) via the shared Arc
+    let new_hash = crate::web_server::auth::hash_pin(&pin);
+    let mut ph = state.shared_pin_hash.lock().map_err(|e| e.to_string())?;
+    *ph = Some(new_hash);
+
+    Ok(())
 }
 
 #[tauri::command]

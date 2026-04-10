@@ -114,6 +114,9 @@ pub fn run() {
 
             app.manage(AppState {
                 shared_active_pool: std::sync::Arc::new(std::sync::Mutex::new(pool.clone())),
+                shared_pin_hash: std::sync::Arc::new(std::sync::Mutex::new(
+                    crate::web_server::auth::load_pin_hash(),
+                )),
                 db: pool,
                 profile_state: std::sync::Mutex::new(ProfileState {
                     active: "default".to_string(),
