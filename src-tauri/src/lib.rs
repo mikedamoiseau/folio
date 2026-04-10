@@ -128,6 +128,60 @@ pub fn run() {
                 enrichment_registry,
                 web_server_handle: std::sync::Mutex::new(None),
             });
+
+            // Auto-start web server if previously enabled
+            let app_handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                let state = app_handle.state::<AppState>();
+                let auto_start = {
+                    let conn = match state
+                        .active_db()
+                        .and_then(|p| p.get().map_err(|e| e.to_string()))
+                    {
+                        Ok(c) => c,
+                        Err(_) => return,
+                    };
+                    db::get_setting(&conn, "web_server_enabled")
+                        .ok()
+                        .flatten()
+                        .as_deref()
+                        == Some("true")
+                };
+                if auto_start {
+                    let port = {
+                        let conn = match state
+                            .active_db()
+                            .and_then(|p| p.get().map_err(|e| e.to_string()))
+                        {
+                            Ok(c) => c,
+                            Err(_) => return,
+                        };
+                        db::get_setting(&conn, "web_server_port")
+                            .ok()
+                            .flatten()
+                            .and_then(|s| s.parse::<u16>().ok())
+                            .unwrap_or(web_server::DEFAULT_PORT)
+                    };
+                    let pin_hash = web_server::auth::load_pin_hash();
+                    {
+                        let mut ph = state.shared_pin_hash.lock().unwrap();
+                        *ph = pin_hash;
+                    }
+                    let web_state = web_server::WebState {
+                        pool: state.shared_active_pool.clone(),
+                        data_dir: state.data_dir.clone(),
+                        pin_hash: state.shared_pin_hash.clone(),
+                        sessions: std::sync::Arc::new(std::sync::Mutex::new(
+                            std::collections::HashMap::new(),
+                        )),
+                    };
+                    if let Ok(handle) = web_server::start(web_state, port).await {
+                        let mut h = state.web_server_handle.lock().unwrap();
+                        *h = Some(handle);
+                    }
+                }
+            });
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

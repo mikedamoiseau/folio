@@ -3976,6 +3976,10 @@ pub async fn web_server_start(
         Some(&format!("port {port}")),
     );
 
+    // Save enabled state + port for auto-start on next launch
+    let _ = db::set_setting(&conn, "web_server_enabled", "true");
+    let _ = db::set_setting(&conn, "web_server_port", &port.to_string());
+
     Ok(url)
 }
 
@@ -3991,6 +3995,7 @@ pub async fn web_server_stop(state: State<'_, AppState>) -> Result<(), String> {
             crate::web_server::stop(h);
             let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
             log_activity(&conn, "web_server_stopped", "system", None, None, None);
+            let _ = db::set_setting(&conn, "web_server_enabled", "false");
             Ok(())
         }
         None => Err("Web server is not running".to_string()),
