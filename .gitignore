@@ -48,3 +48,4 @@ lerna-debug.log*
 
 # Superpowers brainstorming artifacts
 .superpowers/
+.gitnexus
