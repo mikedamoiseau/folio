@@ -274,4 +274,171 @@ mod tests {
 
         let _ = shutdown_tx.send(());
     }
+
+    #[tokio::test]
+    async fn test_login_sets_cookie() {
+        let state = test_state();
+        *state.pin_hash.lock().unwrap() = Some(auth::hash_pin("1234"));
+
+        let addr = SocketAddr::from(([127, 0, 0, 1], 0));
+        let router = build_router(state);
+        let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (tx, rx) = oneshot::channel::<()>();
+        tokio::spawn(async move {
+            axum::serve(listener, router)
+                .with_graceful_shutdown(async {
+                    let _ = rx.await;
+                })
+                .await
+                .ok();
+        });
+
+        let client = reqwest::Client::new();
+        let resp = client
+            .post(format!("http://127.0.0.1:{port}/api/auth"))
+            .json(&serde_json::json!({"pin": "1234"}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+
+        // Check Set-Cookie header
+        let cookie = resp
+            .headers()
+            .get("set-cookie")
+            .expect("login should set a cookie");
+        let cookie_str = cookie.to_str().unwrap();
+        assert!(cookie_str.contains("folio_session="));
+        assert!(cookie_str.contains("HttpOnly"));
+        assert!(cookie_str.contains("SameSite=Strict"));
+
+        let _ = tx.send(());
+    }
+
+    #[tokio::test]
+    async fn test_bearer_token_grants_access() {
+        let state = test_state();
+        *state.pin_hash.lock().unwrap() = Some(auth::hash_pin("5555"));
+
+        let addr = SocketAddr::from(([127, 0, 0, 1], 0));
+        let router = build_router(state);
+        let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (tx, rx) = oneshot::channel::<()>();
+        tokio::spawn(async move {
+            axum::serve(listener, router)
+                .with_graceful_shutdown(async {
+                    let _ = rx.await;
+                })
+                .await
+                .ok();
+        });
+
+        let client = reqwest::Client::new();
+
+        // Login to get token
+        let resp = client
+            .post(format!("http://127.0.0.1:{port}/api/auth"))
+            .json(&serde_json::json!({"pin": "5555"}))
+            .send()
+            .await
+            .unwrap();
+        let body: serde_json::Value = resp.json().await.unwrap();
+        let token = body["token"].as_str().unwrap();
+
+        // Use bearer token to access protected route
+        let resp = client
+            .get(format!("http://127.0.0.1:{port}/api/books"))
+            .header("Authorization", format!("Bearer {token}"))
+            .send()
+            .await
+            .unwrap();
+        // Should not be 401 (might be 404 since /api/books isn't implemented yet, that's ok)
+        assert_ne!(resp.status(), 401);
+
+        let _ = tx.send(());
+    }
+
+    #[tokio::test]
+    async fn test_basic_auth_grants_access() {
+        use base64::Engine;
+
+        let state = test_state();
+        *state.pin_hash.lock().unwrap() = Some(auth::hash_pin("7777"));
+
+        let addr = SocketAddr::from(([127, 0, 0, 1], 0));
+        let router = build_router(state);
+        let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (tx, rx) = oneshot::channel::<()>();
+        tokio::spawn(async move {
+            axum::serve(listener, router)
+                .with_graceful_shutdown(async {
+                    let _ = rx.await;
+                })
+                .await
+                .ok();
+        });
+
+        let client = reqwest::Client::new();
+        let encoded = base64::engine::general_purpose::STANDARD.encode("user:7777");
+
+        // Basic auth with correct PIN should grant access to OPDS
+        let resp = client
+            .get(format!("http://127.0.0.1:{port}/opds"))
+            .header("Authorization", format!("Basic {encoded}"))
+            .send()
+            .await
+            .unwrap();
+        assert_ne!(resp.status(), 401);
+
+        // Basic auth with wrong PIN should be rejected
+        let wrong = base64::engine::general_purpose::STANDARD.encode("user:0000");
+        let resp = client
+            .get(format!("http://127.0.0.1:{port}/opds"))
+            .header("Authorization", format!("Basic {wrong}"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 401);
+
+        let _ = tx.send(());
+    }
+
+    #[tokio::test]
+    async fn test_no_pin_allows_all_access() {
+        let state = test_state();
+        // pin_hash is None — no PIN set, should allow open access
+
+        let addr = SocketAddr::from(([127, 0, 0, 1], 0));
+        let router = build_router(state);
+        let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (tx, rx) = oneshot::channel::<()>();
+        tokio::spawn(async move {
+            axum::serve(listener, router)
+                .with_graceful_shutdown(async {
+                    let _ = rx.await;
+                })
+                .await
+                .ok();
+        });
+
+        let client = reqwest::Client::new();
+
+        // Protected route should be accessible without auth when no PIN is set
+        let resp = client
+            .get(format!("http://127.0.0.1:{port}/opds"))
+            .send()
+            .await
+            .unwrap();
+        assert_ne!(
+            resp.status(),
+            401,
+            "No PIN = open access, should not get 401"
+        );
+
+        let _ = tx.send(());
+    }
 }

@@ -1,4 +1,10 @@
-use axum::{extract::State, routing::get, Json, Router};
+use axum::{
+    extract::State,
+    http::{header, StatusCode},
+    response::{IntoResponse, Response},
+    routing::get,
+    Json, Router,
+};
 
 use super::WebState;
 
@@ -27,19 +33,24 @@ struct LoginResponse {
 async fn login(
     State(state): State<WebState>,
     Json(body): Json<LoginRequest>,
-) -> Result<Json<LoginResponse>, (axum::http::StatusCode, String)> {
+) -> Result<Response, (StatusCode, String)> {
     let valid = state
         .pin_hash
         .lock()
-        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
         .as_ref()
         .map(|hash| super::auth::verify_pin(&body.pin, hash))
         .unwrap_or(false);
 
     if !valid {
-        return Err((axum::http::StatusCode::UNAUTHORIZED, "Invalid PIN".into()));
+        return Err((StatusCode::UNAUTHORIZED, "Invalid PIN".into()));
     }
 
     let token = super::auth::create_session(&state);
-    Ok(Json(LoginResponse { token }))
+    let cookie = format!("folio_session={token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=86400");
+    let body = Json(LoginResponse {
+        token: token.clone(),
+    });
+
+    Ok(([(header::SET_COOKIE, cookie)], body).into_response())
 }

@@ -121,6 +121,18 @@ pub async fn auth_middleware(
         return next.run(req).await;
     }
 
+    // If no PIN is configured, allow open access (user hasn't set up auth yet)
+    let has_pin = state
+        .pin_hash
+        .lock()
+        .ok()
+        .and_then(|h| h.as_ref().cloned())
+        .is_some();
+
+    if !has_pin {
+        return next.run(req).await;
+    }
+
     // Check bearer token (from header or cookie)
     if let Some(token) = extract_bearer(&req).or_else(|| extract_cookie_token(&req)) {
         if validate_session(&state, &token) {
