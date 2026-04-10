@@ -64,3 +64,74 @@ All 18 tests pass.
 
 ---
 
+
+## [Codex — Reviewer] Round 2
+
+(Codex encountered an error this round)
+
+---
+
+## [Gemini — Reviewer] Round 2
+
+NEEDS_FIX: The web server remains insecure by default, allowing unauthenticated access to personal data when no PIN is configured.
+
+## Detailed Findings
+
+### 1. Default Unauthenticated Web Server Access
+
+*   **File:** `src-tauri/src/web_server/auth.rs`
+*   **Line numbers:** 126-135 (as per Gemini's original finding)
+*   **What can go wrong:** As previously stated, if the web server runs on a network-accessible interface (e.g., `0.0.0.0`) without a configured PIN, any entity on the same network can access all application data and functionality without authentication. This exposes the user's entire library, reading progress, and potentially other sensitive data.
+*   **Why the code is vulnerable to this:** The `auth_middleware` explicitly bypasses authentication if `state.pin_hash` is `None`. While the implementer (Claude) argued this is a "product decision" and a "common pattern" for personal media servers, this approach prioritizes convenience over security by making an insecure configuration the default. A user-initiated server, especially one binding to `0.0.0.0` for LAN access, should still default to a secure state or require explicit, informed consent for unauthenticated access. The "user-initiated" argument does not imply user consent for insecure defaults.
+*   **Impact if it happens:** Unauthorized access to a user's entire library and potentially sensitive data, posing a significant privacy and security risk. An attacker on the local network could easily browse, extract, or manipulate personal information stored by the application.
+*   **Fix recommendation:** The system *must* default to a secure posture. If no PIN is configured, the server should respond with `401 Unauthorized` for all requests, regardless of the binding address. Any allowance for unauthenticated access must be an explicit, opt-in configuration by the user, accompanied by prominent security warnings explaining the risks. Additionally, the web server should default to binding only to `127.0.0.1` (localhost), requiring explicit user configuration and warnings to bind to `0.0.0.0` or other network interfaces. This requires design decisions, but the default behavior from a security perspective is non-negotiable.
+*   **Severity:** BLOCKING
+*   **Fixable:** NO (Still requires fundamental design decisions regarding default security posture and user experience for first-time setup and configuration warnings, as identified in the initial review.)
+
+---
+
+
+## [Claude — Implementer] Round 2
+
+## Analysis
+
+Codex produced no findings in either round (errors both times), so there are **zero issues flagged by both reviewers**. All findings come from Gemini alone, which means I evaluate each independently.
+
+---
+
+### Issue 1: Default Unauthenticated Web Server Access
+
+**Raised by:** Gemini (both rounds) | **Fixable:** NO | **My vote:** Acknowledge, do not fix
+
+Per the response rules, findings marked "Fixable: NO" must not be attempted — they require human judgment. I'll explain my perspective for the project owner:
+
+This is a legitimate security consideration, but it's a **product design decision**, not a code bug:
+
+1. **The web server is opt-in** — it doesn't start automatically. The user explicitly enables it.
+2. **"No PIN = open" is a standard pattern** in personal media servers (Calibre-web, Navidrome, etc.) where the common case is a trusted home network.
+3. **Requiring a PIN before any access** would create a chicken-and-egg UX problem: how does a user set a PIN from a remote device if the server blocks all unauthenticated requests? You'd need a setup flow, a first-run token, or a desktop-only PIN configuration — all of which are valid but require real design work.
+4. **Gemini's point about `0.0.0.0` binding is fair** — if the server binds to all interfaces, open access is riskier than localhost-only. This could be mitigated by defaulting to `127.0.0.1` and requiring explicit opt-in for LAN binding, but that's also a product decision.
+
+**Recommendation to the project owner:** Consider (a) defaulting to `127.0.0.1` binding, and (b) showing a prominent warning in the desktop UI when the web server is enabled without a PIN on `0.0.0.0`. These are incremental improvements that don't require blocking the current PR.
+
+---
+
+### Issue 2: Verbose Internal Error Message on Mutex Poisoning
+
+**Raised by:** Gemini (round 1) | **Fixable:** YES | **Already fixed in this diff**
+
+The fix at `api.rs:40` — replacing `e.to_string()` with `"Internal server error".to_string()` — is correct and sufficient. Generic error messages to HTTP clients, no internal details leaked. No further changes needed.
+
+---
+
+## Summary
+
+| Issue | Raised by | Action | Reason |
+|-------|-----------|--------|--------|
+| Default unauthenticated access when no PIN set | Gemini (only) | **No fix** (Fixable: NO) | Valid concern acknowledged. Requires product design decisions (default binding, setup UX, opt-in flow). Not a code bug — it's intentional behavior that warrants a design discussion, not a PR block. Recommend incremental mitigations to project owner. |
+| Verbose error on mutex poisoning | Gemini (only) | **Already fixed** | Agreed and fixed in round 1. `e.to_string()` → generic message. No further action. |
+
+**Verdict: No additional code changes required.** The one fixable issue was already addressed. The security posture question is real but is a product-level decision that should be tracked as a follow-up issue, not blocked in this PR.
+
+---
+
