@@ -121,7 +121,7 @@ pub async fn auth_middleware(
         return next.run(req).await;
     }
 
-    // If no PIN is configured, require setup via the desktop app first
+    // If no PIN is configured, allow open access (user hasn't set up auth yet)
     let has_pin = state
         .pin_hash
         .lock()
@@ -130,7 +130,7 @@ pub async fn auth_middleware(
         .is_some();
 
     if !has_pin {
-        return (StatusCode::UNAUTHORIZED, "PIN not configured — set a PIN in the Folio desktop app first").into_response();
+        return next.run(req).await;
     }
 
     // Check bearer token (from header or cookie)
