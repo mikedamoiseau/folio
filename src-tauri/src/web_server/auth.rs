@@ -91,6 +91,17 @@ fn extract_cookie_token(req: &Request<Body>) -> Option<String> {
     None
 }
 
+/// Generate a QR code as an SVG string for the given URL.
+pub fn generate_qr_svg(url: &str) -> Result<String, String> {
+    use qrcode::QrCode;
+    let code = QrCode::new(url.as_bytes()).map_err(|e| e.to_string())?;
+    let svg = code
+        .render::<qrcode::render::svg::Color>()
+        .min_dimensions(200, 200)
+        .build();
+    Ok(svg)
+}
+
 /// Auth middleware — checks for valid session or Basic Auth PIN.
 pub async fn auth_middleware(
     State(state): State<WebState>,
@@ -99,8 +110,9 @@ pub async fn auth_middleware(
 ) -> Response {
     let path = req.uri().path();
 
-    // Allow unauthenticated access to login-related routes and static assets
+    // Allow unauthenticated access to login-related routes, health check, and static assets
     if path == "/api/auth"
+        || path == "/api/health"
         || path == "/"
         || path == "/app.js"
         || path == "/app.css"
@@ -131,4 +143,80 @@ pub async fn auth_middleware(
     }
 
     (StatusCode::UNAUTHORIZED, "Authentication required").into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+    use std::sync::{Arc, Mutex};
+
+    fn test_state() -> WebState {
+        // Create a minimal WebState for testing (no real DB needed for auth tests)
+        let pool =
+            crate::db::create_pool(&std::path::PathBuf::from(":memory:")).expect("in-memory DB");
+        WebState {
+            pool: Arc::new(Mutex::new(pool)),
+            data_dir: std::path::PathBuf::from("/tmp"),
+            pin_hash: Arc::new(Mutex::new(None)),
+            sessions: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+
+    #[test]
+    fn test_hash_pin_deterministic() {
+        let h1 = hash_pin("1234");
+        let h2 = hash_pin("1234");
+        assert_eq!(h1, h2);
+    }
+
+    #[test]
+    fn test_hash_pin_different_inputs() {
+        let h1 = hash_pin("1234");
+        let h2 = hash_pin("5678");
+        assert_ne!(h1, h2);
+    }
+
+    #[test]
+    fn test_verify_pin_correct() {
+        let hash = hash_pin("1234");
+        assert!(verify_pin("1234", &hash));
+    }
+
+    #[test]
+    fn test_verify_pin_wrong() {
+        let hash = hash_pin("1234");
+        assert!(!verify_pin("9999", &hash));
+    }
+
+    #[test]
+    fn test_create_and_validate_session() {
+        let state = test_state();
+        let token = create_session(&state);
+        assert!(validate_session(&state, &token));
+    }
+
+    #[test]
+    fn test_validate_session_unknown_token() {
+        let state = test_state();
+        assert!(!validate_session(&state, "nonexistent-token"));
+    }
+
+    #[test]
+    fn test_generate_qr_svg() {
+        let svg = generate_qr_svg("http://192.168.1.10:7788").unwrap();
+        assert!(svg.contains("<svg"));
+        assert!(svg.contains("</svg>"));
+    }
+
+    #[test]
+    fn test_pin_hash_in_state() {
+        let state = test_state();
+        let hash = hash_pin("4321");
+        *state.pin_hash.lock().unwrap() = Some(hash.clone());
+
+        let stored = state.pin_hash.lock().unwrap();
+        assert_eq!(stored.as_ref().unwrap(), &hash);
+        assert!(verify_pin("4321", stored.as_ref().unwrap()));
+    }
 }

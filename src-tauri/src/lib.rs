@@ -113,6 +113,7 @@ pub fn run() {
             };
 
             app.manage(AppState {
+                shared_active_pool: std::sync::Arc::new(std::sync::Mutex::new(pool.clone())),
                 db: pool,
                 profile_state: std::sync::Mutex::new(ProfileState {
                     active: "default".to_string(),
@@ -122,6 +123,7 @@ pub fn run() {
                 epub_cache: std::sync::Mutex::new(LruCache::new(5)),
                 pdf_cache: std::sync::Mutex::new(LruCache::new(20)),
                 enrichment_registry,
+                web_server_handle: std::sync::Mutex::new(None),
             });
             Ok(())
         })
@@ -217,6 +219,11 @@ pub fn run() {
             commands::clear_page_cache,
             commands::sync_pull_book,
             commands::sync_push_book,
+            commands::web_server_start,
+            commands::web_server_stop,
+            commands::web_server_status,
+            commands::web_server_set_pin,
+            commands::web_server_get_qr,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

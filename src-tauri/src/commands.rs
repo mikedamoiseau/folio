@@ -91,6 +91,7 @@ impl<V> LruCache<V> {
 /// 2. `epub_cache` — EPUB archive LRU cache
 /// 3. `pdf_cache` — PDF render LRU cache
 /// 4. `enrichment_registry` — metadata provider registry
+/// 5. `web_server_handle` — running web server handle
 pub struct ProfileState {
     pub active: String,
     pub pools: std::collections::HashMap<String, DbPool>,
@@ -109,6 +110,10 @@ pub struct AppState {
     pub pdf_cache: std::sync::Mutex<LruCache<String>>,
     /// Metadata provider registry (lock #4).
     pub enrichment_registry: std::sync::Mutex<crate::providers::ProviderRegistry>,
+    /// DB pool shared with the web server, swapped on profile switch.
+    pub shared_active_pool: std::sync::Arc<std::sync::Mutex<DbPool>>,
+    /// Handle to the running web server (lock #5).
+    pub web_server_handle: std::sync::Mutex<Option<crate::web_server::WebServerHandle>>,
 }
 
 impl AppState {
@@ -2289,6 +2294,13 @@ pub async fn switch_profile(name: String, state: State<'_, AppState>) -> Result<
         ps.active = name.clone();
     }
 
+    // Sync the shared pool used by the web server
+    let new_pool = state.active_db()?;
+    {
+        let mut shared = state.shared_active_pool.lock().map_err(|e| e.to_string())?;
+        *shared = new_pool;
+    }
+
     let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
     log_activity(
         &conn,
@@ -3911,6 +3923,109 @@ pub async fn sync_push_book(book_id: String, state: State<'_, AppState>) -> Resu
     });
 
     Ok(())
+}
+
+// ── Web Server Commands ──────────────────────────────────────────────────────
+
+#[tauri::command]
+pub async fn web_server_start(
+    port: Option<u16>,
+    state: State<'_, AppState>,
+) -> Result<String, String> {
+    let port = port.unwrap_or(crate::web_server::DEFAULT_PORT);
+
+    // Check if already running
+    {
+        let handle = state.web_server_handle.lock().map_err(|e| e.to_string())?;
+        if handle.is_some() {
+            return Err("Web server is already running".to_string());
+        }
+    }
+
+    // Load PIN hash from keychain
+    let pin_hash = crate::web_server::auth::load_pin_hash();
+
+    let web_state = crate::web_server::WebState {
+        pool: state.shared_active_pool.clone(),
+        data_dir: state.data_dir.clone(),
+        pin_hash: std::sync::Arc::new(std::sync::Mutex::new(pin_hash)),
+        sessions: std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+    };
+
+    let handle = crate::web_server::start(web_state, port).await?;
+    let url = handle.url.clone();
+
+    {
+        let mut h = state.web_server_handle.lock().map_err(|e| e.to_string())?;
+        *h = Some(handle);
+    }
+
+    let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
+    log_activity(
+        &conn,
+        "web_server_started",
+        "system",
+        None,
+        Some(&url),
+        Some(&format!("port {port}")),
+    );
+
+    Ok(url)
+}
+
+#[tauri::command]
+pub async fn web_server_stop(state: State<'_, AppState>) -> Result<(), String> {
+    let handle = {
+        let mut h = state.web_server_handle.lock().map_err(|e| e.to_string())?;
+        h.take()
+    };
+
+    match handle {
+        Some(h) => {
+            crate::web_server::stop(h);
+            let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
+            log_activity(&conn, "web_server_stopped", "system", None, None, None);
+            Ok(())
+        }
+        None => Err("Web server is not running".to_string()),
+    }
+}
+
+#[tauri::command]
+pub async fn web_server_status(
+    state: State<'_, AppState>,
+) -> Result<crate::web_server::WebServerStatus, String> {
+    let handle = state.web_server_handle.lock().map_err(|e| e.to_string())?;
+    match handle.as_ref() {
+        Some(h) => Ok(crate::web_server::WebServerStatus {
+            running: true,
+            url: Some(h.url.clone()),
+            port: h.port,
+        }),
+        None => Ok(crate::web_server::WebServerStatus {
+            running: false,
+            url: None,
+            port: crate::web_server::DEFAULT_PORT,
+        }),
+    }
+}
+
+#[tauri::command]
+pub async fn web_server_set_pin(pin: String) -> Result<(), String> {
+    if pin.is_empty() {
+        return Err("PIN cannot be empty".to_string());
+    }
+    crate::web_server::auth::store_pin(&pin)
+}
+
+#[tauri::command]
+pub async fn web_server_get_qr(state: State<'_, AppState>) -> Result<String, String> {
+    let handle = state.web_server_handle.lock().map_err(|e| e.to_string())?;
+    let url = handle
+        .as_ref()
+        .map(|h| h.url.clone())
+        .ok_or_else(|| "Web server is not running".to_string())?;
+    crate::web_server::auth::generate_qr_svg(&url)
 }
 
 #[cfg(test)]
