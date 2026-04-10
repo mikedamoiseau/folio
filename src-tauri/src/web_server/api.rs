@@ -37,7 +37,7 @@ async fn login(
     let valid = state
         .pin_hash
         .lock()
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Internal server error".to_string()))?
         .as_ref()
         .map(|hash| super::auth::verify_pin(&body.pin, hash))
         .unwrap_or(false);
