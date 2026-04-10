@@ -1,0 +1,64 @@
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg: #111; --fg: #eee; --accent: #6c9; --card-bg: #1a1a2e;
+  --border: #333; --radius: 8px; --gap: 16px;
+}
+
+body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: var(--bg); color: var(--fg); min-height: 100vh; }
+
+/* ── Login ─────────────────────────────────────── */
+.login { display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; gap: 16px; }
+.login h1 { font-size: 2rem; color: var(--accent); }
+.login input { padding: 12px 16px; font-size: 1.1rem; border: 1px solid var(--border); border-radius: var(--radius); background: var(--card-bg); color: var(--fg); width: 200px; text-align: center; letter-spacing: 8px; }
+.login button { padding: 12px 32px; background: var(--accent); color: #111; border: none; border-radius: var(--radius); font-size: 1rem; cursor: pointer; font-weight: 600; }
+.login button:hover { opacity: 0.9; }
+.login .error { color: #e55; font-size: 0.9rem; }
+
+/* ── Header ────────────────────────────────────── */
+.header { display: flex; align-items: center; padding: 12px var(--gap); border-bottom: 1px solid var(--border); gap: 16px; position: sticky; top: 0; background: var(--bg); z-index: 10; }
+.header h1 { font-size: 1.3rem; color: var(--accent); white-space: nowrap; }
+.header input[type="search"] { flex: 1; padding: 8px 12px; background: var(--card-bg); border: 1px solid var(--border); border-radius: var(--radius); color: var(--fg); font-size: 0.95rem; }
+.header .back-btn { background: none; border: none; color: var(--fg); font-size: 1.2rem; cursor: pointer; padding: 4px 8px; }
+
+/* ── Book Grid ─────────────────────────────────── */
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: var(--gap); padding: var(--gap); }
+.card { background: var(--card-bg); border-radius: var(--radius); overflow: hidden; cursor: pointer; transition: transform 0.15s; }
+.card:hover { transform: translateY(-2px); }
+.card img { width: 100%; aspect-ratio: 2/3; object-fit: cover; background: #222; }
+.card .info { padding: 8px; }
+.card .title { font-size: 0.85rem; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.card .author { font-size: 0.75rem; color: #999; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.card .format { font-size: 0.65rem; color: var(--accent); text-transform: uppercase; margin-top: 2px; }
+
+/* ── Book Detail ───────────────────────────────── */
+.detail { max-width: 700px; margin: 0 auto; padding: var(--gap); }
+.detail .meta { display: flex; gap: var(--gap); margin-bottom: var(--gap); }
+.detail .cover { width: 200px; border-radius: var(--radius); flex-shrink: 0; }
+.detail .cover img { width: 100%; border-radius: var(--radius); }
+.detail .info h2 { margin-bottom: 8px; }
+.detail .info p { color: #aaa; margin-bottom: 4px; font-size: 0.9rem; }
+.detail .actions { display: flex; gap: 8px; margin-top: 12px; }
+.detail .actions a, .detail .actions button { padding: 10px 20px; border-radius: var(--radius); text-decoration: none; font-weight: 600; font-size: 0.9rem; cursor: pointer; border: none; }
+.btn-primary { background: var(--accent); color: #111; }
+.btn-secondary { background: var(--card-bg); color: var(--fg); border: 1px solid var(--border) !important; }
+
+/* ── Reader ────────────────────────────────────── */
+.reader { max-width: 800px; margin: 0 auto; padding: var(--gap); }
+.reader .nav { display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--border); margin-bottom: var(--gap); }
+.reader .nav button { padding: 6px 16px; background: var(--card-bg); border: 1px solid var(--border); border-radius: var(--radius); color: var(--fg); cursor: pointer; }
+.reader .nav button:disabled { opacity: 0.3; cursor: default; }
+.reader .content { line-height: 1.7; }
+.reader .content img { max-width: 100%; height: auto; }
+.reader .page-img { display: flex; justify-content: center; }
+.reader .page-img img { max-width: 100%; max-height: 90vh; }
+
+/* ── Empty / Loading ───────────────────────────── */
+.empty { text-align: center; padding: 60px var(--gap); color: #666; }
+.loading { text-align: center; padding: 40px; color: #666; }
+
+@media (max-width: 600px) {
+  .detail .meta { flex-direction: column; align-items: center; text-align: center; }
+  .detail .cover { width: 150px; }
+  .grid { grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); }
+}
