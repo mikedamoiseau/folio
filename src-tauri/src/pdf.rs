@@ -145,6 +145,43 @@ pub fn get_page_image(path: &str, page_index: u32, width: u32) -> Result<String,
     Ok(format!("data:image/jpeg;base64,{b64}"))
 }
 
+/// Render one PDF page to raw JPEG bytes + mime type.
+/// Avoids the base64 encode/decode round-trip for web serving.
+pub fn get_page_image_bytes(
+    path: &str,
+    page_index: u32,
+) -> Result<(Vec<u8>, &'static str), String> {
+    let pdfium = bind_pdfium()?;
+    let document = pdfium
+        .load_pdf_from_file(path, None)
+        .map_err(|e| format!("failed to open PDF: {e}"))?;
+
+    let pages = document.pages();
+    if page_index > u16::MAX as u32 {
+        return Err(format!(
+            "page index {page_index} exceeds maximum supported ({})",
+            u16::MAX
+        ));
+    }
+    let page = pages
+        .get(page_index as u16)
+        .map_err(|e| format!("page {page_index} not found: {e}"))?;
+
+    let config = PdfRenderConfig::new().set_target_width(1200);
+
+    let bitmap = page
+        .render_with_config(&config)
+        .map_err(|e| format!("render failed: {e}"))?;
+
+    let img = bitmap.as_image();
+    let mut jpeg_bytes: Vec<u8> = Vec::new();
+    let encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpeg_bytes, 90);
+    img.write_with_encoder(encoder)
+        .map_err(|e| format!("JPEG encode failed: {e}"))?;
+
+    Ok((jpeg_bytes, "image/jpeg"))
+}
+
 /// Search result from PDF text search — mirrors epub::SearchResult so the
 /// frontend can use the same type for both formats.
 #[derive(Debug, Clone, serde::Serialize)]

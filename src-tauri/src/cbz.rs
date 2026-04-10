@@ -157,6 +157,45 @@ pub fn get_page_image(path: &str, page_index: u32) -> Result<String, String> {
     Ok(format!("data:{mime};base64,{encoded}"))
 }
 
+/// Extracts a single page image and returns raw bytes + mime type.
+/// Avoids the base64 encode/decode round-trip for web serving.
+pub fn get_page_image_bytes(path: &str, page_index: u32) -> Result<(Vec<u8>, String), String> {
+    let mut archive = open_archive(path)?;
+    let images = collect_image_names(&mut archive);
+
+    let name = images
+        .get(page_index as usize)
+        .ok_or_else(|| {
+            format!(
+                "Page index {page_index} out of range (total pages: {})",
+                images.len()
+            )
+        })?
+        .clone();
+
+    let mut entry = archive
+        .by_name(&name)
+        .map_err(|e| format!("Cannot read page '{name}': {e}"))?;
+
+    let mut data = Vec::new();
+    entry
+        .read_to_end(&mut data)
+        .map_err(|e| format!("Cannot read image data: {e}"))?;
+
+    let lower = name.to_lowercase();
+    let mime = if lower.ends_with(".png") {
+        "image/png"
+    } else if lower.ends_with(".webp") {
+        "image/webp"
+    } else if lower.ends_with(".gif") {
+        "image/gif"
+    } else {
+        "image/jpeg"
+    };
+
+    Ok((data, mime.to_string()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

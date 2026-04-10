@@ -55,7 +55,12 @@ async fn login(
     let valid = state
         .pin_hash
         .lock()
-        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Internal server error".to_string()))?
+        .map_err(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Internal server error".to_string(),
+            )
+        })?
         .as_ref()
         .map(|hash| super::auth::verify_pin(&body.pin, hash))
         .unwrap_or(false);
@@ -87,8 +92,8 @@ async fn list_books(
     let conn = state
         .conn()
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
-    let books = db::list_books(&conn)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let books =
+        db::list_books(&conn).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     let books = match params.q {
         Some(ref q) if !q.is_empty() => {
@@ -147,10 +152,7 @@ async fn get_cover(
     Ok((
         [
             (header::CONTENT_TYPE, mime),
-            (
-                header::CACHE_CONTROL,
-                "public, max-age=86400".to_string(),
-            ),
+            (header::CACHE_CONTROL, "public, max-age=86400".to_string()),
         ],
         bytes,
     )
@@ -260,10 +262,7 @@ async fn get_epub_image(
     Ok((
         [
             (header::CONTENT_TYPE, mime),
-            (
-                header::CACHE_CONTROL,
-                "public, max-age=86400".to_string(),
-            ),
+            (header::CACHE_CONTROL, "public, max-age=86400".to_string()),
         ],
         bytes,
     )
@@ -404,8 +403,7 @@ mod tests {
 
     #[test]
     fn test_rewrite_asset_urls() {
-        let html =
-            r#"<img src="asset://localhost/%2Ftmp%2Fimages%2Fbook1%2F0%2Fchapter1.jpg" />"#;
+        let html = r#"<img src="asset://localhost/%2Ftmp%2Fimages%2Fbook1%2F0%2Fchapter1.jpg" />"#;
         let result = rewrite_asset_urls_to_http(html, "book1", 0);
         assert!(result.contains("/api/books/book1/images/0/chapter1.jpg"));
         assert!(!result.contains("asset://"));

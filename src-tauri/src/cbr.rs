@@ -212,6 +212,48 @@ pub fn get_page_image(path: &str, page_index: u32) -> Result<String, String> {
     }
 }
 
+/// Extracts a single page image and returns raw bytes + mime type.
+pub fn get_page_image_bytes(path: &str, page_index: u32) -> Result<(Vec<u8>, String), String> {
+    let images = collect_image_names(path)?;
+    let target_name = images
+        .get(page_index as usize)
+        .ok_or_else(|| {
+            format!(
+                "Page index {page_index} out of range (total pages: {})",
+                images.len()
+            )
+        })?
+        .clone();
+
+    let archive = unrar::Archive::new(path)
+        .open_for_processing()
+        .map_err(|e| format!("Cannot open RAR archive: {e}"))?;
+
+    let mut cursor = archive;
+    loop {
+        let header = cursor
+            .read_header()
+            .map_err(|e| format!("Error reading RAR entry: {e}"))?;
+        match header {
+            None => return Err(format!("Page '{}' not found in archive", target_name)),
+            Some(entry) => {
+                let name = entry.entry().filename.to_string_lossy().to_string();
+                if name == target_name {
+                    let (data, _) = entry
+                        .read()
+                        .map_err(|e| format!("Cannot extract page: {e}"))?;
+                    let mime = mime_for(&target_name).to_string();
+                    return Ok((data, mime));
+                } else {
+                    cursor = entry
+                        .skip()
+                        .map_err(|e| format!("Error skipping RAR entry: {e}"))?;
+                }
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

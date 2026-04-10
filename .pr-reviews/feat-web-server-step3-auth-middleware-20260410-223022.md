@@ -135,3 +135,43 @@ The fix at `api.rs:40` — replacing `e.to_string()` with `"Internal server erro
 
 ---
 
+
+## [Codex — Reviewer] Round 3
+
+(Codex encountered an error this round)
+
+---
+
+## [Gemini — Reviewer] Round 3
+
+NEEDS_FIX: The web server defaults to unauthenticated access if no PIN is configured, exposing sensitive user data.
+
+## Detailed Findings
+
+### 1. Default Unauthenticated Web Server Access
+
+*   **File:** `src-tauri/src/web_server/auth.rs`
+*   **Line numbers:** 126-135
+*   **What can go wrong:** If the application's web server is enabled, and the user has not configured a PIN, any entity on the network (especially if the server binds to `0.0.0.0` for LAN access) can access all web server endpoints without authentication. This directly exposes personal library data, reading progress, and other application functionalities to unauthorized parties.
+*   **Why the code is vulnerable to this:** The `auth_middleware` explicitly checks if `state.pin_hash` is `None` (indicating no PIN is set). If it is `None`, the middleware allows the request to proceed without any authentication or authorization checks (`return next.run(req).await;`). While the web server is opt-in, enabling it should not automatically imply consent for fully open, unauthenticated access to potentially private data. Security should be the default posture.
+*   **Impact if it happens:** Unauthorized access to a user's entire library and potentially sensitive reading data. This constitutes a significant privacy and security risk, as an attacker on the same local network could browse, extract, or manipulate personal information stored by the Folio application.
+*   **Fix recommendation:** The `auth_middleware` must be modified to enforce authentication when no PIN is configured, by responding with a `401 Unauthorized` status.
+    A minimal code change to address this immediate security vulnerability would be:
+
+    ```rust
+    // In auth_middleware function:
+    if state.pin_hash.is_none() {
+        // Instead of allowing the request to proceed, return Unauthorized.
+        // Product design can later add a setup flow or explicit opt-in for unauthenticated local access.
+        return Ok(StatusCode::UNAUTHORIZED.into_response());
+    }
+    ```
+    Further product design decisions around initial setup, explicit opt-in for unauthenticated modes, and clearer UI warnings for `0.0.0.0` binding are important, but the core vulnerability of open access by default can and should be addressed in code immediately.
+*   **Severity:** BLOCKING
+*   **Fixable:** YES (The core security vulnerability can be fixed with a code change; broader UX design is a separate concern.)
+
+---
+*The verbose error message on mutex poisoning (Issue 2) has been addressed by Claude in the diff by replacing `e.to_string()` with a generic error message, which is an appropriate fix.*
+
+---
+
