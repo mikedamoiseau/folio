@@ -18,6 +18,7 @@ import KeyboardShortcutsHelp from "../components/KeyboardShortcutsHelp";
 import { startDrag, endDrag, isDragging, getDraggedCoverSrc, subscribe } from "../lib/dragState";
 import { friendlyError } from "../lib/errors";
 import { LiveRegion } from "../components/LiveRegion";
+import { useToast } from "../components/Toast";
 import type { Book } from "../types";
 
 interface ReadingProgress {
@@ -30,6 +31,7 @@ interface ReadingProgress {
 export default function Library() {
   const { t } = useTranslation();
   const navigate = useNavigate();
+  const { addToast } = useToast();
   const [books, setBooks] = useState<Book[]>([]);
   const [progressMap, setProgressMap] = useState<Record<string, number>>({});
   const [lastReadMap, setLastReadMap] = useState<Record<string, number>>({});
@@ -63,7 +65,8 @@ export default function Library() {
   const [editingBook, setEditingBook] = useState<Book | null>(null);
   const [detailBook, setDetailBook] = useState<Book | null>(null);
   const [scanningBookId, setScanningBookId] = useState<string | null>(null);
-  const [scanToast, setScanToast] = useState<{ message: string; isError: boolean } | null>(null);
+  // scanToast state kept for LiveRegion — visual toasts now use useToast()
+  const [scanToastMessage, setScanToastMessage] = useState("");
   const [showShortcuts, setShowShortcuts] = useState(false);
   const searchRef = useRef<HTMLInputElement>(null);
   const [scanProgress, setScanProgress] = useState<{ current: number; total: number; bookTitle: string; status: string } | null>(null);
@@ -445,7 +448,8 @@ export default function Library() {
       const p = event.payload;
       if (p.status === "done" || p.status === "cancelled") {
         if (p.status === "cancelled" && p.current > 0) {
-          setScanToast({ message: t("library.scanCancelled", { count: p.current }), isError: false });
+          addToast(t("library.scanCancelled", { count: p.current }), "info");
+          setScanToastMessage(t("library.scanCancelled", { count: p.current }));
         }
         setScanProgress(null);
         loadBooks(activeCollectionIdRef.current);
@@ -1159,18 +1163,19 @@ export default function Library() {
           }}
           onScan={async (id) => {
             setScanningBookId(id);
-            setScanToast(null);
             try {
               const updatedBook = await invoke<Book>("scan_single_book", { bookId: id });
               await loadBooks(activeCollectionIdRef.current);
               setDetailBook(updatedBook);
-              setScanToast({ message: t("library.metadataUpdated"), isError: false });
+              addToast(t("library.metadataUpdated"), "success");
+              setScanToastMessage(t("library.metadataUpdated"));
             } catch (err) {
               const msg = String(err);
-              setScanToast({ message: msg.includes("No match") ? t("library.noMetadataFound") : t("library.scanFailed"), isError: true });
+              const errorMsg = msg.includes("No match") ? t("library.noMetadataFound") : t("library.scanFailed");
+              addToast(errorMsg, "error");
+              setScanToastMessage(errorMsg);
             } finally {
               setScanningBookId(null);
-              setTimeout(() => setScanToast(null), 2500);
             }
           }}
         />
@@ -1302,20 +1307,14 @@ export default function Library() {
         </div>
       )}
 
-      {scanToast && (
-        <div className={`fixed bottom-4 right-4 z-50 px-3 py-2 rounded-lg text-xs shadow-lg ${scanToast.isError ? "bg-red-50 text-red-700 dark:bg-red-900/30 dark:text-red-300" : "bg-green-50 text-green-700 dark:bg-green-900/30 dark:text-green-300"}`}>
-          {scanToast.message}
-        </div>
-      )}
+      {/* Toast notifications now rendered by ToastProvider at app root */}
 
       {/* Screen reader announcements for import and scan progress */}
       <LiveRegion
         message={
           importing && importProgress
             ? `${t("library.importing")} ${importProgress.current} / ${importProgress.total}`
-            : scanToast
-              ? scanToast.message
-              : ""
+            : scanToastMessage || ""
         }
       />
     </div>
