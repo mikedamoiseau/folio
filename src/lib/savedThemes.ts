@@ -15,6 +15,9 @@ export interface SavedTheme {
 const STORAGE_KEY = "folio-saved-themes";
 
 const HEX_COLOR_RE = /^#[0-9a-fA-F]{6}$/;
+const VALID_FONT_FAMILIES = new Set(["serif", "literata", "sans-serif", "dyslexic"]);
+const CUSTOM_FONT_RE = /^custom:[0-9a-f-]+$/i;
+const MAX_SAVED_THEMES = 50;
 
 function isValidTheme(obj: unknown): obj is SavedTheme {
   if (!obj || typeof obj !== "object") return false;
@@ -28,7 +31,7 @@ function isValidTheme(obj: unknown): obj is SavedTheme {
       const v = (t.colors as Record<string, unknown>)[name];
       return typeof v === "string" && HEX_COLOR_RE.test(v);
     }) &&
-    typeof t.fontFamily === "string" &&
+    typeof t.fontFamily === "string" && (VALID_FONT_FAMILIES.has(t.fontFamily) || CUSTOM_FONT_RE.test(t.fontFamily)) &&
     typeof t.fontSize === "number" && Number.isFinite(t.fontSize) &&
     typeof t.typography === "object" && t.typography !== null &&
     typeof (t.typography as Record<string, unknown>).lineHeight === "number" && Number.isFinite((t.typography as Record<string, unknown>).lineHeight) &&
@@ -76,7 +79,8 @@ export function addTheme(themes: SavedTheme[], theme: SavedTheme): SavedTheme[] 
   if (idIdx !== -1) {
     return themes.map((t, i) => (i === idIdx ? theme : t));
   }
-  if (themes.some((t) => t.name === theme.name)) return themes;
+  if (themes.some((t) => t.name.toLowerCase() === theme.name.toLowerCase())) return themes;
+  if (themes.length >= MAX_SAVED_THEMES) return themes;
   return [...themes, theme];
 }
 
@@ -85,6 +89,6 @@ export function deleteTheme(themes: SavedTheme[], id: string): SavedTheme[] {
 }
 
 export function renameTheme(themes: SavedTheme[], id: string, newName: string): SavedTheme[] {
-  if (themes.some((t) => t.name === newName && t.id !== id)) return themes;
+  if (themes.some((t) => t.name.toLowerCase() === newName.toLowerCase() && t.id !== id)) return themes;
   return themes.map((t) => (t.id === id ? { ...t, name: newName } : t));
 }

@@ -237,6 +237,7 @@
     "themeName": "Theme name",
     "save": "Save",
     "themeNameRequired": "Name is required",
+    "themeNameExists": "A theme with this name already exists",
     "themeOverwrite": "\"{{name}}\" exists \u2014 overwrite?",
     "overwrite": "Overwrite",
     "deleteThemeConfirm": "Delete \"{{name}}\"?",

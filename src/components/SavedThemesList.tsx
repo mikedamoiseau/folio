@@ -29,6 +29,7 @@ export default function SavedThemesList({
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
+  const [renameError, setRenameError] = useState<string | null>(null);
 
   const saveInputRef = useRef<HTMLInputElement>(null);
   const renameInputRef = useRef<HTMLInputElement>(null);
@@ -71,7 +72,7 @@ export default function SavedThemesList({
       return;
     }
 
-    const conflict = themes.find((th) => th.name === trimmed);
+    const conflict = themes.find((th) => th.name.toLowerCase() === trimmed.toLowerCase());
     if (conflict && overwriteTarget?.id !== conflict.id) {
       // Show overwrite confirmation
       setOverwriteTarget(conflict);
@@ -102,16 +103,25 @@ export default function SavedThemesList({
 
   function commitRename(id: string) {
     const trimmed = renameValue.trim();
-    if (trimmed) {
-      onRename(id, trimmed);
+    if (!trimmed) {
+      cancelRename();
+      return;
     }
+    const conflict = themes.find((t) => t.name.toLowerCase() === trimmed.toLowerCase() && t.id !== id);
+    if (conflict) {
+      setRenameError(t("settings.themeNameExists"));
+      return;
+    }
+    onRename(id, trimmed);
     setRenamingId(null);
     setRenameValue("");
+    setRenameError(null);
   }
 
   function cancelRename() {
     setRenamingId(null);
     setRenameValue("");
+    setRenameError(null);
   }
 
   function handleRenameKeyDown(e: React.KeyboardEvent<HTMLInputElement>, id: string) {
@@ -142,13 +152,14 @@ export default function SavedThemesList({
       )}
 
       {/* Theme list */}
+      <ul role="list" className="space-y-1">
       {themes.map((theme) => {
         const isDeleting = deletingId === theme.id;
         const isRenaming = renamingId === theme.id;
 
         return (
+          <li key={theme.id}>
           <div
-            key={theme.id}
             role="button"
             tabIndex={0}
             className="group flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-warm-subtle focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-1 transition-colors cursor-pointer"
@@ -185,16 +196,19 @@ export default function SavedThemesList({
 
             {/* Name — normal or inline rename input */}
             {isRenaming ? (
-              <input
-                ref={renameInputRef}
-                type="text"
-                value={renameValue}
-                onChange={(e) => setRenameValue(e.target.value)}
-                onKeyDown={(e) => handleRenameKeyDown(e, theme.id)}
-                onBlur={() => commitRename(theme.id)}
-                onClick={(e) => e.stopPropagation()}
-                className="flex-1 text-sm bg-transparent border-b border-accent outline-none text-ink min-w-0"
-              />
+              <div className="flex-1 min-w-0">
+                <input
+                  ref={renameInputRef}
+                  type="text"
+                  value={renameValue}
+                  onChange={(e) => { setRenameValue(e.target.value); setRenameError(null); }}
+                  onKeyDown={(e) => handleRenameKeyDown(e, theme.id)}
+                  onBlur={() => cancelRename()}
+                  onClick={(e) => e.stopPropagation()}
+                  className="w-full text-sm bg-transparent border-b border-accent outline-none text-ink"
+                />
+                {renameError && <p className="text-[10px] text-red-500 mt-0.5">{renameError}</p>}
+              </div>
             ) : (
               <span className="flex-1 text-sm text-ink truncate min-w-0">
                 {theme.name}
@@ -234,7 +248,7 @@ export default function SavedThemesList({
                 <button
                   type="button"
                   onClick={() => startRename(theme)}
-                  className="p-0.5 text-ink-muted hover:text-ink transition-colors"
+                  className="p-0.5 text-ink-muted hover:text-ink transition-colors focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-1 rounded"
                   aria-label={t("common.edit") + " " + theme.name}
                 >
                   <svg width="12" height="12" viewBox="0 0 20 20" fill="none" aria-hidden="true">
@@ -251,7 +265,7 @@ export default function SavedThemesList({
                 <button
                   type="button"
                   onClick={() => { setDeletingId(theme.id); setRenamingId(null); }}
-                  className="p-0.5 text-ink-muted hover:text-red-500 transition-colors"
+                  className="p-0.5 text-ink-muted hover:text-red-500 transition-colors focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-1 rounded"
                   aria-label={t("common.remove") + " " + theme.name}
                 >
                   <svg width="12" height="12" viewBox="0 0 20 20" fill="none" aria-hidden="true">
@@ -266,8 +280,10 @@ export default function SavedThemesList({
               </span>
             )}
           </div>
+          </li>
         );
       })}
+      </ul>
 
       {/* Save form */}
       {showSaveForm ? (

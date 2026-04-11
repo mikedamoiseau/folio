@@ -237,6 +237,7 @@
     "themeName": "Nom du th\u00e8me",
     "save": "Enregistrer",
     "themeNameRequired": "Le nom est requis",
+    "themeNameExists": "Un th\u00e8me avec ce nom existe d\u00e9j\u00e0",
     "themeOverwrite": "\u00ab {{name}} \u00bb existe d\u00e9j\u00e0 \u2014 \u00e9craser ?",
     "overwrite": "\u00c9craser",
     "deleteThemeConfirm": "Supprimer \u00ab {{name}} \u00bb ?",
