@@ -62,8 +62,13 @@ export function loadSavedThemes(): SavedTheme[] {
   }
 }
 
-export function saveSavedThemes(themes: SavedTheme[]): void {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(themes));
+export function saveSavedThemes(themes: SavedTheme[]): boolean {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(themes));
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export function addTheme(themes: SavedTheme[], theme: SavedTheme): SavedTheme[] {

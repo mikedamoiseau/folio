@@ -29,7 +29,7 @@ function Accordion({ title, children, open, onToggle }: { title: string; childre
         type="button"
         onClick={onToggle}
         aria-expanded={open}
-        aria-controls={sectionId}
+        {...(open ? { "aria-controls": sectionId } : {})}
         className="w-full flex items-center justify-between py-1 group"
       >
         <h3 className="text-xs font-semibold uppercase tracking-wider text-ink-muted">
@@ -295,7 +295,7 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
       fontFamily,
       fontSize,
       typography,
-      createdAt: Date.now(),
+      createdAt: existing ? existing.createdAt : Date.now(),
     };
     const updated = addTheme(savedThemes, theme);
     setSavedThemes(updated);

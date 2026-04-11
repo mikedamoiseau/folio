@@ -57,7 +57,7 @@ interface ThemeContextValue {
   setMangaMode: (enabled: boolean) => void;
   pageAnimation: boolean;
   setPageAnimation: (enabled: boolean) => void;
-  loadTheme: (theme: { mode: ColorMode; colors: ColorTokens; fontFamily: string; fontSize: number; typography: TypographySettings }) => void;
+  loadTheme: (theme: { colors: ColorTokens; fontFamily: string; fontSize: number; typography: TypographySettings }) => void;
 }
 
 const STORAGE_KEYS = {
@@ -275,14 +275,12 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     }, 500);
   }, []);
 
-  const loadTheme = useCallback((theme: { mode: ColorMode; colors: ColorTokens; fontFamily: string; fontSize: number; typography: TypographySettings }) => {
-    if (theme.mode === "custom") {
-      setCustomColors(theme.colors);
-    }
+  const loadTheme = useCallback((theme: { colors: ColorTokens; fontFamily: string; fontSize: number; typography: TypographySettings }) => {
+    setCustomColors(theme.colors);
     setFontFamily(theme.fontFamily);
     setFontSize(theme.fontSize);
     setTypography(theme.typography);
-    setMode(theme.mode);
+    setMode("custom");
   }, [setCustomColors, setFontFamily, setFontSize, setTypography, setMode]);
 
   const value = useMemo<ThemeContextValue>(() => ({

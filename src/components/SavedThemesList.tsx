@@ -149,9 +149,17 @@ export default function SavedThemesList({
         return (
           <div
             key={theme.id}
-            className="group flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-warm-subtle transition-colors cursor-pointer"
+            role="button"
+            tabIndex={0}
+            className="group flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-warm-subtle focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-1 transition-colors cursor-pointer"
             onClick={() => {
               if (!isDeleting && !isRenaming) {
+                onLoad(theme);
+              }
+            }}
+            onKeyDown={(e) => {
+              if ((e.key === "Enter" || e.key === " ") && !isDeleting && !isRenaming) {
+                e.preventDefault();
                 onLoad(theme);
               }
             }}
@@ -219,7 +227,7 @@ export default function SavedThemesList({
               </span>
             ) : (
               <span
-                className="flex items-center gap-0.5 shrink-0 opacity-0 group-hover:opacity-100 transition-all duration-150"
+                className="flex items-center gap-0.5 shrink-0 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-all duration-150"
                 onClick={(e) => e.stopPropagation()}
               >
                 {/* Rename button */}
