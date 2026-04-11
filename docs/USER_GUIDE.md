@@ -353,6 +353,27 @@ Choose from four presets or create your own:
 
 **Custom colors:** Click the "Custom colors" button to open the color editor. Pick a background and text color — the remaining UI colors (borders, accents, muted text, etc.) are automatically derived. Expand "Advanced" to fine-tune individual color tokens. Preset buttons let you reset to the sepia or light palette.
 
+### Saved themes
+
+Save your current visual setup as a named theme to quickly switch between different reading moods. A saved theme captures colors, font family, font size, and all typography settings (line height, margins, alignment, spacing, hyphenation).
+
+**Saving a theme:**
+
+1. Configure your preferred appearance — colors, font, and typography settings
+2. In **Settings > Appearance > Saved Themes**, click **+ Save as theme**
+3. Enter a name (e.g., "Night Reading", "Beach Mode") and click **Save**
+4. If the name already exists, you'll be asked to confirm overwriting
+
+**Loading a theme:** Click any saved theme in the list to apply it instantly. The active theme is highlighted with an accent background. Loading a theme switches to custom color mode and applies all saved settings.
+
+**Managing themes:**
+
+- **Rename:** Hover over a theme and click the pencil icon. Edit the name inline and press Enter to confirm.
+- **Delete:** Hover over a theme and click the X icon. Confirm the deletion when prompted.
+- Up to 50 themes can be saved. Names are case-insensitive ("Dark" and "dark" are treated as the same name).
+
+**What is NOT saved in a theme:** Custom CSS is a global override layer and is not included in saved themes. A note below the save button reminds you of this.
+
 ### Font size
 
 Adjust between 14px and 24px using the slider, the +/- buttons in Settings, or the A-/A+ buttons in the reader header.
@@ -418,7 +439,7 @@ Search the full text of any EPUB book:
 
 ### Advanced typography
 
-Fine-tune your reading experience under **Settings > Text & Typography**:
+Fine-tune your reading experience under **Settings > Appearance > Typography**:
 
 - **Line height** — adjust spacing between lines (1.2× to 2.4×)
 - **Page margins** — control horizontal padding (0px to 80px)

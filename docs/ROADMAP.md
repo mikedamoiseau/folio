@@ -440,7 +440,8 @@ Tauri v2 supports mobile targets. The React frontend renders in a mobile WebView
 - Future: auto-detect landscape/wide images and display solo at full width
 
 #### 38b. Settings Panel Reorganization — **Done**
-- ~~Grouped 7 accordions into 3: Appearance (theme + custom CSS), Text & Typography (font + line height + margins + alignment), Page Layout (paginated/continuous + dual-page + manga)~~
+- ~~Grouped settings into focused accordions: Appearance (saved themes + color presets + custom colors + typography + custom CSS), Page Layout (paginated/continuous + dual-page + manga), and others~~
+- ~~Typography controls (font, line height, margins, alignment) merged under Appearance in #48~~
 
 #### 39. Multi-Language Support (i18n) — **Done**
 - ~~i18next + react-i18next infrastructure with browser locale auto-detection~~
@@ -589,10 +590,15 @@ Lower priority features — high effort, niche audience, or dependent on other w
 - Lightweight alternative to a full plugin SDK — extensible without modifying core code
 - Enables custom automation: auto-tagging, post-import scripts, external sync
 
-### 48. User-Created Themes
-- Custom color schemes beyond built-in presets (light, dark, sepia)
-- Define background, text, accent, and UI colors
-- Import/export themes for sharing
+### 48. User-Created Themes — **Done**
+- ~~Save, name, load, rename, and delete custom visual themes~~
+- ~~Each theme captures color tokens, font family, font size, and typography settings~~
+- ~~Settings panel restructured: typography controls merged under Appearance accordion~~
+- ~~Theme list with color swatches, active theme indicator, inline rename/delete~~
+- ~~Up to 50 saved themes, case-insensitive naming, full validation~~
+- ~~Accessibility: keyboard navigation, ARIA live announcements, focus-visible rings, semantic list markup~~
+- ~~Animated accordion sections with subtle background panels~~
+- Import/export themes for sharing (future)
 
 ## Summary
 
@@ -607,4 +613,4 @@ Lower priority features — high effort, niche audience, or dependent on other w
 | 7 | Android & iOS App | Not started | Mobile |
 | 8 | Sepia Theme, OpenDyslexic, Star Ratings, In-Book Search, Typography, Custom Fonts, Continuous Scroll, Time-to-Finish, Bookmark Naming, Series, Activity Log, MOBI, Nav History, Custom CSS, Dual-Page/Manga, Settings Reorg, i18n (EN+FR), PDF Zoom Quality, Go to Page, Animations, Comic Page Cache, Split View | 19 done | Reader & library enhancements |
 | 9 | DB Migration Versioning, Transaction Boundaries, Zip Bomb Protection, PDF Cache Memory Limits, Thread Pool, Backup Secret Atomicity, Screen Reader Live Regions, Loading Skeletons, Toast System, Search Nav, Bulk Actions, Highlight Positioning | 12 done, 1 remaining (#55 Structured Errors) | Hardening & polish |
-| N/H | Dictionary, Vocabulary Builder, TTS, Library-Wide Search, Annotation Exports, Plugins/Hooks, User Themes | Not started | Nice to have |
+| N/H | Dictionary, Vocabulary Builder, TTS, Library-Wide Search, Annotation Exports, Plugins/Hooks | Not started (User Themes done) | Nice to have |
