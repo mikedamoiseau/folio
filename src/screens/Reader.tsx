@@ -1577,10 +1577,15 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
                 const containerW = contentRef.current?.clientWidth ?? 600;
                 const popupW = Math.min(200, containerW - 16);
                 const popupH = 36;
-                // Clamp X so popup doesn't overflow left/right edges
+                // Clamp X so popup doesn't overflow left/right edges (#61)
                 const clampedX = Math.max(popupW / 2 + 8, Math.min(selectionPopup.x, containerW - popupW / 2 - 8));
-                // If popup would go above the visible area, show below selection instead
-                const showBelow = selectionPopup.y - popupH < (scrollContainerRef.current?.scrollTop ?? 0);
+                // Smart Y positioning (#61): check both top and bottom viewport edges
+                const scrollTop = scrollContainerRef.current?.scrollTop ?? 0;
+                const viewportH = scrollContainerRef.current?.clientHeight ?? window.innerHeight;
+                const wouldClipTop = selectionPopup.y - popupH < scrollTop;
+                const wouldClipBottom = selectionPopup.y + 32 + popupH > scrollTop + viewportH;
+                // Prefer above; fall back to below if clipped; if both clip, show above
+                const showBelow = wouldClipTop && !wouldClipBottom;
                 const yOffset = showBelow ? 32 : -8;
                 const transformY = showBelow ? "0%" : "-100%";
                 return (
