@@ -4008,16 +4008,19 @@ pub async fn web_server_status(
     state: State<'_, AppState>,
 ) -> Result<crate::web_server::WebServerStatus, String> {
     let handle = state.web_server_handle.lock().map_err(|e| e.to_string())?;
+    let has_pin = crate::web_server::auth::load_pin_hash().is_some();
     match handle.as_ref() {
         Some(h) => Ok(crate::web_server::WebServerStatus {
             running: true,
             url: Some(h.url.clone()),
             port: h.port,
+            has_pin,
         }),
         None => Ok(crate::web_server::WebServerStatus {
             running: false,
             url: None,
             port: crate::web_server::DEFAULT_PORT,
+            has_pin,
         }),
     }
 }

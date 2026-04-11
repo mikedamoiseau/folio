@@ -337,7 +337,6 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
   const [webServerError, setWebServerError] = useState<string | null>(null);
   const [webServerLoading, setWebServerLoading] = useState(false);
   const [pinSaved, setPinSaved] = useState(false);
-  const [pinSavedOnce, setPinSavedOnce] = useState(false);
 
   // Custom fonts
   interface CustomFont {
@@ -488,7 +487,7 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
         if (importModeVal) setImportMode(importModeVal);
         // Load web server status
         try {
-          const status = await invoke<{ running: boolean; url: string | null; port: number }>("web_server_status");
+          const status = await invoke<{ running: boolean; url: string | null; port: number; has_pin: boolean }>("web_server_status");
           setWebServerRunning(status.running);
           setWebServerUrl(status.url);
           setWebServerPort(String(status.port));
@@ -1483,7 +1482,6 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                           await invoke("web_server_set_pin", { pin: webServerPin });
                           setWebServerError(null);
                           setPinSaved(true);
-                          setPinSavedOnce(true);
                           setTimeout(() => setPinSaved(false), 2000);
                         } catch (e) { setWebServerError(friendlyError(String(e), t)); }
                       }}
@@ -1514,7 +1512,7 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
               {/* R1-4: Loading state + R4-1: PIN guard */}
               <button
                 type="button"
-                disabled={webServerLoading || (!webServerRunning && !pinSavedOnce)}
+                disabled={webServerLoading}
                 onClick={async () => {
                   setWebServerError(null);
                   setWebServerLoading(true);
@@ -1543,10 +1541,6 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                   ? (webServerRunning ? t("settings.stopping") : t("settings.starting"))
                   : (webServerRunning ? t("settings.stopServer") : t("settings.startServer"))}
               </button>
-              {!webServerRunning && !pinSavedOnce && (
-                <p className="text-xs text-ink-muted px-1">{t("settings.pinPlaceholder")}</p>
-              )}
-
               {/* Status + R1-5: Copy URL */}
               {webServerRunning && webServerUrl && (
                 <div className="bg-warm-subtle rounded-xl px-3 py-2.5 space-y-2">

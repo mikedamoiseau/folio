@@ -49,6 +49,7 @@ pub struct WebServerStatus {
     pub running: bool,
     pub url: Option<String>,
     pub port: u16,
+    pub has_pin: bool,
 }
 
 /// Detect the local LAN IP address.
@@ -80,7 +81,7 @@ async fn security_headers_middleware(
     headers.insert("x-frame-options", "DENY".parse().unwrap());
     headers.insert(
         "content-security-policy",
-        "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src * data:"
+        "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:"
             .parse()
             .unwrap(),
     );
