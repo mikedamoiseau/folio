@@ -117,6 +117,18 @@ Hover over a book card to reveal action buttons:
 - **Edit:** Opens a dialog to change the title, author, cover image, and tags. See [Book Metadata and OpenLibrary](#6-book-metadata-and-openlibrary).
 - **Delete:** Removes the book from your library (with a confirmation prompt).
 
+### Bulk actions
+
+To act on multiple books at once, click the **selection icon** in the toolbar (grid icon next to the import button). This enters selection mode:
+
+- Click book cards to select or deselect them. A checkbox appears on each card.
+- A floating action bar appears at the bottom showing the selection count.
+- **Select all / Deselect all** — toggle between selecting all visible books or clearing the selection.
+- **Delete** — remove all selected books (with a confirmation prompt).
+- **Cancel** — exit selection mode.
+
+Selection mode disables drag-and-drop to prevent accidental actions.
+
 ---
 
 ## 3. Collections

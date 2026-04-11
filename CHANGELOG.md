@@ -21,6 +21,13 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 - Path traversal protection on image endpoints
 - Streamed file downloads (no memory exhaustion on large files)
 - OPDS pagination (50 books per page)
+- **Bulk book actions** — select multiple books in the library grid, then delete in bulk. Selection mode with select all/deselect all.
+- **Unified toast notifications** — consistent bottom-center toast system replacing ad-hoc notification patterns. Auto-dismiss with pause-on-hover.
+- **Screen reader live regions** — aria-live announcements for chapter changes, bookmark confirmations, and import progress.
+- **Database migration versioning** — schema_version table tracks applied migrations for safe future schema changes.
+- **PDF cache memory limits** — LRU cache now evicts by total memory (200 MB cap) in addition to entry count.
+- **Bounded background threads** — background operations (enrichment, backup, sync) use tokio's bounded thread pool instead of unbounded OS threads.
+- **Highlight popup smart positioning** — color picker popup detects both top and bottom viewport edges to avoid clipping.
 
 ## [1.3.0] - 2026-04-02
 
