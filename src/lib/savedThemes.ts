@@ -1,9 +1,10 @@
-import { TOKEN_NAMES, type ColorTokens } from "./themes";
+import { TOKEN_NAMES, type ColorTokens, type ColorMode, isValidColorMode } from "./themes";
 import type { TypographySettings } from "../context/ThemeContext";
 
 export interface SavedTheme {
   id: string;
   name: string;
+  mode: ColorMode;
   colors: ColorTokens;
   fontFamily: string;
   fontSize: number;
@@ -21,6 +22,7 @@ function isValidTheme(obj: unknown): obj is SavedTheme {
   return (
     typeof t.id === "string" &&
     typeof t.name === "string" &&
+    typeof t.mode === "string" && isValidColorMode(t.mode) &&
     typeof t.colors === "object" && t.colors !== null &&
     TOKEN_NAMES.every((name) => {
       const v = (t.colors as Record<string, unknown>)[name];
@@ -38,13 +40,23 @@ function isValidTheme(obj: unknown): obj is SavedTheme {
   );
 }
 
+/** Hydrate themes saved before `mode` was added (pre-v0.x) as "custom". */
+function migrateTheme(obj: unknown): unknown {
+  if (!obj || typeof obj !== "object") return obj;
+  const t = obj as Record<string, unknown>;
+  if (t.mode === undefined) {
+    return { ...t, mode: "custom" };
+  }
+  return obj;
+}
+
 export function loadSavedThemes(): SavedTheme[] {
   const stored = localStorage.getItem(STORAGE_KEY);
   if (!stored) return [];
   try {
     const parsed = JSON.parse(stored);
     if (!Array.isArray(parsed)) return [];
-    return parsed.filter(isValidTheme);
+    return parsed.map(migrateTheme).filter(isValidTheme);
   } catch {
     return [];
   }

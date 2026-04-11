@@ -11,6 +11,15 @@ import {
   deriveTokensFromBase,
 } from "../lib/themes";
 import ActivityLog from "./ActivityLog";
+import SavedThemesList from "./SavedThemesList";
+import {
+  loadSavedThemes,
+  saveSavedThemes,
+  addTheme,
+  deleteTheme,
+  renameTheme,
+  type SavedTheme,
+} from "../lib/savedThemes";
 
 function Accordion({ title, children, open, onToggle }: { title: string; children: ReactNode; open: boolean; onToggle: () => void }) {
   const sectionId = `section-${title.replace(/\s+/g, "-").toLowerCase()}`;
@@ -267,12 +276,47 @@ function formatBytes(bytes: number): string {
 
 export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
   const { t } = useTranslation();
-  const { mode, setMode, customColors, setCustomColors, fontSize, setFontSize, fontFamily, setFontFamily, scrollMode, setScrollMode, typography, setTypography, customCss, setCustomCss, dualPage, setDualPage, mangaMode, setMangaMode, pageAnimation, setPageAnimation } =
+  const { mode, setMode, customColors, setCustomColors, fontSize, setFontSize, fontFamily, setFontFamily, scrollMode, setScrollMode, typography, setTypography, customCss, setCustomCss, dualPage, setDualPage, mangaMode, setMangaMode, pageAnimation, setPageAnimation, loadTheme } =
     useTheme();
   const [openSection, setOpenSection] = useState<string | null>("appearance");
   const toggleSection = (id: string) => setOpenSection((prev) => (prev === id ? null : id));
   const panelRef = useRef<HTMLDivElement>(null);
   const previousFocus = useRef<HTMLElement | null>(null);
+
+  const [savedThemes, setSavedThemes] = useState<SavedTheme[]>(loadSavedThemes);
+
+  const handleSaveTheme = useCallback((name: string) => {
+    const existing = savedThemes.find((t) => t.name === name);
+    const theme: SavedTheme = {
+      id: existing ? existing.id : crypto.randomUUID(),
+      name,
+      mode,
+      colors: customColors,
+      fontFamily,
+      fontSize,
+      typography,
+      createdAt: Date.now(),
+    };
+    const updated = addTheme(savedThemes, theme);
+    setSavedThemes(updated);
+    saveSavedThemes(updated);
+  }, [mode, customColors, fontFamily, fontSize, typography, savedThemes]);
+
+  const handleDeleteTheme = useCallback((id: string) => {
+    const updated = deleteTheme(savedThemes, id);
+    setSavedThemes(updated);
+    saveSavedThemes(updated);
+  }, [savedThemes]);
+
+  const handleRenameTheme = useCallback((id: string, newName: string) => {
+    const updated = renameTheme(savedThemes, id, newName);
+    setSavedThemes(updated);
+    saveSavedThemes(updated);
+  }, [savedThemes]);
+
+  const handleLoadTheme = useCallback((theme: SavedTheme) => {
+    loadTheme(theme);
+  }, [loadTheme]);
 
   // Library folder state
   const [libraryFolder, setLibraryFolder] = useState<string | null>(null);
@@ -817,6 +861,20 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
         <div className="flex-1 overflow-y-auto p-5 space-y-7">
           {/* Theme */}
           <Accordion title={t("settings.appearance")} open={openSection === "appearance"} onToggle={() => toggleSection("appearance")}>
+            {/* Saved Themes */}
+            <div className="pb-4 mb-4 border-b border-warm-border/50">
+              <h4 className="text-xs font-semibold uppercase tracking-wider text-ink-muted mb-2">
+                {t("settings.savedThemes")}
+              </h4>
+              <SavedThemesList
+                themes={savedThemes}
+                onLoad={handleLoadTheme}
+                onSave={handleSaveTheme}
+                onDelete={handleDeleteTheme}
+                onRename={handleRenameTheme}
+              />
+            </div>
+
             <div className="space-y-3">
               {/* Preset mode buttons */}
               <div className="flex gap-1 bg-warm-subtle rounded-xl p-1">
@@ -869,6 +927,9 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                 spellCheck={false}
               />
               <p className="text-[11px] text-ink-muted leading-relaxed" dangerouslySetInnerHTML={{ __html: t("settings.customCssHint") }} />
+              <p className="text-[11px] text-ink-muted/60 leading-relaxed">
+                {t("settings.customCssGlobalHint")}
+              </p>
               {customCss && (
                 <button
                   type="button"
@@ -879,242 +940,246 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                 </button>
               )}
             </div>
-          </Accordion>
-
-          {/* Text & Typography */}
-          <Accordion title={t("settings.textTypography")} open={openSection === "text"} onToggle={() => toggleSection("text")}>
-            <div className="flex items-center gap-3">
-              <button
-                onClick={() => setFontSize(fontSize - 1)}
-                disabled={fontSize <= MIN_FONT_SIZE}
-                className="w-8 h-8 flex items-center justify-center rounded-lg bg-warm-subtle text-ink-muted hover:text-ink hover:bg-warm-border transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-sm font-medium focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2"
-                aria-label={t("reader.decreaseFontSize")}
-              >
-                −
-              </button>
-              <div className="flex-1 flex flex-col items-center gap-1">
-                <input
-                  type="range"
-                  min={MIN_FONT_SIZE}
-                  max={MAX_FONT_SIZE}
-                  value={fontSize}
-                  onChange={(e) => setFontSize(Number(e.target.value))}
-                  className="w-full accent-accent"
-                  aria-label={t("settings.fontSize")}
-                  aria-valuetext={`${fontSize} pixels`}
-                />
-                <span className="text-xs text-ink-muted tabular-nums">
-                  {fontSize}px
-                </span>
-              </div>
-              <button
-                onClick={() => setFontSize(fontSize + 1)}
-                disabled={fontSize >= MAX_FONT_SIZE}
-                className="w-8 h-8 flex items-center justify-center rounded-lg bg-warm-subtle text-ink-muted hover:text-ink hover:bg-warm-border transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-sm font-medium focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2"
-                aria-label={t("reader.increaseFontSize")}
-              >
-                +
-              </button>
-            </div>
-
-            {/* Reading font */}
-            <div className="mt-4 pt-4 border-t border-warm-border/50">
-            <label className="text-xs font-medium text-ink-muted mb-2 block">{t("settings.readingFont")}</label>
-            <div className="flex flex-col gap-1">
-              {/* Built-in fonts */}
-              {([
-                { key: "serif", label: "Lora", css: '"Lora Variable", Georgia, serif' },
-                { key: "literata", label: "Literata", css: '"Literata Variable", Georgia, serif' },
-                { key: "sans-serif", label: "DM Sans", css: '"DM Sans Variable", system-ui, sans-serif' },
-                { key: "dyslexic", label: "OpenDyslexic", css: '"OpenDyslexic", sans-serif' },
-              ] as const).map((option) => (
-                <button
-                  type="button"
-                  key={option.key}
-                  onClick={() => setFontFamily(option.key)}
-                  className={`w-full text-left px-3 py-2 text-sm rounded-lg transition-all duration-150 ${
-                    fontFamily === option.key
-                      ? "bg-accent-light text-accent font-medium"
-                      : "text-ink-muted hover:text-ink hover:bg-warm-subtle"
-                  }`}
-                  style={{ fontFamily: option.css }}
-                >
-                  {option.label}
-                </button>
-              ))}
-
-              {/* Custom fonts */}
-              {customFonts.map((font) => (
-                <div
-                  key={font.id}
-                  className={`group flex items-center gap-2 px-3 py-2 rounded-lg transition-all duration-150 cursor-pointer ${
-                    fontFamily === `custom:${font.id}`
-                      ? "bg-accent-light text-accent font-medium"
-                      : "text-ink-muted hover:text-ink hover:bg-warm-subtle"
-                  }`}
-                  onClick={() => setFontFamily(`custom:${font.id}`)}
-                >
-                  <span
-                    className="flex-1 text-sm truncate"
-                    style={{ fontFamily: `"CustomFont-${font.id}", serif` }}
-                  >
-                    {font.name}
-                  </span>
-                  {deletingFontId === font.id ? (
-                    <span className="flex items-center gap-1 shrink-0">
-                      <button
-                        onClick={(e) => { e.stopPropagation(); handleDeleteFont(font.id); }}
-                        className="text-[10px] px-1.5 py-0.5 bg-accent text-white rounded hover:bg-accent-hover transition-colors"
-                      >
-                        {t("common.delete")}
-                      </button>
-                      <button
-                        onClick={(e) => { e.stopPropagation(); setDeletingFontId(null); }}
-                        className="text-[10px] px-1.5 py-0.5 text-ink-muted hover:text-ink transition-colors"
-                      >
-                        {t("common.cancel")}
-                      </button>
-                    </span>
-                  ) : (
-                    <button
-                      onClick={(e) => { e.stopPropagation(); setDeletingFontId(font.id); }}
-                      className="opacity-0 group-hover:opacity-100 p-0.5 text-ink-muted hover:text-red-500 transition-all shrink-0"
-                      aria-label={t("common.remove") + " " + font.name}
-                    >
-                      <svg width="12" height="12" viewBox="0 0 20 20" fill="none">
-                        <path d="M15 5L5 15M5 5l10 10" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-                      </svg>
-                    </button>
-                  )}
-                </div>
-              ))}
-
-              {/* Add font button */}
-              <button
-                type="button"
-                onClick={handleImportFont}
-                className="w-full text-left px-3 py-2 text-sm text-accent hover:bg-warm-subtle rounded-lg transition-colors flex items-center gap-2"
-              >
-                <svg width="14" height="14" viewBox="0 0 20 20" fill="none">
-                  <path d="M10 4v12M4 10h12" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-                </svg>
-                {t("settings.addFont")}
-              </button>
-              <p className="px-3 text-[10px] text-ink-muted/60">
-                {t("settings.addFontWarning")}
-              </p>
-            </div>
-
-            {/* Font preview */}
-            <p
-              className="mt-3 text-sm text-ink-muted leading-relaxed"
-              style={{
-                fontFamily:
-                  fontFamily === "serif"
-                    ? '"Lora Variable", Georgia, serif'
-                    : fontFamily === "literata"
-                      ? '"Literata Variable", Georgia, serif'
-                      : fontFamily === "dyslexic"
-                        ? '"OpenDyslexic", sans-serif'
-                        : fontFamily.startsWith("custom:")
-                          ? `"CustomFont-${fontFamily.slice(7)}", serif`
-                          : '"DM Sans Variable", system-ui, sans-serif',
-              }}
-            >
-              {t("settings.fontPreview")}
-            </p>
-            </div>
 
             {/* Typography */}
             <div className="mt-4 pt-4 border-t border-warm-border/50">
-            <div className="space-y-4">
-              {/* Line height */}
-              <div>
-                <div className="flex items-center justify-between mb-1">
-                  <label className="text-xs font-medium text-ink-muted">{t("settings.lineHeight")}</label>
-                  <span className="text-xs text-ink-muted tabular-nums">{typography.lineHeight.toFixed(1)}</span>
+              <h4 className="text-xs font-semibold uppercase tracking-wider text-ink-muted mb-3">
+                {t("settings.typography")}
+              </h4>
+
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={() => setFontSize(fontSize - 1)}
+                  disabled={fontSize <= MIN_FONT_SIZE}
+                  className="w-8 h-8 flex items-center justify-center rounded-lg bg-warm-subtle text-ink-muted hover:text-ink hover:bg-warm-border transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-sm font-medium focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2"
+                  aria-label={t("reader.decreaseFontSize")}
+                >
+                  −
+                </button>
+                <div className="flex-1 flex flex-col items-center gap-1">
+                  <input
+                    type="range"
+                    min={MIN_FONT_SIZE}
+                    max={MAX_FONT_SIZE}
+                    value={fontSize}
+                    onChange={(e) => setFontSize(Number(e.target.value))}
+                    className="w-full accent-accent"
+                    aria-label={t("settings.fontSize")}
+                    aria-valuetext={`${fontSize} pixels`}
+                  />
+                  <span className="text-xs text-ink-muted tabular-nums">
+                    {fontSize}px
+                  </span>
                 </div>
-                <input
-                  type="range"
-                  min={1.2}
-                  max={2.4}
-                  step={0.1}
-                  value={typography.lineHeight}
-                  onChange={(e) => setTypography({ ...typography, lineHeight: parseFloat(e.target.value) })}
-                  className="w-full accent-accent"
-                />
+                <button
+                  onClick={() => setFontSize(fontSize + 1)}
+                  disabled={fontSize >= MAX_FONT_SIZE}
+                  className="w-8 h-8 flex items-center justify-center rounded-lg bg-warm-subtle text-ink-muted hover:text-ink hover:bg-warm-border transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-sm font-medium focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2"
+                  aria-label={t("reader.increaseFontSize")}
+                >
+                  +
+                </button>
               </div>
 
-              {/* Page margins */}
-              <div>
-                <div className="flex items-center justify-between mb-1">
-                  <label className="text-xs font-medium text-ink-muted">{t("settings.pageMargins")}</label>
-                  <span className="text-xs text-ink-muted tabular-nums">{typography.pageMargins}px</span>
-                </div>
-                <input
-                  type="range"
-                  min={0}
-                  max={80}
-                  step={4}
-                  value={typography.pageMargins}
-                  onChange={(e) => setTypography({ ...typography, pageMargins: parseInt(e.target.value, 10) })}
-                  className="w-full accent-accent"
-                />
-              </div>
-
-              {/* Paragraph spacing */}
-              <div>
-                <div className="flex items-center justify-between mb-1">
-                  <label className="text-xs font-medium text-ink-muted">{t("settings.paragraphSpacing")}</label>
-                  <span className="text-xs text-ink-muted tabular-nums">{typography.paragraphSpacing.toFixed(1)}em</span>
-                </div>
-                <input
-                  type="range"
-                  min={0}
-                  max={2}
-                  step={0.1}
-                  value={typography.paragraphSpacing}
-                  onChange={(e) => setTypography({ ...typography, paragraphSpacing: parseFloat(e.target.value) })}
-                  className="w-full accent-accent"
-                />
-              </div>
-
-              {/* Text alignment */}
-              <div>
-                <label className="text-xs font-medium text-ink-muted mb-1 block">{t("settings.textAlignment")}</label>
-                <div className="flex gap-1 bg-warm-subtle rounded-xl p-1">
-                  {(["left", "justify"] as const).map((option) => (
-                    <button
-                      type="button"
-                      key={option}
-                      onClick={() => setTypography({ ...typography, textAlign: option })}
-                      className={`flex-1 px-3 py-2 text-sm rounded-lg capitalize transition-all duration-150 ${
-                        typography.textAlign === option
-                          ? "bg-surface text-ink shadow-sm font-medium"
-                          : "text-ink-muted hover:text-ink"
-                      }`}
-                    >
-                      {option === "left" ? t("settings.left") : t("settings.justify")}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              {/* Hyphenation */}
-              <div>
-                <label className="flex items-center justify-between cursor-pointer">
-                  <span className="text-xs font-medium text-ink-muted">{t("settings.hyphenation")}</span>
+              {/* Reading font */}
+              <div className="mt-4 pt-4 border-t border-warm-border/50">
+              <label className="text-xs font-medium text-ink-muted mb-2 block">{t("settings.readingFont")}</label>
+              <div className="flex flex-col gap-1">
+                {/* Built-in fonts */}
+                {([
+                  { key: "serif", label: "Lora", css: '"Lora Variable", Georgia, serif' },
+                  { key: "literata", label: "Literata", css: '"Literata Variable", Georgia, serif' },
+                  { key: "sans-serif", label: "DM Sans", css: '"DM Sans Variable", system-ui, sans-serif' },
+                  { key: "dyslexic", label: "OpenDyslexic", css: '"OpenDyslexic", sans-serif' },
+                ] as const).map((option) => (
                   <button
                     type="button"
-                    onClick={() => setTypography({ ...typography, hyphenation: !typography.hyphenation })}
-                    className={`relative w-9 h-5 rounded-full transition-colors duration-200 ${typography.hyphenation ? "bg-accent" : "bg-warm-border"}`}
+                    key={option.key}
+                    onClick={() => setFontFamily(option.key)}
+                    className={`w-full text-left px-3 py-2 text-sm rounded-lg transition-all duration-150 ${
+                      fontFamily === option.key
+                        ? "bg-accent-light text-accent font-medium"
+                        : "text-ink-muted hover:text-ink hover:bg-warm-subtle"
+                    }`}
+                    style={{ fontFamily: option.css }}
                   >
-                    <span className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform duration-200 ${typography.hyphenation ? "translate-x-4" : ""}`} />
+                    {option.label}
                   </button>
-                </label>
-                <p className="text-[11px] text-ink-muted/60 mt-1">{t("settings.hyphenationHint")}</p>
+                ))}
+
+                {/* Custom fonts */}
+                {customFonts.map((font) => (
+                  <div
+                    key={font.id}
+                    className={`group flex items-center gap-2 px-3 py-2 rounded-lg transition-all duration-150 cursor-pointer ${
+                      fontFamily === `custom:${font.id}`
+                        ? "bg-accent-light text-accent font-medium"
+                        : "text-ink-muted hover:text-ink hover:bg-warm-subtle"
+                    }`}
+                    onClick={() => setFontFamily(`custom:${font.id}`)}
+                  >
+                    <span
+                      className="flex-1 text-sm truncate"
+                      style={{ fontFamily: `"CustomFont-${font.id}", serif` }}
+                    >
+                      {font.name}
+                    </span>
+                    {deletingFontId === font.id ? (
+                      <span className="flex items-center gap-1 shrink-0">
+                        <button
+                          onClick={(e) => { e.stopPropagation(); handleDeleteFont(font.id); }}
+                          className="text-[10px] px-1.5 py-0.5 bg-accent text-white rounded hover:bg-accent-hover transition-colors"
+                        >
+                          {t("common.delete")}
+                        </button>
+                        <button
+                          onClick={(e) => { e.stopPropagation(); setDeletingFontId(null); }}
+                          className="text-[10px] px-1.5 py-0.5 text-ink-muted hover:text-ink transition-colors"
+                        >
+                          {t("common.cancel")}
+                        </button>
+                      </span>
+                    ) : (
+                      <button
+                        onClick={(e) => { e.stopPropagation(); setDeletingFontId(font.id); }}
+                        className="opacity-0 group-hover:opacity-100 p-0.5 text-ink-muted hover:text-red-500 transition-all shrink-0"
+                        aria-label={t("common.remove") + " " + font.name}
+                      >
+                        <svg width="12" height="12" viewBox="0 0 20 20" fill="none">
+                          <path d="M15 5L5 15M5 5l10 10" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                        </svg>
+                      </button>
+                    )}
+                  </div>
+                ))}
+
+                {/* Add font button */}
+                <button
+                  type="button"
+                  onClick={handleImportFont}
+                  className="w-full text-left px-3 py-2 text-sm text-accent hover:bg-warm-subtle rounded-lg transition-colors flex items-center gap-2"
+                >
+                  <svg width="14" height="14" viewBox="0 0 20 20" fill="none">
+                    <path d="M10 4v12M4 10h12" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                  </svg>
+                  {t("settings.addFont")}
+                </button>
+                <p className="px-3 text-[10px] text-ink-muted/60">
+                  {t("settings.addFontWarning")}
+                </p>
               </div>
-            </div>
+
+              {/* Font preview */}
+              <p
+                className="mt-3 text-sm text-ink-muted leading-relaxed"
+                style={{
+                  fontFamily:
+                    fontFamily === "serif"
+                      ? '"Lora Variable", Georgia, serif'
+                      : fontFamily === "literata"
+                        ? '"Literata Variable", Georgia, serif'
+                        : fontFamily === "dyslexic"
+                          ? '"OpenDyslexic", sans-serif'
+                          : fontFamily.startsWith("custom:")
+                            ? `"CustomFont-${fontFamily.slice(7)}", serif`
+                            : '"DM Sans Variable", system-ui, sans-serif',
+                }}
+              >
+                {t("settings.fontPreview")}
+              </p>
+              </div>
+
+              {/* Typography sliders */}
+              <div className="mt-4 pt-4 border-t border-warm-border/50">
+              <div className="space-y-4">
+                {/* Line height */}
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="text-xs font-medium text-ink-muted">{t("settings.lineHeight")}</label>
+                    <span className="text-xs text-ink-muted tabular-nums">{typography.lineHeight.toFixed(1)}</span>
+                  </div>
+                  <input
+                    type="range"
+                    min={1.2}
+                    max={2.4}
+                    step={0.1}
+                    value={typography.lineHeight}
+                    onChange={(e) => setTypography({ ...typography, lineHeight: parseFloat(e.target.value) })}
+                    className="w-full accent-accent"
+                  />
+                </div>
+
+                {/* Page margins */}
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="text-xs font-medium text-ink-muted">{t("settings.pageMargins")}</label>
+                    <span className="text-xs text-ink-muted tabular-nums">{typography.pageMargins}px</span>
+                  </div>
+                  <input
+                    type="range"
+                    min={0}
+                    max={80}
+                    step={4}
+                    value={typography.pageMargins}
+                    onChange={(e) => setTypography({ ...typography, pageMargins: parseInt(e.target.value, 10) })}
+                    className="w-full accent-accent"
+                  />
+                </div>
+
+                {/* Paragraph spacing */}
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="text-xs font-medium text-ink-muted">{t("settings.paragraphSpacing")}</label>
+                    <span className="text-xs text-ink-muted tabular-nums">{typography.paragraphSpacing.toFixed(1)}em</span>
+                  </div>
+                  <input
+                    type="range"
+                    min={0}
+                    max={2}
+                    step={0.1}
+                    value={typography.paragraphSpacing}
+                    onChange={(e) => setTypography({ ...typography, paragraphSpacing: parseFloat(e.target.value) })}
+                    className="w-full accent-accent"
+                  />
+                </div>
+
+                {/* Text alignment */}
+                <div>
+                  <label className="text-xs font-medium text-ink-muted mb-1 block">{t("settings.textAlignment")}</label>
+                  <div className="flex gap-1 bg-warm-subtle rounded-xl p-1">
+                    {(["left", "justify"] as const).map((option) => (
+                      <button
+                        type="button"
+                        key={option}
+                        onClick={() => setTypography({ ...typography, textAlign: option })}
+                        className={`flex-1 px-3 py-2 text-sm rounded-lg capitalize transition-all duration-150 ${
+                          typography.textAlign === option
+                            ? "bg-surface text-ink shadow-sm font-medium"
+                            : "text-ink-muted hover:text-ink"
+                        }`}
+                      >
+                        {option === "left" ? t("settings.left") : t("settings.justify")}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Hyphenation */}
+                <div>
+                  <label className="flex items-center justify-between cursor-pointer">
+                    <span className="text-xs font-medium text-ink-muted">{t("settings.hyphenation")}</span>
+                    <button
+                      type="button"
+                      onClick={() => setTypography({ ...typography, hyphenation: !typography.hyphenation })}
+                      className={`relative w-9 h-5 rounded-full transition-colors duration-200 ${typography.hyphenation ? "bg-accent" : "bg-warm-border"}`}
+                    >
+                      <span className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform duration-200 ${typography.hyphenation ? "translate-x-4" : ""}`} />
+                    </button>
+                  </label>
+                  <p className="text-[11px] text-ink-muted/60 mt-1">{t("settings.hyphenationHint")}</p>
+                </div>
+              </div>
+              </div>
             </div>
           </Accordion>
 

@@ -24,6 +24,7 @@ function makeTheme(overrides: Partial<SavedTheme> = {}): SavedTheme {
   return {
     id: "id-1",
     name: "Theme 1",
+    mode: "custom",
     colors: {
       paper: "#ffffff",
       surface: "#ffffff",
@@ -78,6 +79,24 @@ describe("loadSavedThemes", () => {
   it("returns empty array when stored value is not an array", () => {
     localStorage.setItem("folio-saved-themes", JSON.stringify({ id: "id-1" }));
     expect(loadSavedThemes()).toEqual([]);
+  });
+
+  it("migrates pre-upgrade themes without mode field as custom", () => {
+    // Simulate a theme saved by the old schema (no `mode` field)
+    const { mode: _mode, ...legacyTheme } = makeTheme({ id: "id-legacy", name: "Legacy" });
+    localStorage.setItem("folio-saved-themes", JSON.stringify([legacyTheme]));
+    const result = loadSavedThemes();
+    expect(result).toHaveLength(1);
+    expect(result[0].id).toBe("id-legacy");
+    expect(result[0].mode).toBe("custom");
+  });
+
+  it("does not overwrite an existing mode during migration", () => {
+    const theme = makeTheme({ id: "id-dark", name: "Dark Theme", mode: "dark" });
+    localStorage.setItem("folio-saved-themes", JSON.stringify([theme]));
+    const result = loadSavedThemes();
+    expect(result).toHaveLength(1);
+    expect(result[0].mode).toBe("dark");
   });
 
   it("filters out malformed entries, keeps valid ones", () => {
