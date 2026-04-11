@@ -28,24 +28,25 @@ impl RateLimiter {
         }
     }
 
-    /// Check if an IP is allowed to attempt login.
-    pub fn check(&self, ip: &str) -> bool {
+    /// Atomically check and record a login attempt for an IP.
+    /// Returns `true` if the attempt is allowed, `false` if rate-limited.
+    /// The attempt is recorded under the same lock to prevent TOCTOU races.
+    pub fn attempt(&self, ip: &str) -> bool {
         let mut map = self.attempts.lock().unwrap();
         let window = std::time::Duration::from_secs(self.window_secs);
-        if let Some(times) = map.get_mut(ip) {
-            times.retain(|t| t.elapsed() < window);
-            times.len() < self.max_attempts
-        } else {
-            true
+        let times = map.entry(ip.to_string()).or_default();
+        times.retain(|t| t.elapsed() < window);
+        if times.len() >= self.max_attempts {
+            return false;
         }
+        times.push(std::time::Instant::now());
+        true
     }
 
-    /// Record a failed login attempt for an IP.
-    pub fn record_failure(&self, ip: &str) {
+    /// Clear attempts for an IP (call after successful login).
+    pub fn clear(&self, ip: &str) {
         let mut map = self.attempts.lock().unwrap();
-        map.entry(ip.to_string())
-            .or_default()
-            .push(std::time::Instant::now());
+        map.remove(ip);
     }
 }
 
@@ -275,19 +276,19 @@ mod tests {
     fn test_rate_limiter_allows_initial_attempts() {
         let limiter = RateLimiter::new(3, 300);
         let ip = "192.168.1.10".to_string();
-        assert!(limiter.check(&ip));
-        assert!(limiter.check(&ip));
-        assert!(limiter.check(&ip));
+        assert!(limiter.attempt(&ip));
+        assert!(limiter.attempt(&ip));
+        assert!(limiter.attempt(&ip));
     }
 
     #[test]
     fn test_rate_limiter_blocks_after_max() {
         let limiter = RateLimiter::new(3, 300);
         let ip = "192.168.1.10".to_string();
-        limiter.record_failure(&ip);
-        limiter.record_failure(&ip);
-        limiter.record_failure(&ip);
-        assert!(!limiter.check(&ip));
+        assert!(limiter.attempt(&ip));
+        assert!(limiter.attempt(&ip));
+        assert!(limiter.attempt(&ip));
+        assert!(!limiter.attempt(&ip)); // 4th attempt blocked
     }
 
     #[test]
@@ -295,9 +296,20 @@ mod tests {
         let limiter = RateLimiter::new(2, 300);
         let ip1 = "192.168.1.10".to_string();
         let ip2 = "192.168.1.11".to_string();
-        limiter.record_failure(&ip1);
-        limiter.record_failure(&ip1);
-        assert!(!limiter.check(&ip1));
-        assert!(limiter.check(&ip2)); // different IP, not blocked
+        assert!(limiter.attempt(&ip1));
+        assert!(limiter.attempt(&ip1));
+        assert!(!limiter.attempt(&ip1));
+        assert!(limiter.attempt(&ip2)); // different IP, not blocked
+    }
+
+    #[test]
+    fn test_rate_limiter_clear_resets() {
+        let limiter = RateLimiter::new(2, 300);
+        let ip = "192.168.1.10".to_string();
+        assert!(limiter.attempt(&ip));
+        assert!(limiter.attempt(&ip));
+        assert!(!limiter.attempt(&ip));
+        limiter.clear(&ip);
+        assert!(limiter.attempt(&ip)); // allowed again after clear
     }
 }

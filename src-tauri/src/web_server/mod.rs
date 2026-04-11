@@ -90,12 +90,15 @@ pub async fn start(state: WebState, port: u16) -> Result<WebServerHandle, String
     let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
 
     tokio::spawn(async move {
-        axum::serve(listener, router)
-            .with_graceful_shutdown(async {
-                let _ = shutdown_rx.await;
-            })
-            .await
-            .ok();
+        axum::serve(
+            listener,
+            router.into_make_service_with_connect_info::<SocketAddr>(),
+        )
+        .with_graceful_shutdown(async {
+            let _ = shutdown_rx.await;
+        })
+        .await
+        .ok();
     });
 
     let ip = get_local_ip().unwrap_or_else(|| "127.0.0.1".to_string());
@@ -165,7 +168,7 @@ mod tests {
         let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
 
         let server_handle = tokio::spawn(async move {
-            axum::serve(listener, router)
+            axum::serve(listener, router.into_make_service_with_connect_info::<SocketAddr>())
                 .with_graceful_shutdown(async {
                     let _ = shutdown_rx.await;
                 })
@@ -201,7 +204,7 @@ mod tests {
         let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
 
         tokio::spawn(async move {
-            axum::serve(listener, router)
+            axum::serve(listener, router.into_make_service_with_connect_info::<SocketAddr>())
                 .with_graceful_shutdown(async {
                     let _ = shutdown_rx.await;
                 })
@@ -244,7 +247,7 @@ mod tests {
         let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
 
         tokio::spawn(async move {
-            axum::serve(listener, router)
+            axum::serve(listener, router.into_make_service_with_connect_info::<SocketAddr>())
                 .with_graceful_shutdown(async {
                     let _ = shutdown_rx.await;
                 })
@@ -289,7 +292,7 @@ mod tests {
         let port = listener.local_addr().unwrap().port();
         let (tx, rx) = oneshot::channel::<()>();
         tokio::spawn(async move {
-            axum::serve(listener, router)
+            axum::serve(listener, router.into_make_service_with_connect_info::<SocketAddr>())
                 .with_graceful_shutdown(async {
                     let _ = rx.await;
                 })
@@ -330,7 +333,7 @@ mod tests {
         let port = listener.local_addr().unwrap().port();
         let (tx, rx) = oneshot::channel::<()>();
         tokio::spawn(async move {
-            axum::serve(listener, router)
+            axum::serve(listener, router.into_make_service_with_connect_info::<SocketAddr>())
                 .with_graceful_shutdown(async {
                     let _ = rx.await;
                 })
@@ -376,7 +379,7 @@ mod tests {
         let port = listener.local_addr().unwrap().port();
         let (tx, rx) = oneshot::channel::<()>();
         tokio::spawn(async move {
-            axum::serve(listener, router)
+            axum::serve(listener, router.into_make_service_with_connect_info::<SocketAddr>())
                 .with_graceful_shutdown(async {
                     let _ = rx.await;
                 })
@@ -420,7 +423,7 @@ mod tests {
         let port = listener.local_addr().unwrap().port();
         let (tx, rx) = oneshot::channel::<()>();
         tokio::spawn(async move {
-            axum::serve(listener, router)
+            axum::serve(listener, router.into_make_service_with_connect_info::<SocketAddr>())
                 .with_graceful_shutdown(async {
                     let _ = rx.await;
                 })

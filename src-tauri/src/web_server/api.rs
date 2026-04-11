@@ -49,19 +49,15 @@ struct LoginResponse {
 }
 
 async fn login(
+    axum::extract::ConnectInfo(addr): axum::extract::ConnectInfo<std::net::SocketAddr>,
     State(state): State<WebState>,
     req: axum::extract::Request,
 ) -> Result<Response, (StatusCode, String)> {
-    // Extract client IP for rate limiting
-    let client_ip = req
-        .headers()
-        .get("x-forwarded-for")
-        .and_then(|v| v.to_str().ok())
-        .map(|s| s.split(',').next().unwrap_or("unknown").trim().to_string())
-        .unwrap_or_else(|| "unknown".to_string());
+    // Use the actual peer IP from the TCP connection (not spoofable headers)
+    let client_ip = addr.ip().to_string();
 
-    // R2-2: Check rate limit before processing
-    if !state.login_limiter.check(&client_ip) {
+    // R2-2: Atomically check rate limit and record the attempt
+    if !state.login_limiter.attempt(&client_ip) {
         return Err((
             StatusCode::TOO_MANY_REQUESTS,
             "Too many login attempts. Try again later.".to_string(),
@@ -90,9 +86,11 @@ async fn login(
         .unwrap_or(false);
 
     if !valid {
-        state.login_limiter.record_failure(&client_ip);
         return Err((StatusCode::UNAUTHORIZED, "Invalid PIN".into()));
     }
+
+    // Successful login — clear rate limit entries for this IP
+    state.login_limiter.clear(&client_ip);
 
     let token = super::auth::create_session(&state);
     let cookie = format!("folio_session={token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=86400");
