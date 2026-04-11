@@ -1408,7 +1408,7 @@ pub async fn prepare_comic(
 
     // Run eviction in background
     let evict_cache_dir = cache_dir.clone();
-    std::thread::spawn(move || {
+    tauri::async_runtime::spawn_blocking(move || {
         let _ = page_cache::run_eviction(&evict_cache_dir, max_size_mb);
     });
 
@@ -1938,7 +1938,7 @@ pub async fn search_openlibrary(
     author: Option<String>,
 ) -> Result<Vec<openlibrary::OpenLibraryResult>, String> {
     let (tx, rx) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
+    tauri::async_runtime::spawn_blocking(move || {
         let _ = tx.send(openlibrary::search(&title, author.as_deref()));
     });
     rx.recv().map_err(|e| format!("Thread error: {e}"))?
@@ -1953,7 +1953,7 @@ pub async fn enrich_book_from_openlibrary(
     // Fetch detailed metadata from OpenLibrary (on a separate thread)
     let key = openlibrary_key.clone();
     let (tx, rx) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
+    tauri::async_runtime::spawn_blocking(move || {
         let _ = tx.send(openlibrary::get_work(&key));
     });
     let work = rx.recv().map_err(|e| format!("Thread error: {e}"))??;
@@ -1972,7 +1972,7 @@ pub async fn enrich_book_from_openlibrary(
         Some(book.author.clone())
     };
     let (tx2, rx2) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
+    tauri::async_runtime::spawn_blocking(move || {
         let _ = tx2.send(openlibrary::search(&search_title, search_author.as_deref()));
     });
     let search_results = rx2
@@ -2108,7 +2108,7 @@ pub async fn search_all_catalogs(
         let q = query.clone();
         let tx = result_tx.clone();
         let cat_name = cat.name.clone();
-        std::thread::spawn(move || {
+        tauri::async_runtime::spawn_blocking(move || {
             // 1. Fetch root feed to get searchUrl
             let root = match opds::fetch_feed(&url) {
                 Ok(f) => f,
@@ -2200,7 +2200,7 @@ pub async fn get_discover_books(
         let url = cat.url.clone();
         let tx = result_tx.clone();
         let cat_name = cat.name.clone();
-        std::thread::spawn(move || {
+        tauri::async_runtime::spawn_blocking(move || {
             let entries = match opds::fetch_feed(&url) {
                 Ok(feed) => feed
                     .entries
@@ -2251,7 +2251,7 @@ pub async fn get_discover_books(
 #[tauri::command]
 pub async fn browse_opds(url: String) -> Result<opds::OpdsFeed, String> {
     let (tx, rx) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
+    tauri::async_runtime::spawn_blocking(move || {
         let _ = tx.send(opds::fetch_feed(&url));
     });
     rx.recv().map_err(|e| format!("Thread error: {e}"))?
@@ -2282,7 +2282,7 @@ pub async fn download_opds_book(
         let dl_url = download_url.clone();
         let dl_dest = temp_str.clone();
         let (tx, rx) = std::sync::mpsc::channel();
-        std::thread::spawn(move || {
+        tauri::async_runtime::spawn_blocking(move || {
             let _ = tx.send(opds::download_file(&dl_url, &dl_dest));
         });
         rx.recv().map_err(|e| format!("Thread error: {e}"))??;
@@ -2984,7 +2984,7 @@ pub async fn run_backup(
     let op = crate::backup::build_operator(&config)?;
     let (tx, rx) = std::sync::mpsc::channel();
     let app_handle = app.clone();
-    std::thread::spawn(move || {
+    tauri::async_runtime::spawn_blocking(move || {
         let result = crate::backup::run_incremental_backup_with_progress(
             &op,
             &conn,
@@ -3051,7 +3051,7 @@ pub async fn get_backup_status(
     crate::backup::load_secrets(&mut config)?;
     let op = crate::backup::build_operator(&config)?;
     let (tx, rx) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
+    tauri::async_runtime::spawn_blocking(move || {
         let _ = tx.send(crate::backup::read_manifest(&op));
     });
     let manifest = rx.recv().map_err(|e| format!("Thread error: {e}"))?;
@@ -3113,7 +3113,7 @@ pub async fn start_scan(
         new_reg
     };
     let app_clone = app.clone();
-    std::thread::spawn(move || {
+    tauri::async_runtime::spawn_blocking(move || {
         for (i, book) in books.iter().enumerate() {
             if SCAN_CANCEL.load(Ordering::SeqCst) {
                 let _ = app_clone.emit(
@@ -3273,7 +3273,7 @@ pub async fn scan_single_book(book_id: String, state: State<'_, AppState>) -> Re
     let t = lookup_title.to_string();
     let a = lookup_author.to_string();
     let i = lookup_isbn.map(|s| s.to_string());
-    std::thread::spawn(move || {
+    tauri::async_runtime::spawn_blocking(move || {
         let _ = tx.send(crate::enrichment::enrich_book(
             &t,
             &a,
@@ -3847,7 +3847,7 @@ pub async fn sync_pull_book(
     // Spawn thread for network fetch only — keep DB connection on main thread
     let fh = file_hash.clone();
     let (tx, rx) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
+    tauri::async_runtime::spawn_blocking(move || {
         let result = crate::sync::fetch_remote_sync(&op, &fh);
         let _ = tx.send(result);
     });
@@ -3947,7 +3947,7 @@ pub async fn sync_push_book(book_id: String, state: State<'_, AppState>) -> Resu
     let pool = state.active_db()?;
 
     // Fire-and-forget: spawn background thread that pull-merges then pushes
-    std::thread::spawn(move || {
+    tauri::async_runtime::spawn_blocking(move || {
         let bg_conn = match pool.get() {
             Ok(c) => c,
             Err(_) => return,
