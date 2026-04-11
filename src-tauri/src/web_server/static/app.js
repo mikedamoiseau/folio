@@ -3,17 +3,12 @@
   const $ = (s) => document.querySelector(s);
   const app = () => $("#app");
 
-  let token = localStorage.getItem("folio_token") || "";
-
-  function headers() {
-    const h = { "Content-Type": "application/json" };
-    if (token) h["Authorization"] = "Bearer " + token;
-    return h;
-  }
+  // R3-4: Use httpOnly cookies only — no localStorage token storage
+  let authenticated = false;
 
   async function api(path) {
-    const resp = await fetch(path, { headers: headers() });
-    if (resp.status === 401) { token = ""; localStorage.removeItem("folio_token"); showLogin(); return null; }
+    const resp = await fetch(path, { credentials: "same-origin" });
+    if (resp.status === 401) { authenticated = false; showLogin(); return null; }
     return resp;
   }
 
@@ -55,12 +50,15 @@
         const resp = await fetch("/api/auth", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ pin })
+          body: JSON.stringify({ pin }),
+          credentials: "same-origin"
         });
-        if (!resp.ok) { err.textContent = "Invalid PIN"; btn.disabled = false; return; }
-        const data = await resp.json();
-        token = data.token;
-        localStorage.setItem("folio_token", token);
+        if (!resp.ok) {
+          err.textContent = resp.status === 429 ? "Too many attempts. Try again later." : "Invalid PIN";
+          btn.disabled = false;
+          return;
+        }
+        authenticated = true;
         route();
       } catch(e) { err.textContent = "Connection error"; btn.disabled = false; }
     }
@@ -210,19 +208,10 @@
 
   // ── Init ──────────────────────────────────────
   async function init() {
-    // Check if we need auth
-    const resp = await fetch("/api/health");
-    if (resp.status === 401) { showLogin(); return; }
-
-    // Check if a token is needed (try accessing books)
-    if (token) {
-      const test = await fetch("/api/books", { headers: headers() });
-      if (test.status === 401) { token = ""; localStorage.removeItem("folio_token"); showLogin(); return; }
-    } else {
-      const test = await fetch("/api/books");
-      if (test.status === 401) { showLogin(); return; }
-    }
-
+    // Check if we have a valid session (cookie-based)
+    const test = await fetch("/api/books", { credentials: "same-origin" });
+    if (test.status === 401) { showLogin(); return; }
+    authenticated = true;
     route();
   }
 

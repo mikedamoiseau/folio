@@ -58,6 +58,24 @@ pub fn get_local_ip() -> Option<String> {
     socket.local_addr().ok().map(|a| a.ip().to_string())
 }
 
+/// Middleware that adds security headers to all responses (R3-3).
+async fn security_headers_middleware(
+    req: axum::http::Request<axum::body::Body>,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let mut response = next.run(req).await;
+    let headers = response.headers_mut();
+    headers.insert("x-content-type-options", "nosniff".parse().unwrap());
+    headers.insert("x-frame-options", "DENY".parse().unwrap());
+    headers.insert(
+        "content-security-policy",
+        "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src * data:"
+            .parse()
+            .unwrap(),
+    );
+    response
+}
+
 /// Build the full axum router with all routes and middleware.
 pub fn build_router(state: WebState) -> Router {
     let api_routes = api::routes(state.clone());
@@ -72,6 +90,7 @@ pub fn build_router(state: WebState) -> Router {
             state.clone(),
             auth::auth_middleware,
         ))
+        .layer(middleware::from_fn(security_headers_middleware))
         .with_state(state)
 }
 
@@ -465,6 +484,41 @@ mod tests {
             401,
             "No PIN = open access, should not get 401"
         );
+
+        let _ = tx.send(());
+    }
+
+    // R3-3: CSP headers present on responses
+    #[tokio::test]
+    async fn test_responses_have_security_headers() {
+        let state = test_state();
+        let addr = SocketAddr::from(([127, 0, 0, 1], 0));
+        let router = build_router(state);
+        let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (tx, rx) = oneshot::channel::<()>();
+        tokio::spawn(async move {
+            axum::serve(
+                listener,
+                router.into_make_service_with_connect_info::<SocketAddr>(),
+            )
+            .with_graceful_shutdown(async {
+                let _ = rx.await;
+            })
+            .await
+            .ok();
+        });
+
+        let client = reqwest::Client::new();
+        let resp = client
+            .get(format!("http://127.0.0.1:{port}/api/health"))
+            .send()
+            .await
+            .unwrap();
+
+        assert!(resp.headers().contains_key("x-content-type-options"));
+        assert!(resp.headers().contains_key("x-frame-options"));
+        assert!(resp.headers().contains_key("content-security-policy"));
 
         let _ = tx.send(());
     }

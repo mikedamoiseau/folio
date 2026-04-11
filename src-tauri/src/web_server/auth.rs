@@ -77,13 +77,15 @@ pub fn verify_pin(pin: &str, stored_hash: &str) -> bool {
     hash_pin(pin) == stored_hash
 }
 
-/// Create a new session token and store it.
-pub fn create_session(state: &WebState) -> String {
+/// Create a new session token and store it. Returns an error if the session store is unavailable.
+pub fn create_session(state: &WebState) -> Result<String, String> {
     let token = uuid::Uuid::new_v4().to_string();
-    if let Ok(mut sessions) = state.sessions.lock() {
-        sessions.insert(token.clone(), std::time::Instant::now());
-    }
-    token
+    let mut sessions = state
+        .sessions
+        .lock()
+        .map_err(|_| "Session store unavailable".to_string())?;
+    sessions.insert(token.clone(), std::time::Instant::now());
+    Ok(token)
 }
 
 /// Check if a session token is valid (exists and not expired).
@@ -256,7 +258,7 @@ mod tests {
     #[test]
     fn test_create_and_validate_session() {
         let state = test_state();
-        let token = create_session(&state);
+        let token = create_session(&state).unwrap();
         assert!(validate_session(&state, &token));
     }
 
@@ -324,5 +326,16 @@ mod tests {
         assert!(!limiter.attempt(&ip));
         limiter.clear(&ip);
         assert!(limiter.attempt(&ip)); // allowed again after clear
+    }
+
+    // R2-5: create_session should return Result
+    #[test]
+    fn test_create_session_returns_result() {
+        let state = test_state();
+        let result = create_session(&state);
+        assert!(result.is_ok());
+        let token = result.unwrap();
+        assert!(!token.is_empty());
+        assert!(validate_session(&state, &token));
     }
 }

@@ -92,7 +92,8 @@ async fn login(
     // Successful login — clear rate limit entries for this IP
     state.login_limiter.clear(&client_ip);
 
-    let token = super::auth::create_session(&state);
+    let token =
+        super::auth::create_session(&state).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
     let cookie = format!("folio_session={token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=86400");
     let body = Json(LoginResponse {
         token: token.clone(),
