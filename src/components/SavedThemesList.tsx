@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import type { SavedTheme } from "../lib/savedThemes";
+import { LiveRegion } from "./LiveRegion";
 
 interface SavedThemesListProps {
   themes: SavedTheme[];
@@ -30,6 +31,7 @@ export default function SavedThemesList({
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
   const [renameError, setRenameError] = useState<string | null>(null);
+  const [liveMessage, setLiveMessage] = useState("");
 
   const saveInputRef = useRef<HTMLInputElement>(null);
   const renameInputRef = useRef<HTMLInputElement>(null);
@@ -65,8 +67,8 @@ export default function SavedThemesList({
     setOverwriteTarget(null);
   }
 
-  function commitSave(nameOverride?: string) {
-    const trimmed = (nameOverride ?? saveName).trim();
+  function commitSave() {
+    const trimmed = saveName.trim();
     if (!trimmed) {
       setSaveError(t("settings.themeNameRequired"));
       return;
@@ -81,6 +83,7 @@ export default function SavedThemesList({
     }
 
     onSave(trimmed);
+    setLiveMessage(t("settings.themeSaved", { name: trimmed }));
     closeSaveForm();
   }
 
@@ -113,6 +116,7 @@ export default function SavedThemesList({
       return;
     }
     onRename(id, trimmed);
+    setLiveMessage(t("settings.themeRenamed", { name: trimmed }));
     setRenamingId(null);
     setRenameValue("");
     setRenameError(null);
@@ -138,12 +142,14 @@ export default function SavedThemesList({
   function handleDeleteConfirm(id: string) {
     onDelete(id);
     setDeletingId(null);
+    setLiveMessage(t("settings.themeDeleted"));
   }
 
   // ── Render ──────────────────────────────────────────────────
 
   return (
     <div className="space-y-1">
+      <LiveRegion message={liveMessage} />
       {/* Empty state */}
       {themes.length === 0 && (
         <p className="text-[11px] text-ink-muted/60 px-1 py-1">
@@ -166,30 +172,35 @@ export default function SavedThemesList({
             onClick={() => {
               if (!isDeleting && !isRenaming) {
                 onLoad(theme);
+                setLiveMessage(t("settings.themeLoaded", { name: theme.name }));
               }
             }}
             onKeyDown={(e) => {
               if ((e.key === "Enter" || e.key === " ") && !isDeleting && !isRenaming) {
                 e.preventDefault();
                 onLoad(theme);
+                setLiveMessage(t("settings.themeLoaded", { name: theme.name }));
               }
             }}
           >
             {/* Color swatches */}
             <div className="flex gap-0.5 shrink-0">
               <span
-                className="w-3 h-3 rounded-sm border border-black/10"
+                className="w-3.5 h-3.5 rounded-sm border border-black/10"
                 style={{ backgroundColor: theme.colors["paper"] }}
+                title={theme.colors["paper"]}
                 aria-hidden="true"
               />
               <span
-                className="w-3 h-3 rounded-sm border border-black/10"
+                className="w-3.5 h-3.5 rounded-sm border border-black/10"
                 style={{ backgroundColor: theme.colors["ink"] }}
+                title={theme.colors["ink"]}
                 aria-hidden="true"
               />
               <span
-                className="w-3 h-3 rounded-sm border border-black/10"
+                className="w-3.5 h-3.5 rounded-sm border border-black/10"
                 style={{ backgroundColor: theme.colors["accent"] }}
+                title={theme.colors["accent"]}
                 aria-hidden="true"
               />
             </div>
@@ -221,7 +232,7 @@ export default function SavedThemesList({
                 className="flex items-center gap-1 shrink-0"
                 onClick={(e) => e.stopPropagation()}
               >
-                <span className="text-[10px] text-ink-muted mr-0.5">
+                <span className="text-[11px] text-ink-muted mr-0.5">
                   {t("settings.deleteThemeConfirm", { name: theme.name })}
                 </span>
                 <button
@@ -290,17 +301,23 @@ export default function SavedThemesList({
         <div className="mt-2 space-y-1.5">
           {/* Overwrite confirmation */}
           {overwriteTarget ? (
-            <div className="flex items-center gap-2 px-2 py-1.5 rounded-lg bg-warm-subtle">
+            <div
+              className="flex items-center gap-2 px-2 py-1.5 rounded-lg bg-warm-subtle"
+              onKeyDown={(e) => { if (e.key === "Escape") setOverwriteTarget(null); }}
+            >
               <span className="flex-1 text-[11px] text-ink-muted">
                 {t("settings.themeOverwrite", { name: overwriteTarget.name })}
               </span>
               <button
                 type="button"
+                autoFocus
                 onClick={() => {
                   onSave(overwriteTarget.name);
+                  setLiveMessage(t("settings.themeSaved", { name: overwriteTarget.name }));
                   closeSaveForm();
                 }}
-                className="text-[10px] px-1.5 py-0.5 bg-accent text-white rounded hover:bg-accent-hover transition-colors shrink-0"
+                onKeyDown={(e) => { if (e.key === "Escape") setOverwriteTarget(null); }}
+                className="text-[10px] px-1.5 py-0.5 bg-accent text-white rounded hover:bg-accent-hover transition-colors shrink-0 focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-1"
               >
                 {t("settings.overwrite")}
               </button>
@@ -349,8 +366,11 @@ export default function SavedThemesList({
         <button
           type="button"
           onClick={openSaveForm}
-          className="mt-1 w-full text-left px-2 py-1.5 text-sm text-ink-muted hover:text-ink border border-dashed border-warm-border hover:border-accent rounded-lg transition-colors"
+          className="mt-1 w-full text-left px-2 py-1.5 text-sm text-ink-muted hover:text-ink border border-dashed border-warm-border hover:border-accent rounded-lg transition-colors flex items-center gap-2"
         >
+          <svg width="14" height="14" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+            <path d="M10 4v12M4 10h12" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+          </svg>
           {t("settings.saveAsTheme")}
         </button>
       )}

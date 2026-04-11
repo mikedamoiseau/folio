@@ -314,10 +314,6 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
     saveSavedThemes(updated);
   }, [savedThemes]);
 
-  const handleLoadTheme = useCallback((theme: SavedTheme) => {
-    loadTheme(theme);
-  }, [loadTheme]);
-
   // Library folder state
   const [libraryFolder, setLibraryFolder] = useState<string | null>(null);
   const [libraryInfo, setLibraryInfo] = useState<LibraryFolderInfo | null>(null);
@@ -766,7 +762,7 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
   const handleRunBackup = async () => {
     setRunningBackup(true);
     setRemoteBackupMessage(null);
-    setBackupProgressText(t("settings.starting"));
+    setBackupProgressText(t("settings.backupStarting"));
     const unlisten = await listen<{ step: string; current: number; total: number }>("backup-progress", (event) => {
       const { step, current, total } = event.payload;
       if (total > 0) {
@@ -868,7 +864,7 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
               </h4>
               <SavedThemesList
                 themes={savedThemes}
-                onLoad={handleLoadTheme}
+                onLoad={loadTheme}
                 onSave={handleSaveTheme}
                 onDelete={handleDeleteTheme}
                 onRename={handleRenameTheme}
