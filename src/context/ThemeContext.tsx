@@ -57,6 +57,7 @@ interface ThemeContextValue {
   setMangaMode: (enabled: boolean) => void;
   pageAnimation: boolean;
   setPageAnimation: (enabled: boolean) => void;
+  loadTheme: (theme: { colors: ColorTokens; fontFamily: string; fontSize: number; typography: TypographySettings }) => void;
 }
 
 const STORAGE_KEYS = {
@@ -274,6 +275,14 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     }, 500);
   }, []);
 
+  const loadTheme = useCallback((theme: { colors: ColorTokens; fontFamily: string; fontSize: number; typography: TypographySettings }) => {
+    setCustomColors(theme.colors);
+    setFontFamily(theme.fontFamily);
+    setFontSize(theme.fontSize);
+    setTypography(theme.typography);
+    setMode("custom");
+  }, [setCustomColors, setFontFamily, setFontSize, setTypography, setMode]);
+
   const value = useMemo<ThemeContextValue>(() => ({
     mode, resolved, setMode,
     customColors, setCustomColors,
@@ -285,7 +294,8 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     dualPage, setDualPage,
     mangaMode, setMangaMode,
     pageAnimation, setPageAnimation,
-  }), [mode, resolved, setMode, customColors, setCustomColors, fontSize, setFontSize, fontFamily, setFontFamily, scrollMode, setScrollMode, typography, setTypography, customCss, setCustomCss, dualPage, setDualPage, mangaMode, setMangaMode, pageAnimation, setPageAnimation]);
+    loadTheme,
+  }), [mode, resolved, setMode, customColors, setCustomColors, fontSize, setFontSize, fontFamily, setFontFamily, scrollMode, setScrollMode, typography, setTypography, customCss, setCustomCss, dualPage, setDualPage, mangaMode, setMangaMode, pageAnimation, setPageAnimation, loadTheme]);
 
   return (
     <ThemeContext.Provider value={value}>
