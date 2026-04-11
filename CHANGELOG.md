@@ -3,6 +3,25 @@
 All notable changes to this project will be documented in this file.
 This project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.4.0] - 2026-04-11
+
+### Added
+- **Remote Access (Web Server)** — browse and read your library from any device on the local network. Embeds an HTTP server with PIN authentication, JSON API, OPDS catalog, and a built-in web UI. See `docs/WEB_SERVER_API.md` for full documentation.
+  - JSON REST API for books, covers, chapters, pages, downloads, collections
+  - OPDS Atom XML catalog (compatible with KOReader, Calibre, Moon+ Reader)
+  - Embedded web UI (login, responsive book grid, EPUB/PDF/comic reader)
+  - PIN-based auth with OS keychain storage, session tokens, HTTP Basic Auth for OPDS
+  - Rate limiting on login (5 attempts / 5 min per IP)
+  - QR code for easy mobile access
+  - Auto-start on app launch if previously enabled
+  - Graceful shutdown when app closes
+  - Settings panel with PIN, port, start/stop toggle, URL + QR display
+- Security headers on all web server responses (CSP, X-Frame-Options, X-Content-Type-Options)
+- EPUB HTML sanitization for web serving (ammonia, prevents XSS)
+- Path traversal protection on image endpoints
+- Streamed file downloads (no memory exhaustion on large files)
+- OPDS pagination (50 books per page)
+
 ## [1.3.0] - 2026-04-02
 
 ### Added
