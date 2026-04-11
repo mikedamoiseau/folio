@@ -78,8 +78,20 @@ fn book_to_entry(book: &Book) -> String {
     )
 }
 
-fn wrap_feed(title: &str, feed_id: &str, entries: &str, self_href: &str, kind: &str) -> String {
+const OPDS_PAGE_SIZE: usize = 50;
+
+fn wrap_feed(
+    title: &str,
+    feed_id: &str,
+    entries: &str,
+    self_href: &str,
+    kind: &str,
+    next_href: Option<&str>,
+) -> String {
     let now = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ");
+    let next_link = next_href
+        .map(|h| format!(r#"  <link rel="next" href="{h}" type="{kind}"/>"#))
+        .unwrap_or_default();
     format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <feed xmlns="http://www.w3.org/2005/Atom"
@@ -90,6 +102,7 @@ fn wrap_feed(title: &str, feed_id: &str, entries: &str, self_href: &str, kind: &
   <link rel="self" href="{self_href}" type="{kind}"/>
   <link rel="start" href="/opds" type="{ATOM_CONTENT_TYPE}"/>
   <link rel="search" href="/opds/search?q={{searchTerms}}" type="{ATOM_ACQ_TYPE}"/>
+{next_link}
 {entries}
 </feed>"#
     )
@@ -120,30 +133,56 @@ async fn root_catalog() -> Response {
         &entries,
         "/opds",
         ATOM_CONTENT_TYPE,
+        None,
     );
 
     ([(header::CONTENT_TYPE, ATOM_CONTENT_TYPE)], xml).into_response()
 }
 
-async fn all_books(State(state): State<WebState>) -> Result<Response, (StatusCode, String)> {
+#[derive(serde::Deserialize)]
+struct PaginationQuery {
+    page: Option<usize>,
+}
+
+async fn all_books(
+    State(state): State<WebState>,
+    Query(params): Query<PaginationQuery>,
+) -> Result<Response, (StatusCode, String)> {
     let conn = state
         .conn()
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
     let books =
         db::list_books(&conn).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    let entries: String = books
+    let page = params.page.unwrap_or(0);
+    let start = page * OPDS_PAGE_SIZE;
+    let page_books: Vec<&Book> = books.iter().skip(start).take(OPDS_PAGE_SIZE).collect();
+
+    let entries: String = page_books
         .iter()
-        .map(book_to_entry)
+        .map(|b| book_to_entry(b))
         .collect::<Vec<_>>()
         .join("\n");
+
+    let has_next = start + OPDS_PAGE_SIZE < books.len();
+    let next_href = if has_next {
+        Some(format!("/opds/all?page={}", page + 1))
+    } else {
+        None
+    };
+    let self_href = if page > 0 {
+        format!("/opds/all?page={page}")
+    } else {
+        "/opds/all".to_string()
+    };
 
     let xml = wrap_feed(
         "All Books",
         "urn:folio:all",
         &entries,
-        "/opds/all",
+        &self_href,
         ATOM_ACQ_TYPE,
+        next_href.as_deref(),
     );
 
     Ok(([(header::CONTENT_TYPE, ATOM_ACQ_TYPE)], xml).into_response())
@@ -172,6 +211,7 @@ async fn new_books(State(state): State<WebState>) -> Result<Response, (StatusCod
         &entries,
         "/opds/new",
         ATOM_ACQ_TYPE,
+        None,
     );
 
     Ok(([(header::CONTENT_TYPE, ATOM_ACQ_TYPE)], xml).into_response())
@@ -199,6 +239,7 @@ async fn collection_feed(
         &entries,
         &format!("/opds/collections/{id}"),
         ATOM_ACQ_TYPE,
+        None,
     );
 
     Ok(([(header::CONTENT_TYPE, ATOM_ACQ_TYPE)], xml).into_response())
@@ -246,6 +287,7 @@ async fn search_books(
         &entries,
         &format!("/opds/search?q={}", urlencoding::encode(search_term)),
         ATOM_ACQ_TYPE,
+        None,
     );
 
     Ok(([(header::CONTENT_TYPE, ATOM_ACQ_TYPE)], xml).into_response())
