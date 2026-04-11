@@ -85,9 +85,8 @@
       content = '<div class="empty">No books found</div>';
     } else {
       content = '<div class="grid">' + books.map(b => `
-        <div class="card" onclick="location.hash='#/book/${b.id}'">
-          <img src="/api/books/${b.id}/cover" alt="" loading="lazy"
-               onerror="this.style.background='#333';this.alt='No cover'">
+        <div class="card" data-id="${b.id}">
+          <img src="/api/books/${b.id}/cover" alt="" loading="lazy">
           <div class="info">
             <div class="title">${esc(b.title)}</div>
             <div class="author">${esc(b.author)}</div>
@@ -102,6 +101,13 @@
         <input type="search" id="search" placeholder="Search books..." value="${esc(query || "")}">
       </div>
       ${content}`;
+
+    document.querySelectorAll(".card").forEach(c => {
+      c.addEventListener("click", () => navigate("#/book/" + c.dataset.id));
+    });
+    document.querySelectorAll(".card img").forEach(img => {
+      img.addEventListener("error", () => { img.style.background = "#333"; img.alt = "No cover"; });
+    });
 
     let timer;
     $("#search").oninput = (e) => {
@@ -123,14 +129,13 @@
 
     app().innerHTML = `
       <div class="header">
-        <button class="back-btn" onclick="location.hash='#'">&larr;</button>
+        <button class="back-btn" id="back-btn">&larr;</button>
         <h1>${esc(book.title)}</h1>
       </div>
       <div class="detail">
         <div class="meta">
           <div class="cover">
-            <img src="/api/books/${id}/cover" alt=""
-                 onerror="this.style.background='#333'">
+            <img src="/api/books/${id}/cover" alt="">
           </div>
           <div class="info">
             <h2>${esc(book.title)}</h2>
@@ -138,12 +143,17 @@
             <p>Format: ${book.format.toUpperCase()}</p>
             ${book.description ? `<p>${esc(book.description)}</p>` : ""}
             <div class="actions">
-              ${readHash ? `<button class="btn-primary" onclick="location.hash='${readHash}'">Read</button>` : ""}
+              ${readHash ? `<button class="btn-primary" id="read-btn">Read</button>` : ""}
               <a class="btn-secondary" href="/api/books/${id}/download">Download</a>
             </div>
           </div>
         </div>
       </div>`;
+    $("#back-btn").addEventListener("click", () => navigate("#"));
+    const coverImg = $(".detail .cover img");
+    if (coverImg) coverImg.addEventListener("error", () => { coverImg.style.background = "#333"; });
+    const readBtn = $("#read-btn");
+    if (readBtn) readBtn.addEventListener("click", () => navigate(readHash));
   }
 
   // ── Reader ────────────────────────────────────
@@ -163,17 +173,20 @@
 
       app().innerHTML = `
         <div class="header">
-          <button class="back-btn" onclick="location.hash='#/book/${id}'">&larr;</button>
+          <button class="back-btn" id="back-btn">&larr;</button>
           <h1>${esc(book.title)}</h1>
         </div>
         <div class="reader">
           <div class="nav">
-            <button ${index <= 0 ? "disabled" : ""} onclick="location.hash='#/book/${id}/${index-1}/read'">Prev</button>
+            <button id="prev-btn" ${index <= 0 ? "disabled" : ""}>Prev</button>
             <span>Chapter ${index + 1} / ${total}</span>
-            <button ${index >= total - 1 ? "disabled" : ""} onclick="location.hash='#/book/${id}/${index+1}/read'">Next</button>
+            <button id="next-btn" ${index >= total - 1 ? "disabled" : ""}>Next</button>
           </div>
           <div class="content">${html}</div>
         </div>`;
+      $("#back-btn").addEventListener("click", () => navigate("#/book/" + id));
+      $("#prev-btn").addEventListener("click", () => navigate("#/book/" + id + "/" + (index - 1) + "/read"));
+      $("#next-btn").addEventListener("click", () => navigate("#/book/" + id + "/" + (index + 1) + "/read"));
     } else {
       // PDF / CBZ / CBR — page image viewer
       const countResp = await api(`/api/books/${id}/page-count`);
@@ -182,19 +195,22 @@
 
       app().innerHTML = `
         <div class="header">
-          <button class="back-btn" onclick="location.hash='#/book/${id}'">&larr;</button>
+          <button class="back-btn" id="back-btn">&larr;</button>
           <h1>${esc(book.title)}</h1>
         </div>
         <div class="reader">
           <div class="nav">
-            <button ${index <= 0 ? "disabled" : ""} onclick="location.hash='#/book/${id}/${index-1}/read'">Prev</button>
+            <button id="prev-btn" ${index <= 0 ? "disabled" : ""}>Prev</button>
             <span>Page ${index + 1} / ${count}</span>
-            <button ${index >= count - 1 ? "disabled" : ""} onclick="location.hash='#/book/${id}/${index+1}/read'">Next</button>
+            <button id="next-btn" ${index >= count - 1 ? "disabled" : ""}>Next</button>
           </div>
           <div class="page-img">
             <img src="/api/books/${id}/pages/${index}" alt="Page ${index + 1}">
           </div>
         </div>`;
+      $("#back-btn").addEventListener("click", () => navigate("#/book/" + id));
+      $("#prev-btn").addEventListener("click", () => navigate("#/book/" + id + "/" + (index - 1) + "/read"));
+      $("#next-btn").addEventListener("click", () => navigate("#/book/" + id + "/" + (index + 1) + "/read"));
     }
   }
 
