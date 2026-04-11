@@ -573,4 +573,22 @@ mod tests {
         assert!(sanitized.contains("<em>"));
         assert!(sanitized.contains("<img"));
     }
+
+    // R2-4: URL rewriting with regex handles multiple URLs
+    #[test]
+    fn test_rewrite_asset_urls_multiple_images() {
+        let html = r#"<img src="asset://localhost/a/b/c/img1.jpg"><img src="asset://localhost/x/y/z/img2.png">"#;
+        let result = rewrite_asset_urls_to_http(html, "book1", 3);
+        assert!(result.contains("/api/books/book1/images/3/img1.jpg"));
+        assert!(result.contains("/api/books/book1/images/3/img2.png"));
+        assert!(!result.contains("asset://"));
+    }
+
+    // R2-4: URL rewriting handles UTF-8 filenames
+    #[test]
+    fn test_rewrite_asset_urls_utf8_filename() {
+        let html = r#"<img src="asset://localhost/path/%E5%9B%BE%E7%89%87.jpg">"#;
+        let result = rewrite_asset_urls_to_http(html, "book1", 0);
+        assert!(!result.contains("asset://"));
+    }
 }

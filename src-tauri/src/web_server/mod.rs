@@ -52,10 +52,21 @@ pub struct WebServerStatus {
 }
 
 /// Detect the local LAN IP address.
+/// Uses a UDP socket connecting to Google DNS (8.8.8.8:53) to determine
+/// which local interface would be used for outbound traffic.
 pub fn get_local_ip() -> Option<String> {
     let socket = std::net::UdpSocket::bind("0.0.0.0:0").ok()?;
-    socket.connect("8.8.8.8:80").ok()?;
-    socket.local_addr().ok().map(|a| a.ip().to_string())
+    // R2-3: Use port 53 (DNS), not 80 (HTTP). No actual packet is sent —
+    // connect() on a UDP socket just sets the default destination and lets
+    // us read the local address the OS chose.
+    socket.connect("8.8.8.8:53").ok()?;
+    let addr = socket.local_addr().ok()?;
+    let ip = addr.ip();
+    // Don't return loopback — it's useless for LAN access
+    if ip.is_loopback() {
+        return None;
+    }
+    Some(ip.to_string())
 }
 
 /// Middleware that adds security headers to all responses (R3-3).
@@ -102,9 +113,15 @@ pub async fn start(state: WebState, port: u16) -> Result<WebServerHandle, String
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
     let router = build_router(state);
 
-    let listener = tokio::net::TcpListener::bind(addr)
-        .await
-        .map_err(|e| format!("Failed to bind to port {port}: {e}"))?;
+    let listener = tokio::net::TcpListener::bind(addr).await.map_err(|e| {
+        if e.kind() == std::io::ErrorKind::AddrInUse {
+            format!("Port {port} is already in use. Try a different port (1024\u{2013}65535).")
+        } else if e.kind() == std::io::ErrorKind::PermissionDenied {
+            format!("Permission denied for port {port}. Use a port above 1024.")
+        } else {
+            format!("Failed to start server on port {port}: {e}")
+        }
+    })?;
 
     let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
 
@@ -159,6 +176,9 @@ mod tests {
             assert!(!addr.is_empty());
             // Should look like an IP address (contains dots)
             assert!(addr.contains('.'));
+            // R2-3: Should not be 127.0.0.1 on a machine with a LAN interface
+            // (can't strictly assert this in CI, but verify it's a valid IP)
+            assert!(addr.parse::<std::net::IpAddr>().is_ok());
         }
     }
 
