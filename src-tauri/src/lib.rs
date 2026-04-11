@@ -124,7 +124,11 @@ pub fn run() {
                 }),
                 data_dir,
                 epub_cache: std::sync::Mutex::new(LruCache::new(5)),
-                pdf_cache: std::sync::Mutex::new(LruCache::new(20)),
+                pdf_cache: std::sync::Mutex::new({
+                    let mut c = LruCache::new(20);
+                    c.set_max_bytes(200 * 1024 * 1024); // 200 MB memory limit (#52)
+                    c
+                }),
                 enrichment_registry,
                 web_server_handle: std::sync::Mutex::new(None),
             });

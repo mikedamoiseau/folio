@@ -21,17 +21,43 @@ use crate::pdf;
 /// separate Mutexes.
 pub struct LruCache<V> {
     entries: std::collections::HashMap<String, V>,
+    sizes: std::collections::HashMap<String, usize>,
     order: Vec<String>,
     capacity: usize,
+    max_bytes: usize,
+    current_bytes: usize,
 }
 
 impl<V> LruCache<V> {
     pub fn new(capacity: usize) -> Self {
         Self {
             entries: std::collections::HashMap::new(),
+            sizes: std::collections::HashMap::new(),
             order: Vec::new(),
             capacity,
+            max_bytes: 0, // 0 = no memory limit
+            current_bytes: 0,
         }
+    }
+
+    /// Set maximum total byte size for the cache (#52).
+    pub fn set_max_bytes(&mut self, bytes: usize) {
+        self.max_bytes = bytes;
+    }
+
+    /// Current total tracked byte size.
+    pub fn total_bytes(&self) -> usize {
+        self.current_bytes
+    }
+
+    /// Number of entries.
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    /// Whether the cache is empty.
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
     }
 
     /// Move an existing key to the most-recently-used position.
@@ -42,24 +68,55 @@ impl<V> LruCache<V> {
         self.order.push(key.to_string());
     }
 
-    /// Insert a key-value pair, evicting the least-recently-used entry when at
-    /// capacity.
+    /// Evict least-recently-used entries until both count and memory limits are satisfied.
+    fn evict_if_needed(&mut self) {
+        while self.entries.len() >= self.capacity
+            || (self.max_bytes > 0 && self.current_bytes > self.max_bytes)
+        {
+            if let Some(oldest) = self.order.first().cloned() {
+                self.entries.remove(&oldest);
+                if let Some(size) = self.sizes.remove(&oldest) {
+                    self.current_bytes = self.current_bytes.saturating_sub(size);
+                }
+                self.order.remove(0);
+            } else {
+                self.entries.clear();
+                self.sizes.clear();
+                self.current_bytes = 0;
+                break;
+            }
+        }
+    }
+
+    /// Insert a key-value pair, evicting the least-recently-used entry when at capacity.
     fn insert(&mut self, key: String, value: V) {
         if self.entries.contains_key(&key) {
             self.touch(&key);
             self.entries.insert(key, value);
             return;
         }
-        while self.entries.len() >= self.capacity {
-            if let Some(oldest) = self.order.first().cloned() {
-                self.entries.remove(&oldest);
-                self.order.remove(0);
-            } else {
-                self.entries.clear();
-                break;
-            }
-        }
+        self.evict_if_needed();
         self.entries.insert(key.clone(), value);
+        self.order.push(key);
+    }
+
+    /// Insert with explicit byte size tracking (#52).
+    fn insert_with_size(&mut self, key: String, value: V, size_bytes: usize) {
+        if self.entries.contains_key(&key) {
+            // Update size tracking for existing entry
+            if let Some(old_size) = self.sizes.get(&key) {
+                self.current_bytes = self.current_bytes.saturating_sub(*old_size);
+            }
+            self.touch(&key);
+            self.entries.insert(key.clone(), value);
+            self.sizes.insert(key, size_bytes);
+            self.current_bytes += size_bytes;
+            return;
+        }
+        self.current_bytes += size_bytes;
+        self.evict_if_needed();
+        self.entries.insert(key.clone(), value);
+        self.sizes.insert(key.clone(), size_bytes);
         self.order.push(key);
     }
 
@@ -73,6 +130,9 @@ impl<V> LruCache<V> {
 
     fn remove(&mut self, key: &str) {
         self.entries.remove(key);
+        if let Some(size) = self.sizes.remove(key) {
+            self.current_bytes = self.current_bytes.saturating_sub(size);
+        }
         self.order.retain(|k| k != key);
     }
 }
@@ -2849,10 +2909,11 @@ pub async fn get_pdf_page(
     // Render (outside the lock)
     let data = pdf::get_page_image(&file_path, page_index, render_width)?;
 
-    // Store in cache with LRU eviction
+    // Store in cache with LRU + memory eviction (#52)
     {
+        let size = data.len();
         let mut cache = state.pdf_cache.lock().map_err(|e| e.to_string())?;
-        cache.insert(cache_key, data.clone());
+        cache.insert_with_size(cache_key, data.clone(), size);
     }
 
     Ok(data)
@@ -4218,5 +4279,33 @@ mod tests {
         assert_eq!(derive_font_name("My Font.otf"), "My Font");
         assert_eq!(derive_font_name("Roboto-BoldItalic.ttf"), "Roboto");
         assert_eq!(derive_font_name("SimpleFont.ttf"), "SimpleFont");
+    }
+
+    // #52: PDF cache memory limits
+    #[test]
+    fn test_lru_cache_memory_tracking() {
+        let mut cache = LruCache::<String>::new(100); // high count limit
+        cache.set_max_bytes(100); // but low memory limit
+
+        // Each entry is ~10 bytes
+        cache.insert_with_size("a".to_string(), "0123456789".to_string(), 10);
+        cache.insert_with_size("b".to_string(), "0123456789".to_string(), 10);
+        assert_eq!(cache.total_bytes(), 20);
+        assert_eq!(cache.len(), 2);
+    }
+
+    #[test]
+    fn test_lru_cache_memory_eviction() {
+        let mut cache = LruCache::<String>::new(100);
+        cache.set_max_bytes(25); // evict when over 25 bytes
+
+        cache.insert_with_size("a".to_string(), "0123456789".to_string(), 10);
+        cache.insert_with_size("b".to_string(), "0123456789".to_string(), 10);
+        cache.insert_with_size("c".to_string(), "0123456789".to_string(), 10);
+
+        // "a" should have been evicted to stay under 25 bytes
+        assert!(cache.get("a").is_none());
+        assert!(cache.get("b").is_some() || cache.get("c").is_some());
+        assert!(cache.total_bytes() <= 25);
     }
 }
