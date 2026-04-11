@@ -25,15 +25,15 @@ function makeTheme(overrides: Partial<SavedTheme> = {}): SavedTheme {
     id: "id-1",
     name: "Theme 1",
     colors: {
-      paper: "#fff",
-      surface: "#fff",
-      ink: "#000",
-      "ink-muted": "#888",
-      "warm-border": "#ddd",
-      "warm-subtle": "#eee",
-      accent: "#c00",
-      "accent-hover": "#a00",
-      "accent-light": "#fee",
+      paper: "#ffffff",
+      surface: "#ffffff",
+      ink: "#000000",
+      "ink-muted": "#888888",
+      "warm-border": "#dddddd",
+      "warm-subtle": "#eeeeee",
+      accent: "#cc0000",
+      "accent-hover": "#aa0000",
+      "accent-light": "#ffeeee",
     },
     fontFamily: "serif",
     fontSize: 18,
@@ -183,7 +183,7 @@ describe("loadSavedThemes", () => {
   });
 
   it("filters out entries with incomplete color tokens", () => {
-    const bad = { ...makeTheme(), colors: { paper: "#fff" } }; // missing 8 tokens
+    const bad = { ...makeTheme(), colors: { paper: "#ffffff" } }; // missing 8 tokens
     localStorage.setItem("folio-saved-themes", JSON.stringify([bad]));
     expect(loadSavedThemes()).toEqual([]);
   });

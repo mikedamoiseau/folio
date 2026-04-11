@@ -13,6 +13,8 @@ export interface SavedTheme {
 
 const STORAGE_KEY = "folio-saved-themes";
 
+const HEX_COLOR_RE = /^#[0-9a-fA-F]{6}$/;
+
 function isValidTheme(obj: unknown): obj is SavedTheme {
   if (!obj || typeof obj !== "object") return false;
   const t = obj as Record<string, unknown>;
@@ -20,7 +22,10 @@ function isValidTheme(obj: unknown): obj is SavedTheme {
     typeof t.id === "string" &&
     typeof t.name === "string" &&
     typeof t.colors === "object" && t.colors !== null &&
-    TOKEN_NAMES.every((name) => typeof (t.colors as Record<string, unknown>)[name] === "string") &&
+    TOKEN_NAMES.every((name) => {
+      const v = (t.colors as Record<string, unknown>)[name];
+      return typeof v === "string" && HEX_COLOR_RE.test(v);
+    }) &&
     typeof t.fontFamily === "string" &&
     typeof t.fontSize === "number" && Number.isFinite(t.fontSize) &&
     typeof t.typography === "object" && t.typography !== null &&
