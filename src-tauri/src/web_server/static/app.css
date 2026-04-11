@@ -7,6 +7,10 @@
 
 body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: var(--bg); color: var(--fg); min-height: 100vh; }
 
+/* R1-3: Focus indicators for keyboard navigation */
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+button:focus-visible, a:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
 /* ── Login ─────────────────────────────────────── */
 .login { display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; gap: 16px; }
 .login h1 { font-size: 2rem; color: var(--accent); }

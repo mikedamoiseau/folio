@@ -13,11 +13,14 @@ import {
 import ActivityLog from "./ActivityLog";
 
 function Accordion({ title, children, open, onToggle }: { title: string; children: ReactNode; open: boolean; onToggle: () => void }) {
+  const sectionId = `section-${title.replace(/\s+/g, "-").toLowerCase()}`;
   return (
     <section>
       <button
         type="button"
         onClick={onToggle}
+        aria-expanded={open}
+        aria-controls={sectionId}
         className="w-full flex items-center justify-between py-1 group"
       >
         <h3 className="text-xs font-semibold uppercase tracking-wider text-ink-muted">
@@ -28,12 +31,13 @@ function Accordion({ title, children, open, onToggle }: { title: string; childre
           height="12"
           viewBox="0 0 20 20"
           fill="none"
+          aria-hidden="true"
           className={`text-ink-muted/50 group-hover:text-ink-muted transition-transform duration-200 ${open ? "rotate-180" : ""}`}
         >
           <path d="M5 7.5L10 12.5L15 7.5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
       </button>
-      {open && <div className="mt-3">{children}</div>}
+      {open && <div id={sectionId} role="region" aria-label={title} className="mt-3">{children}</div>}
     </section>
   );
 }
@@ -331,6 +335,9 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
   const [webServerPin, setWebServerPin] = useState("");
   const [webServerQr, setWebServerQr] = useState<string | null>(null);
   const [webServerError, setWebServerError] = useState<string | null>(null);
+  const [webServerLoading, setWebServerLoading] = useState(false);
+  const [pinSaved, setPinSaved] = useState(false);
+  const [pinSavedOnce, setPinSavedOnce] = useState(false);
 
   // Custom fonts
   interface CustomFont {
@@ -1455,32 +1462,38 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
 
           <Accordion title={t("settings.remoteAccess")} open={openSection === "webserver"} onToggle={() => toggleSection("webserver")}>
             <div className="space-y-2">
-              {/* PIN input */}
+              {/* PIN input (R4-2: save feedback, R4-1: guard) */}
               <div className="bg-warm-subtle rounded-xl px-3 py-2.5">
                 <label htmlFor="web-server-pin" className="text-xs text-ink-muted mb-1 block">{t("settings.pin")}</label>
                 <input
                   id="web-server-pin"
                   type="password"
                   value={webServerPin}
-                  onChange={(e) => setWebServerPin(e.target.value)}
+                  onChange={(e) => { setWebServerPin(e.target.value); setPinSaved(false); }}
                   placeholder={t("settings.pinPlaceholder")}
                   maxLength={8}
                   className="w-full bg-transparent text-sm text-ink focus:outline-none"
                 />
-                {webServerPin && (
-                  <button
-                    type="button"
-                    onClick={async () => {
-                      try {
-                        await invoke("web_server_set_pin", { pin: webServerPin });
-                        setWebServerError(null);
-                      } catch (e) { setWebServerError(friendlyError(String(e), t)); }
-                    }}
-                    className="mt-1 text-xs text-accent hover:underline"
-                  >
-                    {t("settings.savePin")}
-                  </button>
-                )}
+                <div className="flex items-center gap-2 mt-1">
+                  {webServerPin && (
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        try {
+                          await invoke("web_server_set_pin", { pin: webServerPin });
+                          setWebServerError(null);
+                          setPinSaved(true);
+                          setPinSavedOnce(true);
+                          setTimeout(() => setPinSaved(false), 2000);
+                        } catch (e) { setWebServerError(friendlyError(String(e), t)); }
+                      }}
+                      className="text-xs text-accent hover:underline"
+                    >
+                      {t("settings.savePin")}
+                    </button>
+                  )}
+                  {pinSaved && <span className="text-xs text-green-400">{t("settings.pinSaved")}</span>}
+                </div>
               </div>
 
               {/* Port input */}
@@ -1498,11 +1511,13 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                 />
               </div>
 
-              {/* Start/Stop button */}
+              {/* R1-4: Loading state + R4-1: PIN guard */}
               <button
                 type="button"
+                disabled={webServerLoading || (!webServerRunning && !pinSavedOnce)}
                 onClick={async () => {
                   setWebServerError(null);
+                  setWebServerLoading(true);
                   try {
                     if (webServerRunning) {
                       await invoke("web_server_stop");
@@ -1516,25 +1531,42 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                       try { const qr = await invoke<string>("web_server_get_qr"); setWebServerQr(qr); } catch {}
                     }
                   } catch (e) { setWebServerError(friendlyError(String(e), t)); }
+                  setWebServerLoading(false);
                 }}
-                className={`w-full px-3 py-2 text-sm font-medium rounded-xl transition-colors ${
+                className={`w-full px-3 py-2 text-sm font-medium rounded-xl transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
                   webServerRunning
                     ? "bg-red-500/20 text-red-400 hover:bg-red-500/30"
                     : "bg-accent/20 text-accent hover:bg-accent/30"
                 }`}
               >
-                {webServerRunning ? t("settings.stopServer") : t("settings.startServer")}
+                {webServerLoading
+                  ? (webServerRunning ? t("settings.stopping") : t("settings.starting"))
+                  : (webServerRunning ? t("settings.stopServer") : t("settings.startServer"))}
               </button>
+              {!webServerRunning && !pinSavedOnce && (
+                <p className="text-xs text-ink-muted px-1">{t("settings.pinPlaceholder")}</p>
+              )}
 
-              {/* Status */}
+              {/* Status + R1-5: Copy URL */}
               {webServerRunning && webServerUrl && (
                 <div className="bg-warm-subtle rounded-xl px-3 py-2.5 space-y-2">
-                  <p className="text-xs text-ink-muted">
-                    {t("settings.serverRunningAt")}{" "}
-                    <a href={webServerUrl} target="_blank" rel="noopener noreferrer" className="text-accent hover:underline">
-                      {webServerUrl}
-                    </a>
-                  </p>
+                  <div className="flex items-center gap-2">
+                    <p className="text-xs text-ink-muted flex-1">
+                      {t("settings.serverRunningAt")}{" "}
+                      <a href={webServerUrl} target="_blank" rel="noopener noreferrer" className="text-accent hover:underline">
+                        {webServerUrl}
+                      </a>
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        navigator.clipboard.writeText(webServerUrl);
+                      }}
+                      className="text-xs text-accent hover:underline shrink-0"
+                    >
+                      {t("settings.copyUrl")}
+                    </button>
+                  </div>
                   {webServerQr && (
                     <div className="flex justify-center" dangerouslySetInnerHTML={{ __html: webServerQr }} />
                   )}
