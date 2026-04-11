@@ -11,9 +11,45 @@ use crate::models::{
 
 pub type DbPool = Pool<SqliteConnectionManager>;
 
+/// Current schema version. Bump this when adding new migrations.
+const SCHEMA_VERSION: i64 = 1;
+
+/// Get the current schema version from the database (0 if not yet set).
+pub fn get_schema_version(conn: &Connection) -> Result<i64> {
+    // Table may not exist yet on first run
+    let exists: bool = conn.query_row(
+        "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='schema_version'",
+        [],
+        |row| row.get(0),
+    )?;
+    if !exists {
+        return Ok(0);
+    }
+    conn.query_row(
+        "SELECT version FROM schema_version ORDER BY version DESC LIMIT 1",
+        [],
+        |row| row.get(0),
+    )
+    .or(Ok(0))
+}
+
+fn set_schema_version(conn: &Connection, version: i64) -> Result<()> {
+    conn.execute(
+        "INSERT OR REPLACE INTO schema_version (id, version, applied_at) VALUES (1, ?1, strftime('%s','now'))",
+        params![version],
+    )?;
+    Ok(())
+}
+
 fn run_schema(conn: &Connection) -> Result<()> {
     conn.execute_batch(
         "
+        CREATE TABLE IF NOT EXISTS schema_version (
+            id INTEGER PRIMARY KEY,
+            version INTEGER NOT NULL,
+            applied_at INTEGER NOT NULL
+        );
+
         CREATE TABLE IF NOT EXISTS books (
             id TEXT PRIMARY KEY,
             title TEXT NOT NULL,
@@ -218,6 +254,9 @@ fn run_schema(conn: &Connection) -> Result<()> {
             ALTER TABLE collection_rules_new RENAME TO collection_rules;",
         )?;
     }
+
+    // Record schema version (#49)
+    set_schema_version(conn, SCHEMA_VERSION)?;
 
     Ok(())
 }
@@ -2622,5 +2661,36 @@ mod tests {
         bulk_add_to_collection(&conn, &["a", "b"], "coll-1").unwrap();
         let books = get_books_in_collection(&conn, "coll-1").unwrap();
         assert_eq!(books.len(), 2);
+    }
+
+    // #49: Migration versioning
+    #[test]
+    fn test_schema_version_tracked() {
+        let (_dir, conn) = setup();
+        let version = get_schema_version(&conn).unwrap();
+        assert!(version > 0, "schema version should be set after init");
+    }
+
+    #[test]
+    fn test_schema_version_idempotent() {
+        let (_dir, conn) = setup();
+        let v1 = get_schema_version(&conn).unwrap();
+        // Running schema again should not change the version
+        run_schema(&conn).unwrap();
+        let v2 = get_schema_version(&conn).unwrap();
+        assert_eq!(v1, v2);
+    }
+
+    #[test]
+    fn test_schema_version_table_exists() {
+        let (_dir, conn) = setup();
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='schema_version'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1);
     }
 }
