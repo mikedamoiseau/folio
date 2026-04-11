@@ -65,6 +65,10 @@ export default function Library() {
   const [editingBook, setEditingBook] = useState<Book | null>(null);
   const [detailBook, setDetailBook] = useState<Book | null>(null);
   const [scanningBookId, setScanningBookId] = useState<string | null>(null);
+  // Bulk selection (#60)
+  const [selectMode, setSelectMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+
   // scanToast state kept for LiveRegion — visual toasts now use useToast()
   const [scanToastMessage, setScanToastMessage] = useState("");
   const [showShortcuts, setShowShortcuts] = useState(false);
@@ -634,6 +638,22 @@ export default function Library() {
               </svg>
             </button>
           )}
+          {/* Bulk select toggle (#60) */}
+          {hasBooks && (
+            <button
+              type="button"
+              onClick={() => { setSelectMode((m) => !m); setSelectedIds(new Set()); }}
+              className={`p-1.5 rounded-lg transition-colors ${selectMode ? "bg-accent/20 text-accent" : "text-ink-muted hover:text-ink hover:bg-warm-subtle"}`}
+              title={selectMode ? t("library.exitSelect") : t("library.selectBooks")}
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <rect x="3" y="3" width="7" height="7" rx="1" />
+                <rect x="14" y="3" width="7" height="7" rx="1" />
+                <rect x="3" y="14" width="7" height="7" rx="1" />
+                <path d="M17 14v7m-3.5-3.5h7" />
+              </svg>
+            </button>
+          )}
           <ImportButton
             onImportFiles={handleImport}
             onImportFolder={handleImportFolder}
@@ -1003,10 +1023,33 @@ export default function Library() {
               filtered.map((book) => (
                 <div
                   key={book.id}
-                  onMouseDown={() => startDrag(book.id, book.cover_path ? convertFileSrc(book.cover_path) : undefined)}
-                  onMouseUp={() => endDrag()}
+                  className="relative"
+                  onMouseDown={() => !selectMode && startDrag(book.id, book.cover_path ? convertFileSrc(book.cover_path) : undefined)}
+                  onMouseUp={() => !selectMode && endDrag()}
                   onDragStart={(e) => e.preventDefault()}
                 >
+                  {/* Bulk select checkbox overlay */}
+                  {selectMode && (
+                    <div
+                      className="absolute top-2 left-2 z-10"
+                      onClick={(e) => { e.stopPropagation(); }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={selectedIds.has(book.id)}
+                        onChange={() => {
+                          setSelectedIds((prev) => {
+                            const next = new Set(prev);
+                            if (next.has(book.id)) next.delete(book.id);
+                            else next.add(book.id);
+                            return next;
+                          });
+                        }}
+                        className="w-5 h-5 accent-accent rounded cursor-pointer"
+                        aria-label={`Select ${book.title}`}
+                      />
+                    </div>
+                  )}
                   <BookCard
                     id={book.id}
                     title={book.title}
@@ -1021,8 +1064,19 @@ export default function Library() {
                     volume={book.volume}
                     rating={book.rating}
                     isImported={book.is_imported}
-                    onClick={() => openBook(book.id)}
-                    onDelete={handleRemoveBook}
+                    onClick={() => {
+                      if (selectMode) {
+                        setSelectedIds((prev) => {
+                          const next = new Set(prev);
+                          if (next.has(book.id)) next.delete(book.id);
+                          else next.add(book.id);
+                          return next;
+                        });
+                      } else {
+                        openBook(book.id);
+                      }
+                    }}
+                    onDelete={selectMode ? undefined : handleRemoveBook}
                     onInfo={(id) => {
                       const found = books.find((b) => b.id === id);
                       if (found) setDetailBook(found);
@@ -1303,6 +1357,47 @@ export default function Library() {
             <svg width="14" height="14" viewBox="0 0 20 20" fill="none">
               <path d="M15 5L5 15M5 5l10 10" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
             </svg>
+          </button>
+        </div>
+      )}
+
+      {/* Bulk action bar (#60) */}
+      {selectMode && selectedIds.size > 0 && (
+        <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-50 bg-ink text-paper px-4 py-2.5 rounded-xl shadow-lg flex items-center gap-3 text-sm">
+          <span className="font-medium">{selectedIds.size} {t("library.selected")}</span>
+          <button
+            type="button"
+            onClick={() => {
+              const allIds = filtered.map((b) => b.id);
+              setSelectedIds(new Set(selectedIds.size === allIds.length ? [] : allIds));
+            }}
+            className="text-accent hover:underline text-xs"
+          >
+            {selectedIds.size === filtered.length ? t("library.deselectAll") : t("library.selectAll")}
+          </button>
+          <div className="w-px h-4 bg-paper/20" />
+          <button
+            type="button"
+            onClick={async () => {
+              if (!confirm(t("library.bulkDeleteConfirm", { count: selectedIds.size }))) return;
+              try {
+                await invoke("bulk_delete_books", { bookIds: [...selectedIds] });
+                addToast(t("library.bulkDeleted", { count: selectedIds.size }), "success");
+                setSelectedIds(new Set());
+                setSelectMode(false);
+                await loadBooks(activeCollectionIdRef.current);
+              } catch (e) { addToast(friendlyError(String(e), t), "error"); }
+            }}
+            className="text-red-400 hover:text-red-300 text-xs font-medium"
+          >
+            {t("library.delete")}
+          </button>
+          <button
+            type="button"
+            onClick={() => { setSelectedIds(new Set()); setSelectMode(false); }}
+            className="text-paper/60 hover:text-paper text-xs"
+          >
+            {t("common.cancel")}
           </button>
         </div>
       )}

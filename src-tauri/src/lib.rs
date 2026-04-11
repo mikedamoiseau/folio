@@ -284,6 +284,9 @@ pub fn run() {
             commands::web_server_status,
             commands::web_server_set_pin,
             commands::web_server_get_qr,
+            commands::bulk_delete_books,
+            commands::bulk_add_to_collection,
+            commands::bulk_add_tag,
         ])
         // R5-1: Graceful shutdown — stop web server when app exits
         .on_window_event(|window, event| {

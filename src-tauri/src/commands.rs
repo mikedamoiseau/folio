@@ -3927,6 +3927,51 @@ pub async fn sync_push_book(book_id: String, state: State<'_, AppState>) -> Resu
     Ok(())
 }
 
+// ── Bulk Operations (#60) ────────────────────────────────────────────────────
+
+#[tauri::command]
+pub async fn bulk_delete_books(
+    book_ids: Vec<String>,
+    state: State<'_, AppState>,
+) -> Result<u32, String> {
+    let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
+    let ids_ref: Vec<&str> = book_ids.iter().map(|s| s.as_str()).collect();
+    db::bulk_delete_books(&conn, &ids_ref).map_err(|e| e.to_string())?;
+    log_activity(
+        &conn,
+        "bulk_delete",
+        "book",
+        None,
+        None,
+        Some(&format!("{} books deleted", book_ids.len())),
+    );
+    Ok(book_ids.len() as u32)
+}
+
+#[tauri::command]
+pub async fn bulk_add_to_collection(
+    book_ids: Vec<String>,
+    collection_id: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
+    let ids_ref: Vec<&str> = book_ids.iter().map(|s| s.as_str()).collect();
+    db::bulk_add_to_collection(&conn, &ids_ref, &collection_id).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn bulk_add_tag(
+    book_ids: Vec<String>,
+    tag: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
+    let ids_ref: Vec<&str> = book_ids.iter().map(|s| s.as_str()).collect();
+    db::bulk_add_tag(&conn, &ids_ref, &tag).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 // ── Web Server Commands ──────────────────────────────────────────────────────
 
 #[tauri::command]

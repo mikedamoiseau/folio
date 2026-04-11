@@ -387,6 +387,51 @@ pub fn delete_book(conn: &Connection, id: &str) -> Result<()> {
     Ok(())
 }
 
+/// Delete multiple books in a single transaction.
+pub fn bulk_delete_books(conn: &Connection, ids: &[&str]) -> Result<()> {
+    let tx = conn.unchecked_transaction()?;
+    for id in ids {
+        tx.execute("DELETE FROM books WHERE id = ?1", params![id])?;
+    }
+    tx.commit()?;
+    Ok(())
+}
+
+/// Add multiple books to a collection in a single transaction.
+pub fn bulk_add_to_collection(
+    conn: &Connection,
+    book_ids: &[&str],
+    collection_id: &str,
+) -> Result<()> {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64;
+    let tx = conn.unchecked_transaction()?;
+    for book_id in book_ids {
+        tx.execute(
+            "INSERT OR IGNORE INTO book_collections (book_id, collection_id, added_at) VALUES (?1, ?2, ?3)",
+            params![book_id, collection_id, now],
+        )?;
+    }
+    tx.commit()?;
+    Ok(())
+}
+
+/// Add a tag to multiple books in a single transaction.
+pub fn bulk_add_tag(conn: &Connection, book_ids: &[&str], tag: &str) -> Result<()> {
+    let tx = conn.unchecked_transaction()?;
+    for book_id in book_ids {
+        let tag_id = uuid::Uuid::new_v4().to_string();
+        tx.execute(
+            "INSERT OR IGNORE INTO book_tags (id, book_id, tag) VALUES (?1, ?2, ?3)",
+            params![tag_id, book_id, tag],
+        )?;
+    }
+    tx.commit()?;
+    Ok(())
+}
+
 pub fn update_book_enrichment(
     conn: &Connection,
     book_id: &str,
@@ -2535,5 +2580,47 @@ mod tests {
         // "yes" → false (only exact "true" is truthy)
         set_setting(&conn, "sync_enabled", "yes").unwrap();
         assert!(!is_sync_enabled(&conn));
+    }
+
+    fn sample_book_with_path(id: &str, path: &str) -> Book {
+        let mut b = sample_book(id);
+        b.file_path = path.to_string();
+        b
+    }
+
+    #[test]
+    fn test_bulk_delete_books() {
+        let (_dir, conn) = setup();
+        insert_book(&conn, &sample_book_with_path("a", "/tmp/a.epub")).unwrap();
+        insert_book(&conn, &sample_book_with_path("b", "/tmp/b.epub")).unwrap();
+        insert_book(&conn, &sample_book_with_path("c", "/tmp/c.epub")).unwrap();
+        assert_eq!(list_books(&conn).unwrap().len(), 3);
+
+        bulk_delete_books(&conn, &["a", "c"]).unwrap();
+        let remaining = list_books(&conn).unwrap();
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].id, "b");
+    }
+
+    #[test]
+    fn test_bulk_add_to_collection() {
+        let (_dir, conn) = setup();
+        insert_book(&conn, &sample_book_with_path("a", "/tmp/a.epub")).unwrap();
+        insert_book(&conn, &sample_book_with_path("b", "/tmp/b.epub")).unwrap();
+        let coll = crate::models::Collection {
+            id: "coll-1".to_string(),
+            name: "Test".to_string(),
+            r#type: crate::models::CollectionType::Manual,
+            icon: None,
+            color: None,
+            created_at: 0,
+            updated_at: 0,
+            rules: vec![],
+        };
+        insert_collection(&conn, &coll).unwrap();
+
+        bulk_add_to_collection(&conn, &["a", "b"], "coll-1").unwrap();
+        let books = get_books_in_collection(&conn, "coll-1").unwrap();
+        assert_eq!(books.len(), 2);
     }
 }
