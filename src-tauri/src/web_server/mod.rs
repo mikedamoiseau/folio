@@ -168,12 +168,15 @@ mod tests {
         let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
 
         let server_handle = tokio::spawn(async move {
-            axum::serve(listener, router.into_make_service_with_connect_info::<SocketAddr>())
-                .with_graceful_shutdown(async {
-                    let _ = shutdown_rx.await;
-                })
-                .await
-                .ok();
+            axum::serve(
+                listener,
+                router.into_make_service_with_connect_info::<SocketAddr>(),
+            )
+            .with_graceful_shutdown(async {
+                let _ = shutdown_rx.await;
+            })
+            .await
+            .ok();
         });
 
         // Server should be responding
@@ -204,12 +207,15 @@ mod tests {
         let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
 
         tokio::spawn(async move {
-            axum::serve(listener, router.into_make_service_with_connect_info::<SocketAddr>())
-                .with_graceful_shutdown(async {
-                    let _ = shutdown_rx.await;
-                })
-                .await
-                .ok();
+            axum::serve(
+                listener,
+                router.into_make_service_with_connect_info::<SocketAddr>(),
+            )
+            .with_graceful_shutdown(async {
+                let _ = shutdown_rx.await;
+            })
+            .await
+            .ok();
         });
 
         let client = reqwest::Client::new();
@@ -247,12 +253,15 @@ mod tests {
         let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
 
         tokio::spawn(async move {
-            axum::serve(listener, router.into_make_service_with_connect_info::<SocketAddr>())
-                .with_graceful_shutdown(async {
-                    let _ = shutdown_rx.await;
-                })
-                .await
-                .ok();
+            axum::serve(
+                listener,
+                router.into_make_service_with_connect_info::<SocketAddr>(),
+            )
+            .with_graceful_shutdown(async {
+                let _ = shutdown_rx.await;
+            })
+            .await
+            .ok();
         });
 
         let client = reqwest::Client::new();
@@ -292,12 +301,15 @@ mod tests {
         let port = listener.local_addr().unwrap().port();
         let (tx, rx) = oneshot::channel::<()>();
         tokio::spawn(async move {
-            axum::serve(listener, router.into_make_service_with_connect_info::<SocketAddr>())
-                .with_graceful_shutdown(async {
-                    let _ = rx.await;
-                })
-                .await
-                .ok();
+            axum::serve(
+                listener,
+                router.into_make_service_with_connect_info::<SocketAddr>(),
+            )
+            .with_graceful_shutdown(async {
+                let _ = rx.await;
+            })
+            .await
+            .ok();
         });
 
         let client = reqwest::Client::new();
@@ -333,12 +345,15 @@ mod tests {
         let port = listener.local_addr().unwrap().port();
         let (tx, rx) = oneshot::channel::<()>();
         tokio::spawn(async move {
-            axum::serve(listener, router.into_make_service_with_connect_info::<SocketAddr>())
-                .with_graceful_shutdown(async {
-                    let _ = rx.await;
-                })
-                .await
-                .ok();
+            axum::serve(
+                listener,
+                router.into_make_service_with_connect_info::<SocketAddr>(),
+            )
+            .with_graceful_shutdown(async {
+                let _ = rx.await;
+            })
+            .await
+            .ok();
         });
 
         let client = reqwest::Client::new();
@@ -379,12 +394,15 @@ mod tests {
         let port = listener.local_addr().unwrap().port();
         let (tx, rx) = oneshot::channel::<()>();
         tokio::spawn(async move {
-            axum::serve(listener, router.into_make_service_with_connect_info::<SocketAddr>())
-                .with_graceful_shutdown(async {
-                    let _ = rx.await;
-                })
-                .await
-                .ok();
+            axum::serve(
+                listener,
+                router.into_make_service_with_connect_info::<SocketAddr>(),
+            )
+            .with_graceful_shutdown(async {
+                let _ = rx.await;
+            })
+            .await
+            .ok();
         });
 
         let client = reqwest::Client::new();
@@ -423,12 +441,15 @@ mod tests {
         let port = listener.local_addr().unwrap().port();
         let (tx, rx) = oneshot::channel::<()>();
         tokio::spawn(async move {
-            axum::serve(listener, router.into_make_service_with_connect_info::<SocketAddr>())
-                .with_graceful_shutdown(async {
-                    let _ = rx.await;
-                })
-                .await
-                .ok();
+            axum::serve(
+                listener,
+                router.into_make_service_with_connect_info::<SocketAddr>(),
+            )
+            .with_graceful_shutdown(async {
+                let _ = rx.await;
+            })
+            .await
+            .ok();
         });
 
         let client = reqwest::Client::new();

@@ -248,3 +248,47 @@ NEEDS_FIX: The rate limiter remains vulnerable to a TOCTOU race condition and co
 
 ---
 
+
+## [Codex — Reviewer] Round 3
+
+LGTM: the remaining brute-force bypass is closed because both `/api/auth` and Basic Auth now use the same per-IP limiter sourced from `ConnectInfo<SocketAddr>`.
+
+No blocking findings in the current diff.
+
+Claude’s pushback is correct on the two disputed points:
+- `src-tauri/src/web_server/auth.rs:35-44` is atomic with respect to concurrent callers because the allow/record decision happens under a single `Mutex` lock.
+- `src-tauri/src/web_server/mod.rs:92-96` already serves the router with `into_make_service_with_connect_info::<SocketAddr>()`, so the `ConnectInfo` extraction used in both `api::login` and `auth_middleware` is wired up.
+
+I also checked for any other direct PIN-verification path and only found the two guarded call sites at [api.rs](/Users/mike/Documents/www/folio/src-tauri/src/web_server/api.rs:51) and [auth.rs](/Users/mike/Documents/www/folio/src-tauri/src/web_server/auth.rs:183). Targeted Rust tests were partially runnable in this sandbox: unit-level auth tests passed, while socket-binding integration tests failed with environment `PermissionDenied`, so I could not revalidate the network-path tests end-to-end here.
+
+---
+
+## [Gemini — Reviewer] Round 3
+
+LGTM: All blocking issues from previous rounds have been addressed.
+
+## Detailed Findings:
+
+### 1. `into_make_service_with_connect_info` Verification
+
+*   **File:** `src-tauri/src/web_server/mod.rs`
+*   **Line(s):** 95-98 (and in all test functions that start the server)
+*   **Finding:** Gemini's claim from Round 2 regarding the missing `into_make_service_with_connect_info` call in `axum::serve` is incorrect. The provided `mod.rs` clearly shows `router.into_make_service_with_connect_info::<SocketAddr>()` being used in the `start` function and consistently within all relevant test functions.
+*   **Status:** Resolved (Gemini's finding was based on stale information or an oversight).
+
+### 2. `RateLimiter::attempt` TOCTOU Race Condition Verification
+
+*   **File:** `src-tauri/src/web_server/auth.rs`
+*   **Line(s):** 28-56
+*   **Finding:** Gemini's claim from Round 2 regarding a TOCTOU race condition in `RateLimiter::attempt` is incorrect. The entire `attempt` method is protected by a `std::sync::Mutex` lock, acquired at the beginning of the function (`let mut map = self.attempts.lock().unwrap();`) and released at the end when `map` goes out of scope. This mutex ensures that all operations within `attempt` (pruning old attempts, checking the count, and recording new attempts) are executed atomically, preventing any TOCTOU race conditions.
+*   **Status:** Resolved (Gemini's finding was based on a misunderstanding of Rust's `Mutex` atomicity guarantees).
+
+### 3. Basic Auth Rate Limiting Verification
+
+*   **File:** `src-tauri/src/web_server/auth.rs`
+*   **Line(s):** 181-205 (within `auth_middleware`)
+*   **Finding:** Codex's blocking issue from Round 2 regarding the unthrottled Basic Auth path has been addressed. The `auth_middleware` function now correctly extracts the client IP using `ConnectInfo(addr)` and applies the `state.login_limiter.attempt(&client_ip)` before verifying the PIN for Basic Auth requests. Upon successful authentication, `state.login_limiter.clear(&client_ip)` is called. This ensures that both the `/api/auth` endpoint and Basic Auth authentication through the middleware are subjected to the same rate limiting.
+*   **Status:** Resolved.
+
+---
+
