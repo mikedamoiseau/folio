@@ -5,6 +5,7 @@ import { LiveRegion } from "./LiveRegion";
 
 interface SavedThemesListProps {
   themes: SavedTheme[];
+  activeThemeId: string | null;
   onLoad: (theme: SavedTheme) => void;
   onSave: (name: string) => void;
   onDelete: (id: string) => void;
@@ -13,6 +14,7 @@ interface SavedThemesListProps {
 
 export default function SavedThemesList({
   themes,
+  activeThemeId,
   onLoad,
   onSave,
   onDelete,
@@ -162,13 +164,18 @@ export default function SavedThemesList({
       {themes.map((theme) => {
         const isDeleting = deletingId === theme.id;
         const isRenaming = renamingId === theme.id;
+        const isActive = activeThemeId === theme.id;
 
         return (
           <li key={theme.id}>
           <div
             role="button"
             tabIndex={0}
-            className="group flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-warm-subtle focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-1 transition-colors cursor-pointer"
+            className={`group flex items-center gap-2 px-2 py-1.5 rounded-lg focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-1 transition-colors cursor-pointer ${
+              isActive
+                ? "bg-accent-light text-accent"
+                : "hover:bg-warm-subtle"
+            }`}
             onClick={() => {
               if (!isDeleting && !isRenaming) {
                 onLoad(theme);
@@ -221,7 +228,7 @@ export default function SavedThemesList({
                 {renameError && <p className="text-[10px] text-red-500 mt-0.5">{renameError}</p>}
               </div>
             ) : (
-              <span className="flex-1 text-sm text-ink truncate min-w-0">
+              <span className={`flex-1 text-sm truncate min-w-0 ${isActive ? "text-accent font-medium" : "text-ink"}`}>
                 {theme.name}
               </span>
             )}
@@ -374,6 +381,9 @@ export default function SavedThemesList({
           {t("settings.saveAsTheme")}
         </button>
       )}
+      <p className="text-[10px] text-ink-muted/50 px-1">
+        {t("settings.customCssGlobalHint")}
+      </p>
     </div>
   );
 }

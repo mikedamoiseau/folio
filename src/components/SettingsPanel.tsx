@@ -29,7 +29,7 @@ function Accordion({ title, children, open, onToggle }: { title: string; childre
         type="button"
         onClick={onToggle}
         aria-expanded={open}
-        {...(open ? { "aria-controls": sectionId } : {})}
+        aria-controls={sectionId}
         className="w-full flex items-center justify-between py-1 group"
       >
         <h3 className="text-xs font-semibold uppercase tracking-wider text-ink-muted">
@@ -46,7 +46,16 @@ function Accordion({ title, children, open, onToggle }: { title: string; childre
           <path d="M5 7.5L10 12.5L15 7.5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
       </button>
-      {open && <div id={sectionId} role="region" aria-label={title} className="mt-3">{children}</div>}
+      <div
+        id={sectionId}
+        role="region"
+        aria-label={title}
+        className={`grid transition-[grid-template-rows] duration-200 ease-out ${open ? "grid-rows-[1fr] mt-3" : "grid-rows-[0fr]"}`}
+      >
+        <div className="overflow-hidden">
+          {children}
+        </div>
+      </div>
     </section>
   );
 }
@@ -284,6 +293,12 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
   const previousFocus = useRef<HTMLElement | null>(null);
 
   const [savedThemes, setSavedThemes] = useState<SavedTheme[]>(loadSavedThemes);
+  const [activeThemeId, setActiveThemeId] = useState<string | null>(null);
+
+  const handleLoadTheme = useCallback((theme: SavedTheme) => {
+    loadTheme(theme);
+    setActiveThemeId(theme.id);
+  }, [loadTheme]);
 
   const handleSaveTheme = useCallback((name: string) => {
     const existing = savedThemes.find((t) => t.name === name);
@@ -864,7 +879,8 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
               </h4>
               <SavedThemesList
                 themes={savedThemes}
-                onLoad={loadTheme}
+                activeThemeId={activeThemeId}
+                onLoad={handleLoadTheme}
                 onSave={handleSaveTheme}
                 onDelete={handleDeleteTheme}
                 onRename={handleRenameTheme}
@@ -878,7 +894,7 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                   <button
                     type="button"
                     key={option}
-                    onClick={() => setMode(option)}
+                    onClick={() => { setMode(option); setActiveThemeId(null); }}
                     className={`flex-1 px-2 py-2 text-sm rounded-lg capitalize transition-all duration-150 ${
                       mode === option
                         ? "bg-surface text-ink shadow-sm font-medium"
@@ -893,7 +909,7 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
               {/* Custom theme toggle */}
               <button
                 type="button"
-                onClick={() => setMode(mode === "custom" ? "light" : "custom")}
+                onClick={() => { setMode(mode === "custom" ? "light" : "custom"); setActiveThemeId(null); }}
                 className={`w-full px-3 py-2 text-sm rounded-lg border transition-all duration-150 ${
                   mode === "custom"
                     ? "border-accent bg-accent-light text-ink font-medium"
