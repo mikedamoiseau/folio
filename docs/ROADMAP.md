@@ -481,7 +481,7 @@ Improvements identified via codebase audit (April 2026). Security and stability 
 
 ### Robustness
 
-#### 49. Database Migration Versioning
+#### 49. Database Migration Versioning — **Done**
 - Replace current `ALTER TABLE ... let _ =` pattern with a `schema_version` table
 - Track applied migrations by version number
 - Enable safe non-additive schema changes (column renames, type changes)
@@ -498,13 +498,13 @@ Improvements identified via codebase audit (April 2026). Security and stability 
 - ~~Stop reading entries if total decompressed size exceeds threshold~~
 - ~~Prevents memory/disk exhaustion from maliciously crafted EPUB/CBZ/CBR archives~~
 
-#### 52. PDF Cache Memory Limits
+#### 52. PDF Cache Memory Limits — **Done**
 - Current LRU cache evicts by count (20 entries) but not by memory
 - 20 rendered PDF pages at max resolution could reach 400+ MB
 - Add memory-based eviction (e.g., max 200 MB total cache size)
 - Consider disk-based caching for older pages
 
-#### 53. Thread Pool for Background Operations
+#### 53. Thread Pool for Background Operations — **Done**
 - Enrichment scans and backups currently spawn unbounded threads via `std::thread::spawn`
 - Large batch operations could spawn 1000+ threads
 - Use `rayon::ThreadPool` or Tauri's async runtime with bounded concurrency
@@ -552,7 +552,7 @@ Improvements identified via codebase audit (April 2026). Security and stability 
 - ~~Bulk actions: delete, tag, add to collection~~
 - ~~Select all / deselect all~~
 
-#### 61. Highlight Popup Smart Positioning
+#### 61. Highlight Popup Smart Positioning — **Done**
 - When text selection spans multiple lines, the highlight color picker popup may be offscreen
 - Detect viewport bounds and reposition popup to opposite side when it would be clipped
 - Same pattern for any floating UI anchored to text selections
@@ -606,5 +606,5 @@ Lower priority features — high effort, niche audience, or dependent on other w
 | 6 | Remote Library Access, OPDS Server | Done | Remote access |
 | 7 | Android & iOS App | Not started | Mobile |
 | 8 | Sepia Theme, OpenDyslexic, Star Ratings, In-Book Search, Typography, Custom Fonts, Continuous Scroll, Time-to-Finish, Bookmark Naming, Series, Activity Log, MOBI, Nav History, Custom CSS, Dual-Page/Manga, Settings Reorg, i18n (EN+FR), PDF Zoom Quality, Go to Page, Animations, Comic Page Cache, Split View | 19 done | Reader & library enhancements |
-| 9 | DB Migration Versioning, Transaction Boundaries, Zip Bomb Protection, PDF Cache Memory Limits, Thread Pool, Backup Secret Atomicity, Structured Errors, Screen Reader Live Regions, Loading Skeletons, Toast System, Search Nav, Bulk Actions, Highlight Positioning | In progress | Hardening & polish |
+| 9 | DB Migration Versioning, Transaction Boundaries, Zip Bomb Protection, PDF Cache Memory Limits, Thread Pool, Backup Secret Atomicity, Screen Reader Live Regions, Loading Skeletons, Toast System, Search Nav, Bulk Actions, Highlight Positioning | 12 done, 1 remaining (#55 Structured Errors) | Hardening & polish |
 | N/H | Dictionary, Vocabulary Builder, TTS, Library-Wide Search, Annotation Exports, Plugins/Hooks, User Themes | Not started | Nice to have |
