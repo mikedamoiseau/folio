@@ -1481,6 +1481,13 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
           </div>
         )}
 
+        {/* Screen reader announcement for chapter changes (#56) */}
+        {bookFormat === "epub" && (
+          <div aria-live="polite" aria-atomic="true" className="sr-only">
+            {t("reader.chapterOf", { current: chapterIndex + 1, total: totalChapters || 1 })}
+          </div>
+        )}
+
         {/* Screen reader announcement for search state */}
         {searchOpen && (
           <div aria-live="polite" aria-atomic="true" className="sr-only">

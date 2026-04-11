@@ -17,6 +17,7 @@ import BookDetailModal from "../components/BookDetailModal";
 import KeyboardShortcutsHelp from "../components/KeyboardShortcutsHelp";
 import { startDrag, endDrag, isDragging, getDraggedCoverSrc, subscribe } from "../lib/dragState";
 import { friendlyError } from "../lib/errors";
+import { LiveRegion } from "../components/LiveRegion";
 import type { Book } from "../types";
 
 interface ReadingProgress {
@@ -1306,6 +1307,17 @@ export default function Library() {
           {scanToast.message}
         </div>
       )}
+
+      {/* Screen reader announcements for import and scan progress */}
+      <LiveRegion
+        message={
+          importing && importProgress
+            ? `${t("library.importing")} ${importProgress.current} / ${importProgress.total}`
+            : scanToast
+              ? scanToast.message
+              : ""
+        }
+      />
     </div>
   );
 }

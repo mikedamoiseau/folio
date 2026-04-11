@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { LiveRegion } from "./LiveRegion";
 
 interface BookmarkToastProps {
   bookmarkId: string;
@@ -96,6 +97,7 @@ export default function BookmarkToast({
           <span className="text-white/30 text-[10px]">↵</span>
         </>
       )}
+      <LiveRegion message={mode === "confirmed" ? "Bookmark saved" : ""} />
     </div>
   );
 }
