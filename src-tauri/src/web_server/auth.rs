@@ -159,6 +159,7 @@ pub async fn auth_middleware(
         || path == "/app.js"
         || path == "/app.css"
         || path == "/favicon.ico"
+        || path == "/favicon.png"
     {
         return next.run(req).await;
     }
