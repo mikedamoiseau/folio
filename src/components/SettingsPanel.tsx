@@ -53,7 +53,9 @@ function Accordion({ title, children, open, onToggle }: { title: string; childre
         className={`grid transition-[grid-template-rows] duration-200 ease-out ${open ? "grid-rows-[1fr] mt-3" : "grid-rows-[0fr]"}`}
       >
         <div className="overflow-hidden">
-          {children}
+          <div className="bg-warm-subtle/40 rounded-xl p-4">
+            {children}
+          </div>
         </div>
       </div>
     </section>
