@@ -22,6 +22,8 @@ pub struct WebState {
     pub pin_hash: Arc<Mutex<Option<String>>>,
     /// Active session tokens → creation time.
     pub sessions: Arc<Mutex<HashMap<String, std::time::Instant>>>,
+    /// Rate limiter for login attempts (R2-2).
+    pub login_limiter: Arc<auth::RateLimiter>,
 }
 
 impl WebState {
@@ -123,6 +125,7 @@ mod tests {
             data_dir: PathBuf::from("/tmp"),
             pin_hash: Arc::new(Mutex::new(None)),
             sessions: Arc::new(Mutex::new(HashMap::new())),
+            login_limiter: Arc::new(auth::RateLimiter::new(5, 300)),
         }
     }
 

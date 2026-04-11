@@ -39,7 +39,8 @@ sha2 = "0.10"
 unrar = "0.5"
 reqwest = { version = "0.12", features = ["blocking", "json"] }
 opendal = { version = "0.55", features = ["services-s3", "services-fs", "services-ftp", "services-webdav", "blocking"] }
-tokio = { version = "1", features = ["rt", "rt-multi-thread"] }
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "fs"] }
+tokio-util = { version = "0.7", features = ["io"] }
 keyring = "3"
 regex = "1"
 url = "2"

@@ -50,8 +50,32 @@ struct LoginResponse {
 
 async fn login(
     State(state): State<WebState>,
-    Json(body): Json<LoginRequest>,
+    req: axum::extract::Request,
 ) -> Result<Response, (StatusCode, String)> {
+    // Extract client IP for rate limiting
+    let client_ip = req
+        .headers()
+        .get("x-forwarded-for")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.split(',').next().unwrap_or("unknown").trim().to_string())
+        .unwrap_or_else(|| "unknown".to_string());
+
+    // R2-2: Check rate limit before processing
+    if !state.login_limiter.check(&client_ip) {
+        return Err((
+            StatusCode::TOO_MANY_REQUESTS,
+            "Too many login attempts. Try again later.".to_string(),
+        ));
+    }
+
+    let body: LoginRequest = {
+        let bytes = axum::body::to_bytes(req.into_body(), 1024)
+            .await
+            .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid request body".to_string()))?;
+        serde_json::from_slice(&bytes)
+            .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid JSON".to_string()))?
+    };
+
     let valid = state
         .pin_hash
         .lock()
@@ -66,6 +90,7 @@ async fn login(
         .unwrap_or(false);
 
     if !valid {
+        state.login_limiter.record_failure(&client_ip);
         return Err((StatusCode::UNAUTHORIZED, "Invalid PIN".into()));
     }
 
@@ -204,7 +229,80 @@ async fn get_chapter_content(
     // Rewrite asset:// URLs to HTTP URLs for web serving
     let html = rewrite_asset_urls_to_http(&html, &id, index);
 
+    // R3-1: Sanitize HTML to prevent XSS from malicious EPUB content
+    let html = sanitize_chapter_html(&html);
+
     Ok(([(header::CONTENT_TYPE, "text/html; charset=utf-8")], html).into_response())
+}
+
+/// Validate that a filename is safe (no path traversal sequences).
+fn is_safe_filename(name: &str) -> bool {
+    let decoded = urlencoding::decode(name).unwrap_or_default();
+    let decoded = decoded.as_ref();
+    !decoded.contains("..")
+        && !decoded.starts_with('/')
+        && !decoded.starts_with('\\')
+        && !decoded.contains('\0')
+}
+
+/// Sanitize chapter HTML for web serving — strip scripts and event handlers.
+fn sanitize_chapter_html(html: &str) -> String {
+    ammonia::Builder::new()
+        .add_tags([
+            "h1",
+            "h2",
+            "h3",
+            "h4",
+            "h5",
+            "h6",
+            "p",
+            "div",
+            "span",
+            "a",
+            "em",
+            "strong",
+            "b",
+            "i",
+            "u",
+            "s",
+            "sub",
+            "sup",
+            "br",
+            "hr",
+            "img",
+            "figure",
+            "figcaption",
+            "ul",
+            "ol",
+            "li",
+            "dl",
+            "dt",
+            "dd",
+            "table",
+            "thead",
+            "tbody",
+            "tr",
+            "th",
+            "td",
+            "blockquote",
+            "pre",
+            "code",
+            "section",
+            "article",
+            "nav",
+            "header",
+            "footer",
+            "aside",
+            "details",
+            "summary",
+        ])
+        .add_tag_attributes("a", &["href", "title"])
+        .add_tag_attributes("img", &["src", "alt", "width", "height"])
+        .add_tag_attributes("td", &["colspan", "rowspan"])
+        .add_tag_attributes("th", &["colspan", "rowspan"])
+        .url_relative(ammonia::UrlRelative::PassThrough)
+        .clean(html)
+        .to_string()
 }
 
 /// Rewrite `asset://localhost/...` image URLs to HTTP `/api/books/{id}/images/{chapter}/{filename}`.
@@ -241,6 +339,11 @@ async fn get_epub_image(
     State(state): State<WebState>,
     Path((id, chapter, filename)): Path<(String, usize, String)>,
 ) -> Result<Response, (StatusCode, String)> {
+    // R2-1: Prevent path traversal
+    if !is_safe_filename(&filename) {
+        return Err((StatusCode::BAD_REQUEST, "Invalid filename".to_string()));
+    }
+
     let image_path = state
         .data_dir
         .join("images")
@@ -347,7 +450,14 @@ async fn download_book(
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
         .ok_or_else(|| (StatusCode::NOT_FOUND, "Book not found".to_string()))?;
 
-    let bytes = std::fs::read(&book.file_path)
+    // R3-2: Stream the file instead of reading entirely into memory
+    let file = tokio::fs::File::open(&book.file_path)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    let metadata = file
+        .metadata()
+        .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     let filename = std::path::Path::new(&book.file_path)
@@ -359,6 +469,9 @@ async fn download_book(
         .first_or_octet_stream()
         .to_string();
 
+    let stream = tokio_util::io::ReaderStream::new(file);
+    let body = axum::body::Body::from_stream(stream);
+
     Ok((
         [
             (header::CONTENT_TYPE, mime),
@@ -366,8 +479,9 @@ async fn download_book(
                 header::CONTENT_DISPOSITION,
                 format!("attachment; filename=\"{filename}\""),
             ),
+            (header::CONTENT_LENGTH, metadata.len().to_string()),
         ],
-        bytes,
+        body,
     )
         .into_response())
 }
@@ -414,5 +528,50 @@ mod tests {
         let html = "<p>Hello world</p>";
         let result = rewrite_asset_urls_to_http(html, "book1", 0);
         assert_eq!(result, html);
+    }
+
+    // R2-1: Path traversal prevention
+    #[test]
+    fn test_validate_image_filename_rejects_traversal() {
+        assert!(!is_safe_filename("../../../etc/passwd"));
+        assert!(!is_safe_filename("..%2F..%2Fetc/passwd"));
+        assert!(!is_safe_filename("foo/../bar"));
+        assert!(!is_safe_filename(".."));
+        assert!(!is_safe_filename("/absolute/path"));
+    }
+
+    #[test]
+    fn test_validate_image_filename_accepts_valid() {
+        assert!(is_safe_filename("image.jpg"));
+        assert!(is_safe_filename("chapter1-cover.png"));
+        assert!(is_safe_filename("my image (1).webp"));
+    }
+
+    // R3-1: XSS sanitization
+    #[test]
+    fn test_sanitize_chapter_html_strips_scripts() {
+        let html = r#"<p>Hello</p><script>alert('xss')</script><p>World</p>"#;
+        let sanitized = sanitize_chapter_html(html);
+        assert!(!sanitized.contains("<script>"));
+        assert!(!sanitized.contains("alert("));
+        assert!(sanitized.contains("Hello"));
+        assert!(sanitized.contains("World"));
+    }
+
+    #[test]
+    fn test_sanitize_chapter_html_strips_event_handlers() {
+        let html = r#"<img src="x" onerror="alert('xss')">"#;
+        let sanitized = sanitize_chapter_html(html);
+        assert!(!sanitized.contains("onerror"));
+        assert!(!sanitized.contains("alert"));
+    }
+
+    #[test]
+    fn test_sanitize_chapter_html_preserves_safe_content() {
+        let html = r#"<h1>Title</h1><p>Text with <em>emphasis</em> and <a href="/link">a link</a>.</p><img src="/api/books/1/images/0/fig.jpg">"#;
+        let sanitized = sanitize_chapter_html(html);
+        assert!(sanitized.contains("<h1>"));
+        assert!(sanitized.contains("<em>"));
+        assert!(sanitized.contains("<img"));
     }
 }

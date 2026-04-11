@@ -12,6 +12,43 @@ const KEYRING_SERVICE: &str = "folio-web-server";
 const KEYRING_USER: &str = "pin";
 const SESSION_TTL_SECS: u64 = 86400; // 24 hours
 
+/// Per-IP rate limiter for login attempts.
+pub struct RateLimiter {
+    attempts: std::sync::Mutex<std::collections::HashMap<String, Vec<std::time::Instant>>>,
+    max_attempts: usize,
+    window_secs: u64,
+}
+
+impl RateLimiter {
+    pub fn new(max_attempts: usize, window_secs: u64) -> Self {
+        Self {
+            attempts: std::sync::Mutex::new(std::collections::HashMap::new()),
+            max_attempts,
+            window_secs,
+        }
+    }
+
+    /// Check if an IP is allowed to attempt login.
+    pub fn check(&self, ip: &str) -> bool {
+        let mut map = self.attempts.lock().unwrap();
+        let window = std::time::Duration::from_secs(self.window_secs);
+        if let Some(times) = map.get_mut(ip) {
+            times.retain(|t| t.elapsed() < window);
+            times.len() < self.max_attempts
+        } else {
+            true
+        }
+    }
+
+    /// Record a failed login attempt for an IP.
+    pub fn record_failure(&self, ip: &str) {
+        let mut map = self.attempts.lock().unwrap();
+        map.entry(ip.to_string())
+            .or_default()
+            .push(std::time::Instant::now());
+    }
+}
+
 /// Hash a PIN using SHA-256.
 pub fn hash_pin(pin: &str) -> String {
     use sha2::{Digest, Sha256};
@@ -172,6 +209,7 @@ mod tests {
             data_dir: std::path::PathBuf::from("/tmp"),
             pin_hash: Arc::new(Mutex::new(None)),
             sessions: Arc::new(Mutex::new(HashMap::new())),
+            login_limiter: Arc::new(RateLimiter::new(5, 300)),
         }
     }
 
@@ -230,5 +268,36 @@ mod tests {
         let stored = state.pin_hash.lock().unwrap();
         assert_eq!(stored.as_ref().unwrap(), &hash);
         assert!(verify_pin("4321", stored.as_ref().unwrap()));
+    }
+
+    // R2-2: Rate limiting
+    #[test]
+    fn test_rate_limiter_allows_initial_attempts() {
+        let limiter = RateLimiter::new(3, 300);
+        let ip = "192.168.1.10".to_string();
+        assert!(limiter.check(&ip));
+        assert!(limiter.check(&ip));
+        assert!(limiter.check(&ip));
+    }
+
+    #[test]
+    fn test_rate_limiter_blocks_after_max() {
+        let limiter = RateLimiter::new(3, 300);
+        let ip = "192.168.1.10".to_string();
+        limiter.record_failure(&ip);
+        limiter.record_failure(&ip);
+        limiter.record_failure(&ip);
+        assert!(!limiter.check(&ip));
+    }
+
+    #[test]
+    fn test_rate_limiter_independent_per_ip() {
+        let limiter = RateLimiter::new(2, 300);
+        let ip1 = "192.168.1.10".to_string();
+        let ip2 = "192.168.1.11".to_string();
+        limiter.record_failure(&ip1);
+        limiter.record_failure(&ip1);
+        assert!(!limiter.check(&ip1));
+        assert!(limiter.check(&ip2)); // different IP, not blocked
     }
 }

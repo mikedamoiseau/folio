@@ -3956,6 +3956,7 @@ pub async fn web_server_start(
         data_dir: state.data_dir.clone(),
         pin_hash: state.shared_pin_hash.clone(),
         sessions: std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+        login_limiter: std::sync::Arc::new(crate::web_server::auth::RateLimiter::new(5, 300)),
     };
 
     let handle = crate::web_server::start(web_state, port).await?;

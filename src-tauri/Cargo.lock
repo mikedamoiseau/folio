@@ -1763,6 +1763,7 @@ dependencies = [
  "tauri-plugin-opener",
  "tempfile",
  "tokio",
+ "tokio-util",
  "tower-http",
  "unrar",
  "url",

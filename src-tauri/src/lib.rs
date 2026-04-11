@@ -174,6 +174,9 @@ pub fn run() {
                         sessions: std::sync::Arc::new(std::sync::Mutex::new(
                             std::collections::HashMap::new(),
                         )),
+                        login_limiter: std::sync::Arc::new(web_server::auth::RateLimiter::new(
+                            5, 300,
+                        )),
                     };
                     if let Ok(handle) = web_server::start(web_state, port).await {
                         let mut h = state.web_server_handle.lock().unwrap();
@@ -282,6 +285,20 @@ pub fn run() {
             commands::web_server_set_pin,
             commands::web_server_get_qr,
         ])
+        // R5-1: Graceful shutdown — stop web server when app exits
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::Destroyed = event {
+                let state = window.state::<AppState>();
+                let handle = state
+                    .web_server_handle
+                    .lock()
+                    .ok()
+                    .and_then(|mut h| h.take());
+                if let Some(h) = handle {
+                    web_server::stop(h);
+                }
+            }
+        })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

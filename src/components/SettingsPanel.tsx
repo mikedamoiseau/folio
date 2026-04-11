@@ -1453,16 +1453,17 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
             </button>
           </Accordion>
 
-          <Accordion title="Remote Access" open={openSection === "webserver"} onToggle={() => toggleSection("webserver")}>
+          <Accordion title={t("settings.remoteAccess")} open={openSection === "webserver"} onToggle={() => toggleSection("webserver")}>
             <div className="space-y-2">
               {/* PIN input */}
               <div className="bg-warm-subtle rounded-xl px-3 py-2.5">
-                <label className="text-xs text-ink-muted mb-1 block">PIN</label>
+                <label htmlFor="web-server-pin" className="text-xs text-ink-muted mb-1 block">{t("settings.pin")}</label>
                 <input
+                  id="web-server-pin"
                   type="password"
                   value={webServerPin}
                   onChange={(e) => setWebServerPin(e.target.value)}
-                  placeholder="Set a PIN for web access"
+                  placeholder={t("settings.pinPlaceholder")}
                   maxLength={8}
                   className="w-full bg-transparent text-sm text-ink focus:outline-none"
                 />
@@ -1477,19 +1478,20 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                     }}
                     className="mt-1 text-xs text-accent hover:underline"
                   >
-                    Save PIN
+                    {t("settings.savePin")}
                   </button>
                 )}
               </div>
 
               {/* Port input */}
               <div className="bg-warm-subtle rounded-xl px-3 py-2.5">
-                <label className="text-xs text-ink-muted mb-1 block">Port</label>
+                <label htmlFor="web-server-port" className="text-xs text-ink-muted mb-1 block">{t("settings.port")}</label>
                 <input
                   type="number"
                   value={webServerPort}
                   onChange={(e) => setWebServerPort(e.target.value)}
                   className="w-full bg-transparent text-sm text-ink focus:outline-none"
+                  id="web-server-port"
                   min={1024}
                   max={65535}
                   disabled={webServerRunning}
@@ -1521,14 +1523,14 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                     : "bg-accent/20 text-accent hover:bg-accent/30"
                 }`}
               >
-                {webServerRunning ? "Stop Server" : "Start Server"}
+                {webServerRunning ? t("settings.stopServer") : t("settings.startServer")}
               </button>
 
               {/* Status */}
               {webServerRunning && webServerUrl && (
                 <div className="bg-warm-subtle rounded-xl px-3 py-2.5 space-y-2">
                   <p className="text-xs text-ink-muted">
-                    Server running at{" "}
+                    {t("settings.serverRunningAt")}{" "}
                     <a href={webServerUrl} target="_blank" rel="noopener noreferrer" className="text-accent hover:underline">
                       {webServerUrl}
                     </a>
