@@ -29,6 +29,9 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 - **Bounded background threads** — background operations (enrichment, backup, sync) use tokio's bounded thread pool instead of unbounded OS threads.
 - **Highlight popup smart positioning** — color picker popup detects both top and bottom viewport edges to avoid clipping.
 - **User-created themes (#48)** — save, name, load, rename, and delete custom visual themes. Each theme captures color tokens, font family, font size, and typography settings. Settings panel restructured: typography controls merged under Appearance accordion. Up to 50 saved themes with full validation and case-insensitive naming.
+- **Web server favicon** — Folio app icon served as favicon on the web UI.
+- **Accordion animation** — settings panel accordions now animate open/close with smooth height transitions.
+- **Accordion content panels** — subtle background on expanded accordion sections for better visual separation.
 
 ## [1.3.0] - 2026-04-02
 
