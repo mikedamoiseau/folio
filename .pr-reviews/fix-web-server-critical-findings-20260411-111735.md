@@ -150,3 +150,101 @@ While malformed requests can't guess the PIN, the atomic `attempt()` approach na
 
 ---
 
+
+## [Codex — Reviewer] Round 2
+
+NEEDS_FIX: the PIN is still brute-forceable through the unthrottled HTTP Basic Auth path, so the login limiter does not fully protect the web server.
+
+1. **File:** [src-tauri/src/web_server/auth.rs](/Users/mike/Documents/www/folio/src-tauri/src/web_server/auth.rs:143), [src-tauri/src/web_server/auth.rs](/Users/mike/Documents/www/folio/src-tauri/src/web_server/auth.rs:181), [src-tauri/src/web_server/api.rs](/Users/mike/Documents/www/folio/src-tauri/src/web_server/api.rs:51)  
+**What:** A remote client can bypass the new `/api/auth` rate limit entirely by sending repeated `Authorization: Basic ...` requests with guessed PINs to a protected route such as `/opds` (and, as written, any non-public route).  
+**Why:** The new limiter is only enforced inside `login()` for `/api/auth`, but `auth_middleware()` independently accepts the raw PIN from Basic Auth and verifies it directly without consulting `login_limiter`. That leaves a second authentication path with no throttling.  
+**Impact:** An attacker on the LAN can brute-force the PIN by hitting Basic-authenticated endpoints instead of `/api/auth`, so the core security issue remains.  
+**Fix:** Apply the same rate limiting to Basic Auth verification, keyed by the real peer IP, or restrict Basic Auth to a narrower flow that cannot be used for repeated PIN guesses. If OPDS must keep Basic Auth, move PIN verification behind a shared throttled helper so both `/api/auth` and middleware enforce the same ceiling.  
+**Severity:** BLOCKING  
+**Fixable:** YES
+
+---
+
+## [Gemini — Reviewer] Round 2
+
+NEEDS_FIX: The rate limiter remains vulnerable to a TOCTOU race condition and could be bypassed with concurrent login attempts.
+
+## Detailed Findings
+
+### 1. Login Rate Limit TOCTOU Race Condition Still Possible
+
+*   **File:** `src-tauri/src/web_server/auth.rs`
+*   **Line(s):** 28-56
+*   **What can go wrong:** The `RateLimiter::attempt` method, intended to be atomic, still has a Time-of-Check to Time-of-Use (TOCTOU) race condition. Multiple concurrent requests can still increment the counter and update the timestamp before the check (`last_attempt.elapsed() > Duration::from_secs(300)`) effectively prunes old attempts for *all* concurrent requests.
+*   **Why the code is vulnerable:** The `attempt` method first locks the mutex, then performs the check based on `last_attempt` and `attempts` count, and then updates them. However, for a burst of concurrent requests, each request will acquire the lock, see the *same* `last_attempt` and `attempts` values, potentially increment `attempts`, and update `last_attempt`. If multiple requests come in quickly within the `300s` window, they could all increment `attempts` past the `MAX_ATTEMPTS` before any `last_attempt` update triggers the reset for subsequent requests. The critical issue is that `last_attempt` is updated *after* the `attempts` count is potentially incremented within the same window, meaning previous concurrent requests might not see the `last_attempt` update from a slightly earlier concurrent request until after they've already passed their checks and incremented the counter.
+*   **Impact if it happens:** The advertised `5 attempts / 300s` ceiling is not strictly enforced under load. An attacker can send a rapid burst of login attempts and bypass the rate limit, allowing more than 5 attempts within 300 seconds, accelerating brute-force attacks.
+*   **Fix recommendation:** The rate limiting logic needs to be fully atomic such that the state (attempts, last\_attempt) is updated and then checked, or a single operation checks and then conditionally updates. A simpler and more robust approach is to:
+    1.  Always record the attempt first, regardless of `MAX_ATTEMPTS`.
+    2.  Then, check the conditions: if `attempts > MAX_ATTEMPTS` AND `last_attempt.elapsed() <= Duration::from_secs(300)`, then deny the request.
+    3.  Reset `attempts` and `last_attempt` if `last_attempt.elapsed() > Duration::from_secs(300)` *before* checking the `MAX_ATTEMPTS` condition. This ensures that a new window correctly starts.
+
+    Example (conceptual, might need adjustments for `RateLimiter` structure):
+
+    ```rust
+    // In src-tauri/src/web_server/auth.rs, inside RateLimiter
+    pub fn attempt(&self, ip: &str) -> bool {
+        let mut map = self.0.lock().unwrap();
+        let entry = map.entry(ip.to_string()).or_insert_with(|| RateLimitEntry::new());
+
+        // Always record the attempt immediately
+        entry.attempts += 1;
+        entry.last_attempt = Instant::now(); // Update timestamp with every attempt
+
+        // Reset if the window has passed, even if MAX_ATTEMPTS was hit
+        if entry.last_attempt.elapsed() > Duration::from_secs(300) {
+             entry.attempts = 1; // Start a new window with the current attempt
+        }
+
+        // Only allow if within the limits after the potential reset
+        entry.attempts <= MAX_ATTEMPTS
+    }
+    ```
+*   **Severity:** BLOCKING
+*   **Fixable:** YES
+
+### 2. X-Forwarded-For Fix is Incomplete/Inconsistent
+
+*   **File:** `src-tauri/src/web_server/mod.rs`, `src-tauri/src/web_server/api.rs`
+*   **Line(s):** `mod.rs`: 83, `api.rs`: 53
+*   **What can go wrong:** While the `login` function now correctly uses `ConnectInfo` to extract the client IP, the `axum::serve` setup in `src-tauri/src/web_server/mod.rs` still uses `app.into_make_service()` instead of `app.into_make_service_with_connect_info::<std::net::SocketAddr>()`. This means the `ConnectInfo` extractor in `api::login` will likely not receive the actual `SocketAddr` and might default to a placeholder or panic, rendering the fix ineffective for the production server.
+*   **Why the code is vulnerable:** The server is not configured to provide `ConnectInfo` to the handlers, even though the handler expects it.
+*   **Impact if it happens:** The `login` function's `ConnectInfo` will not correctly provide the client's socket address, falling back to an incorrect or default IP. This makes the `ConnectInfo` fix ineffective, potentially reintroducing the `X-Forwarded-For` bypass (if `X-Forwarded-For` is then relied upon as a fallback or if the placeholder IP is constant) or causing runtime errors.
+*   **Fix recommendation:** Update `src-tauri/src/web_server/mod.rs` to use `into_make_service_with_connect_info` as originally suggested.
+
+    ```rust
+    // In src-tauri/src/web_server/mod.rs, inside start function
+    let app = Router::new()
+        .route("/api/login", post(api::login))
+        // ... other routes
+        .with_state(state.clone());
+    let listener = tokio::net::TcpListener::bind(addr).await.map_err(|e| e.to_string())?;
+    // CHANGE THIS LINE
+    axum::serve(listener, app.into_make_service_with_connect_info::<std::net::SocketAddr>()).await.map_err(|e| e.to_string())?;
+    ```
+*   **Severity:** BLOCKING
+*   **Fixable:** YES
+
+---
+
+
+## [Claude — Implementer] Round 2
+
+---
+
+## Summary
+
+| Issue | Raised by | Action | Reason |
+|-------|-----------|--------|--------|
+| Basic Auth bypasses rate limiting | Codex only | **Fixed** — added `ConnectInfo` + rate limiter to `auth_middleware` Basic Auth path | Agree. Second unthrottled auth path allowed unlimited PIN guesses via `/opds`. |
+| TOCTOU race in `RateLimiter::attempt` | Gemini only | **Pushed back** | Disagree. The entire method runs under a single `Mutex` lock — only one thread can execute at a time. There is no TOCTOU; the Mutex *is* the atomicity guarantee. |
+| `into_make_service_with_connect_info` missing | Gemini only | **Pushed back** | Factually wrong. `mod.rs:95` already uses `into_make_service_with_connect_info::<SocketAddr>()`. This was fixed in Round 1. Gemini appears to be reviewing stale code. |
+
+**Changes made:** One file modified (`auth.rs`) — added `ConnectInfo<SocketAddr>` extractor to `auth_middleware` and wired the Basic Auth PIN verification through the same `login_limiter.attempt()` / `clear()` flow used by `/api/auth`. All 268 tests pass, clippy clean.
+
+---
+

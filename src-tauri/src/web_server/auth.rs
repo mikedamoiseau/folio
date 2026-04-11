@@ -1,10 +1,11 @@
 use axum::{
     body::Body,
-    extract::State,
+    extract::{ConnectInfo, State},
     http::{Request, StatusCode},
     middleware::Next,
     response::{IntoResponse, Response},
 };
+use std::net::SocketAddr;
 
 use super::WebState;
 
@@ -142,6 +143,7 @@ pub fn generate_qr_svg(url: &str) -> Result<String, String> {
 
 /// Auth middleware — checks for valid session or Basic Auth PIN.
 pub async fn auth_middleware(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     State(state): State<WebState>,
     req: Request<Body>,
     next: Next,
@@ -178,8 +180,18 @@ pub async fn auth_middleware(
         }
     }
 
-    // Check HTTP Basic Auth (for OPDS clients)
+    // Check HTTP Basic Auth (for OPDS clients) — rate-limited like /api/auth
     if let Some(pin) = extract_basic_pin(&req) {
+        let client_ip = addr.ip().to_string();
+
+        if !state.login_limiter.attempt(&client_ip) {
+            return (
+                StatusCode::TOO_MANY_REQUESTS,
+                "Too many login attempts. Try again later.",
+            )
+                .into_response();
+        }
+
         let valid = state
             .pin_hash
             .lock()
@@ -188,6 +200,7 @@ pub async fn auth_middleware(
             .unwrap_or(false);
 
         if valid {
+            state.login_limiter.clear(&client_ip);
             return next.run(req).await;
         }
     }
