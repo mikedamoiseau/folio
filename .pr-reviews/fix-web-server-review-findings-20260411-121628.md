@@ -81,3 +81,20 @@ The `has_pin` field is typed but currently unused since the guard was removed. T
 
 ---
 
+
+## [Codex — Reviewer] Round 2
+
+LGTM: The previous blocking issues are addressed, and I did not find any new security or correctness regressions in the current diff.
+
+No findings.
+
+Residual risk: `/opds/all` still paginates in memory after `db::list_books(&conn)`, so very large libraries will continue to pay full-list cost per page. Given the stated scope and the earlier pushback, I’m treating that as a non-blocking tradeoff rather than a merge blocker.
+
+---
+
+## [Gemini — Reviewer] Round 2
+
+LGTM: All critical findings from the previous rounds have been addressed, and the code appears more secure and robust.
+
+---
+
