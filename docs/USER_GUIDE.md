@@ -17,9 +17,10 @@ How to install, import books, and read them. Covers all formats, collections, hi
 9. [Customizing Your Reading Experience](#9-customizing-your-reading-experience)
 10. [Backup and Restore](#10-backup-and-restore)
 11. [Reading Stats](#11-reading-stats)
-12. [Language](#12-language)
-13. [Keyboard Shortcuts](#13-keyboard-shortcuts)
-14. [Troubleshooting](#14-troubleshooting)
+12. [Remote Access](#12-remote-access)
+13. [Language](#13-language)
+14. [Keyboard Shortcuts](#14-keyboard-shortcuts)
+15. [Troubleshooting](#15-troubleshooting)
 
 ---
 
@@ -564,7 +565,58 @@ Stats are tracked automatically — reading sessions are recorded when you open 
 
 ---
 
-## 12. Language
+## 12. Remote Access
+
+Browse and read your library from any device on the same WiFi network — phone, tablet, or another computer — without installing anything.
+
+### Setting up
+
+1. Open **Settings** and scroll to the **Remote Access** section
+2. Enter a **PIN** (this is the password for web access) and click **Save PIN**
+3. Click **Start Server**
+4. A URL and QR code appear — scan the QR code with your phone or type the URL in any browser
+
+The server runs on port 7788 by default. You can change the port before starting.
+
+### Using the web interface
+
+On your phone or tablet, open the URL in a browser. You'll see:
+
+- **Login screen** — enter the PIN you set in the desktop app
+- **Library** — a grid of book covers with a search bar. Tap any book to see its details.
+- **Book detail** — shows cover, title, author, and format. Tap **Read** to open the book or **Download** to save it to your device.
+- **Reader** — EPUBs show chapter content with prev/next navigation. PDFs and comics show page images with prev/next buttons.
+
+The web interface works entirely on your local network. No internet connection needed, no data leaves your WiFi.
+
+### OPDS for reader apps
+
+If you use an ebook reader app that supports OPDS (KOReader, Calibre, Moon+ Reader, etc.), you can connect it directly:
+
+1. In the reader app, add a new OPDS catalog
+2. Enter the URL: `http://<your-ip>:7788/opds`
+3. For authentication, use HTTP Basic Auth with any username and your PIN as the password
+4. Browse your library and download books directly into the reader app
+
+### Auto-start
+
+If the server was running when you last closed Folio, it starts automatically next time you open the app. Stop the server from Settings to disable auto-start.
+
+### Security
+
+- Your PIN is hashed (SHA-256) and stored in your operating system's keychain
+- Web sessions expire after 24 hours
+- Login attempts are rate-limited (5 tries per 5 minutes per device)
+- The server is read-only — nobody can modify your library from the web interface
+- All served content is sanitized to prevent malicious scripts in EPUB files
+
+### Stopping the server
+
+Click **Stop Server** in Settings. The server also stops automatically when you close the Folio app.
+
+---
+
+## 13. Language
 
 Folio supports multiple interface languages. Currently available: **English** and **French**.
 
@@ -578,7 +630,7 @@ Folio supports multiple interface languages. Currently available: **English** an
 
 ---
 
-## 13. Keyboard Shortcuts
+## 14. Keyboard Shortcuts
 
 Press `?` at any time to see the shortcut reference.
 
@@ -606,7 +658,7 @@ Press `?` at any time to see the shortcut reference.
 
 ---
 
-## 14. Troubleshooting
+## 15. Troubleshooting
 
 ### "Failed to load book"
 

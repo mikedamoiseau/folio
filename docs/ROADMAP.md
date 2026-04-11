@@ -261,9 +261,9 @@ Expand where books come from and how they persist.
 
 ## Phase 6: Remote Access
 
-### 22. Built-in Web Server for Remote Library Access
+### 22. Built-in Web Server for Remote Library Access — **Done**
 
-Embed a lightweight HTTP server so the library can be accessed from any device on the local network via a web browser.
+~~Embed a lightweight HTTP server so the library can be accessed from any device on the local network via a web browser.~~
 
 **Core features:**
 - Toggle in settings: "Enable remote access" (off by default)
@@ -611,7 +611,7 @@ Lower priority features — high effort, niche audience, or dependent on other w
 | 3 | Remote Files, Bulk Import, Backup, Book Discovery, Linked Books, Position Sync | 5 done, 2 partial | Import & sync |
 | 4 | Stats, Goodreads, Recents, Share, Recommendations | 4 done, 1 partial | Discovery & social |
 | 5 | Multiple Profiles | Done | Multi-user |
-| 6 | Remote Library Access, OPDS Server | Not started | Remote access |
+| 6 | Remote Library Access, OPDS Server | Done | Remote access |
 | 7 | Android & iOS App | Not started | Mobile |
 | 8 | Sepia Theme, OpenDyslexic, Star Ratings, In-Book Search, Typography, Custom Fonts, Continuous Scroll, Time-to-Finish, Bookmark Naming, Series, Activity Log, MOBI, Nav History, Custom CSS, Dual-Page/Manga, Settings Reorg, i18n (EN+FR), PDF Zoom Quality, Go to Page, Animations, Comic Page Cache, Split View | 19 done | Reader & library enhancements |
 | 9 | DB Migration Versioning, Transaction Boundaries, Zip Bomb Protection, PDF Cache Memory Limits, Thread Pool, Backup Secret Atomicity, Structured Errors, Screen Reader Live Regions, Loading Skeletons, Toast System, Search Nav, Bulk Actions, Highlight Positioning | In progress | Hardening & polish |
