@@ -10,6 +10,7 @@
   // Active filter state
   let activeCollectionId = null;
   let activeSeries = null;
+  let activeSort = "date_added";
 
   async function api(path) {
     const resp = await fetch(path, { credentials: "same-origin" });
@@ -153,9 +154,20 @@
         <div class="header">
           <h1>Folio</h1>
           <input type="search" id="search" placeholder="Search books..." value="${esc(query || "")}">
+          <select id="sort-select" aria-label="Sort by">
+            <option value="date_added">Recent</option>
+            <option value="title">Title</option>
+            <option value="author">Author</option>
+            <option value="last_read">Last Read</option>
+            <option value="rating">Rating</option>
+          </select>
         </div>
         <div id="filter-bar"></div>
         <div id="library-content"><div class="loading">Loading...</div></div>`;
+
+      const sortSelect = $("#sort-select");
+      sortSelect.value = activeSort;
+      sortSelect.onchange = () => { activeSort = sortSelect.value; refreshLibrary(); };
 
       let timer;
       $("#search").oninput = (e) => {
@@ -186,11 +198,13 @@
     let url;
     if (activeCollectionId) {
       url = "/api/collections/" + encodeURIComponent(activeCollectionId) + "/books";
-    } else if (activeSeries) {
-      url = "/api/books?series=" + encodeURIComponent(activeSeries);
-      if (query) url += "&q=" + encodeURIComponent(query);
     } else {
-      url = query ? "/api/books?q=" + encodeURIComponent(query) : "/api/books";
+      const params = new URLSearchParams();
+      if (activeSeries) params.set("series", activeSeries);
+      if (query) params.set("q", query);
+      if (activeSort && activeSort !== "date_added") params.set("sort", activeSort);
+      const qs = params.toString();
+      url = "/api/books" + (qs ? "?" + qs : "");
     }
 
     const resp = await api(url);

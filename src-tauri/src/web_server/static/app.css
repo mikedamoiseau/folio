@@ -24,6 +24,7 @@ button:focus-visible, a:focus-visible, input:focus-visible { outline: 2px solid 
 .header h1 { font-size: 1.3rem; color: var(--accent); white-space: nowrap; }
 .header input[type="search"] { flex: 1; padding: 8px 12px; background: var(--card-bg); border: 1px solid var(--border); border-radius: var(--radius); color: var(--fg); font-size: 0.95rem; }
 .header .back-btn { background: none; border: none; color: var(--fg); font-size: 1.2rem; cursor: pointer; padding: 4px 8px; }
+.header select { padding: 6px 10px; background: var(--card-bg); border: 1px solid var(--border); border-radius: var(--radius); color: var(--fg); font-size: 0.85rem; cursor: pointer; }
 
 /* ── Filter Bar ───────────────────────────────── */
 #filter-bar { padding: 8px var(--gap); border-bottom: 1px solid var(--border); overflow-x: auto; -webkit-overflow-scrolling: touch; }

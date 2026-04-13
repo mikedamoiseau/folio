@@ -109,6 +109,7 @@ async fn login(
 struct BookQuery {
     q: Option<String>,
     series: Option<String>,
+    sort: Option<String>, // title, author, last_read, rating (default: date_added)
 }
 
 async fn list_books(
@@ -142,6 +143,31 @@ async fn list_books(
         }
         _ => books,
     };
+
+    // Sort
+    let mut books = books;
+    match params.sort.as_deref() {
+        Some("title") => books.sort_by(|a, b| a.title.to_lowercase().cmp(&b.title.to_lowercase())),
+        Some("author") => books.sort_by(|a, b| a.author.to_lowercase().cmp(&b.author.to_lowercase())),
+        Some("rating") => books.sort_by(|a, b| {
+            b.rating.unwrap_or(0.0).partial_cmp(&a.rating.unwrap_or(0.0)).unwrap_or(std::cmp::Ordering::Equal)
+        }),
+        Some("last_read") => {
+            // Need reading progress for last_read sort
+            let progress_map: std::collections::HashMap<String, i64> =
+                db::get_all_reading_progress(&conn)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|p| (p.book_id, p.last_read_at))
+                    .collect();
+            books.sort_by(|a, b| {
+                let la = progress_map.get(&a.id).copied().unwrap_or(0);
+                let lb = progress_map.get(&b.id).copied().unwrap_or(0);
+                lb.cmp(&la)
+            });
+        }
+        _ => {} // default: date_added DESC from SQL
+    }
 
     Ok(Json(books))
 }
