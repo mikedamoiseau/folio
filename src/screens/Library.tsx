@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef, useSyncExternalStore } from "react";
+import React, { useState, useEffect, useCallback, useRef, useMemo, useSyncExternalStore } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
@@ -19,6 +19,7 @@ import { startDrag, endDrag, isDragging, getDraggedCoverSrc, subscribe } from ".
 import { friendlyError } from "../lib/errors";
 import { LiveRegion } from "../components/LiveRegion";
 import { useToast } from "../components/Toast";
+import { useDebounce } from "../hooks/useDebounce";
 import type { Book, BookGridItem } from "../types";
 
 interface ReadingProgress {
@@ -36,6 +37,7 @@ export default function Library() {
   const [progressMap, setProgressMap] = useState<Record<string, number>>({});
   const [lastReadMap, setLastReadMap] = useState<Record<string, number>>({});
   const [search, setSearch] = useState("");
+  const debouncedSearch = useDebounce(search, 250);
   const [sortBy, setSortBy] = useState<"date_added" | "last_read" | "title" | "author" | "progress" | "rating" | "series">(() => {
     const stored = localStorage.getItem("folio-library-sort-by");
     if (stored === "date_added" || stored === "last_read" || stored === "title" || stored === "author" || stored === "progress" || stored === "rating" || stored === "series") return stored;
@@ -364,10 +366,10 @@ export default function Library() {
     };
   }, [importFiles]);
 
-  const filtered = books
+  const filtered = useMemo(() => books
     .filter((book) => {
-      if (search) {
-        const q = search.toLowerCase();
+      if (debouncedSearch) {
+        const q = debouncedSearch.toLowerCase();
         if (!book.title.toLowerCase().includes(q) && !book.author.toLowerCase().includes(q)) return false;
       }
       if (filterFormat !== "all" && book.format !== filterFormat) return false;
@@ -411,7 +413,7 @@ export default function Library() {
         case "date_added":
         default: return dir * (a.added_at - b.added_at);
       }
-    });
+    }), [books, debouncedSearch, sortBy, sortAsc, filterFormat, filterStatus, filterRating, filterSource, progressMap, lastReadMap, activeSeries]);
 
   const handleShowBookDetail = useCallback(async (id: string) => {
     latestDetailRequestRef.current = id;

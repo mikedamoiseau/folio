@@ -80,6 +80,7 @@ export default function BookCard({
           <img
             src={coverSrc}
             alt={t("bookCard.coverAlt", { title })}
+            loading="lazy"
             className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-[1.02]"
           />
         ) : (
