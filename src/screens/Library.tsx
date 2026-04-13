@@ -506,12 +506,14 @@ export default function Library() {
     try { await invoke("cancel_scan"); } catch {}
   }, []);
 
-  // After a deletion, if a search is active but yields no results, clear it
+  // After a deletion, if a search is active but yields no results, clear it.
+  // Only clear when debounced value has settled and matches the current input
+  // to avoid race conditions during typing.
   useEffect(() => {
-    if (debouncedSearch && filtered.length === 0 && books.length > 0) {
+    if (debouncedSearch && debouncedSearch === search && filtered.length === 0 && books.length > 0) {
       setSearch("");
     }
-  }, [filtered.length, books.length, debouncedSearch]);
+  }, [filtered.length, books.length, debouncedSearch, search]);
 
   const hasBooks = books.length > 0;
   const hasResults = filtered.length > 0;
@@ -588,7 +590,7 @@ export default function Library() {
             <input
               id="library-search"
               ref={searchRef}
-              type="search"
+              type="text"
               placeholder={t("library.searchPlaceholder")}
               value={search}
               onChange={(e) => setSearch(e.target.value)}

@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { debounce } from "./useDebounce";
+import { debounce, useDebounce } from "./useDebounce";
+import { renderToString } from "react-dom/server";
+import { createElement } from "react";
 
 describe("debounce utility", () => {
   beforeEach(() => {
@@ -48,5 +50,25 @@ describe("debounce utility", () => {
     vi.advanceTimersByTime(300);
 
     expect(fn).not.toHaveBeenCalled();
+  });
+});
+
+describe("useDebounce hook (SSR)", () => {
+  it("returns initial value on first render", () => {
+    function TestComponent() {
+      const debounced = useDebounce("hello", 150);
+      return createElement("span", null, debounced);
+    }
+    const html = renderToString(createElement(TestComponent));
+    expect(html).toContain("hello");
+  });
+
+  it("returns empty string when initialized with empty string", () => {
+    function TestComponent() {
+      const debounced = useDebounce("", 150);
+      return createElement("span", null, `[${debounced}]`);
+    }
+    const html = renderToString(createElement(TestComponent));
+    expect(html).toContain("[]");
   });
 });
