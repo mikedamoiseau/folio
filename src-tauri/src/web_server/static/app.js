@@ -68,12 +68,26 @@
 
   // ── Library ───────────────────────────────────
   async function showLibrary(query) {
-    app().innerHTML = `
-      <div class="header">
-        <h1>Folio</h1>
-        <input type="search" id="search" placeholder="Search books..." value="${query || ""}">
-      </div>
-      <div class="loading">Loading...</div>`;
+    // Only rebuild the full layout if the header/search doesn't exist yet
+    const existing = $("#search");
+    if (!existing) {
+      app().innerHTML = `
+        <div class="header">
+          <h1>Folio</h1>
+          <input type="search" id="search" placeholder="Search books..." value="${esc(query || "")}">
+        </div>
+        <div id="library-content"><div class="loading">Loading...</div></div>`;
+
+      let timer;
+      $("#search").oninput = (e) => {
+        clearTimeout(timer);
+        timer = setTimeout(() => showLibrary(e.target.value), 300);
+      };
+    } else {
+      // Header exists — just show loading in content area, preserve search focus
+      const contentEl = $("#library-content");
+      if (contentEl) contentEl.innerHTML = '<div class="loading">Loading...</div>';
+    }
 
     const url = query ? "/api/books?q=" + encodeURIComponent(query) : "/api/books";
     const resp = await api(url);
@@ -95,12 +109,11 @@
         </div>`).join("") + '</div>';
     }
 
-    app().innerHTML = `
-      <div class="header">
-        <h1>Folio</h1>
-        <input type="search" id="search" placeholder="Search books..." value="${esc(query || "")}">
-      </div>
-      ${content}`;
+    // Update only the content area — search input keeps focus
+    const contentEl = $("#library-content");
+    if (contentEl) {
+      contentEl.innerHTML = content;
+    }
 
     document.querySelectorAll(".card").forEach(c => {
       c.addEventListener("click", () => navigate("#/book/" + c.dataset.id));
@@ -108,12 +121,6 @@
     document.querySelectorAll(".card img").forEach(img => {
       img.addEventListener("error", () => { img.style.background = "#333"; img.alt = "No cover"; });
     });
-
-    let timer;
-    $("#search").oninput = (e) => {
-      clearTimeout(timer);
-      timer = setTimeout(() => showLibrary(e.target.value), 300);
-    };
   }
 
   // ── Detail ────────────────────────────────────
