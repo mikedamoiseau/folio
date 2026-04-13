@@ -1,10 +1,15 @@
 (function() {
   "use strict";
   const $ = (s) => document.querySelector(s);
+  const $$ = (s) => document.querySelectorAll(s);
   const app = () => $("#app");
 
   // R3-4: Use httpOnly cookies only — no localStorage token storage
   let authenticated = false;
+
+  // Active filter state
+  let activeCollectionId = null;
+  let activeSeries = null;
 
   async function api(path) {
     const resp = await fetch(path, { credentials: "same-origin" });
@@ -66,34 +71,145 @@
     pinInput.onkeydown = (e) => { if (e.key === "Enter") doLogin(); };
   }
 
+  // ── Filter Bar (collections + series) ────────
+  async function renderFilterBar() {
+    const bar = $("#filter-bar");
+    if (!bar) return;
+
+    const [collectionsResp, seriesResp] = await Promise.all([
+      api("/api/collections"),
+      api("/api/series"),
+    ]);
+
+    const collections = collectionsResp ? await collectionsResp.json() : [];
+    const series = seriesResp ? await seriesResp.json() : [];
+
+    // Don't show bar if nothing to filter
+    if (collections.length === 0 && series.length === 0) {
+      bar.innerHTML = "";
+      return;
+    }
+
+    let html = '<div class="filter-pills">';
+    html += `<button class="pill ${!activeCollectionId && !activeSeries ? "active" : ""}" data-filter="all">All Books</button>`;
+
+    if (collections.length > 0) {
+      html += '<span class="filter-sep">|</span>';
+      for (const c of collections) {
+        const active = activeCollectionId === c.id ? "active" : "";
+        html += `<button class="pill ${active}" data-collection="${c.id}">${esc(c.name)}</button>`;
+      }
+    }
+
+    if (series.length > 0) {
+      html += '<span class="filter-sep">|</span>';
+      for (const s of series) {
+        const active = activeSeries === s.name ? "active" : "";
+        html += `<button class="pill ${active}" data-series="${esc(s.name)}">${esc(s.name)} <span class="pill-count">${s.count}</span></button>`;
+      }
+    }
+
+    html += "</div>";
+    bar.innerHTML = html;
+
+    // Bind click handlers
+    bar.querySelectorAll("[data-filter='all']").forEach(btn => {
+      btn.onclick = () => { activeCollectionId = null; activeSeries = null; refreshLibrary(); };
+    });
+    bar.querySelectorAll("[data-collection]").forEach(btn => {
+      btn.onclick = () => {
+        activeCollectionId = btn.dataset.collection;
+        activeSeries = null;
+        refreshLibrary();
+      };
+    });
+    bar.querySelectorAll("[data-series]").forEach(btn => {
+      btn.onclick = () => {
+        activeSeries = btn.dataset.series;
+        activeCollectionId = null;
+        refreshLibrary();
+      };
+    });
+  }
+
+  function updateFilterBarActive() {
+    const bar = $("#filter-bar");
+    if (!bar) return;
+    bar.querySelectorAll(".pill").forEach(btn => {
+      btn.classList.remove("active");
+      if (btn.dataset.filter === "all" && !activeCollectionId && !activeSeries) btn.classList.add("active");
+      if (btn.dataset.collection && btn.dataset.collection === activeCollectionId) btn.classList.add("active");
+      if (btn.dataset.series && btn.dataset.series === activeSeries) btn.classList.add("active");
+    });
+  }
+
   // ── Library ───────────────────────────────────
   async function showLibrary(query) {
-    // Only rebuild the full layout if the header/search doesn't exist yet
     const existing = $("#search");
     if (!existing) {
+      activeCollectionId = null;
+      activeSeries = null;
       app().innerHTML = `
         <div class="header">
           <h1>Folio</h1>
           <input type="search" id="search" placeholder="Search books..." value="${esc(query || "")}">
         </div>
+        <div id="filter-bar"></div>
         <div id="library-content"><div class="loading">Loading...</div></div>`;
 
       let timer;
       $("#search").oninput = (e) => {
         clearTimeout(timer);
-        timer = setTimeout(() => showLibrary(e.target.value), 300);
+        timer = setTimeout(() => refreshLibrary(e.target.value), 300);
       };
+
+      // Load filter bar (collections + series)
+      renderFilterBar();
     } else {
-      // Header exists — just show loading in content area, preserve search focus
       const contentEl = $("#library-content");
       if (contentEl) contentEl.innerHTML = '<div class="loading">Loading...</div>';
     }
 
-    const url = query ? "/api/books?q=" + encodeURIComponent(query) : "/api/books";
+    await loadBooks(query);
+  }
+
+  async function refreshLibrary(query) {
+    const searchEl = $("#search");
+    const q = query !== undefined ? query : (searchEl ? searchEl.value : "");
+    updateFilterBarActive();
+    const contentEl = $("#library-content");
+    if (contentEl) contentEl.innerHTML = '<div class="loading">Loading...</div>';
+    await loadBooks(q);
+  }
+
+  async function loadBooks(query) {
+    let url;
+    if (activeCollectionId) {
+      url = "/api/collections/" + encodeURIComponent(activeCollectionId) + "/books";
+    } else if (activeSeries) {
+      url = "/api/books?series=" + encodeURIComponent(activeSeries);
+      if (query) url += "&q=" + encodeURIComponent(query);
+    } else {
+      url = query ? "/api/books?q=" + encodeURIComponent(query) : "/api/books";
+    }
+
     const resp = await api(url);
     if (!resp) return;
     const books = await resp.json();
 
+    // If collection is active and search is typed, filter client-side
+    if (activeCollectionId && query) {
+      const q = query.toLowerCase();
+      const filtered = books.filter(b =>
+        b.title.toLowerCase().includes(q) || b.author.toLowerCase().includes(q)
+      );
+      renderBooks(filtered);
+    } else {
+      renderBooks(books);
+    }
+  }
+
+  function renderBooks(books) {
     let content;
     if (books.length === 0) {
       content = '<div class="empty">No books found</div>';
@@ -109,16 +225,13 @@
         </div>`).join("") + '</div>';
     }
 
-    // Update only the content area — search input keeps focus
     const contentEl = $("#library-content");
-    if (contentEl) {
-      contentEl.innerHTML = content;
-    }
+    if (contentEl) contentEl.innerHTML = content;
 
-    document.querySelectorAll(".card").forEach(c => {
+    $$(".card").forEach(c => {
       c.addEventListener("click", () => navigate("#/book/" + c.dataset.id));
     });
-    document.querySelectorAll(".card img").forEach(img => {
+    $$(".card img").forEach(img => {
       img.addEventListener("error", () => { img.style.background = "#333"; img.alt = "No cover"; });
     });
   }
@@ -195,7 +308,6 @@
       $("#prev-btn").addEventListener("click", () => navigate("#/book/" + id + "/" + (index - 1) + "/read"));
       $("#next-btn").addEventListener("click", () => navigate("#/book/" + id + "/" + (index + 1) + "/read"));
     } else {
-      // PDF / CBZ / CBR — page image viewer
       const countResp = await api(`/api/books/${id}/page-count`);
       if (!countResp) return;
       const { count } = await countResp.json();
@@ -231,7 +343,6 @@
 
   // ── Init ──────────────────────────────────────
   async function init() {
-    // Check if we have a valid session (cookie-based)
     const test = await fetch("/api/books", { credentials: "same-origin" });
     if (test.status === 401) { showLogin(); return; }
     authenticated = true;
