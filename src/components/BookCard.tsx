@@ -81,7 +81,7 @@ export default function BookCard({
             src={coverSrc}
             alt={t("bookCard.coverAlt", { title })}
             loading="lazy"
-            className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-[1.02]"
+            className="w-full h-full object-cover transition-all duration-300 group-hover:scale-[1.02] animate-fade-in"
           />
         ) : (
           <div className="flex flex-col items-center justify-center w-full h-full gap-3">

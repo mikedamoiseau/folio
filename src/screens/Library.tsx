@@ -37,7 +37,7 @@ export default function Library() {
   const [progressMap, setProgressMap] = useState<Record<string, number>>({});
   const [lastReadMap, setLastReadMap] = useState<Record<string, number>>({});
   const [search, setSearch] = useState("");
-  const debouncedSearch = useDebounce(search, 250);
+  const debouncedSearch = useDebounce(search, 150);
   const [sortBy, setSortBy] = useState<"date_added" | "last_read" | "title" | "author" | "progress" | "rating" | "series">(() => {
     const stored = localStorage.getItem("folio-library-sort-by");
     if (stored === "date_added" || stored === "last_read" || stored === "title" || stored === "author" || stored === "progress" || stored === "rating" || stored === "series") return stored;
@@ -110,6 +110,7 @@ export default function Library() {
       }
       setBooks(library);
 
+      let progressErrors = 0;
       const progData = await Promise.all(
         library.map(async (book) => {
           try {
@@ -124,11 +125,14 @@ export default function Library() {
               return { id: book.id, pct, lastRead: prog.last_read_at };
             }
           } catch {
-            // ignore progress fetch errors
+            progressErrors++;
           }
           return { id: book.id, pct: 0, lastRead: 0 };
         })
       );
+      if (progressErrors > 0 && progressErrors === library.length) {
+        addToast(t("library.progressLoadError", { defaultValue: "Could not load reading progress" }), "error");
+      }
 
       setProgressMap(Object.fromEntries(progData.map((d) => [d.id, d.pct])));
       setLastReadMap(Object.fromEntries(progData.map((d) => [d.id, d.lastRead])));
@@ -590,9 +594,11 @@ export default function Library() {
               <circle cx="11" cy="11" r="7" stroke="currentColor" strokeWidth="2" />
               <path d="M21 21l-4.35-4.35" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
             </svg>
+            <label htmlFor="library-search" className="sr-only">{t("library.searchPlaceholder")}</label>
             <input
+              id="library-search"
               ref={searchRef}
-              type="text"
+              type="search"
               placeholder={t("library.searchPlaceholder")}
               value={search}
               onChange={(e) => setSearch(e.target.value)}

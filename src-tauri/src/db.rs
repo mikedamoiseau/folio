@@ -235,6 +235,10 @@ fn run_schema(conn: &Connection) -> Result<()> {
     let _ = conn.execute_batch(
         "CREATE INDEX IF NOT EXISTS idx_reading_progress_last_read_at ON reading_progress(last_read_at);",
     );
+    let _ =
+        conn.execute_batch("CREATE INDEX IF NOT EXISTS idx_books_language ON books(language);");
+    let _ =
+        conn.execute_batch("CREATE INDEX IF NOT EXISTS idx_books_publisher ON books(publisher);");
 
     // Migration: drop CHECK constraint on collection_rules.field (was limited to a fixed set;
     // now validated in application code so new rule fields don't require schema changes).

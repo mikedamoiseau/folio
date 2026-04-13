@@ -77,7 +77,12 @@ export default function VirtualBookGrid({ items, renderItem }: VirtualBookGridPr
   }, []);
 
   useEffect(() => {
+    // Measure synchronously first, then observe for changes
     updateWidth();
+    // Fallback: if synchronous measure returned 0 (not yet laid out), retry next frame
+    if (!containerRef.current?.clientWidth) {
+      requestAnimationFrame(updateWidth);
+    }
     const observer = new ResizeObserver(updateWidth);
     if (containerRef.current) observer.observe(containerRef.current);
     return () => observer.disconnect();
