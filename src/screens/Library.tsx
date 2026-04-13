@@ -506,14 +506,9 @@ export default function Library() {
     try { await invoke("cancel_scan"); } catch {}
   }, []);
 
-  // After a deletion, if a search is active but yields no results, clear it.
-  // Only clear when debounced value has settled and matches the current input
-  // to avoid race conditions during typing.
-  useEffect(() => {
-    if (debouncedSearch && debouncedSearch === search && filtered.length === 0 && books.length > 0) {
-      setSearch("");
-    }
-  }, [filtered.length, books.length, debouncedSearch, search]);
+  // Note: previously auto-cleared search when no results remained after deletion,
+  // but this conflicts with debounced search (race between raw and debounced values).
+  // Users can clear search manually via the input or Escape key.
 
   const hasBooks = books.length > 0;
   const hasResults = filtered.length > 0;
