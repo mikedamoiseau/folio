@@ -325,4 +325,64 @@ mod tests {
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("out of range"));
     }
+
+    #[test]
+    fn import_cbz_with_accented_filename() {
+        let dir = tempfile::tempdir().unwrap();
+        let cbz_path = dir
+            .path()
+            .join("Boule et Bill - 40 - Bill à Facettes (Cazenove, Bastide).cbz");
+        {
+            let file = std::fs::File::create(&cbz_path).unwrap();
+            let mut zip = zip::ZipWriter::new(file);
+            let options = zip::write::SimpleFileOptions::default();
+            zip.start_file("page01.jpg", options).unwrap();
+            zip.write_all(b"fake jpg").unwrap();
+            zip.finish().unwrap();
+        }
+
+        let meta = import_cbz(cbz_path.to_str().unwrap()).unwrap();
+        assert!(meta.title.contains("Bill"));
+        assert!(meta.title.contains("Facettes"));
+        assert_eq!(meta.page_count, 1);
+    }
+
+    #[test]
+    fn import_cbz_with_apostrophe_filename() {
+        let dir = tempfile::tempdir().unwrap();
+        let cbz_path = dir
+            .path()
+            .join("Boule et Bill - 39 - Y a d'la Promenade dans l'Air.cbz");
+        {
+            let file = std::fs::File::create(&cbz_path).unwrap();
+            let mut zip = zip::ZipWriter::new(file);
+            let options = zip::write::SimpleFileOptions::default();
+            zip.start_file("page01.jpg", options).unwrap();
+            zip.write_all(b"fake jpg").unwrap();
+            zip.finish().unwrap();
+        }
+
+        let meta = import_cbz(cbz_path.to_str().unwrap()).unwrap();
+        assert!(meta.title.contains("Promenade"));
+        assert_eq!(meta.page_count, 1);
+    }
+
+    #[test]
+    fn import_cbz_with_accented_image_names_inside_archive() {
+        let dir = tempfile::tempdir().unwrap();
+        let cbz_path = dir.path().join("test_accents.cbz");
+        {
+            let file = std::fs::File::create(&cbz_path).unwrap();
+            let mut zip = zip::ZipWriter::new(file);
+            let options = zip::write::SimpleFileOptions::default();
+            zip.start_file("café/page01.jpg", options).unwrap();
+            zip.write_all(b"fake jpg 1").unwrap();
+            zip.start_file("résumé/page02.jpg", options).unwrap();
+            zip.write_all(b"fake jpg 2").unwrap();
+            zip.finish().unwrap();
+        }
+
+        let meta = import_cbz(cbz_path.to_str().unwrap()).unwrap();
+        assert_eq!(meta.page_count, 2);
+    }
 }

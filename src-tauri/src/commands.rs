@@ -324,7 +324,8 @@ pub async fn import_book(
         }
     }
 
-    // Detect format from file extension and route to the appropriate parser.
+    // Detect format from file extension, with magic-byte fallback for
+    // mislabeled archives (e.g., RAR files saved as .cbz).
     let extension = std::path::Path::new(&file_path)
         .extension()
         .and_then(|e| e.to_str())
@@ -333,8 +334,24 @@ pub async fn import_book(
 
     let format = match extension.as_str() {
         "epub" => BookFormat::Epub,
-        "cbz" => BookFormat::Cbz,
-        "cbr" => BookFormat::Cbr,
+        "cbz" | "cbr" => {
+            // Read magic bytes to detect actual archive type
+            let mut magic = [0u8; 7];
+            if let Ok(mut f) = std::fs::File::open(&file_path) {
+                let _ = std::io::Read::read(&mut f, &mut magic);
+            }
+            if magic[0..4] == [0x50, 0x4B, 0x03, 0x04] {
+                // PK\x03\x04 = ZIP
+                BookFormat::Cbz
+            } else if magic[0..7] == *b"Rar!\x1a\x07\x00" || magic[0..6] == *b"Rar!\x1a\x07" {
+                // RAR v4 or v5
+                BookFormat::Cbr
+            } else if extension == "cbz" {
+                BookFormat::Cbz // trust extension if magic unknown
+            } else {
+                BookFormat::Cbr
+            }
+        }
         "pdf" => BookFormat::Pdf,
         _ => return Err(format!("unsupported file format: .{extension}")),
     };

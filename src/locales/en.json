@@ -546,6 +546,8 @@
     "networkError": "Could not connect to the server. Check your internet connection.",
     "urlBlocked": "This URL was blocked for security reasons.",
     "tooLarge": "The file or response is too large.",
+    "notZip": "This file is not a valid ZIP/CBZ archive. It may be a RAR file with a .cbz extension \u2014 try renaming it to .cbr.",
+    "notRar": "This file is not a valid RAR/CBR archive.",
     "generic": "Something went wrong. Please try again."
   },
 

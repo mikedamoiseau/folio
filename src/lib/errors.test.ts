@@ -29,8 +29,8 @@ describe("friendlyError", () => {
         expect(friendlyError("Book is a duplicate", mockT)).toBe("errors.duplicate");
     });
 
-    it("returns generic message for unknown errors", () => {
-        expect(friendlyError("something unknown", mockT)).toBe("errors.generic");
+    it("returns raw error for unknown errors", () => {
+        expect(friendlyError("something unknown", mockT)).toBe("something unknown");
     });
 
     it("maps timeout errors", () => {
