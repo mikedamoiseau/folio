@@ -239,6 +239,7 @@ pub fn run() {
             commands::add_book_to_collection,
             commands::remove_book_from_collection,
             commands::get_books_in_collection,
+            commands::get_books_in_collection_grid,
             commands::get_library_folder,
             commands::get_library_folder_info,
             commands::set_library_folder,

@@ -1869,6 +1869,15 @@ pub async fn get_books_in_collection(
     db::get_books_in_collection(&conn, &collection_id).map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+pub async fn get_books_in_collection_grid(
+    collection_id: String,
+    state: State<'_, AppState>,
+) -> Result<Vec<BookGridItem>, String> {
+    let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
+    db::get_books_in_collection_grid(&conn, &collection_id).map_err(|e| e.to_string())
+}
+
 // --- Share Collections ---
 
 #[tauri::command]

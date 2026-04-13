@@ -376,6 +376,9 @@ pub fn list_books(conn: &Connection) -> Result<Vec<Book>> {
 
 const GRID_COLUMNS: &str = "id, title, author, cover_path, total_chapters, added_at, format, series, volume, rating, language, publish_year, is_imported";
 
+/// Grid columns prefixed with table alias `b.` for JOIN queries.
+const GRID_COLUMNS_B: &str = "b.id, b.title, b.author, b.cover_path, b.total_chapters, b.added_at, b.format, b.series, b.volume, b.rating, b.language, b.publish_year, b.is_imported";
+
 fn row_to_grid_item(row: &rusqlite::Row) -> rusqlite::Result<BookGridItem> {
     let format_str: String = row.get(6)?;
     Ok(BookGridItem {
@@ -1336,6 +1339,42 @@ pub fn get_books_in_collection(conn: &Connection, collection_id: &str) -> Result
 
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt.query_map(rusqlite::params_from_iter(param_values.iter()), row_to_book)?;
+    rows.collect()
+}
+
+/// Lightweight variant of `get_books_in_collection` returning only grid-display fields.
+pub fn get_books_in_collection_grid(
+    conn: &Connection,
+    collection_id: &str,
+) -> Result<Vec<BookGridItem>> {
+    let mut type_stmt = conn.prepare("SELECT type FROM collections WHERE id = ?1")?;
+    let coll_type: String = type_stmt.query_row(params![collection_id], |row| row.get(0))?;
+
+    if coll_type == "manual" {
+        let sql = format!(
+            "SELECT {} FROM books b JOIN book_collections bc ON bc.book_id = b.id WHERE bc.collection_id = ?1 ORDER BY bc.added_at DESC",
+            GRID_COLUMNS_B
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map(params![collection_id], row_to_grid_item)?;
+        return rows.collect();
+    }
+
+    let rules = get_collection_rules(conn, collection_id)?;
+    let (joins, where_str, param_values) = build_rule_query(&rules);
+
+    let sql = format!(
+        "SELECT DISTINCT {cols}
+         FROM books b
+         {joins}
+         {where_str}
+         ORDER BY b.added_at DESC",
+        cols = GRID_COLUMNS_B
+    );
+
+    let mut stmt = conn.prepare(&sql)?;
+    let rows =
+        stmt.query_map(rusqlite::params_from_iter(param_values.iter()), row_to_grid_item)?;
     rows.collect()
 }
 

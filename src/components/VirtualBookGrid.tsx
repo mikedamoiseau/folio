@@ -31,6 +31,7 @@ function Cell({
   columnIndex,
   rowIndex,
   style,
+  ariaAttributes,
   items,
   renderItem,
   columnCount,
@@ -45,6 +46,9 @@ function Cell({
   if (index >= items.length) return null;
   return (
     <div
+      role={ariaAttributes.role}
+      aria-colindex={ariaAttributes["aria-colindex"]}
+      aria-rowindex={rowIndex + 1}
       style={{
         ...style,
         left: (style.left as number) + paddingLeft,

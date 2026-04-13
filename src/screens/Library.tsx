@@ -67,6 +67,7 @@ export default function Library() {
   const importCancelledRef = useRef(false);
   const [editingBook, setEditingBook] = useState<Book | null>(null);
   const [detailBook, setDetailBook] = useState<Book | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
   const latestDetailRequestRef = useRef<string | null>(null);
   const latestEditRequestRef = useRef<string | null>(null);
   const [scanningBookId, setScanningBookId] = useState<string | null>(null);
@@ -105,8 +106,7 @@ export default function Library() {
     try {
       let library: BookGridItem[];
       if (collectionId) {
-        // Collection endpoint returns full Book — structurally compatible with BookGridItem
-        library = await invoke<BookGridItem[]>("get_books_in_collection", { collectionId });
+        library = await invoke<BookGridItem[]>("get_books_in_collection_grid", { collectionId });
       } else {
         library = await invoke<BookGridItem[]>("get_library_grid");
       }
@@ -419,11 +419,14 @@ export default function Library() {
 
   const handleShowBookDetail = useCallback(async (id: string) => {
     latestDetailRequestRef.current = id;
+    setDetailLoading(true);
     try {
       const found = await invoke<Book>("get_book", { bookId: id });
       if (found && latestDetailRequestRef.current === id) setDetailBook(found);
     } catch (err) {
       addToast(friendlyError(String(err), t), "error");
+    } finally {
+      if (latestDetailRequestRef.current === id) setDetailLoading(false);
     }
   }, [t, addToast]);
 
@@ -1237,10 +1240,17 @@ export default function Library() {
         <KeyboardShortcutsHelp context="library" onClose={() => setShowShortcuts(false)} />
       )}
 
+      {/* Loading overlay for book detail fetch */}
+      {detailLoading && !detailBook && (
+        <div className="fixed inset-0 z-[80] flex items-center justify-center bg-ink/30 backdrop-blur-sm">
+          <div className="w-10 h-10 border-3 border-warm-border border-t-accent rounded-full animate-spin" />
+        </div>
+      )}
+
       {detailBook && (
         <BookDetailModal
           book={detailBook}
-          onClose={() => setDetailBook(null)}
+          onClose={() => { latestDetailRequestRef.current = null; setDetailLoading(false); setDetailBook(null); }}
           onOpen={(id) => {
             setDetailBook(null);
             openBook(id);
