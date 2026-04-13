@@ -20,7 +20,6 @@ import { friendlyError } from "../lib/errors";
 import { LiveRegion } from "../components/LiveRegion";
 import { useToast } from "../components/Toast";
 import { useDebounce } from "../hooks/useDebounce";
-import VirtualBookGrid from "../components/VirtualBookGrid";
 import type { Book, BookGridItem } from "../types";
 
 interface ReadingProgress {
@@ -80,7 +79,6 @@ export default function Library() {
   const [showShortcuts, setShowShortcuts] = useState(false);
   const searchRef = useRef<HTMLInputElement>(null);
   const [scanProgress, setScanProgress] = useState<{ current: number; total: number; bookTitle: string; status: string } | null>(null);
-  const gridAreaRef = useRef<HTMLDivElement>(null);
 
   // Recently read
   const [recentlyRead, setRecentlyRead] = useState<Book[]>([]);
@@ -769,7 +767,7 @@ export default function Library() {
       )}
 
       {/* Content area */}
-      <div className="flex-1 flex flex-col overflow-hidden p-6">
+      <div className="flex-1 overflow-y-auto p-6">
         {!hasBooks && activeCollectionId ? (
           <div className="flex flex-col items-center justify-center h-full text-center">
             <p className="text-base font-medium text-ink">{t("library.collectionEmpty")}</p>
@@ -943,9 +941,9 @@ export default function Library() {
               <div className="flex-1 border-t border-warm-border/50" />
             </div>
           )}
-          {sortBy === "series" ? (
-          <div className="flex-1 min-h-0 overflow-y-auto grid grid-cols-[repeat(auto-fill,160px)] justify-center gap-5 content-start">
-            {(() => {
+          <div className="grid grid-cols-[repeat(auto-fill,160px)] justify-center gap-5">
+            {sortBy === "series" ? (
+              (() => {
                 const seriesBooks = filtered.filter((b) => b.series);
                 const nonSeriesBooks = filtered.filter((b) => !b.series);
                 const groups: Record<string, typeof filtered> = {};
@@ -1052,90 +1050,82 @@ export default function Library() {
                     ))}
                   </>
                 );
-              })()}
-          </div>
-          ) : (
-          <div ref={gridAreaRef} className="flex-1 min-h-0 overflow-hidden">
-            <VirtualBookGrid
-              items={filtered}
-              renderItem={(index) => {
-                const book = filtered[index];
-                return (
-                  <div
-                    key={book.id}
-                    className="relative h-full"
-                    onMouseDown={() => !selectMode && startDrag(book.id, book.cover_path ? convertFileSrc(book.cover_path) : undefined)}
-                    onMouseUp={() => !selectMode && endDrag()}
-                    onDragStart={(e) => e.preventDefault()}
-                  >
-                    {selectMode && (
-                      <div
-                        className="absolute top-2 left-2 z-10"
-                        onClick={(e) => { e.stopPropagation(); }}
-                      >
-                        <input
-                          type="checkbox"
-                          checked={selectedIds.has(book.id)}
-                          onChange={() => {
-                            setSelectedIds((prev) => {
-                              const next = new Set(prev);
-                              if (next.has(book.id)) next.delete(book.id);
-                              else next.add(book.id);
-                              return next;
-                            });
-                          }}
-                          className="w-5 h-5 accent-accent rounded cursor-pointer"
-                          aria-label={`Select ${book.title}`}
-                        />
-                      </div>
-                    )}
-                    <BookCard
-                      id={book.id}
-                      title={book.title}
-                      author={book.author}
-                      coverPath={book.cover_path}
-                      totalChapters={book.total_chapters}
-                      format={book.format}
-                      progress={progressMap[book.id] ?? 0}
-                      language={book.language}
-                      publishYear={book.publish_year}
-                      series={book.series}
-                      volume={book.volume}
-                      rating={book.rating}
-                      isImported={book.is_imported}
-                      onClick={() => {
-                        if (selectMode) {
+              })()
+            ) : (
+              filtered.map((book) => (
+                <div
+                  key={book.id}
+                  className="relative"
+                  onMouseDown={() => !selectMode && startDrag(book.id, book.cover_path ? convertFileSrc(book.cover_path) : undefined)}
+                  onMouseUp={() => !selectMode && endDrag()}
+                  onDragStart={(e) => e.preventDefault()}
+                >
+                  {selectMode && (
+                    <div
+                      className="absolute top-2 left-2 z-10"
+                      onClick={(e) => { e.stopPropagation(); }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={selectedIds.has(book.id)}
+                        onChange={() => {
                           setSelectedIds((prev) => {
                             const next = new Set(prev);
                             if (next.has(book.id)) next.delete(book.id);
                             else next.add(book.id);
                             return next;
                           });
-                        } else {
-                          openBook(book.id);
-                        }
-                      }}
-                      onDelete={selectMode ? undefined : handleRemoveBook}
-                      onInfo={handleShowBookDetail}
-                      onRemoveFromCollection={
-                        isManualCollectionView && activeCollectionId
-                          ? async () => {
-                              await invoke("remove_book_from_collection", {
-                                bookId: book.id,
-                                collectionId: activeCollectionId,
-                              });
-                              await loadBooks(activeCollectionId);
-                            }
-                          : undefined
+                        }}
+                        className="w-5 h-5 accent-accent rounded cursor-pointer"
+                        aria-label={`Select ${book.title}`}
+                      />
+                    </div>
+                  )}
+                  <BookCard
+                    id={book.id}
+                    title={book.title}
+                    author={book.author}
+                    coverPath={book.cover_path}
+                    totalChapters={book.total_chapters}
+                    format={book.format}
+                    progress={progressMap[book.id] ?? 0}
+                    language={book.language}
+                    publishYear={book.publish_year}
+                    series={book.series}
+                    volume={book.volume}
+                    rating={book.rating}
+                    isImported={book.is_imported}
+                    onClick={() => {
+                      if (selectMode) {
+                        setSelectedIds((prev) => {
+                          const next = new Set(prev);
+                          if (next.has(book.id)) next.delete(book.id);
+                          else next.add(book.id);
+                          return next;
+                        });
+                      } else {
+                        openBook(book.id);
                       }
-                      isScanning={scanningBookId === book.id}
-                    />
-                  </div>
-                );
-              }}
-            />
+                    }}
+                    onDelete={selectMode ? undefined : handleRemoveBook}
+                    onInfo={handleShowBookDetail}
+                    onRemoveFromCollection={
+                      isManualCollectionView && activeCollectionId
+                        ? async () => {
+                            await invoke("remove_book_from_collection", {
+                              bookId: book.id,
+                              collectionId: activeCollectionId,
+                            });
+                            await loadBooks(activeCollectionId);
+                          }
+                        : undefined
+                    }
+                    isScanning={scanningBookId === book.id}
+                  />
+                </div>
+              ))
+            )}
           </div>
-          )}
           </>
         ) : (
           <div className="flex flex-col items-center justify-center h-full text-center">
