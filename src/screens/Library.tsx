@@ -508,10 +508,10 @@ export default function Library() {
 
   // After a deletion, if a search is active but yields no results, clear it
   useEffect(() => {
-    if (search && filtered.length === 0 && books.length > 0) {
+    if (debouncedSearch && filtered.length === 0 && books.length > 0) {
       setSearch("");
     }
-  }, [filtered.length, books.length, search]);
+  }, [filtered.length, books.length, debouncedSearch]);
 
   const hasBooks = books.length > 0;
   const hasResults = filtered.length > 0;
