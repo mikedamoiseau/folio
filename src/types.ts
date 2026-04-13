@@ -19,3 +19,20 @@ export interface Book {
   publish_year: number | null;
   is_imported?: boolean;
 }
+
+/** Lightweight book data for grid/list display — no description, genres, isbn, etc. */
+export interface BookGridItem {
+  id: string;
+  title: string;
+  author: string;
+  cover_path: string | null;
+  total_chapters: number;
+  added_at: number;
+  format: "epub" | "cbz" | "cbr" | "pdf";
+  series: string | null;
+  volume: number | null;
+  rating: number | null;
+  language: string | null;
+  publish_year: number | null;
+  is_imported?: boolean;
+}

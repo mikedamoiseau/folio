@@ -5,8 +5,8 @@ use std::path::Path;
 use std::time::Duration;
 
 use crate::models::{
-    ActivityEntry, Book, Bookmark, Collection, CollectionRule, CollectionType, CustomFont,
-    ReadingProgress, SeriesInfo,
+    ActivityEntry, Book, BookGridItem, Bookmark, Collection, CollectionRule, CollectionType,
+    CustomFont, ReadingProgress, SeriesInfo,
 };
 
 pub type DbPool = Pool<SqliteConnectionManager>;
@@ -229,6 +229,13 @@ fn run_schema(conn: &Connection) -> Result<()> {
         "CREATE INDEX IF NOT EXISTS idx_reading_progress_book_id ON reading_progress(book_id);",
     );
 
+    // Performance indexes for large libraries
+    let _ = conn.execute_batch("CREATE INDEX IF NOT EXISTS idx_books_series ON books(series);");
+    let _ = conn.execute_batch("CREATE INDEX IF NOT EXISTS idx_books_format ON books(format);");
+    let _ = conn.execute_batch(
+        "CREATE INDEX IF NOT EXISTS idx_reading_progress_last_read_at ON reading_progress(last_read_at);",
+    );
+
     // Migration: drop CHECK constraint on collection_rules.field (was limited to a fixed set;
     // now validated in application code so new rule fields don't require schema changes).
     let has_check: bool = conn
@@ -364,6 +371,36 @@ pub fn list_books(conn: &Connection) -> Result<Vec<Book>> {
     let sql = format!("SELECT {} FROM books ORDER BY added_at DESC", BOOK_COLUMNS);
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt.query_map([], row_to_book)?;
+    rows.collect()
+}
+
+const GRID_COLUMNS: &str = "id, title, author, cover_path, total_chapters, added_at, format, series, volume, rating, language, publish_year, is_imported";
+
+fn row_to_grid_item(row: &rusqlite::Row) -> rusqlite::Result<BookGridItem> {
+    let format_str: String = row.get(6)?;
+    Ok(BookGridItem {
+        id: row.get(0)?,
+        title: row.get(1)?,
+        author: row.get(2)?,
+        cover_path: row.get(3)?,
+        total_chapters: row.get(4)?,
+        added_at: row.get(5)?,
+        format: format_str
+            .parse()
+            .map_err(|e: String| rusqlite::Error::InvalidParameterName(e))?,
+        series: row.get(7)?,
+        volume: row.get(8)?,
+        rating: row.get(9)?,
+        language: row.get(10)?,
+        publish_year: row.get(11)?,
+        is_imported: row.get::<_, i32>(12).unwrap_or(1) != 0,
+    })
+}
+
+pub fn list_books_grid(conn: &Connection) -> Result<Vec<BookGridItem>> {
+    let sql = format!("SELECT {} FROM books ORDER BY added_at DESC", GRID_COLUMNS);
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map([], row_to_grid_item)?;
     rows.collect()
 }
 
@@ -2692,5 +2729,78 @@ mod tests {
             )
             .unwrap();
         assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn test_performance_indexes_exist() {
+        let (_dir, conn) = setup();
+        let indexes: Vec<String> = conn
+            .prepare("SELECT name FROM sqlite_master WHERE type='index'")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+        assert!(
+            indexes.contains(&"idx_books_series".to_string()),
+            "missing index idx_books_series"
+        );
+        assert!(
+            indexes.contains(&"idx_books_format".to_string()),
+            "missing index idx_books_format"
+        );
+        assert!(
+            indexes.contains(&"idx_reading_progress_last_read_at".to_string()),
+            "missing index idx_reading_progress_last_read_at"
+        );
+    }
+
+    #[test]
+    fn test_list_books_grid_returns_lightweight_items() {
+        let (_dir, conn) = setup();
+        let mut book = sample_book("grid-1");
+        book.file_path = "/tmp/grid1.epub".to_string();
+        book.description = Some("A long description that should be excluded".to_string());
+        book.genres = Some(r#"["fiction","sci-fi"]"#.to_string());
+        book.isbn = Some("978-0-123456-78-9".to_string());
+        book.series = Some("Test Series".to_string());
+        book.volume = Some(1);
+        book.rating = Some(4.5);
+        book.language = Some("en".to_string());
+        book.publish_year = Some(2020);
+        insert_book(&conn, &book).unwrap();
+
+        let items = list_books_grid(&conn).unwrap();
+        assert_eq!(items.len(), 1);
+        let item = &items[0];
+        assert_eq!(item.id, "grid-1");
+        assert_eq!(item.title, "Test Book");
+        assert_eq!(item.author, "Test Author");
+        assert_eq!(item.series, Some("Test Series".to_string()));
+        assert_eq!(item.volume, Some(1));
+        assert_eq!(item.rating, Some(4.5));
+        assert_eq!(item.language, Some("en".to_string()));
+        assert_eq!(item.publish_year, Some(2020));
+        assert!(item.is_imported);
+    }
+
+    #[test]
+    fn test_list_books_grid_order() {
+        let (_dir, conn) = setup();
+        let mut book1 = sample_book("grid-ord-1");
+        book1.file_path = "/tmp/grid-ord-1.epub".to_string();
+        book1.added_at = 1700000000;
+        insert_book(&conn, &book1).unwrap();
+
+        let mut book2 = sample_book("grid-ord-2");
+        book2.file_path = "/tmp/grid-ord-2.epub".to_string();
+        book2.added_at = 1700000100;
+        insert_book(&conn, &book2).unwrap();
+
+        let items = list_books_grid(&conn).unwrap();
+        assert_eq!(items.len(), 2);
+        // Most recent first
+        assert_eq!(items[0].id, "grid-ord-2");
+        assert_eq!(items[1].id, "grid-ord-1");
     }
 }

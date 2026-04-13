@@ -194,6 +194,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::import_book,
             commands::get_library,
+            commands::get_library_grid,
             commands::get_recently_read,
             commands::update_book_metadata,
             commands::get_all_tags,

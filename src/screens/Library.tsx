@@ -19,7 +19,7 @@ import { startDrag, endDrag, isDragging, getDraggedCoverSrc, subscribe } from ".
 import { friendlyError } from "../lib/errors";
 import { LiveRegion } from "../components/LiveRegion";
 import { useToast } from "../components/Toast";
-import type { Book } from "../types";
+import type { Book, BookGridItem } from "../types";
 
 interface ReadingProgress {
   book_id: string;
@@ -32,7 +32,7 @@ export default function Library() {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const { addToast } = useToast();
-  const [books, setBooks] = useState<Book[]>([]);
+  const [books, setBooks] = useState<BookGridItem[]>([]);
   const [progressMap, setProgressMap] = useState<Record<string, number>>({});
   const [lastReadMap, setLastReadMap] = useState<Record<string, number>>({});
   const [search, setSearch] = useState("");
@@ -64,6 +64,8 @@ export default function Library() {
   const importCancelledRef = useRef(false);
   const [editingBook, setEditingBook] = useState<Book | null>(null);
   const [detailBook, setDetailBook] = useState<Book | null>(null);
+  const latestDetailRequestRef = useRef<string | null>(null);
+  const latestEditRequestRef = useRef<string | null>(null);
   const [scanningBookId, setScanningBookId] = useState<string | null>(null);
   // Bulk selection (#60)
   const [selectMode, setSelectMode] = useState(false);
@@ -97,11 +99,12 @@ export default function Library() {
 
   const loadBooks = useCallback(async (collectionId: string | null = activeCollectionIdRef.current) => {
     try {
-      let library: Book[];
+      let library: BookGridItem[];
       if (collectionId) {
-        library = await invoke<Book[]>("get_books_in_collection", { collectionId });
+        // Collection endpoint returns full Book — structurally compatible with BookGridItem
+        library = await invoke<BookGridItem[]>("get_books_in_collection", { collectionId });
       } else {
-        library = await invoke<Book[]>("get_library");
+        library = await invoke<BookGridItem[]>("get_library_grid");
       }
       setBooks(library);
 
@@ -202,18 +205,27 @@ export default function Library() {
 
   const openBook = useCallback(
     async (bookId: string) => {
-      const book = books.find((b) => b.id === bookId);
-      if (book && book.is_imported === false) {
+      const gridItem = books.find((b) => b.id === bookId);
+      if (gridItem && gridItem.is_imported === false) {
+        let fullBook: Book | null;
         try {
-          await invoke("check_file_exists", { filePath: book.file_path });
-        } catch {
-          setFileNotAvailableBookId(bookId);
+          fullBook = await invoke<Book>("get_book", { bookId });
+        } catch (err) {
+          setError(friendlyError(String(err), t));
           return;
+        }
+        if (fullBook) {
+          try {
+            await invoke("check_file_exists", { filePath: fullBook.file_path });
+          } catch {
+            setFileNotAvailableBookId(bookId);
+            return;
+          }
         }
       }
       navigate(`/reader/${bookId}`);
     },
-    [books, navigate]
+    [books, navigate, t]
   );
 
   const importFiles = useCallback(async (paths: string[]) => {
@@ -400,6 +412,27 @@ export default function Library() {
         default: return dir * (a.added_at - b.added_at);
       }
     });
+
+  const handleShowBookDetail = useCallback(async (id: string) => {
+    latestDetailRequestRef.current = id;
+    try {
+      const found = await invoke<Book>("get_book", { bookId: id });
+      if (found && latestDetailRequestRef.current === id) setDetailBook(found);
+    } catch (err) {
+      addToast(friendlyError(String(err), t), "error");
+    }
+  }, [t, addToast]);
+
+  const handleEditBook = useCallback(async (id: string) => {
+    latestEditRequestRef.current = id;
+    setDetailBook(null);
+    try {
+      const book = await invoke<Book>("get_book", { bookId: id });
+      if (book && latestEditRequestRef.current === id) setEditingBook(book);
+    } catch (err) {
+      addToast(friendlyError(String(err), t), "error");
+    }
+  }, [t, addToast]);
 
   // Drag ghost: track mouse position and drag state
   const bookDragging = useSyncExternalStore(subscribe, isDragging);
@@ -956,10 +989,7 @@ export default function Library() {
                               isImported={book.is_imported}
                               onClick={() => openBook(book.id)}
                               onDelete={handleRemoveBook}
-                              onInfo={(id) => {
-                                const found = books.find((b) => b.id === id);
-                                if (found) setDetailBook(found);
-                              }}
+                              onInfo={handleShowBookDetail}
                               onRemoveFromCollection={
                                 isManualCollectionView && activeCollectionId
                                   ? async () => {
@@ -1007,10 +1037,7 @@ export default function Library() {
                           isImported={book.is_imported}
                           onClick={() => openBook(book.id)}
                           onDelete={handleRemoveBook}
-                          onInfo={(id) => {
-                            const found = books.find((b) => b.id === id);
-                            if (found) setDetailBook(found);
-                          }}
+                          onInfo={handleShowBookDetail}
                           onRemoveFromCollection={undefined}
                           isScanning={scanningBookId === book.id}
                         />
@@ -1077,10 +1104,7 @@ export default function Library() {
                       }
                     }}
                     onDelete={selectMode ? undefined : handleRemoveBook}
-                    onInfo={(id) => {
-                      const found = books.find((b) => b.id === id);
-                      if (found) setDetailBook(found);
-                    }}
+                    onInfo={handleShowBookDetail}
                     onRemoveFromCollection={
                       isManualCollectionView && activeCollectionId
                         ? async () => {
@@ -1210,11 +1234,7 @@ export default function Library() {
             setDetailBook(null);
             openBook(id);
           }}
-          onEdit={(id) => {
-            setDetailBook(null);
-            const book = books.find((b) => b.id === id);
-            if (book) setEditingBook(book);
-          }}
+          onEdit={handleEditBook}
           onScan={async (id) => {
             setScanningBookId(id);
             try {

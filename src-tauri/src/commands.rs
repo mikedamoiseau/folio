@@ -6,8 +6,8 @@ use crate::cbz;
 use crate::db::{self, DbPool};
 use crate::epub;
 use crate::models::{
-    AutoBackup, Book, BookFormat, Bookmark, CleanupEntry, CleanupProgress, CleanupResult,
-    Collection, CollectionRule, CollectionType, CustomFont, Highlight, NewRuleInput,
+    AutoBackup, Book, BookFormat, BookGridItem, Bookmark, CleanupEntry, CleanupProgress,
+    CleanupResult, Collection, CollectionRule, CollectionType, CustomFont, Highlight, NewRuleInput,
     ReadingProgress, SeriesInfo,
 };
 use crate::opds;
@@ -710,6 +710,12 @@ pub async fn import_book(
 pub async fn get_library(state: State<'_, AppState>) -> Result<Vec<Book>, String> {
     let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
     db::list_books(&conn).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn get_library_grid(state: State<'_, AppState>) -> Result<Vec<BookGridItem>, String> {
+    let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
+    db::list_books_grid(&conn).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
