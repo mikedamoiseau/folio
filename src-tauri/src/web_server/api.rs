@@ -27,6 +27,7 @@ pub fn routes(state: WebState) -> Router<WebState> {
         .route("/books/{id}/pages/{index}", get(get_page_image))
         .route("/books/{id}/page-count", get(get_page_count))
         .route("/books/{id}/download", get(download_book))
+        .route("/series", get(list_series))
         .route("/collections", get(list_collections))
         .route("/collections/{id}/books", get(get_collection_books))
         .with_state(state)
@@ -107,6 +108,7 @@ async fn login(
 #[derive(serde::Deserialize)]
 struct BookQuery {
     q: Option<String>,
+    series: Option<String>,
 }
 
 async fn list_books(
@@ -118,6 +120,11 @@ async fn list_books(
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
     let books = db::list_books_grid(&conn)
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    let books = match params.series {
+        Some(ref s) if !s.is_empty() => books.into_iter().filter(|b| b.series.as_deref() == Some(s.as_str())).collect(),
+        _ => books,
+    };
 
     let books = match params.q {
         Some(ref q) if !q.is_empty() => {
@@ -487,6 +494,17 @@ async fn download_book(
 
 // ── Collections ──────────────────────────────────────────────────────────────
 
+async fn list_series(
+    State(state): State<WebState>,
+) -> Result<Json<Vec<crate::models::SeriesInfo>>, (StatusCode, String)> {
+    let conn = state
+        .conn()
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    let series =
+        db::list_series(&conn).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Ok(Json(series))
+}
+
 async fn list_collections(
     State(state): State<WebState>,
 ) -> Result<Json<Vec<crate::models::Collection>>, (StatusCode, String)> {
@@ -590,5 +608,29 @@ mod tests {
         let html = r#"<img src="asset://localhost/path/%E5%9B%BE%E7%89%87.jpg">"#;
         let result = rewrite_asset_urls_to_http(html, "book1", 0);
         assert!(!result.contains("asset://"));
+    }
+
+    #[test]
+    fn test_book_query_accepts_series_param() {
+        let query: BookQuery =
+            serde_json::from_str(r#"{"series":"My Series"}"#).expect("should parse series param");
+        assert_eq!(query.series, Some("My Series".to_string()));
+        assert_eq!(query.q, None);
+    }
+
+    #[test]
+    fn test_book_query_accepts_both_params() {
+        let query: BookQuery =
+            serde_json::from_str(r#"{"q":"test","series":"Sci-Fi"}"#).expect("should parse both");
+        assert_eq!(query.q, Some("test".to_string()));
+        assert_eq!(query.series, Some("Sci-Fi".to_string()));
+    }
+
+    #[test]
+    fn test_book_query_empty() {
+        let query: BookQuery =
+            serde_json::from_str("{}").expect("should parse empty");
+        assert_eq!(query.q, None);
+        assert_eq!(query.series, None);
     }
 }
