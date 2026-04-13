@@ -55,6 +55,12 @@ pub fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
         .show_menu_on_left_click(true)
         .on_menu_event(|app, event: MenuEvent| match event.id().as_ref() {
             "show" => {
+                // macOS: restore Regular activation policy so the dock icon
+                // reappears and the window can take focus.
+                #[cfg(target_os = "macos")]
+                {
+                    let _ = app.set_activation_policy(tauri::ActivationPolicy::Regular);
+                }
                 if let Some(window) = app.get_webview_window("main") {
                     let _ = window.show();
                     let _ = window.unminimize();

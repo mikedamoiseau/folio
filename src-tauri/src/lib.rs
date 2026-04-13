@@ -326,6 +326,14 @@ pub fn run() {
                     if autostart_enabled && tray_available {
                         api.prevent_close();
                         let _ = window.hide();
+                        // macOS: switch to Accessory policy so the app stays
+                        // responsive (tray menu works) even with no visible window.
+                        #[cfg(target_os = "macos")]
+                        {
+                            let _ = window
+                                .app_handle()
+                                .set_activation_policy(tauri::ActivationPolicy::Accessory);
+                        }
                     }
                 }
                 tauri::WindowEvent::Destroyed => {
