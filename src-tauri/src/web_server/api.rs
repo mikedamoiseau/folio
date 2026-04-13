@@ -112,12 +112,12 @@ struct BookQuery {
 async fn list_books(
     State(state): State<WebState>,
     Query(params): Query<BookQuery>,
-) -> Result<Json<Vec<crate::models::Book>>, (StatusCode, String)> {
+) -> Result<Json<Vec<crate::models::BookGridItem>>, (StatusCode, String)> {
     let conn = state
         .conn()
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
-    let books =
-        db::list_books(&conn).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let books = db::list_books_grid(&conn)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     let books = match params.q {
         Some(ref q) if !q.is_empty() => {
@@ -501,11 +501,11 @@ async fn list_collections(
 async fn get_collection_books(
     State(state): State<WebState>,
     Path(id): Path<String>,
-) -> Result<Json<Vec<crate::models::Book>>, (StatusCode, String)> {
+) -> Result<Json<Vec<crate::models::BookGridItem>>, (StatusCode, String)> {
     let conn = state
         .conn()
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
-    let books = db::get_books_in_collection(&conn, &id)
+    let books = db::get_books_in_collection_grid(&conn, &id)
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     Ok(Json(books))
 }
