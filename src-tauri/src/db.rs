@@ -278,7 +278,7 @@ pub fn create_pool(db_path: &Path) -> Result<DbPool, Box<dyn std::error::Error>>
     }
 
     let manager = SqliteConnectionManager::file(db_path)
-        .with_init(|conn| conn.execute_batch("PRAGMA foreign_keys = ON;"));
+        .with_init(|conn| conn.execute_batch("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;"));
 
     let pool = Pool::builder()
         .max_size(5)

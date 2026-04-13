@@ -5,7 +5,7 @@ import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
-import BookCard from "../components/BookCard";
+import BookCard, { type BookCardData } from "../components/BookCard";
 import EmptyState from "../components/EmptyState";
 import ImportButton from "../components/ImportButton";
 import CollectionsSidebar, {
@@ -432,6 +432,22 @@ export default function Library() {
       addToast(friendlyError(String(err), t), "error");
     }
   }, [t, addToast]);
+
+  const toCardData = useCallback((book: BookGridItem): BookCardData => ({
+    id: book.id,
+    title: book.title,
+    author: book.author,
+    coverPath: book.cover_path,
+    totalChapters: book.total_chapters,
+    format: book.format,
+    progress: progressMap[book.id] ?? 0,
+    language: book.language,
+    publishYear: book.publish_year,
+    series: book.series,
+    volume: book.volume,
+    rating: book.rating,
+    isImported: book.is_imported,
+  }), [progressMap]);
 
   // Drag ghost: track mouse position and drag state
   const bookDragging = useSyncExternalStore(subscribe, isDragging);
@@ -973,33 +989,22 @@ export default function Library() {
                             onDragStart={(e) => e.preventDefault()}
                           >
                             <BookCard
-                              id={book.id}
-                              title={book.title}
-                              author={book.author}
-                              coverPath={book.cover_path}
-                              totalChapters={book.total_chapters}
-                              format={book.format}
-                              progress={progressMap[book.id] ?? 0}
-                              language={book.language}
-                              publishYear={book.publish_year}
-                              series={book.series}
-                              volume={book.volume}
-                              rating={book.rating}
-                              isImported={book.is_imported}
-                              onClick={() => openBook(book.id)}
-                              onDelete={handleRemoveBook}
-                              onInfo={handleShowBookDetail}
-                              onRemoveFromCollection={
-                                isManualCollectionView && activeCollectionId
-                                  ? async () => {
-                                      await invoke("remove_book_from_collection", {
-                                        bookId: book.id,
-                                        collectionId: activeCollectionId,
-                                      });
-                                      await loadBooks(activeCollectionId);
-                                    }
-                                  : undefined
-                              }
+                              book={toCardData(book)}
+                              actions={{
+                                onClick: () => openBook(book.id),
+                                onDelete: handleRemoveBook,
+                                onInfo: handleShowBookDetail,
+                                onRemoveFromCollection:
+                                  isManualCollectionView && activeCollectionId
+                                    ? async () => {
+                                        await invoke("remove_book_from_collection", {
+                                          bookId: book.id,
+                                          collectionId: activeCollectionId,
+                                        });
+                                        await loadBooks(activeCollectionId);
+                                      }
+                                    : undefined,
+                              }}
                               isScanning={scanningBookId === book.id}
                             />
                           </div>
@@ -1022,23 +1027,12 @@ export default function Library() {
                         onDragStart={(e) => e.preventDefault()}
                       >
                         <BookCard
-                          id={book.id}
-                          title={book.title}
-                          author={book.author}
-                          coverPath={book.cover_path}
-                          totalChapters={book.total_chapters}
-                          format={book.format}
-                          progress={progressMap[book.id] ?? 0}
-                          language={book.language}
-                          publishYear={book.publish_year}
-                          series={book.series}
-                          volume={book.volume}
-                          rating={book.rating}
-                          isImported={book.is_imported}
-                          onClick={() => openBook(book.id)}
-                          onDelete={handleRemoveBook}
-                          onInfo={handleShowBookDetail}
-                          onRemoveFromCollection={undefined}
+                          book={toCardData(book)}
+                          actions={{
+                            onClick: () => openBook(book.id),
+                            onDelete: handleRemoveBook,
+                            onInfo: handleShowBookDetail,
+                          }}
                           isScanning={scanningBookId === book.id}
                         />
                       </div>
@@ -1077,44 +1071,33 @@ export default function Library() {
                     </div>
                   )}
                   <BookCard
-                    id={book.id}
-                    title={book.title}
-                    author={book.author}
-                    coverPath={book.cover_path}
-                    totalChapters={book.total_chapters}
-                    format={book.format}
-                    progress={progressMap[book.id] ?? 0}
-                    language={book.language}
-                    publishYear={book.publish_year}
-                    series={book.series}
-                    volume={book.volume}
-                    rating={book.rating}
-                    isImported={book.is_imported}
-                    onClick={() => {
-                      if (selectMode) {
-                        setSelectedIds((prev) => {
-                          const next = new Set(prev);
-                          if (next.has(book.id)) next.delete(book.id);
-                          else next.add(book.id);
-                          return next;
-                        });
-                      } else {
-                        openBook(book.id);
-                      }
+                    book={toCardData(book)}
+                    actions={{
+                      onClick: () => {
+                        if (selectMode) {
+                          setSelectedIds((prev) => {
+                            const next = new Set(prev);
+                            if (next.has(book.id)) next.delete(book.id);
+                            else next.add(book.id);
+                            return next;
+                          });
+                        } else {
+                          openBook(book.id);
+                        }
+                      },
+                      onDelete: selectMode ? undefined : handleRemoveBook,
+                      onInfo: handleShowBookDetail,
+                      onRemoveFromCollection:
+                        isManualCollectionView && activeCollectionId
+                          ? async () => {
+                              await invoke("remove_book_from_collection", {
+                                bookId: book.id,
+                                collectionId: activeCollectionId,
+                              });
+                              await loadBooks(activeCollectionId);
+                            }
+                          : undefined,
                     }}
-                    onDelete={selectMode ? undefined : handleRemoveBook}
-                    onInfo={handleShowBookDetail}
-                    onRemoveFromCollection={
-                      isManualCollectionView && activeCollectionId
-                        ? async () => {
-                            await invoke("remove_book_from_collection", {
-                              bookId: book.id,
-                              collectionId: activeCollectionId,
-                            });
-                            await loadBooks(activeCollectionId);
-                          }
-                        : undefined
-                    }
                     isScanning={scanningBookId === book.id}
                   />
                 </div>
