@@ -3010,4 +3010,25 @@ mod tests {
         let b = get_book(&conn, "bulk-c1").unwrap().unwrap();
         assert_eq!(b.series, None);
     }
+
+    #[test]
+    fn test_autostart_setting_roundtrip() {
+        let dir = tempfile::tempdir().unwrap();
+        let pool = create_pool(&dir.path().join("test.db")).unwrap();
+        let conn = pool.get().unwrap();
+
+        // Default: no setting exists
+        let val = get_setting(&conn, "autostart_enabled").unwrap();
+        assert_eq!(val, None);
+
+        // Set to true
+        set_setting(&conn, "autostart_enabled", "true").unwrap();
+        let val = get_setting(&conn, "autostart_enabled").unwrap();
+        assert_eq!(val, Some("true".to_string()));
+
+        // Set to false
+        set_setting(&conn, "autostart_enabled", "false").unwrap();
+        let val = get_setting(&conn, "autostart_enabled").unwrap();
+        assert_eq!(val, Some("false".to_string()));
+    }
 }

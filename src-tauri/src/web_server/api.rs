@@ -148,9 +148,14 @@ async fn list_books(
     let mut books = books;
     match params.sort.as_deref() {
         Some("title") => books.sort_by(|a, b| a.title.to_lowercase().cmp(&b.title.to_lowercase())),
-        Some("author") => books.sort_by(|a, b| a.author.to_lowercase().cmp(&b.author.to_lowercase())),
+        Some("author") => {
+            books.sort_by(|a, b| a.author.to_lowercase().cmp(&b.author.to_lowercase()))
+        }
         Some("rating") => books.sort_by(|a, b| {
-            b.rating.unwrap_or(0.0).partial_cmp(&a.rating.unwrap_or(0.0)).unwrap_or(std::cmp::Ordering::Equal)
+            b.rating
+                .unwrap_or(0.0)
+                .partial_cmp(&a.rating.unwrap_or(0.0))
+                .unwrap_or(std::cmp::Ordering::Equal)
         }),
         Some("last_read") => {
             // Need reading progress for last_read sort

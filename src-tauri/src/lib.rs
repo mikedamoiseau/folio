@@ -12,6 +12,7 @@ pub mod page_cache;
 pub mod pdf;
 pub mod providers;
 pub mod sync;
+pub mod tray;
 pub mod web_server;
 
 use commands::{AppState, LruCache, ProfileState};
@@ -23,6 +24,10 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init())
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            None,
+        ))
         .setup(|app| {
             let db_path = app.path().app_data_dir()?.join("library.db");
             let pool = db::create_pool(&db_path).expect("Failed to initialize database");
@@ -133,6 +138,11 @@ pub fn run() {
                 web_server_handle: std::sync::Mutex::new(None),
             });
 
+            // Initialize system tray
+            if let Err(e) = tray::setup_tray(&app.handle().clone()) {
+                log::error!("Failed to initialize tray: {}", e);
+            }
+
             // Auto-start web server if previously enabled
             let app_handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
@@ -185,6 +195,8 @@ pub fn run() {
                     if let Ok(handle) = web_server::start(web_state, port).await {
                         let mut h = state.web_server_handle.lock().unwrap();
                         *h = Some(handle);
+                        // Update tray menu to show "Stop Web Server"
+                        let _ = tray::rebuild_tray_menu(&app_handle);
                     }
                 }
             });
@@ -295,19 +307,40 @@ pub fn run() {
             commands::bulk_add_to_collection,
             commands::bulk_add_tag,
             commands::bulk_update_metadata,
+            commands::get_autostart_enabled,
+            commands::set_autostart_enabled,
         ])
-        // R5-1: Graceful shutdown — stop web server when app exits
         .on_window_event(|window, event| {
-            if let tauri::WindowEvent::Destroyed = event {
-                let state = window.state::<AppState>();
-                let handle = state
-                    .web_server_handle
-                    .lock()
-                    .ok()
-                    .and_then(|mut h| h.take());
-                if let Some(h) = handle {
-                    web_server::stop(h);
+            match event {
+                tauri::WindowEvent::CloseRequested { api, .. } => {
+                    use tauri_plugin_autostart::ManagerExt;
+                    // Hide to tray instead of quitting, but only if the tray
+                    // icon actually exists (setup_tray may have failed).
+                    let autostart_enabled = window
+                        .app_handle()
+                        .autolaunch()
+                        .is_enabled()
+                        .unwrap_or(false);
+                    let tray_available = window.app_handle().tray_by_id("main").is_some();
+
+                    if autostart_enabled && tray_available {
+                        api.prevent_close();
+                        let _ = window.hide();
+                    }
                 }
+                tauri::WindowEvent::Destroyed => {
+                    // R5-1: Graceful shutdown — stop web server when app exits
+                    let state = window.state::<AppState>();
+                    let handle = state
+                        .web_server_handle
+                        .lock()
+                        .ok()
+                        .and_then(|mut h| h.take());
+                    if let Some(h) = handle {
+                        web_server::stop(h);
+                    }
+                }
+                _ => {}
             }
         })
         .run(tauri::generate_context!())

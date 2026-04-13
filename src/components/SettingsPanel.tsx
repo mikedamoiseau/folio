@@ -294,6 +294,11 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
   const panelRef = useRef<HTMLDivElement>(null);
   const previousFocus = useRef<HTMLElement | null>(null);
 
+  // Autostart state
+  const [autoStartEnabled, setAutoStartEnabled] = useState(false);
+  const [autoStartLoading, setAutoStartLoading] = useState(false);
+  const [autoStartError, setAutoStartError] = useState<string | null>(null);
+
   const [savedThemes, setSavedThemes] = useState<SavedTheme[]>(loadSavedThemes);
   const [activeThemeId, setActiveThemeId] = useState<string | null>(null);
 
@@ -419,6 +424,11 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
   useEffect(() => {
     loadCustomFonts();
   }, [loadCustomFonts]);
+
+  // Load autostart state on mount
+  useEffect(() => {
+    invoke<boolean>("get_autostart_enabled").then(setAutoStartEnabled).catch(() => {});
+  }, []);
 
   // Inject @font-face rules for custom fonts
   useEffect(() => {
@@ -872,6 +882,44 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
 
         {/* Settings content */}
         <div className="flex-1 overflow-y-auto p-5 space-y-7">
+          {/* General */}
+          <Accordion title={t("settings.general")} open={openSection === "general"} onToggle={() => toggleSection("general")}>
+            <div className="space-y-2">
+              <label className="flex items-center justify-between gap-3 bg-warm-subtle rounded-xl px-3 py-2.5">
+                <div>
+                  <span className="text-sm text-ink">{t("settings.launchAtStartup")}</span>
+                  <p className="text-[11px] text-ink-muted/60 mt-0.5">{t("settings.launchAtStartupHint")}</p>
+                </div>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={autoStartEnabled}
+                  disabled={autoStartLoading}
+                  onClick={async () => {
+                    const newValue = !autoStartEnabled;
+                    setAutoStartLoading(true);
+                    setAutoStartError(null);
+                    try {
+                      await invoke("set_autostart_enabled", { enabled: newValue });
+                      setAutoStartEnabled(newValue);
+                    } catch (e) {
+                      setAutoStartError(t("settings.autoStartFailed", { error: friendlyError(String(e), t) }));
+                    }
+                    setAutoStartLoading(false);
+                  }}
+                  className={`relative w-10 h-6 rounded-full transition-colors shrink-0 ${autoStartEnabled ? "bg-accent" : "bg-warm-border"} ${autoStartLoading ? "opacity-40 cursor-not-allowed" : ""}`}
+                >
+                  <span
+                    className={`absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full shadow transition-transform ${autoStartEnabled ? "translate-x-4" : ""}`}
+                  />
+                </button>
+              </label>
+              {autoStartError && (
+                <p className="text-xs text-red-500 px-1">{autoStartError}</p>
+              )}
+            </div>
+          </Accordion>
+
           {/* Theme */}
           <Accordion title={t("settings.appearance")} open={openSection === "appearance"} onToggle={() => toggleSection("appearance")}>
             {/* Saved Themes */}

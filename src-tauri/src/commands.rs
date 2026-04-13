@@ -4150,6 +4150,7 @@ pub async fn bulk_update_metadata(
 
 #[tauri::command]
 pub async fn web_server_start(
+    app: AppHandle,
     port: Option<u16>,
     state: State<'_, AppState>,
 ) -> Result<String, String> {
@@ -4200,11 +4201,14 @@ pub async fn web_server_start(
     let _ = db::set_setting(&conn, "web_server_enabled", "true");
     let _ = db::set_setting(&conn, "web_server_port", &port.to_string());
 
+    // Rebuild tray menu to reflect server running state
+    let _ = crate::tray::rebuild_tray_menu(&app);
+
     Ok(url)
 }
 
 #[tauri::command]
-pub async fn web_server_stop(state: State<'_, AppState>) -> Result<(), String> {
+pub async fn web_server_stop(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
     let handle = {
         let mut h = state.web_server_handle.lock().map_err(|e| e.to_string())?;
         h.take()
@@ -4216,6 +4220,8 @@ pub async fn web_server_stop(state: State<'_, AppState>) -> Result<(), String> {
             let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
             log_activity(&conn, "web_server_stopped", "system", None, None, None);
             let _ = db::set_setting(&conn, "web_server_enabled", "false");
+            // Rebuild tray menu to reflect server stopped state
+            let _ = crate::tray::rebuild_tray_menu(&app);
             Ok(())
         }
         None => Err("Web server is not running".to_string()),
@@ -4421,4 +4427,33 @@ mod tests {
         assert!(cache.get("b").is_some() || cache.get("c").is_some());
         assert!(cache.total_bytes() <= 25);
     }
+}
+
+// ── Autostart ──────────────────────────────────────────────
+
+#[tauri::command]
+pub async fn get_autostart_enabled(app: AppHandle) -> Result<bool, String> {
+    use tauri_plugin_autostart::ManagerExt;
+    app.autolaunch()
+        .is_enabled()
+        .map_err(|e| format!("Failed to check autostart: {}", e))
+}
+
+#[tauri::command]
+pub async fn set_autostart_enabled(app: AppHandle, enabled: bool) -> Result<(), String> {
+    use tauri_plugin_autostart::ManagerExt;
+
+    let autostart = app.autolaunch();
+
+    if enabled {
+        autostart
+            .enable()
+            .map_err(|e| format!("Failed to enable autostart: {}", e))?;
+    } else {
+        autostart
+            .disable()
+            .map_err(|e| format!("Failed to disable autostart: {}", e))?;
+    }
+
+    Ok(())
 }
