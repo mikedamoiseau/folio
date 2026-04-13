@@ -69,6 +69,7 @@ interface VirtualBookGridProps {
 export default function VirtualBookGrid({ items, renderItem }: VirtualBookGridProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [containerWidth, setContainerWidth] = useState(0);
+  const resizeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const updateWidth = useCallback(() => {
     if (containerRef.current) {
@@ -77,15 +78,19 @@ export default function VirtualBookGrid({ items, renderItem }: VirtualBookGridPr
   }, []);
 
   useEffect(() => {
-    // Measure synchronously first, then observe for changes
     updateWidth();
-    // Fallback: if synchronous measure returned 0 (not yet laid out), retry next frame
     if (!containerRef.current?.clientWidth) {
       requestAnimationFrame(updateWidth);
     }
-    const observer = new ResizeObserver(updateWidth);
+    const observer = new ResizeObserver(() => {
+      if (resizeTimerRef.current) clearTimeout(resizeTimerRef.current);
+      resizeTimerRef.current = setTimeout(updateWidth, 150);
+    });
     if (containerRef.current) observer.observe(containerRef.current);
-    return () => observer.disconnect();
+    return () => {
+      observer.disconnect();
+      if (resizeTimerRef.current) clearTimeout(resizeTimerRef.current);
+    };
   }, [updateWidth]);
 
   const layout = calcGridLayout(containerWidth || 1000);

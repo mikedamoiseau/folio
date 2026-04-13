@@ -1126,6 +1126,14 @@ pub async fn get_reading_progress(
     db::get_reading_progress(&conn, &book_id).map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+pub async fn get_all_reading_progress(
+    state: State<'_, AppState>,
+) -> Result<Vec<ReadingProgress>, String> {
+    let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
+    db::get_all_reading_progress(&conn).map_err(|e| e.to_string())
+}
+
 fn validate_file_exists(file_path: &str) -> Result<(), String> {
     let path = std::path::Path::new(file_path);
     if !path.exists() {

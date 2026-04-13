@@ -384,23 +384,23 @@ const GRID_COLUMNS: &str = "id, title, author, cover_path, total_chapters, added
 const GRID_COLUMNS_B: &str = "b.id, b.title, b.author, b.cover_path, b.total_chapters, b.added_at, b.format, b.series, b.volume, b.rating, b.language, b.publish_year, b.is_imported";
 
 fn row_to_grid_item(row: &rusqlite::Row) -> rusqlite::Result<BookGridItem> {
-    let format_str: String = row.get(6)?;
+    let format_str: String = row.get("format")?;
     Ok(BookGridItem {
-        id: row.get(0)?,
-        title: row.get(1)?,
-        author: row.get(2)?,
-        cover_path: row.get(3)?,
-        total_chapters: row.get(4)?,
-        added_at: row.get(5)?,
+        id: row.get("id")?,
+        title: row.get("title")?,
+        author: row.get("author")?,
+        cover_path: row.get("cover_path")?,
+        total_chapters: row.get("total_chapters")?,
+        added_at: row.get("added_at")?,
         format: format_str
             .parse()
             .map_err(|e: String| rusqlite::Error::InvalidParameterName(e))?,
-        series: row.get(7)?,
-        volume: row.get(8)?,
-        rating: row.get(9)?,
-        language: row.get(10)?,
-        publish_year: row.get(11)?,
-        is_imported: row.get::<_, i32>(12).unwrap_or(1) != 0,
+        series: row.get("series")?,
+        volume: row.get("volume")?,
+        rating: row.get("rating")?,
+        language: row.get("language")?,
+        publish_year: row.get("publish_year")?,
+        is_imported: row.get::<_, i32>("is_imported").unwrap_or(1) != 0,
     })
 }
 
@@ -637,6 +637,21 @@ pub fn get_reading_progress(conn: &Connection, book_id: &str) -> Result<Option<R
     }
 }
 
+pub fn get_all_reading_progress(conn: &Connection) -> Result<Vec<ReadingProgress>> {
+    let mut stmt = conn.prepare(
+        "SELECT book_id, chapter_index, scroll_position, last_read_at FROM reading_progress",
+    )?;
+    let rows = stmt.query_map([], |row| {
+        Ok(ReadingProgress {
+            book_id: row.get(0)?,
+            chapter_index: row.get(1)?,
+            scroll_position: row.get(2)?,
+            last_read_at: row.get(3)?,
+        })
+    })?;
+    rows.collect()
+}
+
 pub fn get_recently_read_books(conn: &Connection, limit: u32) -> Result<Vec<Book>> {
     let sql = format!(
         "SELECT {} FROM books b JOIN reading_progress rp ON rp.book_id = b.id ORDER BY rp.last_read_at DESC LIMIT ?1",
@@ -727,31 +742,31 @@ const BOOK_COLUMNS: &str = "id, title, author, file_path, cover_path, total_chap
 const BOOK_COLUMNS_B: &str = "b.id, b.title, b.author, b.file_path, b.cover_path, b.total_chapters, b.added_at, b.format, b.file_hash, b.description, b.genres, b.rating, b.isbn, b.openlibrary_key, b.enrichment_status, b.series, b.volume, b.language, b.publisher, b.publish_year, b.is_imported";
 
 fn row_to_book(row: &rusqlite::Row) -> rusqlite::Result<Book> {
-    let format_str: String = row.get(7)?;
+    let format_str: String = row.get("format")?;
     Ok(Book {
-        id: row.get(0)?,
-        title: row.get(1)?,
-        author: row.get(2)?,
-        file_path: row.get(3)?,
-        cover_path: row.get(4)?,
-        total_chapters: row.get(5)?,
-        added_at: row.get(6)?,
+        id: row.get("id")?,
+        title: row.get("title")?,
+        author: row.get("author")?,
+        file_path: row.get("file_path")?,
+        cover_path: row.get("cover_path")?,
+        total_chapters: row.get("total_chapters")?,
+        added_at: row.get("added_at")?,
         format: format_str
             .parse()
             .map_err(|e: String| rusqlite::Error::InvalidParameterName(e))?,
-        file_hash: row.get(8)?,
-        description: row.get(9)?,
-        genres: row.get(10)?,
-        rating: row.get(11)?,
-        isbn: row.get(12)?,
-        openlibrary_key: row.get(13)?,
-        enrichment_status: row.get(14)?,
-        series: row.get(15)?,
-        volume: row.get(16)?,
-        language: row.get(17)?,
-        publisher: row.get(18)?,
-        publish_year: row.get(19)?,
-        is_imported: row.get::<_, i32>(20).unwrap_or(1) != 0,
+        file_hash: row.get("file_hash")?,
+        description: row.get("description")?,
+        genres: row.get("genres")?,
+        rating: row.get("rating")?,
+        isbn: row.get("isbn")?,
+        openlibrary_key: row.get("openlibrary_key")?,
+        enrichment_status: row.get("enrichment_status")?,
+        series: row.get("series")?,
+        volume: row.get("volume")?,
+        language: row.get("language")?,
+        publisher: row.get("publisher")?,
+        publish_year: row.get("publish_year")?,
+        is_imported: row.get::<_, i32>("is_imported").unwrap_or(1) != 0,
     })
 }
 

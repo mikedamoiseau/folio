@@ -110,32 +110,22 @@ export default function Library() {
       }
       setBooks(library);
 
-      let progressErrors = 0;
-      const progData = await Promise.all(
-        library.map(async (book) => {
-          try {
-            const prog: ReadingProgress | null = await invoke(
-              "get_reading_progress",
-              { bookId: book.id }
-            );
-            if (prog && book.total_chapters > 0) {
-              const pct = Math.round(
-                ((prog.chapter_index + 1) / book.total_chapters) * 100
-              );
-              return { id: book.id, pct, lastRead: prog.last_read_at };
-            }
-          } catch {
-            progressErrors++;
-          }
-          return { id: book.id, pct: 0, lastRead: 0 };
-        })
-      );
-      if (progressErrors > 0 && progressErrors === library.length) {
+      // Batch-load all reading progress in a single IPC call
+      const chaptersMap = Object.fromEntries(library.map((b) => [b.id, b.total_chapters]));
+      try {
+        const allProgress = await invoke<ReadingProgress[]>("get_all_reading_progress");
+        const pMap: Record<string, number> = {};
+        const lrMap: Record<string, number> = {};
+        for (const prog of allProgress) {
+          const total = chaptersMap[prog.book_id] ?? 0;
+          pMap[prog.book_id] = total > 0 ? Math.round(((prog.chapter_index + 1) / total) * 100) : 0;
+          lrMap[prog.book_id] = prog.last_read_at;
+        }
+        setProgressMap(pMap);
+        setLastReadMap(lrMap);
+      } catch {
         addToast(t("library.progressLoadError", { defaultValue: "Could not load reading progress" }), "error");
       }
-
-      setProgressMap(Object.fromEntries(progData.map((d) => [d.id, d.pct])));
-      setLastReadMap(Object.fromEntries(progData.map((d) => [d.id, d.lastRead])));
     } catch (err) {
       setError(friendlyError(String(err), t));
     } finally {
@@ -980,6 +970,7 @@ export default function Library() {
                         {groups[seriesName].map((book) => (
                           <div
                             key={book.id}
+                            className="card-cv"
                             onMouseDown={() => startDrag(book.id, book.cover_path ? convertFileSrc(book.cover_path) : undefined)}
                             onMouseUp={() => endDrag()}
                             onDragStart={(e) => e.preventDefault()}
@@ -1028,6 +1019,7 @@ export default function Library() {
                     {nonSeriesBooks.map((book) => (
                       <div
                         key={book.id}
+                        className="card-cv"
                         onMouseDown={() => startDrag(book.id, book.cover_path ? convertFileSrc(book.cover_path) : undefined)}
                         onMouseUp={() => endDrag()}
                         onDragStart={(e) => e.preventDefault()}
@@ -1061,7 +1053,7 @@ export default function Library() {
               filtered.map((book) => (
                 <div
                   key={book.id}
-                  className="relative"
+                  className="relative card-cv"
                   onMouseDown={() => !selectMode && startDrag(book.id, book.cover_path ? convertFileSrc(book.cover_path) : undefined)}
                   onMouseUp={() => !selectMode && endDrag()}
                   onDragStart={(e) => e.preventDefault()}

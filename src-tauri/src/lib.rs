@@ -222,6 +222,7 @@ pub fn run() {
             commands::search_book_content,
             commands::get_toc,
             commands::get_reading_progress,
+            commands::get_all_reading_progress,
             commands::save_reading_progress,
             commands::get_bookmarks,
             commands::add_bookmark,

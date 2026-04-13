@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect } from "react";
 
 /** Generic debounce utility — also exported for direct use and testing. */
 export function debounce<T extends (...args: unknown[]) => void>(fn: T, ms: number) {
@@ -17,14 +17,8 @@ export function debounce<T extends (...args: unknown[]) => void>(fn: T, ms: numb
 /** React hook that returns a debounced version of the given value. */
 export function useDebounce<T>(value: T, delay: number): T {
   const [debouncedValue, setDebouncedValue] = useState(value);
-  const firstRender = useRef(true);
 
   useEffect(() => {
-    // On first render, set immediately (no delay for initial value)
-    if (firstRender.current) {
-      firstRender.current = false;
-      return;
-    }
     const timer = setTimeout(() => setDebouncedValue(value), delay);
     return () => clearTimeout(timer);
   }, [value, delay]);
