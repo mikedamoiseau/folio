@@ -4056,6 +4056,79 @@ pub async fn bulk_add_tag(
     Ok(())
 }
 
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BulkEditFields {
+    pub author: Option<String>,
+    pub series: Option<String>,
+    pub publish_year: Option<u16>,
+    pub language: Option<String>,
+    pub publisher: Option<String>,
+}
+
+#[tauri::command]
+pub async fn bulk_update_metadata(
+    book_ids: Vec<String>,
+    fields: BulkEditFields,
+    state: State<'_, AppState>,
+) -> Result<u32, String> {
+    let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
+    let ids_ref: Vec<&str> = book_ids.iter().map(|s| s.as_str()).collect();
+
+    // Normalize strings with the same rules as update_book_metadata:
+    // trim whitespace + enforce length limits.
+    let normalize_str = |s: String, max_len: usize| -> String {
+        let trimmed = s.trim().to_string();
+        if trimmed.len() > max_len {
+            // Truncate to the largest valid char boundary at or below max_len bytes.
+            // Direct byte slicing can panic on multi-byte UTF-8 characters.
+            let mut end = max_len;
+            while end > 0 && !trimmed.is_char_boundary(end) {
+                end -= 1;
+            }
+            trimmed[..end].to_string()
+        } else {
+            trimmed
+        }
+    };
+    // Author is required: reject empty after trim instead of silently skipping.
+    let author = if let Some(s) = fields.author {
+        let t = normalize_str(s, 500);
+        if t.is_empty() {
+            return Err("Author cannot be empty.".to_string());
+        }
+        Some(t)
+    } else {
+        None
+    };
+    // Optional fields: trim + length-limit; empty string preserved for DB to convert to NULL.
+    let series = fields.series.map(|s| normalize_str(s, 500));
+    let language = fields.language.map(|s| normalize_str(s, 50));
+    let publisher = fields.publisher.map(|s| normalize_str(s, 500));
+
+    let count = db::bulk_update_metadata(
+        &conn,
+        &ids_ref,
+        author.as_deref(),
+        series.as_deref(),
+        fields.publish_year,
+        language.as_deref(),
+        publisher.as_deref(),
+    )
+    .map_err(|e| e.to_string())?;
+
+    log_activity(
+        &conn,
+        "bulk_edit",
+        "book",
+        None,
+        None,
+        Some(&format!("{} books updated", count)),
+    );
+
+    Ok(count)
+}
+
 // ── Web Server Commands ──────────────────────────────────────────────────────
 
 #[tauri::command]

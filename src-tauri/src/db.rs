@@ -235,8 +235,7 @@ fn run_schema(conn: &Connection) -> Result<()> {
     let _ = conn.execute_batch(
         "CREATE INDEX IF NOT EXISTS idx_reading_progress_last_read_at ON reading_progress(last_read_at);",
     );
-    let _ =
-        conn.execute_batch("CREATE INDEX IF NOT EXISTS idx_books_language ON books(language);");
+    let _ = conn.execute_batch("CREATE INDEX IF NOT EXISTS idx_books_language ON books(language);");
     let _ =
         conn.execute_batch("CREATE INDEX IF NOT EXISTS idx_books_publisher ON books(publisher);");
 
@@ -277,8 +276,11 @@ pub fn create_pool(db_path: &Path) -> Result<DbPool, Box<dyn std::error::Error>>
         std::fs::create_dir_all(parent)?;
     }
 
-    let manager = SqliteConnectionManager::file(db_path)
-        .with_init(|conn| conn.execute_batch("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;"));
+    let manager = SqliteConnectionManager::file(db_path).with_init(|conn| {
+        conn.execute_batch(
+            "PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;",
+        )
+    });
 
     let pool = Pool::builder()
         .max_size(5)
@@ -513,6 +515,81 @@ pub fn bulk_add_tag(conn: &Connection, book_ids: &[&str], tag: &str) -> Result<(
     }
     tx.commit()?;
     Ok(())
+}
+
+/// Update metadata fields on multiple books in a single transaction.
+/// Only non-None fields are applied. Empty strings clear optional fields to NULL.
+pub fn bulk_update_metadata(
+    conn: &Connection,
+    ids: &[&str],
+    author: Option<&str>,
+    series: Option<&str>,
+    publish_year: Option<u16>,
+    language: Option<&str>,
+    publisher: Option<&str>,
+) -> Result<u32> {
+    if ids.is_empty() {
+        return Ok(0);
+    }
+
+    let mut set_clauses: Vec<&str> = Vec::new();
+    let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+
+    if let Some(v) = author {
+        set_clauses.push("author = ?");
+        params.push(Box::new(v.to_string()));
+    }
+    if let Some(v) = series {
+        set_clauses.push("series = ?");
+        params.push(Box::new(if v.is_empty() {
+            None::<String>
+        } else {
+            Some(v.to_string())
+        }));
+    }
+    if let Some(v) = publish_year {
+        set_clauses.push("publish_year = ?");
+        params.push(Box::new(if v == 0 { None::<u16> } else { Some(v) }));
+    }
+    if let Some(v) = language {
+        set_clauses.push("language = ?");
+        params.push(Box::new(if v.is_empty() {
+            None::<String>
+        } else {
+            Some(v.to_string())
+        }));
+    }
+    if let Some(v) = publisher {
+        set_clauses.push("publisher = ?");
+        params.push(Box::new(if v.is_empty() {
+            None::<String>
+        } else {
+            Some(v.to_string())
+        }));
+    }
+
+    if set_clauses.is_empty() {
+        return Ok(0);
+    }
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64;
+    set_clauses.push("updated_at = ?");
+    params.push(Box::new(now));
+
+    let sql = format!("UPDATE books SET {} WHERE id = ?", set_clauses.join(", "));
+    let tx = conn.unchecked_transaction()?;
+    let mut count: u32 = 0;
+    for id in ids {
+        let mut all_params: Vec<&dyn rusqlite::types::ToSql> =
+            params.iter().map(|p| p.as_ref()).collect();
+        all_params.push(id);
+        count += tx.execute(&sql, all_params.as_slice())? as u32;
+    }
+    tx.commit()?;
+    Ok(count)
 }
 
 pub fn update_book_enrichment(
@@ -1392,8 +1469,10 @@ pub fn get_books_in_collection_grid(
     );
 
     let mut stmt = conn.prepare(&sql)?;
-    let rows =
-        stmt.query_map(rusqlite::params_from_iter(param_values.iter()), row_to_grid_item)?;
+    let rows = stmt.query_map(
+        rusqlite::params_from_iter(param_values.iter()),
+        row_to_grid_item,
+    )?;
     rows.collect()
 }
 
@@ -2860,5 +2939,75 @@ mod tests {
         // Most recent first
         assert_eq!(items[0].id, "grid-ord-2");
         assert_eq!(items[1].id, "grid-ord-1");
+    }
+
+    #[test]
+    fn test_bulk_update_metadata_author() {
+        let (_dir, conn) = setup();
+        let mut b1 = sample_book("bulk-1");
+        b1.file_path = "/tmp/bulk1.epub".to_string();
+        b1.author = "Old Author".to_string();
+        insert_book(&conn, &b1).unwrap();
+        let mut b2 = sample_book("bulk-2");
+        b2.file_path = "/tmp/bulk2.epub".to_string();
+        b2.author = "Old Author".to_string();
+        insert_book(&conn, &b2).unwrap();
+
+        let updated = bulk_update_metadata(
+            &conn,
+            &["bulk-1", "bulk-2"],
+            Some("New Author"),
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(updated, 2);
+        assert_eq!(
+            get_book(&conn, "bulk-1").unwrap().unwrap().author,
+            "New Author"
+        );
+        assert_eq!(
+            get_book(&conn, "bulk-2").unwrap().unwrap().author,
+            "New Author"
+        );
+    }
+
+    #[test]
+    fn test_bulk_update_metadata_partial_fields() {
+        let (_dir, conn) = setup();
+        let mut b1 = sample_book("bulk-p1");
+        b1.file_path = "/tmp/bulkp1.epub".to_string();
+        b1.author = "Keep This".to_string();
+        b1.series = Some("Old Series".to_string());
+        insert_book(&conn, &b1).unwrap();
+
+        bulk_update_metadata(
+            &conn,
+            &["bulk-p1"],
+            None,
+            Some("New Series"),
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        let b = get_book(&conn, "bulk-p1").unwrap().unwrap();
+        assert_eq!(b.author, "Keep This");
+        assert_eq!(b.series, Some("New Series".to_string()));
+    }
+
+    #[test]
+    fn test_bulk_update_metadata_clear_field() {
+        let (_dir, conn) = setup();
+        let mut b1 = sample_book("bulk-c1");
+        b1.file_path = "/tmp/bulkc1.epub".to_string();
+        b1.series = Some("Remove Me".to_string());
+        insert_book(&conn, &b1).unwrap();
+
+        bulk_update_metadata(&conn, &["bulk-c1"], None, Some(""), None, None, None).unwrap();
+        let b = get_book(&conn, "bulk-c1").unwrap().unwrap();
+        assert_eq!(b.series, None);
     }
 }

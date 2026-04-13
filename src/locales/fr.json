@@ -79,6 +79,8 @@
     "deselectAll": "Tout d\u00e9s\u00e9lectionner",
     "bulkDeleteConfirm": "Supprimer {{count}} livres ? Cette action est irr\u00e9versible.",
     "bulkDeleted": "{{count}} livres supprim\u00e9s",
+    "bulkEdit": "Modifier",
+    "bulkEditSuccess": "{{count}} livres mis \u00e0 jour",
     "filterByFormat": "Filtrer par format",
     "filterByStatus": "Filtrer par statut",
     "filterByRating": "Filtrer par note",
@@ -555,5 +557,14 @@
     "label": "Langue",
     "english": "English",
     "french": "Fran\u00e7ais"
+  },
+  "bulkEdit": {
+    "title": "Modifier {{count}} livres",
+    "author": "Auteur",
+    "series": "S\u00e9rie",
+    "year": "Ann\u00e9e",
+    "language": "Langue",
+    "publisher": "\u00c9diteur",
+    "multipleValues": "Valeurs multiples"
   }
 }

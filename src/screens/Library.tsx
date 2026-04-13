@@ -6,6 +6,7 @@ import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import BookCard, { type BookCardData } from "../components/BookCard";
+import BulkEditDialog from "../components/BulkEditDialog";
 import EmptyState from "../components/EmptyState";
 import ImportButton from "../components/ImportButton";
 import CollectionsSidebar, {
@@ -73,6 +74,7 @@ export default function Library() {
   // Bulk selection (#60)
   const [selectMode, setSelectMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [bulkEditing, setBulkEditing] = useState(false);
 
   // scanToast state kept for LiveRegion — visual toasts now use useToast()
   const [scanToastMessage, setScanToastMessage] = useState("");
@@ -1384,6 +1386,13 @@ export default function Library() {
           >
             {selectedIds.size === filtered.length ? t("library.deselectAll") : t("library.selectAll")}
           </button>
+          <button
+            type="button"
+            onClick={() => setBulkEditing(true)}
+            className="text-accent hover:text-accent-hover text-xs font-medium"
+          >
+            {t("library.bulkEdit")}
+          </button>
           <div className="w-px h-4 bg-paper/20" />
           <button
             type="button"
@@ -1412,6 +1421,21 @@ export default function Library() {
       )}
 
       {/* Toast notifications now rendered by ToastProvider at app root */}
+
+      {bulkEditing && (
+        <BulkEditDialog
+          bookIds={[...selectedIds]}
+          books={filtered}
+          onClose={() => setBulkEditing(false)}
+          onSave={async (updatedCount) => {
+            setBulkEditing(false);
+            setSelectedIds(new Set());
+            setSelectMode(false);
+            await loadBooks(activeCollectionIdRef.current);
+            addToast(t("library.bulkEditSuccess", { count: updatedCount }), "success");
+          }}
+        />
+      )}
 
       {/* Screen reader announcements for import and scan progress */}
       <LiveRegion

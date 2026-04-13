@@ -122,7 +122,10 @@ async fn list_books(
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     let books = match params.series {
-        Some(ref s) if !s.is_empty() => books.into_iter().filter(|b| b.series.as_deref() == Some(s.as_str())).collect(),
+        Some(ref s) if !s.is_empty() => books
+            .into_iter()
+            .filter(|b| b.series.as_deref() == Some(s.as_str()))
+            .collect(),
         _ => books,
     };
 
@@ -628,8 +631,7 @@ mod tests {
 
     #[test]
     fn test_book_query_empty() {
-        let query: BookQuery =
-            serde_json::from_str("{}").expect("should parse empty");
+        let query: BookQuery = serde_json::from_str("{}").expect("should parse empty");
         assert_eq!(query.q, None);
         assert_eq!(query.series, None);
     }

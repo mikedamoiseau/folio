@@ -79,6 +79,8 @@
     "deselectAll": "Deselect all",
     "bulkDeleteConfirm": "Delete {{count}} books? This cannot be undone.",
     "bulkDeleted": "{{count}} books deleted",
+    "bulkEdit": "Edit",
+    "bulkEditSuccess": "Updated {{count}} books",
     "filterByFormat": "Filter by format",
     "filterByStatus": "Filter by status",
     "filterByRating": "Filter by rating",
@@ -555,5 +557,14 @@
     "label": "Language",
     "english": "English",
     "french": "Fran\u00e7ais"
+  },
+  "bulkEdit": {
+    "title": "Edit {{count}} Books",
+    "author": "Author",
+    "series": "Series",
+    "year": "Year",
+    "language": "Language",
+    "publisher": "Publisher",
+    "multipleValues": "Multiple values"
   }
 }
