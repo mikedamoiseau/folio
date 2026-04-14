@@ -1,3 +1,9 @@
+import { resolve, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const projectRoot = resolve(__dirname, "../..");
+
 export const config = {
   runner: "local",
   port: 4444,
@@ -15,7 +21,7 @@ export const config = {
   capabilities: [
     {
       "tauri:options": {
-        binary: "../../src-tauri/target/debug/folio",
+        binary: resolve(projectRoot, "src-tauri/target/debug/folio"),
       },
     },
   ],
