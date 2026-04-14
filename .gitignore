@@ -46,6 +46,10 @@ lerna-debug.log*
 .claude-bw/
 .claude/
 
+# E2E test artifacts
+tests/e2e/screenshots/
+tests/e2e/package-lock.json
+
 # Superpowers brainstorming artifacts
 .superpowers/
 .gitnexus
