@@ -1,11 +1,6 @@
 import { expect } from "@wdio/globals";
 
 describe("Import Functionality", () => {
-  before(async () => {
-    await browser.url("tauri://localhost/");
-    await browser.pause(2000);
-  });
-
   it("should show the import button in the toolbar", async () => {
     // ImportButton renders a button that opens a dropdown
     const importBtns = await browser.$$("button");

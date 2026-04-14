@@ -1,11 +1,6 @@
 import { expect } from "@wdio/globals";
 
 describe("Theme & Appearance", () => {
-  before(async () => {
-    await browser.url("tauri://localhost/");
-    await browser.pause(2000);
-  });
-
   it("should open settings and navigate to Appearance section", async () => {
     const settingsBtn = await browser.$(
       'button[aria-label*="settings" i], button[aria-label*="Settings"]'

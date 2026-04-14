@@ -7,7 +7,7 @@ describe("Folio App - Smoke Test", () => {
   });
 
   it("should render the app container", async () => {
-    const app = await browser.$("#app");
+    const app = await browser.$("#root");
     await expect(app).toBeExisting();
   });
 

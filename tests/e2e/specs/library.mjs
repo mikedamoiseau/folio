@@ -11,16 +11,39 @@ describe("Library Screen", () => {
     });
 
     it("should accept text input in search field", async () => {
-      const search = await browser.$("#library-search");
-      await search.setValue("test query");
-      const value = await search.getValue();
+      // React controlled inputs need native input event simulation
+      await browser.execute(() => {
+        const el = document.getElementById("library-search");
+        if (el) {
+          const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
+            window.HTMLInputElement.prototype, "value"
+          ).set;
+          nativeInputValueSetter.call(el, "test query");
+          el.dispatchEvent(new Event("input", { bubbles: true }));
+        }
+      });
+      await browser.pause(500);
+      const value = await browser.execute(
+        () => document.getElementById("library-search")?.value
+      );
       expect(value).toBe("test query");
     });
 
     it("should clear search and restore results", async () => {
-      const search = await browser.$("#library-search");
-      await search.clearValue();
-      const value = await search.getValue();
+      await browser.execute(() => {
+        const el = document.getElementById("library-search");
+        if (el) {
+          const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
+            window.HTMLInputElement.prototype, "value"
+          ).set;
+          nativeInputValueSetter.call(el, "");
+          el.dispatchEvent(new Event("input", { bubbles: true }));
+        }
+      });
+      await browser.pause(500);
+      const value = await browser.execute(
+        () => document.getElementById("library-search")?.value
+      );
       expect(value).toBe("");
     });
 
@@ -45,17 +68,36 @@ describe("Library Screen", () => {
       const formatSelect = await browser.$(
         'select[aria-label*="format" i], select[aria-label*="Format"]'
       );
-      await formatSelect.selectByAttribute("value", "epub");
-      const value = await formatSelect.getValue();
+      // Use JS to change the select value (selectByAttribute may not work
+      // with the tauri-webdriver bridge)
+      await browser.execute((sel) => {
+        const el = document.querySelector(sel);
+        if (el) {
+          el.value = "epub";
+          el.dispatchEvent(new Event("change", { bubbles: true }));
+        }
+      }, 'select[aria-label*="format" i], select[aria-label*="Format"]');
+      await browser.pause(500);
+      const value = await browser.execute(
+        (sel) => document.querySelector(sel)?.value,
+        'select[aria-label*="format" i], select[aria-label*="Format"]'
+      );
       expect(value).toBe("epub");
     });
 
     it("should reset format filter to all", async () => {
-      const formatSelect = await browser.$(
+      await browser.execute((sel) => {
+        const el = document.querySelector(sel);
+        if (el) {
+          el.value = "all";
+          el.dispatchEvent(new Event("change", { bubbles: true }));
+        }
+      }, 'select[aria-label*="format" i], select[aria-label*="Format"]');
+      await browser.pause(500);
+      const value = await browser.execute(
+        (sel) => document.querySelector(sel)?.value,
         'select[aria-label*="format" i], select[aria-label*="Format"]'
       );
-      await formatSelect.selectByAttribute("value", "all");
-      const value = await formatSelect.getValue();
       expect(value).toBe("all");
     });
 

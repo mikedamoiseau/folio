@@ -1,12 +1,6 @@
 import { expect } from "@wdio/globals";
 
 describe("Settings Panel", () => {
-  before(async () => {
-    // Navigate to library first to ensure we're on the main screen
-    await browser.url("tauri://localhost/");
-    await browser.pause(2000);
-  });
-
   it("should open settings panel when clicking the settings button", async () => {
     const settingsBtn = await browser.$(
       'button[aria-label="Open settings"], button[aria-label*="settings" i]'

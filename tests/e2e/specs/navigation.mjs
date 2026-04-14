@@ -1,11 +1,6 @@
 import { expect } from "@wdio/globals";
 
 describe("App Navigation", () => {
-  before(async () => {
-    await browser.url("tauri://localhost/");
-    await browser.pause(2000);
-  });
-
   describe("Header Controls", () => {
     it("should show the Folio logo as a link to home", async () => {
       const logo = await browser.$('a[href="/"]');
