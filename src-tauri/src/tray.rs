@@ -1,7 +1,7 @@
 use tauri::{
     menu::{MenuBuilder, MenuEvent, MenuItemBuilder, PredefinedMenuItem},
     tray::TrayIconBuilder,
-    AppHandle, Manager,
+    AppHandle, Manager, WebviewUrl, WebviewWindowBuilder,
 };
 
 use crate::commands::AppState;
@@ -56,9 +56,15 @@ pub fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
         .on_menu_event(|app, event: MenuEvent| match event.id().as_ref() {
             "show" => {
                 if let Some(window) = app.get_webview_window("main") {
-                    let _ = window.show();
                     let _ = window.unminimize();
+                    let _ = window.show();
                     let _ = window.set_focus();
+                } else {
+                    // Window was destroyed — recreate it
+                    let _ = WebviewWindowBuilder::new(app, "main", WebviewUrl::default())
+                        .title("Folio")
+                        .inner_size(800.0, 600.0)
+                        .build();
                 }
             }
             "open_webui" => {
@@ -93,7 +99,7 @@ pub fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
         })
         .on_tray_icon_event(|_tray, event| {
             // macOS: activate the app on any tray interaction so the menu
-            // can open even when the window is hidden (Accessory policy).
+            // can open even when the window is minimized.
             #[cfg(target_os = "macos")]
             {
                 use tauri::tray::TrayIconEvent;
