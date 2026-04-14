@@ -55,12 +55,6 @@ pub fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
         .show_menu_on_left_click(true)
         .on_menu_event(|app, event: MenuEvent| match event.id().as_ref() {
             "show" => {
-                // macOS: restore Regular activation policy so the dock icon
-                // reappears and the window can take focus.
-                #[cfg(target_os = "macos")]
-                {
-                    let _ = app.set_activation_policy(tauri::ActivationPolicy::Regular);
-                }
                 if let Some(window) = app.get_webview_window("main") {
                     let _ = window.show();
                     let _ = window.unminimize();
@@ -96,6 +90,23 @@ pub fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
                 app.exit(0);
             }
             _ => {}
+        })
+        .on_tray_icon_event(|_tray, event| {
+            // macOS: activate the app on any tray interaction so the menu
+            // can open even when the window is hidden (Accessory policy).
+            #[cfg(target_os = "macos")]
+            {
+                use tauri::tray::TrayIconEvent;
+                if matches!(event, TrayIconEvent::Click { .. }) {
+                    use objc2::MainThreadMarker;
+                    use objc2_app_kit::NSApplication;
+                    if let Some(mtm) = MainThreadMarker::new() {
+                        let ns_app = NSApplication::sharedApplication(mtm);
+                        ns_app.activate();
+                    }
+                }
+            }
+            let _ = &event; // suppress unused warning on non-macOS
         })
         .build(app)?;
 
