@@ -1,7 +1,16 @@
 export const config = {
   runner: "local",
   port: 4444,
-  specs: ["./specs/**/*.mjs"],
+  specs: [
+    "./specs/smoke.mjs",
+    "./specs/window.mjs",
+    "./specs/navigation.mjs",
+    "./specs/library.mjs",
+    "./specs/settings.mjs",
+    "./specs/theme.mjs",
+    "./specs/import-dialog.mjs",
+    "./specs/accessibility.mjs",
+  ],
   maxInstances: 1,
   capabilities: [
     {
