@@ -79,6 +79,8 @@
     "deselectAll": "Deselect all",
     "bulkDeleteConfirm": "Delete {{count}} books? This cannot be undone.",
     "bulkDeleted": "{{count}} books deleted",
+    "bulkEdit": "Edit",
+    "bulkEditSuccess": "Updated {{count}} books",
     "filterByFormat": "Filter by format",
     "filterByStatus": "Filter by status",
     "filterByRating": "Filter by rating",
@@ -299,6 +301,10 @@
     "apiKeyPlaceholder": "API key (optional)",
     "activity": "Activity",
     "viewActivityLog": "View activity log",
+    "general": "General",
+    "launchAtStartup": "Launch at startup",
+    "launchAtStartupHint": "Start Folio automatically when you log in",
+    "autoStartFailed": "Failed to change autostart: {{error}}",
     "remoteAccess": "Remote Access",
     "pin": "PIN",
     "pinPlaceholder": "Set a PIN for web access",
@@ -544,6 +550,8 @@
     "networkError": "Could not connect to the server. Check your internet connection.",
     "urlBlocked": "This URL was blocked for security reasons.",
     "tooLarge": "The file or response is too large.",
+    "notZip": "This file is not a valid ZIP/CBZ archive. It may be a RAR file with a .cbz extension \u2014 try renaming it to .cbr.",
+    "notRar": "This file is not a valid RAR/CBR archive.",
     "generic": "Something went wrong. Please try again."
   },
 
@@ -555,5 +563,14 @@
     "label": "Language",
     "english": "English",
     "french": "Fran\u00e7ais"
+  },
+  "bulkEdit": {
+    "title": "Edit {{count}} Books",
+    "author": "Author",
+    "series": "Series",
+    "year": "Year",
+    "language": "Language",
+    "publisher": "Publisher",
+    "multipleValues": "Multiple values"
   }
 }

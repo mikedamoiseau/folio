@@ -5,7 +5,7 @@ import { convertFileSrc } from "@tauri-apps/api/core";
 import { formatMetadataPills } from "../lib/utils";
 import StarRating from "./StarRating";
 
-interface BookCardProps {
+export interface BookCardData {
   id: string;
   title: string;
   author: string;
@@ -19,36 +19,26 @@ interface BookCardProps {
   volume?: number | null;
   rating?: number | null;
   isImported?: boolean;
+}
+
+export interface BookCardActions {
   onClick: () => void;
   onDelete?: (id: string) => void;
   onEdit?: (id: string) => void;
   onInfo?: (id: string) => void;
   onRemoveFromCollection?: () => void;
   onScanForMetadata?: (id: string) => void;
+}
+
+interface BookCardProps {
+  book: BookCardData;
+  actions: BookCardActions;
   isScanning?: boolean;
 }
 
-export default function BookCard({
-  id,
-  title,
-  author,
-  coverPath,
-  format,
-  progress,
-  language,
-  publishYear,
-  series,
-  volume,
-  rating,
-  isImported,
-  onClick,
-  onDelete,
-  onEdit,
-  onInfo,
-  onRemoveFromCollection,
-  onScanForMetadata,
-  isScanning,
-}: BookCardProps) {
+export default function BookCard({ book, actions, isScanning }: BookCardProps) {
+  const { id, title, author, coverPath, format, progress, language, publishYear, series, volume, rating, isImported } = book;
+  const { onClick, onDelete, onEdit, onInfo, onRemoveFromCollection, onScanForMetadata } = actions;
   const { t } = useTranslation();
   const coverSrc = coverPath ? convertFileSrc(coverPath) : null;
   const [confirming, setConfirming] = useState(false);
@@ -80,7 +70,8 @@ export default function BookCard({
           <img
             src={coverSrc}
             alt={t("bookCard.coverAlt", { title })}
-            className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-[1.02]"
+            loading="lazy"
+            className="w-full h-full object-cover transition-all duration-300 group-hover:scale-[1.02] animate-fade-in"
           />
         ) : (
           <div className="flex flex-col items-center justify-center w-full h-full gap-3">

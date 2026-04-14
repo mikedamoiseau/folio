@@ -21,6 +21,9 @@ const ERROR_KEYS: Record<string, string> = {
   "dns error": "errors.networkError",
   "url blocked": "errors.urlBlocked",
   "too large": "errors.tooLarge",
+  "could not find eocd": "errors.notZip",
+  "not a valid zip": "errors.notZip",
+  "not a valid rar": "errors.notRar",
 };
 
 export function friendlyError(raw: string, t: TFunction): string {
@@ -28,5 +31,6 @@ export function friendlyError(raw: string, t: TFunction): string {
   for (const [key, translationKey] of Object.entries(ERROR_KEYS)) {
     if (lower.includes(key)) return t(translationKey);
   }
-  return t("errors.generic");
+  // Show the raw error rather than a useless generic message
+  return raw;
 }

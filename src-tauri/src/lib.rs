@@ -12,6 +12,7 @@ pub mod page_cache;
 pub mod pdf;
 pub mod providers;
 pub mod sync;
+pub mod tray;
 pub mod web_server;
 
 use commands::{AppState, LruCache, ProfileState};
@@ -19,10 +20,23 @@ use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    #[allow(unused_mut)]
+    let mut builder = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init())
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            None,
+        ));
+
+    // WebDriver automation plugin — debug builds only
+    #[cfg(debug_assertions)]
+    {
+        builder = builder.plugin(tauri_plugin_webdriver_automation::init());
+    }
+
+    builder
         .setup(|app| {
             let db_path = app.path().app_data_dir()?.join("library.db");
             let pool = db::create_pool(&db_path).expect("Failed to initialize database");
@@ -133,6 +147,11 @@ pub fn run() {
                 web_server_handle: std::sync::Mutex::new(None),
             });
 
+            // Initialize system tray
+            if let Err(e) = tray::setup_tray(&app.handle().clone()) {
+                log::error!("Failed to initialize tray: {}", e);
+            }
+
             // Auto-start web server if previously enabled
             let app_handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
@@ -185,6 +204,8 @@ pub fn run() {
                     if let Ok(handle) = web_server::start(web_state, port).await {
                         let mut h = state.web_server_handle.lock().unwrap();
                         *h = Some(handle);
+                        // Update tray menu to show "Stop Web Server"
+                        let _ = tray::rebuild_tray_menu(&app_handle);
                     }
                 }
             });
@@ -194,6 +215,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::import_book,
             commands::get_library,
+            commands::get_library_grid,
             commands::get_recently_read,
             commands::update_book_metadata,
             commands::get_all_tags,
@@ -221,6 +243,7 @@ pub fn run() {
             commands::search_book_content,
             commands::get_toc,
             commands::get_reading_progress,
+            commands::get_all_reading_progress,
             commands::save_reading_progress,
             commands::get_bookmarks,
             commands::add_bookmark,
@@ -238,6 +261,7 @@ pub fn run() {
             commands::add_book_to_collection,
             commands::remove_book_from_collection,
             commands::get_books_in_collection,
+            commands::get_books_in_collection_grid,
             commands::get_library_folder,
             commands::get_library_folder_info,
             commands::set_library_folder,
@@ -291,19 +315,49 @@ pub fn run() {
             commands::bulk_delete_books,
             commands::bulk_add_to_collection,
             commands::bulk_add_tag,
+            commands::bulk_update_metadata,
+            commands::get_autostart_enabled,
+            commands::set_autostart_enabled,
         ])
-        // R5-1: Graceful shutdown — stop web server when app exits
         .on_window_event(|window, event| {
-            if let tauri::WindowEvent::Destroyed = event {
-                let state = window.state::<AppState>();
-                let handle = state
-                    .web_server_handle
-                    .lock()
-                    .ok()
-                    .and_then(|mut h| h.take());
-                if let Some(h) = handle {
-                    web_server::stop(h);
+            match event {
+                tauri::WindowEvent::CloseRequested { api, .. } => {
+                    use tauri_plugin_autostart::ManagerExt;
+                    // Hide to tray instead of quitting, but only if the tray
+                    // icon actually exists (setup_tray may have failed).
+                    let autostart_enabled = window
+                        .app_handle()
+                        .autolaunch()
+                        .is_enabled()
+                        .unwrap_or(false);
+                    let tray_available = window.app_handle().tray_by_id("main").is_some();
+
+                    if autostart_enabled && tray_available {
+                        api.prevent_close();
+                        let _ = window.hide();
+                        // macOS: switch to Accessory policy so the app stays
+                        // responsive (tray menu works) even with no visible window.
+                        #[cfg(target_os = "macos")]
+                        {
+                            let _ = window
+                                .app_handle()
+                                .set_activation_policy(tauri::ActivationPolicy::Accessory);
+                        }
+                    }
                 }
+                tauri::WindowEvent::Destroyed => {
+                    // R5-1: Graceful shutdown — stop web server when app exits
+                    let state = window.state::<AppState>();
+                    let handle = state
+                        .web_server_handle
+                        .lock()
+                        .ok()
+                        .and_then(|mut h| h.take());
+                    if let Some(h) = handle {
+                        web_server::stop(h);
+                    }
+                }
+                _ => {}
             }
         })
         .run(tauri::generate_context!())

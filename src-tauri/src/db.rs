@@ -5,8 +5,8 @@ use std::path::Path;
 use std::time::Duration;
 
 use crate::models::{
-    ActivityEntry, Book, Bookmark, Collection, CollectionRule, CollectionType, CustomFont,
-    ReadingProgress, SeriesInfo,
+    ActivityEntry, Book, BookGridItem, Bookmark, Collection, CollectionRule, CollectionType,
+    CustomFont, ReadingProgress, SeriesInfo,
 };
 
 pub type DbPool = Pool<SqliteConnectionManager>;
@@ -229,6 +229,16 @@ fn run_schema(conn: &Connection) -> Result<()> {
         "CREATE INDEX IF NOT EXISTS idx_reading_progress_book_id ON reading_progress(book_id);",
     );
 
+    // Performance indexes for large libraries
+    let _ = conn.execute_batch("CREATE INDEX IF NOT EXISTS idx_books_series ON books(series);");
+    let _ = conn.execute_batch("CREATE INDEX IF NOT EXISTS idx_books_format ON books(format);");
+    let _ = conn.execute_batch(
+        "CREATE INDEX IF NOT EXISTS idx_reading_progress_last_read_at ON reading_progress(last_read_at);",
+    );
+    let _ = conn.execute_batch("CREATE INDEX IF NOT EXISTS idx_books_language ON books(language);");
+    let _ =
+        conn.execute_batch("CREATE INDEX IF NOT EXISTS idx_books_publisher ON books(publisher);");
+
     // Migration: drop CHECK constraint on collection_rules.field (was limited to a fixed set;
     // now validated in application code so new rule fields don't require schema changes).
     let has_check: bool = conn
@@ -266,8 +276,11 @@ pub fn create_pool(db_path: &Path) -> Result<DbPool, Box<dyn std::error::Error>>
         std::fs::create_dir_all(parent)?;
     }
 
-    let manager = SqliteConnectionManager::file(db_path)
-        .with_init(|conn| conn.execute_batch("PRAGMA foreign_keys = ON;"));
+    let manager = SqliteConnectionManager::file(db_path).with_init(|conn| {
+        conn.execute_batch(
+            "PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;",
+        )
+    });
 
     let pool = Pool::builder()
         .max_size(5)
@@ -364,6 +377,39 @@ pub fn list_books(conn: &Connection) -> Result<Vec<Book>> {
     let sql = format!("SELECT {} FROM books ORDER BY added_at DESC", BOOK_COLUMNS);
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt.query_map([], row_to_book)?;
+    rows.collect()
+}
+
+const GRID_COLUMNS: &str = "id, title, author, cover_path, total_chapters, added_at, format, series, volume, rating, language, publish_year, is_imported";
+
+/// Grid columns prefixed with table alias `b.` for JOIN queries.
+const GRID_COLUMNS_B: &str = "b.id, b.title, b.author, b.cover_path, b.total_chapters, b.added_at, b.format, b.series, b.volume, b.rating, b.language, b.publish_year, b.is_imported";
+
+fn row_to_grid_item(row: &rusqlite::Row) -> rusqlite::Result<BookGridItem> {
+    let format_str: String = row.get("format")?;
+    Ok(BookGridItem {
+        id: row.get("id")?,
+        title: row.get("title")?,
+        author: row.get("author")?,
+        cover_path: row.get("cover_path")?,
+        total_chapters: row.get("total_chapters")?,
+        added_at: row.get("added_at")?,
+        format: format_str
+            .parse()
+            .map_err(|e: String| rusqlite::Error::InvalidParameterName(e))?,
+        series: row.get("series")?,
+        volume: row.get("volume")?,
+        rating: row.get("rating")?,
+        language: row.get("language")?,
+        publish_year: row.get("publish_year")?,
+        is_imported: row.get::<_, i32>("is_imported").unwrap_or(1) != 0,
+    })
+}
+
+pub fn list_books_grid(conn: &Connection) -> Result<Vec<BookGridItem>> {
+    let sql = format!("SELECT {} FROM books ORDER BY added_at DESC", GRID_COLUMNS);
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map([], row_to_grid_item)?;
     rows.collect()
 }
 
@@ -469,6 +515,81 @@ pub fn bulk_add_tag(conn: &Connection, book_ids: &[&str], tag: &str) -> Result<(
     }
     tx.commit()?;
     Ok(())
+}
+
+/// Update metadata fields on multiple books in a single transaction.
+/// Only non-None fields are applied. Empty strings clear optional fields to NULL.
+pub fn bulk_update_metadata(
+    conn: &Connection,
+    ids: &[&str],
+    author: Option<&str>,
+    series: Option<&str>,
+    publish_year: Option<u16>,
+    language: Option<&str>,
+    publisher: Option<&str>,
+) -> Result<u32> {
+    if ids.is_empty() {
+        return Ok(0);
+    }
+
+    let mut set_clauses: Vec<&str> = Vec::new();
+    let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+
+    if let Some(v) = author {
+        set_clauses.push("author = ?");
+        params.push(Box::new(v.to_string()));
+    }
+    if let Some(v) = series {
+        set_clauses.push("series = ?");
+        params.push(Box::new(if v.is_empty() {
+            None::<String>
+        } else {
+            Some(v.to_string())
+        }));
+    }
+    if let Some(v) = publish_year {
+        set_clauses.push("publish_year = ?");
+        params.push(Box::new(if v == 0 { None::<u16> } else { Some(v) }));
+    }
+    if let Some(v) = language {
+        set_clauses.push("language = ?");
+        params.push(Box::new(if v.is_empty() {
+            None::<String>
+        } else {
+            Some(v.to_string())
+        }));
+    }
+    if let Some(v) = publisher {
+        set_clauses.push("publisher = ?");
+        params.push(Box::new(if v.is_empty() {
+            None::<String>
+        } else {
+            Some(v.to_string())
+        }));
+    }
+
+    if set_clauses.is_empty() {
+        return Ok(0);
+    }
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64;
+    set_clauses.push("updated_at = ?");
+    params.push(Box::new(now));
+
+    let sql = format!("UPDATE books SET {} WHERE id = ?", set_clauses.join(", "));
+    let tx = conn.unchecked_transaction()?;
+    let mut count: u32 = 0;
+    for id in ids {
+        let mut all_params: Vec<&dyn rusqlite::types::ToSql> =
+            params.iter().map(|p| p.as_ref()).collect();
+        all_params.push(id);
+        count += tx.execute(&sql, all_params.as_slice())? as u32;
+    }
+    tx.commit()?;
+    Ok(count)
 }
 
 pub fn update_book_enrichment(
@@ -593,6 +714,21 @@ pub fn get_reading_progress(conn: &Connection, book_id: &str) -> Result<Option<R
     }
 }
 
+pub fn get_all_reading_progress(conn: &Connection) -> Result<Vec<ReadingProgress>> {
+    let mut stmt = conn.prepare(
+        "SELECT book_id, chapter_index, scroll_position, last_read_at FROM reading_progress",
+    )?;
+    let rows = stmt.query_map([], |row| {
+        Ok(ReadingProgress {
+            book_id: row.get(0)?,
+            chapter_index: row.get(1)?,
+            scroll_position: row.get(2)?,
+            last_read_at: row.get(3)?,
+        })
+    })?;
+    rows.collect()
+}
+
 pub fn get_recently_read_books(conn: &Connection, limit: u32) -> Result<Vec<Book>> {
     let sql = format!(
         "SELECT {} FROM books b JOIN reading_progress rp ON rp.book_id = b.id ORDER BY rp.last_read_at DESC LIMIT ?1",
@@ -683,31 +819,31 @@ const BOOK_COLUMNS: &str = "id, title, author, file_path, cover_path, total_chap
 const BOOK_COLUMNS_B: &str = "b.id, b.title, b.author, b.file_path, b.cover_path, b.total_chapters, b.added_at, b.format, b.file_hash, b.description, b.genres, b.rating, b.isbn, b.openlibrary_key, b.enrichment_status, b.series, b.volume, b.language, b.publisher, b.publish_year, b.is_imported";
 
 fn row_to_book(row: &rusqlite::Row) -> rusqlite::Result<Book> {
-    let format_str: String = row.get(7)?;
+    let format_str: String = row.get("format")?;
     Ok(Book {
-        id: row.get(0)?,
-        title: row.get(1)?,
-        author: row.get(2)?,
-        file_path: row.get(3)?,
-        cover_path: row.get(4)?,
-        total_chapters: row.get(5)?,
-        added_at: row.get(6)?,
+        id: row.get("id")?,
+        title: row.get("title")?,
+        author: row.get("author")?,
+        file_path: row.get("file_path")?,
+        cover_path: row.get("cover_path")?,
+        total_chapters: row.get("total_chapters")?,
+        added_at: row.get("added_at")?,
         format: format_str
             .parse()
             .map_err(|e: String| rusqlite::Error::InvalidParameterName(e))?,
-        file_hash: row.get(8)?,
-        description: row.get(9)?,
-        genres: row.get(10)?,
-        rating: row.get(11)?,
-        isbn: row.get(12)?,
-        openlibrary_key: row.get(13)?,
-        enrichment_status: row.get(14)?,
-        series: row.get(15)?,
-        volume: row.get(16)?,
-        language: row.get(17)?,
-        publisher: row.get(18)?,
-        publish_year: row.get(19)?,
-        is_imported: row.get::<_, i32>(20).unwrap_or(1) != 0,
+        file_hash: row.get("file_hash")?,
+        description: row.get("description")?,
+        genres: row.get("genres")?,
+        rating: row.get("rating")?,
+        isbn: row.get("isbn")?,
+        openlibrary_key: row.get("openlibrary_key")?,
+        enrichment_status: row.get("enrichment_status")?,
+        series: row.get("series")?,
+        volume: row.get("volume")?,
+        language: row.get("language")?,
+        publisher: row.get("publisher")?,
+        publish_year: row.get("publish_year")?,
+        is_imported: row.get::<_, i32>("is_imported").unwrap_or(1) != 0,
     })
 }
 
@@ -1299,6 +1435,44 @@ pub fn get_books_in_collection(conn: &Connection, collection_id: &str) -> Result
 
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt.query_map(rusqlite::params_from_iter(param_values.iter()), row_to_book)?;
+    rows.collect()
+}
+
+/// Lightweight variant of `get_books_in_collection` returning only grid-display fields.
+pub fn get_books_in_collection_grid(
+    conn: &Connection,
+    collection_id: &str,
+) -> Result<Vec<BookGridItem>> {
+    let mut type_stmt = conn.prepare("SELECT type FROM collections WHERE id = ?1")?;
+    let coll_type: String = type_stmt.query_row(params![collection_id], |row| row.get(0))?;
+
+    if coll_type == "manual" {
+        let sql = format!(
+            "SELECT {} FROM books b JOIN book_collections bc ON bc.book_id = b.id WHERE bc.collection_id = ?1 ORDER BY bc.added_at DESC",
+            GRID_COLUMNS_B
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map(params![collection_id], row_to_grid_item)?;
+        return rows.collect();
+    }
+
+    let rules = get_collection_rules(conn, collection_id)?;
+    let (joins, where_str, param_values) = build_rule_query(&rules);
+
+    let sql = format!(
+        "SELECT DISTINCT {cols}
+         FROM books b
+         {joins}
+         {where_str}
+         ORDER BY b.added_at DESC",
+        cols = GRID_COLUMNS_B
+    );
+
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map(
+        rusqlite::params_from_iter(param_values.iter()),
+        row_to_grid_item,
+    )?;
     rows.collect()
 }
 
@@ -2692,5 +2866,169 @@ mod tests {
             )
             .unwrap();
         assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn test_performance_indexes_exist() {
+        let (_dir, conn) = setup();
+        let indexes: Vec<String> = conn
+            .prepare("SELECT name FROM sqlite_master WHERE type='index'")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+        assert!(
+            indexes.contains(&"idx_books_series".to_string()),
+            "missing index idx_books_series"
+        );
+        assert!(
+            indexes.contains(&"idx_books_format".to_string()),
+            "missing index idx_books_format"
+        );
+        assert!(
+            indexes.contains(&"idx_reading_progress_last_read_at".to_string()),
+            "missing index idx_reading_progress_last_read_at"
+        );
+    }
+
+    #[test]
+    fn test_list_books_grid_returns_lightweight_items() {
+        let (_dir, conn) = setup();
+        let mut book = sample_book("grid-1");
+        book.file_path = "/tmp/grid1.epub".to_string();
+        book.description = Some("A long description that should be excluded".to_string());
+        book.genres = Some(r#"["fiction","sci-fi"]"#.to_string());
+        book.isbn = Some("978-0-123456-78-9".to_string());
+        book.series = Some("Test Series".to_string());
+        book.volume = Some(1);
+        book.rating = Some(4.5);
+        book.language = Some("en".to_string());
+        book.publish_year = Some(2020);
+        insert_book(&conn, &book).unwrap();
+
+        let items = list_books_grid(&conn).unwrap();
+        assert_eq!(items.len(), 1);
+        let item = &items[0];
+        assert_eq!(item.id, "grid-1");
+        assert_eq!(item.title, "Test Book");
+        assert_eq!(item.author, "Test Author");
+        assert_eq!(item.series, Some("Test Series".to_string()));
+        assert_eq!(item.volume, Some(1));
+        assert_eq!(item.rating, Some(4.5));
+        assert_eq!(item.language, Some("en".to_string()));
+        assert_eq!(item.publish_year, Some(2020));
+        assert!(item.is_imported);
+    }
+
+    #[test]
+    fn test_list_books_grid_order() {
+        let (_dir, conn) = setup();
+        let mut book1 = sample_book("grid-ord-1");
+        book1.file_path = "/tmp/grid-ord-1.epub".to_string();
+        book1.added_at = 1700000000;
+        insert_book(&conn, &book1).unwrap();
+
+        let mut book2 = sample_book("grid-ord-2");
+        book2.file_path = "/tmp/grid-ord-2.epub".to_string();
+        book2.added_at = 1700000100;
+        insert_book(&conn, &book2).unwrap();
+
+        let items = list_books_grid(&conn).unwrap();
+        assert_eq!(items.len(), 2);
+        // Most recent first
+        assert_eq!(items[0].id, "grid-ord-2");
+        assert_eq!(items[1].id, "grid-ord-1");
+    }
+
+    #[test]
+    fn test_bulk_update_metadata_author() {
+        let (_dir, conn) = setup();
+        let mut b1 = sample_book("bulk-1");
+        b1.file_path = "/tmp/bulk1.epub".to_string();
+        b1.author = "Old Author".to_string();
+        insert_book(&conn, &b1).unwrap();
+        let mut b2 = sample_book("bulk-2");
+        b2.file_path = "/tmp/bulk2.epub".to_string();
+        b2.author = "Old Author".to_string();
+        insert_book(&conn, &b2).unwrap();
+
+        let updated = bulk_update_metadata(
+            &conn,
+            &["bulk-1", "bulk-2"],
+            Some("New Author"),
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(updated, 2);
+        assert_eq!(
+            get_book(&conn, "bulk-1").unwrap().unwrap().author,
+            "New Author"
+        );
+        assert_eq!(
+            get_book(&conn, "bulk-2").unwrap().unwrap().author,
+            "New Author"
+        );
+    }
+
+    #[test]
+    fn test_bulk_update_metadata_partial_fields() {
+        let (_dir, conn) = setup();
+        let mut b1 = sample_book("bulk-p1");
+        b1.file_path = "/tmp/bulkp1.epub".to_string();
+        b1.author = "Keep This".to_string();
+        b1.series = Some("Old Series".to_string());
+        insert_book(&conn, &b1).unwrap();
+
+        bulk_update_metadata(
+            &conn,
+            &["bulk-p1"],
+            None,
+            Some("New Series"),
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        let b = get_book(&conn, "bulk-p1").unwrap().unwrap();
+        assert_eq!(b.author, "Keep This");
+        assert_eq!(b.series, Some("New Series".to_string()));
+    }
+
+    #[test]
+    fn test_bulk_update_metadata_clear_field() {
+        let (_dir, conn) = setup();
+        let mut b1 = sample_book("bulk-c1");
+        b1.file_path = "/tmp/bulkc1.epub".to_string();
+        b1.series = Some("Remove Me".to_string());
+        insert_book(&conn, &b1).unwrap();
+
+        bulk_update_metadata(&conn, &["bulk-c1"], None, Some(""), None, None, None).unwrap();
+        let b = get_book(&conn, "bulk-c1").unwrap().unwrap();
+        assert_eq!(b.series, None);
+    }
+
+    #[test]
+    fn test_autostart_setting_roundtrip() {
+        let dir = tempfile::tempdir().unwrap();
+        let pool = create_pool(&dir.path().join("test.db")).unwrap();
+        let conn = pool.get().unwrap();
+
+        // Default: no setting exists
+        let val = get_setting(&conn, "autostart_enabled").unwrap();
+        assert_eq!(val, None);
+
+        // Set to true
+        set_setting(&conn, "autostart_enabled", "true").unwrap();
+        let val = get_setting(&conn, "autostart_enabled").unwrap();
+        assert_eq!(val, Some("true".to_string()));
+
+        // Set to false
+        set_setting(&conn, "autostart_enabled", "false").unwrap();
+        let val = get_setting(&conn, "autostart_enabled").unwrap();
+        assert_eq!(val, Some("false".to_string()));
     }
 }

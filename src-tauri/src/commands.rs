@@ -6,8 +6,8 @@ use crate::cbz;
 use crate::db::{self, DbPool};
 use crate::epub;
 use crate::models::{
-    AutoBackup, Book, BookFormat, Bookmark, CleanupEntry, CleanupProgress, CleanupResult,
-    Collection, CollectionRule, CollectionType, CustomFont, Highlight, NewRuleInput,
+    AutoBackup, Book, BookFormat, BookGridItem, Bookmark, CleanupEntry, CleanupProgress,
+    CleanupResult, Collection, CollectionRule, CollectionType, CustomFont, Highlight, NewRuleInput,
     ReadingProgress, SeriesInfo,
 };
 use crate::opds;
@@ -324,7 +324,8 @@ pub async fn import_book(
         }
     }
 
-    // Detect format from file extension and route to the appropriate parser.
+    // Detect format from file extension, with magic-byte fallback for
+    // mislabeled archives (e.g., RAR files saved as .cbz).
     let extension = std::path::Path::new(&file_path)
         .extension()
         .and_then(|e| e.to_str())
@@ -333,8 +334,24 @@ pub async fn import_book(
 
     let format = match extension.as_str() {
         "epub" => BookFormat::Epub,
-        "cbz" => BookFormat::Cbz,
-        "cbr" => BookFormat::Cbr,
+        "cbz" | "cbr" => {
+            // Read magic bytes to detect actual archive type
+            let mut magic = [0u8; 7];
+            if let Ok(mut f) = std::fs::File::open(&file_path) {
+                let _ = std::io::Read::read(&mut f, &mut magic);
+            }
+            if magic[0..4] == [0x50, 0x4B, 0x03, 0x04] {
+                // PK\x03\x04 = ZIP
+                BookFormat::Cbz
+            } else if magic[0..7] == *b"Rar!\x1a\x07\x00" || magic[0..6] == *b"Rar!\x1a\x07" {
+                // RAR v4 or v5
+                BookFormat::Cbr
+            } else if extension == "cbz" {
+                BookFormat::Cbz // trust extension if magic unknown
+            } else {
+                BookFormat::Cbr
+            }
+        }
         "pdf" => BookFormat::Pdf,
         _ => return Err(format!("unsupported file format: .{extension}")),
     };
@@ -710,6 +727,12 @@ pub async fn import_book(
 pub async fn get_library(state: State<'_, AppState>) -> Result<Vec<Book>, String> {
     let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
     db::list_books(&conn).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn get_library_grid(state: State<'_, AppState>) -> Result<Vec<BookGridItem>, String> {
+    let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
+    db::list_books_grid(&conn).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -1118,6 +1141,14 @@ pub async fn get_reading_progress(
 ) -> Result<Option<ReadingProgress>, String> {
     let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
     db::get_reading_progress(&conn, &book_id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn get_all_reading_progress(
+    state: State<'_, AppState>,
+) -> Result<Vec<ReadingProgress>, String> {
+    let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
+    db::get_all_reading_progress(&conn).map_err(|e| e.to_string())
 }
 
 fn validate_file_exists(file_path: &str) -> Result<(), String> {
@@ -1861,6 +1892,15 @@ pub async fn get_books_in_collection(
 ) -> Result<Vec<Book>, String> {
     let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
     db::get_books_in_collection(&conn, &collection_id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn get_books_in_collection_grid(
+    collection_id: String,
+    state: State<'_, AppState>,
+) -> Result<Vec<BookGridItem>, String> {
+    let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
+    db::get_books_in_collection_grid(&conn, &collection_id).map_err(|e| e.to_string())
 }
 
 // --- Share Collections ---
@@ -4033,10 +4073,84 @@ pub async fn bulk_add_tag(
     Ok(())
 }
 
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BulkEditFields {
+    pub author: Option<String>,
+    pub series: Option<String>,
+    pub publish_year: Option<u16>,
+    pub language: Option<String>,
+    pub publisher: Option<String>,
+}
+
+#[tauri::command]
+pub async fn bulk_update_metadata(
+    book_ids: Vec<String>,
+    fields: BulkEditFields,
+    state: State<'_, AppState>,
+) -> Result<u32, String> {
+    let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
+    let ids_ref: Vec<&str> = book_ids.iter().map(|s| s.as_str()).collect();
+
+    // Normalize strings with the same rules as update_book_metadata:
+    // trim whitespace + enforce length limits.
+    let normalize_str = |s: String, max_len: usize| -> String {
+        let trimmed = s.trim().to_string();
+        if trimmed.len() > max_len {
+            // Truncate to the largest valid char boundary at or below max_len bytes.
+            // Direct byte slicing can panic on multi-byte UTF-8 characters.
+            let mut end = max_len;
+            while end > 0 && !trimmed.is_char_boundary(end) {
+                end -= 1;
+            }
+            trimmed[..end].to_string()
+        } else {
+            trimmed
+        }
+    };
+    // Author is required: reject empty after trim instead of silently skipping.
+    let author = if let Some(s) = fields.author {
+        let t = normalize_str(s, 500);
+        if t.is_empty() {
+            return Err("Author cannot be empty.".to_string());
+        }
+        Some(t)
+    } else {
+        None
+    };
+    // Optional fields: trim + length-limit; empty string preserved for DB to convert to NULL.
+    let series = fields.series.map(|s| normalize_str(s, 500));
+    let language = fields.language.map(|s| normalize_str(s, 50));
+    let publisher = fields.publisher.map(|s| normalize_str(s, 500));
+
+    let count = db::bulk_update_metadata(
+        &conn,
+        &ids_ref,
+        author.as_deref(),
+        series.as_deref(),
+        fields.publish_year,
+        language.as_deref(),
+        publisher.as_deref(),
+    )
+    .map_err(|e| e.to_string())?;
+
+    log_activity(
+        &conn,
+        "bulk_edit",
+        "book",
+        None,
+        None,
+        Some(&format!("{} books updated", count)),
+    );
+
+    Ok(count)
+}
+
 // ── Web Server Commands ──────────────────────────────────────────────────────
 
 #[tauri::command]
 pub async fn web_server_start(
+    app: AppHandle,
     port: Option<u16>,
     state: State<'_, AppState>,
 ) -> Result<String, String> {
@@ -4087,11 +4201,14 @@ pub async fn web_server_start(
     let _ = db::set_setting(&conn, "web_server_enabled", "true");
     let _ = db::set_setting(&conn, "web_server_port", &port.to_string());
 
+    // Rebuild tray menu to reflect server running state
+    let _ = crate::tray::rebuild_tray_menu(&app);
+
     Ok(url)
 }
 
 #[tauri::command]
-pub async fn web_server_stop(state: State<'_, AppState>) -> Result<(), String> {
+pub async fn web_server_stop(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
     let handle = {
         let mut h = state.web_server_handle.lock().map_err(|e| e.to_string())?;
         h.take()
@@ -4103,6 +4220,8 @@ pub async fn web_server_stop(state: State<'_, AppState>) -> Result<(), String> {
             let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
             log_activity(&conn, "web_server_stopped", "system", None, None, None);
             let _ = db::set_setting(&conn, "web_server_enabled", "false");
+            // Rebuild tray menu to reflect server stopped state
+            let _ = crate::tray::rebuild_tray_menu(&app);
             Ok(())
         }
         None => Err("Web server is not running".to_string()),
@@ -4308,4 +4427,33 @@ mod tests {
         assert!(cache.get("b").is_some() || cache.get("c").is_some());
         assert!(cache.total_bytes() <= 25);
     }
+}
+
+// ── Autostart ──────────────────────────────────────────────
+
+#[tauri::command]
+pub async fn get_autostart_enabled(app: AppHandle) -> Result<bool, String> {
+    use tauri_plugin_autostart::ManagerExt;
+    app.autolaunch()
+        .is_enabled()
+        .map_err(|e| format!("Failed to check autostart: {}", e))
+}
+
+#[tauri::command]
+pub async fn set_autostart_enabled(app: AppHandle, enabled: bool) -> Result<(), String> {
+    use tauri_plugin_autostart::ManagerExt;
+
+    let autostart = app.autolaunch();
+
+    if enabled {
+        autostart
+            .enable()
+            .map_err(|e| format!("Failed to enable autostart: {}", e))?;
+    } else {
+        autostart
+            .disable()
+            .map_err(|e| format!("Failed to disable autostart: {}", e))?;
+    }
+
+    Ok(())
 }

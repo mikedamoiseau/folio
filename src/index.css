@@ -122,6 +122,13 @@
   to   { opacity: 1; transform: translateY(0) scale(1); }
 }
 
+/* ── Off-screen rendering optimization ──────────────────────── */
+/* Browser skips layout/paint for cards scrolled far off-screen */
+.card-cv {
+  content-visibility: auto;
+  contain-intrinsic-size: 160px 310px;
+}
+
 /* ── Form focus enhancement ─────────────────────────────────── */
 /* Adds a subtle accent glow ring alongside the border change  */
 

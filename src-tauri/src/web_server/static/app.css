@@ -24,6 +24,16 @@ button:focus-visible, a:focus-visible, input:focus-visible { outline: 2px solid 
 .header h1 { font-size: 1.3rem; color: var(--accent); white-space: nowrap; }
 .header input[type="search"] { flex: 1; padding: 8px 12px; background: var(--card-bg); border: 1px solid var(--border); border-radius: var(--radius); color: var(--fg); font-size: 0.95rem; }
 .header .back-btn { background: none; border: none; color: var(--fg); font-size: 1.2rem; cursor: pointer; padding: 4px 8px; }
+.header select { padding: 6px 10px; background: var(--card-bg); border: 1px solid var(--border); border-radius: var(--radius); color: var(--fg); font-size: 0.85rem; cursor: pointer; }
+
+/* ── Filter Bar ───────────────────────────────── */
+#filter-bar { padding: 8px var(--gap); border-bottom: 1px solid var(--border); overflow-x: auto; -webkit-overflow-scrolling: touch; }
+.filter-pills { display: flex; gap: 6px; align-items: center; white-space: nowrap; }
+.pill { padding: 5px 12px; background: var(--card-bg); border: 1px solid var(--border); border-radius: 20px; color: #aaa; font-size: 0.78rem; cursor: pointer; transition: all 0.15s; }
+.pill:hover { color: var(--fg); border-color: #555; }
+.pill.active { background: var(--accent); color: #111; border-color: var(--accent); font-weight: 600; }
+.pill-count { font-size: 0.65rem; opacity: 0.7; margin-left: 2px; }
+.filter-sep { color: #444; font-size: 0.7rem; user-select: none; }
 
 /* ── Book Grid ─────────────────────────────────── */
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: var(--gap); padding: var(--gap); }

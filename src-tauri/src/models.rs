@@ -59,6 +59,25 @@ pub struct Book {
     pub is_imported: bool,
 }
 
+/// Lightweight subset of Book for grid/list display — omits heavy fields
+/// like description, genres, isbn, file_path, file_hash, etc.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BookGridItem {
+    pub id: String,
+    pub title: String,
+    pub author: String,
+    pub cover_path: Option<String>,
+    pub total_chapters: u32,
+    pub added_at: i64,
+    pub format: BookFormat,
+    pub series: Option<String>,
+    pub volume: Option<u32>,
+    pub rating: Option<f64>,
+    pub language: Option<String>,
+    pub publish_year: Option<u16>,
+    pub is_imported: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReadingProgress {
     pub book_id: String,
