@@ -106,3 +106,52 @@ The fix types the parse result as `unknown`, checks `Array.isArray(parsed)` and 
 
 ---
 
+
+## [Codex — Reviewer] Round 3
+
+NEEDS_FIX: persisted tag filters are only type-validated, not reconciled with the fetched tag set, so stale-but-valid IDs can still blank the library with an effectively invisible active filter
+
+1. **File**: [src/screens/Library.tsx](/Users/mike/Documents/www/folio/src/screens/Library.tsx:63), [src/screens/Library.tsx](/Users/mike/Documents/www/folio/src/screens/Library.tsx:156), [src/screens/Library.tsx](/Users/mike/Documents/www/folio/src/screens/Library.tsx:434), [src/components/TagFilter.tsx](/Users/mike/Documents/www/folio/src/components/TagFilter.tsx:90)  
+   **Line number(s)**: `Library.tsx` 63-69, 156-167, 434-438; `TagFilter.tsx` 90-121  
+   **What** can go wrong: if `localStorage["folio-library-filter-tags"]` contains a string array with IDs that do not exist in the fetched tag list, the library renders as empty even though books exist. A concrete case is persisted `["stale-tag-id"]` from prior bad state or manual storage corruption.  
+   **Why** the code is vulnerable to this: the initializer now validates only the JSON shape, not whether the IDs are real. After `get_all_tags()` succeeds, the code stores `allTags` but never drops unknown IDs from `filterTagIds`. The filter then does `filterTagIds.every((id) => tags.has(id))`, which is false for every book when an unknown ID is present. At the same time, `TagFilter` derives `selectedNames` by looking up IDs in `allTags`; unknown IDs disappear from the label, so the trigger can render as a blank active chip instead of showing what is selected.  
+   **Impact** if it happens: the main library can still be filtered down to zero results by persisted invalid state, and the active filter is hard to discover or clear because the button loses its visible label.  
+   **Fix** recommendation: after loading `tags`, build a `Set` of valid IDs and immediately prune `filterTagIds` to known IDs before applying the filter or persisting state. Also make the trigger resilient when `selectedTagIds` contains unknown IDs, e.g. fall back to a visible “Tags”/“Clear” label instead of rendering an empty chip.  
+   **Severity**: BLOCKING  
+   **Fixable**: YES
+
+---
+
+## [Gemini — Reviewer] Round 3
+
+(Gemini encountered an error this round)
+
+---
+
+
+## [Claude — Implementer] Round 3
+
+All 293 Rust tests pass, all 162 frontend tests pass, type check is clean.
+
+---
+
+## Verdict
+
+**I agree with Codex.** The issue is real and the fix is two lines:
+
+### Fix 1: Prune stale IDs after tag load (`Library.tsx:161-166`)
+
+After `get_all_tags()` returns, we now build a `Set` of valid tag IDs and prune `filterTagIds` to only contain IDs that exist. This prevents stale persisted IDs from blanking the library. The `prev.length` check avoids unnecessary re-renders when nothing changed.
+
+### Fix 2: TagFilter fallback label (`TagFilter.tsx:107`)
+
+Changed the condition from `selectedTagIds.length === 0` to `selectedTagIds.length === 0 || selectedNames.length === 0`. If all selected IDs fail to resolve to names (edge case before pruning kicks in, or during a race), the button shows "Tags" instead of rendering as a blank active chip.
+
+---
+
+| Issue | Raised by | Action | Reason |
+|-------|-----------|--------|--------|
+| Stale persisted tag IDs blank library with invisible active filter | Codex | **Fixed** | Agree — valid string array with non-existent IDs causes empty library and blank button. Now pruned after tag load + fallback label in TagFilter. |
+
+---
+

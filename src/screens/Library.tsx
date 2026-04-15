@@ -159,6 +159,12 @@ export default function Library() {
           invoke<BookTagAssoc[]>("get_all_book_tags"),
         ]);
         setAllTags(tags);
+        // Prune persisted filterTagIds to only IDs that still exist
+        const validIds = new Set(tags.map((tg) => tg.id));
+        setFilterTagIds((prev) => {
+          const pruned = prev.filter((id) => validIds.has(id));
+          return pruned.length === prev.length ? prev : pruned;
+        });
         const map = new Map<string, Set<string>>();
         for (const { book_id, tag_id } of assocs) {
           if (!map.has(book_id)) map.set(book_id, new Set());

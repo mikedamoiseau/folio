@@ -104,7 +104,7 @@ export default function TagFilter({
         } focus:outline-none`}
         aria-label={t("library.filterByTags")}
       >
-        {selectedTagIds.length === 0 ? (
+        {selectedTagIds.length === 0 || selectedNames.length === 0 ? (
           <span>{t("library.tagsAll")}</span>
         ) : selectedNames.length <= 2 ? (
           selectedNames.map((name) => (
