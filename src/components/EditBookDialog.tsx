@@ -104,14 +104,14 @@ export default function EditBookDialog({
         .slice(0, 5)
     : [];
 
-  const handleAddTag = async (raw: string) => {
+  const handleAddTag = async (raw: string): Promise<boolean> => {
     const names = raw
       .split(",")
       .map((s) => s.trim().toLowerCase())
       .filter((s) => s && !bookTags.some((tg) => tg.name.toLowerCase() === s));
     if (names.length === 0) {
       setTagInput("");
-      return;
+      return true;
     }
     try {
       for (const name of names) {
@@ -119,8 +119,10 @@ export default function EditBookDialog({
       }
       setTagInput("");
       await loadTags();
-    } catch {
-      // ignore
+      return true;
+    } catch (err) {
+      setError(friendlyError(String(err), t));
+      return false;
     }
   };
 
@@ -139,7 +141,11 @@ export default function EditBookDialog({
     try {
       // Commit any pending tag input before saving metadata
       if (tagInput.trim()) {
-        await handleAddTag(tagInput);
+        const tagOk = await handleAddTag(tagInput);
+        if (!tagOk) {
+          setSaving(false);
+          return;
+        }
       }
       await invoke("update_book_metadata", {
         bookId,

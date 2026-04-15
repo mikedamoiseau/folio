@@ -163,7 +163,9 @@ export default function Library() {
         }
         setBookTagMap(map);
       } catch {
-        // tag load failure is non-fatal
+        // tag load failure is non-fatal — clear active tag filter to prevent
+        // empty-library lockout when persisted filterTagIds can't be resolved
+        setFilterTagIds([]);
       }
     } catch (err) {
       setError(friendlyError(String(err), t));
