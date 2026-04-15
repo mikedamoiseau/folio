@@ -113,17 +113,19 @@ export default function EditBookDialog({
       setTagInput("");
       return true;
     }
+    let ok = true;
     try {
       for (const name of names) {
         await invoke("add_tag_to_book", { bookId, tagName: name });
       }
       setTagInput("");
-      await loadTags();
-      return true;
     } catch (err) {
       setError(friendlyError(String(err), t));
-      return false;
+      ok = false;
+    } finally {
+      await loadTags();
     }
+    return ok;
   };
 
   const handleRemoveTag = async (tagId: string) => {

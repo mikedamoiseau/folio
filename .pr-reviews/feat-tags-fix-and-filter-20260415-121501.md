@@ -204,3 +204,51 @@ No code changes needed this round.
 
 ---
 
+
+## [Codex — Reviewer] Round 5
+
+NEEDS_FIX: multi-tag save still leaves the dialog in a hidden partial-write state when one tag add succeeds and a later one fails
+
+1. **File**: [src/components/EditBookDialog.tsx](/Users/mike/Documents/www/folio/src/components/EditBookDialog.tsx:107)  
+   **Line number(s)**: 107-125, 142-147  
+   **What** can go wrong: saving pending input like `"fiction, sci-fi"` can partially persist tags if one `add_tag_to_book` call succeeds and a later one fails. The dialog then stays open showing the old tag list and the original input, so the user cannot tell that some tags were already written.  
+   **Why** the code is vulnerable to this: `handleAddTag()` performs multiple writes in a loop, but only calls `setTagInput("")` and `loadTags()` after the entire loop succeeds. If the second or later write throws, the earlier writes remain committed, the catch returns `false`, and `handleSave()` aborts without refreshing local tag state.  
+   **Impact** if it happens: the UI misrepresents persisted data and invites duplicate/retry behavior against already-saved tags. This is still a partial-write data integrity bug, just no longer silent success.  
+   **Fix** recommendation: make multi-tag add atomic or reconcile state after partial failure. Concretely, either move comma-split tag creation into one backend command/transaction, or track which tags succeeded and always `loadTags()` in a `finally` path before returning failure so the dialog reflects the true persisted state.  
+   **Severity**: BLOCKING  
+   **Fixable**: YES
+
+---
+
+## [Gemini — Reviewer] Round 5
+
+LGTM: All previously identified blocking issues regarding tag saving and filter persistence have been correctly addressed.
+
+No new blocking findings. The code changes consistently implement the recommended fixes from prior rounds, enhancing data integrity and preventing UI lockouts. The acknowledged residual risk regarding test coverage is a valid observation for future improvement but does not constitute a blocking defect for this iteration.
+
+---
+
+
+## [Claude — Implementer] Round 5
+
+All 293 Rust tests pass, 162 frontend tests pass, type check is clean.
+
+---
+
+## Analysis
+
+**Codex (Round 5):** NEEDS_FIX — partial-write state in `handleAddTag`. When comma-separated tags like `"fiction, sci-fi"` are saved, if tag 1 succeeds but tag 2 fails, `loadTags()` is never called because it's only in the success path. The dialog shows stale tag state.
+
+**Gemini (Round 5):** LGTM — no new findings.
+
+Only Codex flagged this. My verdict: **I agree with Codex.** The bug is real. If the second `invoke` in the loop throws, the first tag is already persisted in the DB but `loadTags()` never runs, so the dialog's `bookTags` list is stale. The user sees the old state and may retry, not realizing one tag was already saved. The fix is to move `loadTags()` into a `finally` block so it always runs after any writes are attempted.
+
+**Fix applied:** Restructured `handleAddTag` to use `try/catch/finally`. The `finally` block always calls `await loadTags()` so the dialog reflects the true persisted state even after partial failure. The success flag (`ok`) is tracked separately and returned after the `finally` completes.
+
+| Issue | Raised by | Action | Reason |
+|-------|-----------|--------|--------|
+| Partial-write state: `loadTags()` skipped after partial multi-tag failure | Codex | **Fixed** | Agree — `loadTags()` moved to `finally` block so dialog always reflects persisted state after writes, whether all succeed or some fail |
+| LGTM (no new findings) | Gemini | No action | No issues to evaluate |
+
+---
+
