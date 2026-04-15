@@ -3,6 +3,18 @@
 All notable changes to this project will be documented in this file.
 This project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.4.1] - 2026-04-15
+
+### Added
+- **Tag filter in library toolbar** — searchable multi-select combobox to filter books by tags. Select one or more tags; books must have all selected tags to appear (AND logic). Selection persists to localStorage.
+- **Chip-on-comma tag input** — in the Edit Book dialog, typing a comma immediately creates a tag. Pressing Enter also works. Clicking Save commits any pending tag text before saving metadata. Supports comma-separated batch input (e.g., "japan, manga" creates two tags).
+- **Eager tag loading** — tags and book-tag associations are loaded alongside the library for instant client-side filtering.
+
+### Fixed
+- **Tags not saving in Edit Book dialog** — tags typed in the input were silently lost because the Save button didn't commit pending tag text. Only pressing Enter (with no visual cue) would save tags.
+- **Web server deadlock on auto-start** — the auto-start code held the `web_server_handle` mutex while calling `rebuild_tray_menu`, which also locks the same mutex. Since `std::sync::Mutex` is not reentrant, this deadlocked on every app launch with web server enabled, making all web server IPC calls (status, start, stop) hang forever.
+- **System tray responsiveness on macOS** — window close now minimizes instead of hiding, keeping the macOS event loop alive so the tray menu stays responsive. Added `ExitRequested` handler to prevent auto-exit when autostart and tray are enabled. Tray "Show" recreates the window if destroyed.
+
 ## [1.4.0] - 2026-04-11
 
 ### Added

@@ -29,7 +29,7 @@ These features fix core limitations and unlock future work.
 ### 5. Tags — **Done**
 - ~~Lightweight freeform labels orthogonal to collections (e.g., "to-read", "favorites", "borrowed", "lent-to-sarah")~~
 - ~~Autocomplete from existing tags when assigning~~
-- Filterable in library view (tags visible in edit dialog; library-level tag filter TBD)
+- ~~Filterable in library view — searchable multi-select tag filter in toolbar (AND logic), chip-on-comma tag input in edit dialog~~
 
 ## Phase 2: Reading Experience
 

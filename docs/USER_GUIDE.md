@@ -107,8 +107,9 @@ In the full library view, a **"Continue Reading"** row at the top shows your mos
 - **Rating filter:** Filter by minimum star rating (1+ through 5 stars).
 - **Sorting:** Sort by date added, title, author, last read, progress, rating, or series — ascending or descending.
 - **Source filter:** Filter by All, Imported, or Linked books.
+- **Tag filter:** Click the "Tags" button to open a searchable dropdown of all your tags. Select one or more tags to filter — only books with all selected tags are shown (AND logic). Selected tags appear as chips on the button. Your tag selection persists between sessions.
 
-All filters combine, so you can search for "asimov" within "epub" books that are "in progress."
+All filters combine, so you can search for "asimov" within "epub" books tagged "sci-fi" that are "in progress."
 
 ### Editing and removing books
 
@@ -261,7 +262,7 @@ Click the edit button on any book card to open the metadata editor.
 - Publisher and publish year
 - Cover image (upload a JPG, PNG, or WebP)
 - Star rating (1-5 stars — click a star to rate, click the same star again to clear)
-- Tags (with autocomplete from your existing tags)
+- Tags — type a tag name and press Enter or comma to add it. Comma-separated input creates multiple tags at once (e.g., "japan, manga"). Existing tags appear as autocomplete suggestions. Tags are shown as removable chips.
 
 ### Enrichment providers
 
