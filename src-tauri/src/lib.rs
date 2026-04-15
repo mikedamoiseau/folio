@@ -202,8 +202,10 @@ pub fn run() {
                         )),
                     };
                     if let Ok(handle) = web_server::start(web_state, port).await {
-                        let mut h = state.web_server_handle.lock().unwrap();
-                        *h = Some(handle);
+                        {
+                            let mut h = state.web_server_handle.lock().unwrap();
+                            *h = Some(handle);
+                        }
                         // Update tray menu to show "Stop Web Server"
                         let _ = tray::rebuild_tray_menu(&app_handle);
                     }
