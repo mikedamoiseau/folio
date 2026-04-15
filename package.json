@@ -19,7 +19,7 @@
     "@fontsource-variable/playfair-display": "^5.2.8",
     "@tauri-apps/api": "^2",
     "@tauri-apps/plugin-clipboard-manager": "^2.3.2",
-    "@tauri-apps/plugin-dialog": "^2.6.0",
+    "@tauri-apps/plugin-dialog": "^2.7.0",
     "@tauri-apps/plugin-opener": "^2",
     "i18next": "^26.0.1",
     "i18next-browser-languagedetector": "^8.2.1",
