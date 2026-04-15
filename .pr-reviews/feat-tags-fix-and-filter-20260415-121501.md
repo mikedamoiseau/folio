@@ -155,3 +155,52 @@ Changed the condition from `selectedTagIds.length === 0` to `selectedTagIds.leng
 
 ---
 
+
+## [Codex — Reviewer] Round 4
+
+LGTM: the current diff closes the previously blocking tag-save and persisted-filter lockout paths, and I did not find a remaining defensible blocking issue in the changed code.
+
+No findings.
+
+Residual risk: the new frontend tests are mostly render-smoke coverage, so interaction paths like comma-triggered multi-tag entry and live tag-filter toggling still rely on manual behavior testing rather than strong automated assertions.
+
+---
+
+## [Gemini — Reviewer] Round 4
+
+(Gemini encountered an error this round)
+
+---
+
+
+## [Claude — Implementer] Round 4
+
+Everything checks out. Here's my verdict:
+
+---
+
+## Round 4 Verdict: LGTM
+
+**Codex:** LGTM — no findings. 
+**Gemini:** Errored out — no findings.
+**Claude (me):** LGTM.
+
+All previously identified issues from rounds 1–3 have been properly fixed in the current diff:
+
+1. **Silent tag-save failures** — `handleAddTag` returns `Promise<boolean>`, `handleSave` aborts on failure (`EditBookDialog.tsx:107-127, 142-148`)
+2. **Persisted tag filter blanks library on tag-load failure** — catch block clears `filterTagIds` (`Library.tsx:174-177`)
+3. **localStorage not validated as string array** — `Array.isArray` + element type check with fallback (`Library.tsx:63-70`)
+4. **Stale persisted IDs not reconciled** — pruning against valid tag set after fetch (`Library.tsx:162-167`) + fallback label in TagFilter (`TagFilter.tsx:107`)
+
+**On Codex's residual risk note** (test coverage is smoke-level): This is a fair observation but not blocking. The render-smoke tests verify component structure, and the E2E tests cover the toolbar integration. Interaction-level tests for comma-triggered multi-tag entry and filter toggling would strengthen confidence but aren't required to ship this feature.
+
+No code changes needed this round.
+
+| Issue | Raised by | Action | Reason |
+|-------|-----------|--------|--------|
+| (no new issues) | Codex: LGTM | No action | All prior findings resolved; no new blocking issues |
+| (no findings) | Gemini: errored | No action | No review to evaluate |
+| Residual test coverage risk | Codex (observation) | **Acknowledged** | Valid but non-blocking — smoke tests + E2E cover the critical paths; interaction tests are a follow-up improvement |
+
+---
+
