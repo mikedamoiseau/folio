@@ -84,16 +84,7 @@ pub fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
                 });
             }
             "quit" => {
-                let state = app.state::<AppState>();
-                let handle = state
-                    .web_server_handle
-                    .lock()
-                    .ok()
-                    .and_then(|mut h| h.take());
-                if let Some(h) = handle {
-                    crate::web_server::stop(h);
-                }
-                app.exit(0);
+                std::process::exit(0);
             }
             _ => {}
         })
