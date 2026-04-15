@@ -1406,6 +1406,14 @@ pub fn delete_tag(conn: &Connection, tag_id: &str) -> Result<()> {
     Ok(())
 }
 
+pub fn list_all_book_tags(conn: &Connection) -> Result<Vec<(String, String)>> {
+    let mut stmt = conn.prepare("SELECT book_id, tag_id FROM book_tags")?;
+    let rows = stmt.query_map([], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    })?;
+    rows.collect()
+}
+
 pub fn get_books_in_collection(conn: &Connection, collection_id: &str) -> Result<Vec<Book>> {
     let mut type_stmt = conn.prepare("SELECT type FROM collections WHERE id = ?1")?;
     let coll_type: String = type_stmt.query_row(params![collection_id], |row| row.get(0))?;
@@ -3030,5 +3038,34 @@ mod tests {
         set_setting(&conn, "autostart_enabled", "false").unwrap();
         let val = get_setting(&conn, "autostart_enabled").unwrap();
         assert_eq!(val, Some("false".to_string()));
+    }
+
+    #[test]
+    fn test_list_all_book_tags() {
+        let (_dir, conn) = setup();
+        let mut b1 = sample_book("tag-b1");
+        b1.file_path = "/tmp/tag1.epub".to_string();
+        insert_book(&conn, &b1).unwrap();
+
+        let mut b2 = sample_book("tag-b2");
+        b2.file_path = "/tmp/tag2.epub".to_string();
+        insert_book(&conn, &b2).unwrap();
+
+        // No tags yet
+        let assocs = list_all_book_tags(&conn).unwrap();
+        assert!(assocs.is_empty());
+
+        // Create tags and assign
+        get_or_create_tag(&conn, "t1", "fiction").unwrap();
+        get_or_create_tag(&conn, "t2", "sci-fi").unwrap();
+        add_tag_to_book(&conn, "tag-b1", "t1").unwrap();
+        add_tag_to_book(&conn, "tag-b1", "t2").unwrap();
+        add_tag_to_book(&conn, "tag-b2", "t1").unwrap();
+
+        let assocs = list_all_book_tags(&conn).unwrap();
+        assert_eq!(assocs.len(), 3);
+        assert!(assocs.contains(&("tag-b1".to_string(), "t1".to_string())));
+        assert!(assocs.contains(&("tag-b1".to_string(), "t2".to_string())));
+        assert!(assocs.contains(&("tag-b2".to_string(), "t1".to_string())));
     }
 }

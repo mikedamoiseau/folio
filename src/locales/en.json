@@ -85,6 +85,9 @@
     "filterByStatus": "Filter by status",
     "filterByRating": "Filter by rating",
     "filterBySource": "Filter by source",
+    "filterByTags": "Filter by tags",
+    "tagsAll": "Tags",
+    "tagsFilterPlaceholder": "Filter tags\u2026",
     "allBooks": "All books",
     "sourceImported": "Imported",
     "sourceLinked": "Linked"

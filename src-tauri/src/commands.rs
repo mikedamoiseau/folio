@@ -1657,6 +1657,22 @@ pub async fn remove_tag_from_book(
     db::remove_tag_from_book(&conn, &book_id, &tag_id).map_err(|e| e.to_string())
 }
 
+#[derive(serde::Serialize)]
+pub struct BookTagAssoc {
+    pub book_id: String,
+    pub tag_id: String,
+}
+
+#[tauri::command]
+pub async fn get_all_book_tags(state: State<'_, AppState>) -> Result<Vec<BookTagAssoc>, String> {
+    let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
+    let assocs = db::list_all_book_tags(&conn).map_err(|e| e.to_string())?;
+    Ok(assocs
+        .into_iter()
+        .map(|(book_id, tag_id)| BookTagAssoc { book_id, tag_id })
+        .collect())
+}
+
 // --- Collections ---
 
 /// Valid (field, operator) combinations for collection rules.

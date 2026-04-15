@@ -222,6 +222,7 @@ pub fn run() {
             commands::get_book_tags,
             commands::add_tag_to_book,
             commands::remove_tag_from_book,
+            commands::get_all_book_tags,
             commands::scan_folder_for_books,
             commands::add_highlight,
             commands::get_highlights,

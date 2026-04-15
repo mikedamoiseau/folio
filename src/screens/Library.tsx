@@ -16,6 +16,7 @@ import CollectionsSidebar, {
 import EditBookDialog from "../components/EditBookDialog";
 import BookDetailModal from "../components/BookDetailModal";
 import KeyboardShortcutsHelp from "../components/KeyboardShortcutsHelp";
+import TagFilter from "../components/TagFilter";
 import { startDrag, endDrag, isDragging, getDraggedCoverSrc, subscribe } from "../lib/dragState";
 import { friendlyError } from "../lib/errors";
 import { LiveRegion } from "../components/LiveRegion";
@@ -28,6 +29,16 @@ interface ReadingProgress {
   chapter_index: number;
   scroll_position: number;
   last_read_at: number;
+}
+
+interface Tag {
+  id: string;
+  name: string;
+}
+
+interface BookTagAssoc {
+  book_id: string;
+  tag_id: string;
 }
 
 export default function Library() {
@@ -49,6 +60,14 @@ export default function Library() {
   const [filterStatus, setFilterStatus] = useState<string>(() => localStorage.getItem("folio-library-filter-status") ?? "all");
   const [filterRating, setFilterRating] = useState<string>(() => localStorage.getItem("folio-library-filter-rating") ?? "all");
   const [filterSource, setFilterSource] = useState<string>(() => localStorage.getItem("folio-library-filter-source") ?? "all");
+  const [filterTagIds, setFilterTagIds] = useState<string[]>(() => {
+    try {
+      const stored = localStorage.getItem("folio-library-filter-tags");
+      return stored ? JSON.parse(stored) : [];
+    } catch { return []; }
+  });
+  const [allTags, setAllTags] = useState<Tag[]>([]);
+  const [bookTagMap, setBookTagMap] = useState<Map<string, Set<string>>>(new Map());
   // Persist filter/sort state to localStorage
   useEffect(() => { localStorage.setItem("folio-library-sort-by", sortBy); }, [sortBy]);
   useEffect(() => { localStorage.setItem("folio-library-sort-asc", String(sortAsc)); }, [sortAsc]);
@@ -56,6 +75,7 @@ export default function Library() {
   useEffect(() => { localStorage.setItem("folio-library-filter-status", filterStatus); }, [filterStatus]);
   useEffect(() => { localStorage.setItem("folio-library-filter-rating", filterRating); }, [filterRating]);
   useEffect(() => { localStorage.setItem("folio-library-filter-source", filterSource); }, [filterSource]);
+  useEffect(() => { localStorage.setItem("folio-library-filter-tags", JSON.stringify(filterTagIds)); }, [filterTagIds]);
 
   const [fileNotAvailableBookId, setFileNotAvailableBookId] = useState<string | null>(null);
 
@@ -127,6 +147,23 @@ export default function Library() {
         setLastReadMap(lrMap);
       } catch {
         addToast(t("library.progressLoadError", { defaultValue: "Could not load reading progress" }), "error");
+      }
+
+      // Load tags for filtering
+      try {
+        const [tags, assocs] = await Promise.all([
+          invoke<Tag[]>("get_all_tags"),
+          invoke<BookTagAssoc[]>("get_all_book_tags"),
+        ]);
+        setAllTags(tags);
+        const map = new Map<string, Set<string>>();
+        for (const { book_id, tag_id } of assocs) {
+          if (!map.has(book_id)) map.set(book_id, new Set());
+          map.get(book_id)!.add(tag_id);
+        }
+        setBookTagMap(map);
+      } catch {
+        // tag load failure is non-fatal
       }
     } catch (err) {
       setError(friendlyError(String(err), t));
@@ -389,6 +426,12 @@ export default function Library() {
       if (!activeSeries) return true;
       return book.series === activeSeries;
     })
+    .filter((book) => {
+      if (filterTagIds.length === 0) return true;
+      const tags = bookTagMap.get(book.id);
+      if (!tags) return false;
+      return filterTagIds.every((id) => tags.has(id));
+    })
     .sort((a, b) => {
       const dir = sortAsc ? 1 : -1;
       switch (sortBy) {
@@ -409,7 +452,7 @@ export default function Library() {
         case "date_added":
         default: return dir * (a.added_at - b.added_at);
       }
-    }), [books, debouncedSearch, sortBy, sortAsc, filterFormat, filterStatus, filterRating, filterSource, progressMap, lastReadMap, activeSeries]);
+    }), [books, debouncedSearch, sortBy, sortAsc, filterFormat, filterStatus, filterRating, filterSource, progressMap, lastReadMap, activeSeries, filterTagIds, bookTagMap]);
 
   const handleShowBookDetail = useCallback(async (id: string) => {
     latestDetailRequestRef.current = id;
@@ -663,6 +706,14 @@ export default function Library() {
             <option value="imported">{t("library.sourceImported")}</option>
             <option value="linked">{t("library.sourceLinked")}</option>
           </select>
+
+          {/* Filter: tags */}
+          <TagFilter
+            allTags={allTags}
+            bookTagMap={bookTagMap}
+            selectedTagIds={filterTagIds}
+            onChangeSelectedTagIds={setFilterTagIds}
+          />
 
           {scanProgress ? (
             <div className="flex items-center gap-2 text-xs text-ink-muted">
