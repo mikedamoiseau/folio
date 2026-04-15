@@ -67,3 +67,42 @@ Both issues from Codex are valid. I agree with both and have applied fixes.
 
 ---
 
+
+## [Codex — Reviewer] Round 2
+
+NEEDS_FIX: `filterTagIds` is restored from localStorage without runtime validation, so valid-but-wrong persisted data can crash the library screen
+
+1. **File**: [src/screens/Library.tsx](/Users/mike/Documents/www/folio/src/screens/Library.tsx:63) and [src/screens/Library.tsx](/Users/mike/Documents/www/folio/src/screens/Library.tsx:431)  
+   **Line number(s)**: 63-67, 431-435  
+   **What** can go wrong: if `localStorage["folio-library-filter-tags"]` contains valid JSON that is not a string array, the library render can throw at runtime. A concrete case is `"\"t1\""` or `{"id":"t1"}` from corrupted storage, manual edits, or a prior buggy build.  
+   **Why** the code is vulnerable to this: the initializer accepts any `JSON.parse()` result and stores it in `filterTagIds` without checking `Array.isArray(...)` or element types. Later, the filter path assumes `filterTagIds.every(...)` exists. For non-array parsed values, that call is invalid and will crash rendering.  
+   **Impact** if it happens: the main library screen can fail to render until the user manually clears localStorage, which is effectively another persisted-state lockout.  
+   **Fix** recommendation: validate at restore time, e.g. accept only `Array.isArray(parsed) && parsed.every((v) => typeof v === "string")`, otherwise fall back to `[]`. After tags load, also drop any IDs not present in the fetched tag set.  
+   **Severity**: BLOCKING  
+   **Fixable**: YES
+
+---
+
+## [Gemini — Reviewer] Round 2
+
+(Gemini encountered an error this round)
+
+---
+
+
+## [Claude — Implementer] Round 2
+
+Type check passes, all 162 tests pass.
+
+---
+
+## Round 2 Verdict
+
+| Issue | Raised by | Action | Reason |
+|-------|-----------|--------|--------|
+| `filterTagIds` localStorage not validated as string array | Codex | **Fixed** | Agree — localStorage is a system boundary; `JSON.parse` can return any valid JSON type, which would crash `.every()` in the filter logic. Now validates `Array.isArray` + all elements are strings before accepting. |
+
+The fix types the parse result as `unknown`, checks `Array.isArray(parsed)` and `parsed.every((v) => typeof v === "string")` before accepting it. Any non-conforming value falls through to `[]`. This closes the persisted-state lockout vector Codex identified.
+
+---
+

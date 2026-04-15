@@ -63,7 +63,10 @@ export default function Library() {
   const [filterTagIds, setFilterTagIds] = useState<string[]>(() => {
     try {
       const stored = localStorage.getItem("folio-library-filter-tags");
-      return stored ? JSON.parse(stored) : [];
+      if (!stored) return [];
+      const parsed: unknown = JSON.parse(stored);
+      if (Array.isArray(parsed) && parsed.every((v) => typeof v === "string")) return parsed;
+      return [];
     } catch { return []; }
   });
   const [allTags, setAllTags] = useState<Tag[]>([]);
