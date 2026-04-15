@@ -104,15 +104,25 @@ export default function EditBookDialog({
         .slice(0, 5)
     : [];
 
-  const handleAddTag = async (name: string) => {
-    const trimmed = name.trim().toLowerCase();
-    if (!trimmed || bookTags.some((tg) => tg.name.toLowerCase() === trimmed)) return;
+  const handleAddTag = async (raw: string): Promise<boolean> => {
+    const names = raw
+      .split(",")
+      .map((s) => s.trim().toLowerCase())
+      .filter((s) => s && !bookTags.some((tg) => tg.name.toLowerCase() === s));
+    if (names.length === 0) {
+      setTagInput("");
+      return true;
+    }
     try {
-      await invoke("add_tag_to_book", { bookId, tagName: trimmed });
+      for (const name of names) {
+        await invoke("add_tag_to_book", { bookId, tagName: name });
+      }
       setTagInput("");
       await loadTags();
-    } catch {
-      // ignore
+      return true;
+    } catch (err) {
+      setError(friendlyError(String(err), t));
+      return false;
     }
   };
 
@@ -129,6 +139,14 @@ export default function EditBookDialog({
     setSaving(true);
     setError(null);
     try {
+      // Commit any pending tag input before saving metadata
+      if (tagInput.trim()) {
+        const tagOk = await handleAddTag(tagInput);
+        if (!tagOk) {
+          setSaving(false);
+          return;
+        }
+      }
       await invoke("update_book_metadata", {
         bookId,
         title: title !== initialTitle ? title : null,
@@ -335,7 +353,14 @@ export default function EditBookDialog({
                 <input
                   type="text"
                   value={tagInput}
-                  onChange={(e) => setTagInput(e.target.value)}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    if (val.includes(",")) {
+                      handleAddTag(val);
+                    } else {
+                      setTagInput(val);
+                    }
+                  }}
                   onKeyDown={(e) => {
                     if (e.key === "Enter" && tagInput.trim()) {
                       e.preventDefault();
