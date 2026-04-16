@@ -299,6 +299,15 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
   const [autoStartLoading, setAutoStartLoading] = useState(false);
   const [autoStartError, setAutoStartError] = useState<string | null>(null);
 
+  // Continue Reading section visibility (default true)
+  const [showContinueReading, setShowContinueReading] = useState(() => {
+    const stored = localStorage.getItem("folio-show-continue-reading");
+    return stored === null ? true : stored === "true";
+  });
+
+  // Discover section visibility
+  const [showDiscover, setShowDiscover] = useState(() => localStorage.getItem("folio-show-discover") === "true");
+
   const [savedThemes, setSavedThemes] = useState<SavedTheme[]>(loadSavedThemes);
   const [activeThemeId, setActiveThemeId] = useState<string | null>(null);
 
@@ -917,6 +926,52 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
               {autoStartError && (
                 <p className="text-xs text-red-500 px-1">{autoStartError}</p>
               )}
+              <label className="flex items-center justify-between gap-3 bg-warm-subtle rounded-xl px-3 py-2.5">
+                <div>
+                  <span className="text-sm text-ink">{t("settings.showContinueReading")}</span>
+                  <p className="text-[11px] text-ink-muted/60 mt-0.5">{t("settings.showContinueReadingHint")}</p>
+                </div>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={showContinueReading}
+                  data-testid="show-continue-reading-toggle"
+                  onClick={() => {
+                    const next = !showContinueReading;
+                    setShowContinueReading(next);
+                    localStorage.setItem("folio-show-continue-reading", String(next));
+                    window.dispatchEvent(new Event("folio-show-continue-reading-changed"));
+                  }}
+                  className={`relative w-10 h-6 rounded-full transition-colors shrink-0 ${showContinueReading ? "bg-accent" : "bg-warm-border"}`}
+                >
+                  <span
+                    className={`absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full shadow transition-transform ${showContinueReading ? "translate-x-4" : ""}`}
+                  />
+                </button>
+              </label>
+              <label className="flex items-center justify-between gap-3 bg-warm-subtle rounded-xl px-3 py-2.5">
+                <div>
+                  <span className="text-sm text-ink">{t("settings.showDiscover")}</span>
+                  <p className="text-[11px] text-ink-muted/60 mt-0.5">{t("settings.showDiscoverHint")}</p>
+                </div>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={showDiscover}
+                  data-testid="show-discover-toggle"
+                  onClick={() => {
+                    const next = !showDiscover;
+                    setShowDiscover(next);
+                    localStorage.setItem("folio-show-discover", String(next));
+                    window.dispatchEvent(new Event("folio-show-discover-changed"));
+                  }}
+                  className={`relative w-10 h-6 rounded-full transition-colors shrink-0 ${showDiscover ? "bg-accent" : "bg-warm-border"}`}
+                >
+                  <span
+                    className={`absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full shadow transition-transform ${showDiscover ? "translate-x-4" : ""}`}
+                  />
+                </button>
+              </label>
             </div>
           </Accordion>
 

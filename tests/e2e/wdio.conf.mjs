@@ -17,6 +17,7 @@ export const config = {
       "./specs/navigation.mjs",
       "./specs/library.mjs",
       "./specs/settings.mjs",
+      "./specs/section-toggles.mjs",
       "./specs/theme.mjs",
       "./specs/import-dialog.mjs",
       "./specs/accessibility.mjs",

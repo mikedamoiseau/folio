@@ -99,6 +99,9 @@ export default function Library() {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkEditing, setBulkEditing] = useState(false);
 
+  // Collapsed series groups (series view)
+  const [collapsedSeries, setCollapsedSeries] = useState<Set<string>>(new Set());
+
   // scanToast state kept for LiveRegion — visual toasts now use useToast()
   const [scanToastMessage, setScanToastMessage] = useState("");
   const [showShortcuts, setShowShortcuts] = useState(false);
@@ -106,13 +109,35 @@ export default function Library() {
   const [scanProgress, setScanProgress] = useState<{ current: number; total: number; bookTitle: string; status: string } | null>(null);
 
   // Recently read
+  const [showContinueReading, setShowContinueReading] = useState(() => {
+    const stored = localStorage.getItem("folio-show-continue-reading");
+    return stored === null ? true : stored === "true";
+  });
   const [recentlyRead, setRecentlyRead] = useState<Book[]>([]);
 
   // Discover — popular/new books from catalogs (loaded lazily, cached 24h)
   interface DiscoverEntry { id: string; title: string; author: string; summary: string; coverUrl: string | null; links: { href: string; mimeType: string; rel: string }[]; navUrl: string | null }
+  const [showDiscover, setShowDiscover] = useState(() => localStorage.getItem("folio-show-discover") === "true");
   const [discoverBooks, setDiscoverBooks] = useState<DiscoverEntry[]>([]);
   const [discoverInfo, setDiscoverInfo] = useState<{ id: string; rect: DOMRect } | null>(null);
   const [discoverLoading, setDiscoverLoading] = useState(true);
+
+  // Sync showContinueReading when changed from SettingsPanel
+  useEffect(() => {
+    const handler = () => {
+      const stored = localStorage.getItem("folio-show-continue-reading");
+      setShowContinueReading(stored === null ? true : stored === "true");
+    };
+    window.addEventListener("folio-show-continue-reading-changed", handler);
+    return () => window.removeEventListener("folio-show-continue-reading-changed", handler);
+  }, []);
+
+  // Sync showDiscover when changed from SettingsPanel
+  useEffect(() => {
+    const handler = () => setShowDiscover(localStorage.getItem("folio-show-discover") === "true");
+    window.addEventListener("folio-show-discover-changed", handler);
+    return () => window.removeEventListener("folio-show-discover-changed", handler);
+  }, []);
 
   // Collections state
   const [collectionsOpen, setCollectionsOpen] = useState(false);
@@ -217,9 +242,14 @@ export default function Library() {
     loadSeries();
   }, [loadCollections, loadBooks, loadRecentlyRead, loadSeries]);
 
+  // Re-fetch recently read when toggled on
+  useEffect(() => {
+    if (showContinueReading) loadRecentlyRead();
+  }, [showContinueReading, loadRecentlyRead]);
+
   // Load discover books lazily in background (doesn't block UI)
   useEffect(() => {
-    if (!loaded) return;
+    if (!loaded || !showDiscover) return;
     let cancelled = false;
     setDiscoverLoading(true);
     invoke<DiscoverEntry[]>("get_discover_books")
@@ -227,7 +257,7 @@ export default function Library() {
       .catch(() => {})
       .finally(() => { if (!cancelled) setDiscoverLoading(false); });
     return () => { cancelled = true; };
-  }, [loaded]);
+  }, [loaded, showDiscover]);
 
   // Reload books when active collection changes
   useEffect(() => {
@@ -861,9 +891,10 @@ export default function Library() {
           <EmptyState onImport={handleImport} onImportFolder={handleImportFolder} />
         ) : hasResults ? (
           <>
+          <div className="grid grid-cols-[repeat(auto-fill,160px)] justify-center gap-5">
           {/* Continue Reading — recently opened books */}
-          {!search && !activeCollectionId && !activeSeries && recentlyRead.length > 0 && (
-            <div className="mb-6">
+          {showContinueReading && !search && !activeCollectionId && !activeSeries && recentlyRead.length > 0 && (
+            <div className="mb-1 col-[1/-1]">
               <h2 className="text-sm font-semibold text-ink-muted uppercase tracking-wide mb-3">{t("library.continueReading")}</h2>
               <div className="flex gap-4 overflow-x-auto pb-2">
                 {recentlyRead.map((book) => (
@@ -901,8 +932,8 @@ export default function Library() {
             </div>
           )}
           {/* Discover — popular/new from catalogs */}
-          {!search && !activeCollectionId && !activeSeries && (discoverLoading || discoverBooks.length > 0) && (
-            <div className="mb-6">
+          {showDiscover && !search && !activeCollectionId && !activeSeries && (discoverLoading || discoverBooks.length > 0) && (
+            <div className="mb-1 col-[1/-1]" data-testid="discover-section">
               <h2 className="text-sm font-semibold text-ink-muted uppercase tracking-wide mb-3">{t("library.discover")}</h2>
               <div className="flex gap-4 overflow-x-auto pb-2">
                 {discoverLoading && discoverBooks.length === 0 && (
@@ -1008,13 +1039,12 @@ export default function Library() {
           )}
 
           {(activeCollection || activeSeries) && (
-            <div className="flex items-center gap-2 pb-2">
+            <div className="flex items-center gap-2 pb-2 col-[1/-1]">
               <span className="text-xs font-semibold text-ink-muted uppercase tracking-wider">{activeSeries ?? activeCollection?.name}</span>
               <span className="text-[10px] text-ink-muted/50">{t("library.booksCount", { count: filtered.length })}</span>
               <div className="flex-1 border-t border-warm-border/50" />
             </div>
           )}
-          <div className="grid grid-cols-[repeat(auto-fill,160px)] justify-center gap-5">
             {sortBy === "series" ? (
               (() => {
                 const seriesBooks = filtered.filter((b) => b.series);
@@ -1038,13 +1068,28 @@ export default function Library() {
                       <React.Fragment key={seriesName}>
                         {/* Hide redundant series header when only one group and outer header already shows the name */}
                         {!(sortedGroupNames.length === 1 && (activeCollection || activeSeries)) && (
-                        <div className="col-span-full flex items-center gap-2 pt-4 pb-2">
+                        <button
+                          type="button"
+                          className="col-span-full flex items-center gap-2 pt-4 pb-2 text-left"
+                          onClick={() => setCollapsedSeries((prev) => {
+                            const next = new Set(prev);
+                            if (next.has(seriesName)) next.delete(seriesName);
+                            else next.add(seriesName);
+                            return next;
+                          })}
+                        >
+                          <svg
+                            width="12" height="12" viewBox="0 0 24 24" fill="none"
+                            className={`text-ink-muted/50 transition-transform ${collapsedSeries.has(seriesName) ? "" : "rotate-90"}`}
+                          >
+                            <path d="M9 6l6 6-6 6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                          </svg>
                           <span className="text-xs font-semibold text-ink-muted uppercase tracking-wider">{seriesName}</span>
                           <span className="text-[10px] text-ink-muted/50">{t("library.booksCount", { count: groups[seriesName].length })}</span>
                           <div className="flex-1 border-t border-warm-border/50" />
-                        </div>
+                        </button>
                         )}
-                        {groups[seriesName].map((book) => (
+                        {!collapsedSeries.has(seriesName) && groups[seriesName].map((book) => (
                           <div
                             key={book.id}
                             className="card-cv"
@@ -1076,13 +1121,28 @@ export default function Library() {
                       </React.Fragment>
                     ))}
                     {nonSeriesBooks.length > 0 && sortedGroupNames.length > 0 && (
-                      <div className="col-span-full flex items-center gap-2 pt-4 pb-2">
+                      <button
+                        type="button"
+                        className="col-span-full flex items-center gap-2 pt-4 pb-2 text-left"
+                        onClick={() => setCollapsedSeries((prev) => {
+                          const next = new Set(prev);
+                          if (next.has("__other__")) next.delete("__other__");
+                          else next.add("__other__");
+                          return next;
+                        })}
+                      >
+                        <svg
+                          width="12" height="12" viewBox="0 0 24 24" fill="none"
+                          className={`text-ink-muted/50 transition-transform ${collapsedSeries.has("__other__") ? "" : "rotate-90"}`}
+                        >
+                          <path d="M9 6l6 6-6 6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                        </svg>
                         <span className="text-xs font-semibold text-ink-muted uppercase tracking-wider">{t("library.otherBooks")}</span>
                         <span className="text-[10px] text-ink-muted/50">{t("library.booksCount", { count: nonSeriesBooks.length })}</span>
                         <div className="flex-1 border-t border-warm-border/50" />
-                      </div>
+                      </button>
                     )}
-                    {nonSeriesBooks.map((book) => (
+                    {!collapsedSeries.has("__other__") && nonSeriesBooks.map((book) => (
                       <div
                         key={book.id}
                         className="card-cv"
