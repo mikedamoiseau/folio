@@ -1,18 +1,15 @@
 pub mod backup;
 pub mod commands;
-pub mod enrichment;
-pub mod opds;
-pub mod openlibrary;
-pub mod providers;
 pub mod sync;
 pub mod tray;
 pub mod web_server;
 
-// Re-export modules migrated to folio-core (#63) so existing
-// `crate::{db,error,models,epub,pdf,cbz,cbr,page_cache}::…` call sites keep
+// Re-export modules migrated to folio-core (#63) so existing call sites keep
 // compiling during the incremental extraction. New code should prefer
 // `use folio_core::…` directly.
-pub use folio_core::{cbr, cbz, db, epub, error, models, page_cache, pdf};
+pub use folio_core::{
+    cbr, cbz, db, enrichment, epub, error, models, opds, openlibrary, page_cache, pdf, providers,
+};
 
 use commands::{AppState, LruCache, ProfileState};
 use tauri::Manager;
