@@ -34,9 +34,10 @@ interface BookCardProps {
   book: BookCardData;
   actions: BookCardActions;
   isScanning?: boolean;
+  isSelected?: boolean;
 }
 
-export default function BookCard({ book, actions, isScanning }: BookCardProps) {
+export default function BookCard({ book, actions, isScanning, isSelected }: BookCardProps) {
   const { id, title, author, coverPath, format, progress, language, publishYear, series, volume, rating, isImported } = book;
   const { onClick, onDelete, onEdit, onInfo, onRemoveFromCollection, onScanForMetadata } = actions;
   const { t } = useTranslation();
@@ -62,7 +63,12 @@ export default function BookCard({ book, actions, isScanning }: BookCardProps) {
     <button
       type="button"
       onClick={onClick}
-      className="w-full h-full group text-left rounded-xl bg-surface border border-warm-border overflow-hidden cursor-pointer transition-all duration-200 ease-out shadow-sm hover:shadow-[0_8px_24px_-4px_rgba(44,34,24,0.18)] hover:-translate-y-1 focus:outline-2 focus:outline-accent focus:outline-offset-2"
+      aria-pressed={isSelected}
+      className={`w-full h-full group text-left rounded-xl bg-surface border overflow-hidden cursor-pointer transition-all duration-200 ease-out shadow-sm hover:shadow-[0_8px_24px_-4px_rgba(44,34,24,0.18)] hover:-translate-y-1 focus:outline-2 focus:outline-accent focus:outline-offset-2 ${
+        isSelected
+          ? "border-accent ring-2 ring-accent ring-offset-2 ring-offset-paper"
+          : "border-warm-border"
+      }`}
     >
       {/* Cover — 2:3 aspect ratio */}
       <div className="relative aspect-[2/3] bg-warm-subtle overflow-hidden">
