@@ -297,8 +297,12 @@ pub fn create_pool(db_path: &Path) -> crate::error::FolioResult<DbPool> {
     Ok(pool)
 }
 
-/// Opens a single connection used only by tests.
-#[cfg(test)]
+/// Opens a single connection and runs the schema. Exists so cross-crate
+/// integration tests (both inside `folio-core` and in the desktop crate) can
+/// spin up a disposable DB without going through `create_pool`. Exposed
+/// unconditionally because the `#[cfg(test)]` gate only fires for the current
+/// crate, not for downstream callers.
+#[doc(hidden)]
 pub fn init_db(db_path: &Path) -> Result<Connection> {
     if let Some(parent) = db_path.parent() {
         std::fs::create_dir_all(parent).ok();

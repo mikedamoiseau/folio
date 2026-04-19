@@ -7,6 +7,7 @@
 //!
 //! See `docs/ROADMAP.md` #63 for the extraction plan.
 
+pub mod db;
 pub mod error;
 pub mod models;
 pub mod paths;
