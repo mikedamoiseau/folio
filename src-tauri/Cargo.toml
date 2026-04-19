@@ -63,6 +63,7 @@ objc2-app-kit = { version = "0.3", features = ["NSApplication", "NSRunningApplic
 
 [dev-dependencies]
 tempfile = "3"
+folio-core = { path = "../folio-core", features = ["test-utils"] }
 
 [features]
 default = ["sftp"]
