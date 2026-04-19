@@ -103,21 +103,10 @@ pub fn is_valid_isbn(s: &str) -> bool {
     ISBN_RE.is_match(&cleaned)
 }
 
-/// Extract ISBN from a dc:identifier string.
-pub fn extract_isbn(identifier: &str) -> Option<String> {
-    let s = identifier
-        .trim()
-        .strip_prefix("urn:isbn:")
-        .or_else(|| identifier.trim().strip_prefix("isbn:"))
-        .or_else(|| identifier.trim().strip_prefix("ISBN:"))
-        .unwrap_or(identifier.trim());
-    let cleaned = s.replace(['-', ' '], "");
-    if ISBN_RE.is_match(&cleaned) {
-        Some(cleaned)
-    } else {
-        None
-    }
-}
+/// Extract ISBN from a dc:identifier string. Delegates to `folio_core::isbn`
+/// so the desktop enrichment module and the core EPUB parser share a single
+/// definition.
+pub use folio_core::isbn::extract_isbn;
 
 use crate::providers::EnrichmentData;
 
