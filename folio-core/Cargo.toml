@@ -14,6 +14,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 rusqlite = { workspace = true }
 r2d2 = { workspace = true }
+r2d2_sqlite = { workspace = true }
 reqwest = { workspace = true }
 zip = { workspace = true }
 quick-xml = { workspace = true }
@@ -26,6 +27,11 @@ image = { workspace = true }
 
 # paths.rs
 dirs = { workspace = true }
+
+[features]
+# Exposes test-only helpers like `db::init_db` so cross-crate integration
+# tests (e.g. in `src-tauri/`) can reach them. Never enable in release builds.
+test-utils = []
 
 [dev-dependencies]
 tempfile = { workspace = true }
