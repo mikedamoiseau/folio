@@ -1,3 +1,4 @@
+use crate::isbn::ISBN_RE;
 use regex::Regex;
 use std::sync::LazyLock;
 
@@ -9,9 +10,6 @@ pub struct ParsedFilename {
     pub year: Option<u16>,
     pub isbn: Option<String>,
 }
-
-static ISBN_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^(97[89]\d{10}|\d{9}[\dXx])$").unwrap());
 
 static YEAR_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\((\d{4})\)|\[(\d{4})\]").unwrap());
 
@@ -106,7 +104,7 @@ pub fn is_valid_isbn(s: &str) -> bool {
 /// Extract ISBN from a dc:identifier string. Delegates to `folio_core::isbn`
 /// so the desktop enrichment module and the core EPUB parser share a single
 /// definition.
-pub use folio_core::isbn::extract_isbn;
+pub use crate::isbn::extract_isbn;
 
 use crate::providers::EnrichmentData;
 
