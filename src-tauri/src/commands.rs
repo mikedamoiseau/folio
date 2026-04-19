@@ -2447,14 +2447,11 @@ pub struct LibraryFolderInfo {
     pub total_size_bytes: u64,
 }
 
+/// Thin wrapper kept for backwards compatibility with the existing in-crate
+/// call sites; the implementation lives in [`folio_core::paths`] so both the
+/// desktop app and future headless binaries share a single definition.
 pub fn default_library_folder() -> FolioResult<String> {
-    let home = dirs::home_dir()
-        .ok_or_else(|| FolioError::internal("Could not determine home directory"))?;
-    Ok(home
-        .join("Documents")
-        .join("Folio Library")
-        .to_string_lossy()
-        .to_string())
+    folio_core::paths::default_library_folder()
 }
 
 #[tauri::command]
