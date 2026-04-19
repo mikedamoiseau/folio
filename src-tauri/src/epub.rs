@@ -213,12 +213,12 @@ fn find_opf_path(archive: &mut ZipArchive<std::fs::File>) -> Result<String, Epub
     let mut buf = Vec::new();
     loop {
         match reader.read_event_into(&mut buf) {
-            Ok(Event::Start(ref e)) | Ok(Event::Empty(ref e)) => {
-                if e.local_name().as_ref() == b"rootfile" {
-                    for attr in e.attributes().flatten() {
-                        if attr.key.as_ref() == b"full-path" {
-                            return Ok(String::from_utf8_lossy(&attr.value).into_owned());
-                        }
+            Ok(Event::Start(ref e)) | Ok(Event::Empty(ref e))
+                if e.local_name().as_ref() == b"rootfile" =>
+            {
+                for attr in e.attributes().flatten() {
+                    if attr.key.as_ref() == b"full-path" {
+                        return Ok(String::from_utf8_lossy(&attr.value).into_owned());
                     }
                 }
             }
@@ -312,10 +312,8 @@ fn parse_manifest(opf: &str) -> HashMap<String, ManifestItem> {
                     }
                 }
             }
-            Ok(Event::End(ref e)) => {
-                if e.local_name().as_ref() == b"manifest" {
-                    in_manifest = false;
-                }
+            Ok(Event::End(ref e)) if e.local_name().as_ref() == b"manifest" => {
+                in_manifest = false;
             }
             Ok(Event::Eof) => break,
             Err(_) => break,
@@ -347,10 +345,8 @@ fn parse_spine_idrefs(opf: &str) -> Vec<String> {
                     }
                 }
             }
-            Ok(Event::End(ref e)) => {
-                if e.local_name().as_ref() == b"spine" {
-                    in_spine = false;
-                }
+            Ok(Event::End(ref e)) if e.local_name().as_ref() == b"spine" => {
+                in_spine = false;
             }
             Ok(Event::Eof) => break,
             Err(_) => break,
@@ -367,24 +363,22 @@ fn find_cover_meta_id(opf: &str) -> Option<String> {
     let mut buf = Vec::new();
     loop {
         match reader.read_event_into(&mut buf) {
-            Ok(Event::Start(ref e)) | Ok(Event::Empty(ref e)) => {
-                if e.local_name().as_ref() == b"meta" {
-                    let mut name: Option<String> = None;
-                    let mut content: Option<String> = None;
-                    for attr in e.attributes().flatten() {
-                        match attr.key.as_ref() {
-                            b"name" => {
-                                name = Some(String::from_utf8_lossy(&attr.value).into_owned())
-                            }
-                            b"content" => {
-                                content = Some(String::from_utf8_lossy(&attr.value).into_owned())
-                            }
-                            _ => {}
+            Ok(Event::Start(ref e)) | Ok(Event::Empty(ref e))
+                if e.local_name().as_ref() == b"meta" =>
+            {
+                let mut name: Option<String> = None;
+                let mut content: Option<String> = None;
+                for attr in e.attributes().flatten() {
+                    match attr.key.as_ref() {
+                        b"name" => name = Some(String::from_utf8_lossy(&attr.value).into_owned()),
+                        b"content" => {
+                            content = Some(String::from_utf8_lossy(&attr.value).into_owned())
                         }
+                        _ => {}
                     }
-                    if name.as_deref() == Some("cover") {
-                        return content;
-                    }
+                }
+                if name.as_deref() == Some("cover") {
+                    return content;
                 }
             }
             Ok(Event::Eof) => break,
@@ -1242,47 +1236,42 @@ fn parse_nav_toc(nav: &str, href_to_index: &HashMap<String, usize>) -> Vec<TocEn
                     }
                 }
             }
-            Ok(Event::Text(ref e)) => {
-                if in_anchor {
-                    if let Ok(text) = e.unescape() {
-                        let trimmed = text.trim();
-                        if !trimmed.is_empty() {
-                            if !current_label.is_empty() {
-                                current_label.push(' ');
-                            }
-                            current_label.push_str(trimmed);
+            Ok(Event::Text(ref e)) if in_anchor => {
+                if let Ok(text) = e.unescape() {
+                    let trimmed = text.trim();
+                    if !trimmed.is_empty() {
+                        if !current_label.is_empty() {
+                            current_label.push(' ');
                         }
+                        current_label.push_str(trimmed);
                     }
                 }
             }
-            Ok(Event::End(ref e)) => {
-                if in_toc_nav {
-                    if in_anchor {
-                        anchor_depth = anchor_depth.saturating_sub(1);
-                        if anchor_depth == 0 {
-                            if let Some(href) = current_href.take() {
-                                let clean_href =
-                                    href.split('#').next().unwrap_or(&href).to_string();
-                                let chapter_index =
-                                    href_to_index.get(&clean_href).copied().unwrap_or(0);
-                                let label = if current_label.is_empty() {
-                                    format!("Chapter {}", chapter_index + 1)
-                                } else {
-                                    current_label.clone()
-                                };
-                                entries.push(TocEntry {
-                                    label,
-                                    chapter_index,
-                                    children: vec![],
-                                });
-                            }
-                            in_anchor = false;
+            Ok(Event::End(ref e)) if in_toc_nav => {
+                if in_anchor {
+                    anchor_depth = anchor_depth.saturating_sub(1);
+                    if anchor_depth == 0 {
+                        if let Some(href) = current_href.take() {
+                            let clean_href = href.split('#').next().unwrap_or(&href).to_string();
+                            let chapter_index =
+                                href_to_index.get(&clean_href).copied().unwrap_or(0);
+                            let label = if current_label.is_empty() {
+                                format!("Chapter {}", chapter_index + 1)
+                            } else {
+                                current_label.clone()
+                            };
+                            entries.push(TocEntry {
+                                label,
+                                chapter_index,
+                                children: vec![],
+                            });
                         }
-                    } else if e.local_name().as_ref() == b"nav" {
-                        nav_depth = nav_depth.saturating_sub(1);
-                        if nav_depth == 0 {
-                            in_toc_nav = false;
-                        }
+                        in_anchor = false;
+                    }
+                } else if e.local_name().as_ref() == b"nav" {
+                    nav_depth = nav_depth.saturating_sub(1);
+                    if nav_depth == 0 {
+                        in_toc_nav = false;
                     }
                 }
             }

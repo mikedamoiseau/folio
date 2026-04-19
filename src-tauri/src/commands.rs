@@ -3754,7 +3754,7 @@ pub async fn list_auto_backups(state: State<'_, AppState>) -> FolioResult<Vec<Au
     }
 
     // Sort newest first
-    backups.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+    backups.sort_by_key(|b| std::cmp::Reverse(b.timestamp));
 
     Ok(backups)
 }

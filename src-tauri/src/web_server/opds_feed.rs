@@ -190,7 +190,7 @@ async fn new_books(State(state): State<WebState>) -> Result<Response, (StatusCod
     let mut books = db::list_books(&conn).map_err(folio_status)?;
 
     // Sort by added_at descending, take 25 most recent
-    books.sort_by(|a, b| b.added_at.cmp(&a.added_at));
+    books.sort_by_key(|b| std::cmp::Reverse(b.added_at));
     books.truncate(25);
 
     let entries: String = books

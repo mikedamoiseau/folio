@@ -143,10 +143,8 @@ async fn list_books(
     // Sort
     let mut books = books;
     match params.sort.as_deref() {
-        Some("title") => books.sort_by(|a, b| a.title.to_lowercase().cmp(&b.title.to_lowercase())),
-        Some("author") => {
-            books.sort_by(|a, b| a.author.to_lowercase().cmp(&b.author.to_lowercase()))
-        }
+        Some("title") => books.sort_by_key(|a| a.title.to_lowercase()),
+        Some("author") => books.sort_by_key(|a| a.author.to_lowercase()),
         Some("rating") => books.sort_by(|a, b| {
             b.rating
                 .unwrap_or(0.0)
