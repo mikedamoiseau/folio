@@ -262,7 +262,7 @@ export default function PageViewer({
         if (!cancelled) {
           const msg = err instanceof Error && err.message === "timeout"
             ? t("reader.pageLoadTimeout")
-            : friendlyError(String(err), t);
+            : friendlyError(err, t);
           setError(msg);
         }
       } finally {

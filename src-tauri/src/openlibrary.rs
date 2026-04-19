@@ -1,5 +1,7 @@
 use serde::Serialize;
 
+use crate::error::{FolioError, FolioResult};
+
 /// Enriched metadata from OpenLibrary.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -16,7 +18,7 @@ pub struct OpenLibraryResult {
 
 /// Search OpenLibrary by title and optionally author.
 /// Returns the top matches.
-pub fn search(title: &str, author: Option<&str>) -> Result<Vec<OpenLibraryResult>, String> {
+pub fn search(title: &str, author: Option<&str>) -> FolioResult<Vec<OpenLibraryResult>> {
     let mut query = format!("title={}", urlencoding(title));
     if let Some(a) = author {
         if !a.is_empty() {
@@ -28,16 +30,21 @@ pub fn search(title: &str, author: Option<&str>) -> Result<Vec<OpenLibraryResult
         query
     );
 
-    let resp =
-        reqwest::blocking::get(&url).map_err(|e| format!("OpenLibrary search failed: {e}"))?;
+    let resp = reqwest::blocking::get(&url)
+        .map_err(|e| FolioError::network(format!("OpenLibrary search failed: {e}")))?;
     if !resp.status().is_success() {
-        return Err(format!("OpenLibrary HTTP {}", resp.status()));
+        return Err(FolioError::network(format!(
+            "OpenLibrary HTTP {}",
+            resp.status()
+        )));
     }
-    let json: serde_json::Value = resp.json().map_err(|e| format!("JSON parse error: {e}"))?;
+    let json: serde_json::Value = resp
+        .json()
+        .map_err(|e| FolioError::network(format!("JSON parse error: {e}")))?;
 
     let docs = json["docs"]
         .as_array()
-        .ok_or_else(|| "Unexpected response format".to_string())?;
+        .ok_or_else(|| FolioError::internal("Unexpected response format"))?;
     let mut results = Vec::new();
 
     for doc in docs {
@@ -92,14 +99,19 @@ pub fn search(title: &str, author: Option<&str>) -> Result<Vec<OpenLibraryResult
 }
 
 /// Fetch detailed metadata for a specific OpenLibrary work.
-pub fn get_work(key: &str) -> Result<OpenLibraryResult, String> {
+pub fn get_work(key: &str) -> FolioResult<OpenLibraryResult> {
     let url = format!("https://openlibrary.org{}.json", key);
-    let resp =
-        reqwest::blocking::get(&url).map_err(|e| format!("OpenLibrary fetch failed: {e}"))?;
+    let resp = reqwest::blocking::get(&url)
+        .map_err(|e| FolioError::network(format!("OpenLibrary fetch failed: {e}")))?;
     if !resp.status().is_success() {
-        return Err(format!("OpenLibrary HTTP {}", resp.status()));
+        return Err(FolioError::network(format!(
+            "OpenLibrary HTTP {}",
+            resp.status()
+        )));
     }
-    let doc: serde_json::Value = resp.json().map_err(|e| format!("JSON parse error: {e}"))?;
+    let doc: serde_json::Value = resp
+        .json()
+        .map_err(|e| FolioError::network(format!("JSON parse error: {e}")))?;
 
     let title = doc["title"].as_str().unwrap_or("").to_string();
     let description = match &doc["description"] {
@@ -140,13 +152,19 @@ pub fn get_work(key: &str) -> Result<OpenLibraryResult, String> {
 }
 
 /// Look up a book by ISBN. Returns the work data if found.
-pub fn lookup_isbn(isbn: &str) -> Result<OpenLibraryResult, String> {
+pub fn lookup_isbn(isbn: &str) -> FolioResult<OpenLibraryResult> {
     let url = format!("https://openlibrary.org/isbn/{}.json", isbn);
-    let resp = reqwest::blocking::get(&url).map_err(|e| format!("ISBN lookup failed: {e}"))?;
+    let resp = reqwest::blocking::get(&url)
+        .map_err(|e| FolioError::network(format!("ISBN lookup failed: {e}")))?;
     if !resp.status().is_success() {
-        return Err(format!("ISBN not found: HTTP {}", resp.status()));
+        return Err(FolioError::not_found(format!(
+            "ISBN not found: HTTP {}",
+            resp.status()
+        )));
     }
-    let doc: serde_json::Value = resp.json().map_err(|e| format!("JSON parse error: {e}"))?;
+    let doc: serde_json::Value = resp
+        .json()
+        .map_err(|e| FolioError::network(format!("JSON parse error: {e}")))?;
     let title = doc["title"].as_str().unwrap_or("").to_string();
     let work_key = doc["works"]
         .as_array()

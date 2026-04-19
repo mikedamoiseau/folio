@@ -292,41 +292,6 @@ Expand where books come from and how they persist.
 - Write operations from remote (importing books, editing metadata, syncing progress)
 - User accounts or multi-user auth (single shared PIN is sufficient for LAN)
 
-## Phase 7: Mobile
-
-Port Folio to Android and iOS using Tauri v2's mobile support.
-
-### 23. Android & iOS App
-
-Tauri v2 supports mobile targets. The React frontend renders in a mobile WebView and the Rust backend compiles to mobile via `cargo tauri android init` / `cargo tauri ios init`. ~70% of the codebase works as-is; the work is in dependencies and UX.
-
-**Works out of the box:**
-- SQLite (rusqlite bundled) — no changes needed
-- EPUB & CBZ parsing (zip, quick-xml, ammonia) — pure Rust
-- React frontend — renders in mobile WebView
-- Tauri IPC bridge — identical on mobile
-
-**Dependency porting required:**
-
-| Dependency | Effort | Issue |
-|------------|--------|-------|
-| pdfium-render | High | Needs platform-specific native binaries cross-compiled for Android (ARM64/ARM/x86) and iOS (ARM64) |
-| unrar | Medium | C++ library requiring NDK/Xcode cross-compilation toolchain setup |
-| keyring | Medium | Desktop credential stores (macOS Keychain, Windows Credential Manager) don't exist on mobile — switch to Android Keystore / iOS Keychain backends |
-
-**Platform adaptation required:**
-- **File storage:** `dirs` crate paths won't work on mobile; adapt to Android/iOS sandboxed storage
-- **File picker:** `tauri-plugin-dialog` needs mobile-compatible file picker equivalents
-- **Library path:** `~/Documents/folio/` assumption must be replaced with platform-appropriate app storage
-
-**UX changes required:**
-- Responsive layouts for phone and tablet screens (currently fixed 800x600 window)
-- Touch interactions: swipe to turn pages, pinch to zoom
-- Touch alternatives for keyboard shortcuts
-- Mobile-appropriate navigation patterns
-
-**Suggested approach:** Ship an initial mobile version with EPUB + CBZ support only (skip PDF and CBR) to avoid the hardest native dependency work. Add PDF/CBR support in a follow-up once pdfium and unrar cross-compilation is solved.
-
 ## Phase 8: Reader & Library Enhancements
 
 ### Quick Wins
@@ -405,7 +370,7 @@ Tauri v2 supports mobile targets. The React frontend renders in a mobile WebView
 - ~~Filterable by action type with pagination (load more)~~
 - ~~14 data-changing commands instrumented with activity logging~~
 
-#### 34. MOBI/AZW Support
+#### 34. MOBI/AZW Support — **P2**
 - Add MOBI/AZW/AZW3 format parsing (common for older Kindle libraries)
 - New `BookFormat` enum variant, new parser module
 - Extract metadata, cover, and chapter content
@@ -418,7 +383,7 @@ Tauri v2 supports mobile targets. The React frontend renders in a mobile WebView
 - ~~Inline editing in bookmarks panel: click name to edit, Enter/blur saves, Escape cancels~~
 - ~~New `name` column in bookmarks table; `note` field preserved for future use~~
 
-#### 36. Navigation History (Back/Forward)
+#### 36. Navigation History (Back/Forward) — **P2**
 - Browser-like back/forward buttons after following TOC links or internal references in EPUBs
 - Maintain a navigation stack per reading session
 
@@ -471,7 +436,7 @@ Tauri v2 supports mobile targets. The React frontend renders in a mobile WebView
 - Future: PDF disk cache — extend page_cache module for rendered PDF pages
 - Future: frontend cache tuning — increase 10-entry LRU or make size-aware
 
-#### 40. Split View / Side-by-Side Reading
+#### 40. Split View / Side-by-Side Reading — **P2**
 - Open two books simultaneously in a split pane
 - Useful for reference material alongside primary reading
 - Niche but valuable for academic use
@@ -515,10 +480,13 @@ Improvements identified via codebase audit (April 2026). Security and stability 
 - ~~If keychain is inaccessible (user denied access, locked screen), return error~~
 - ~~Prevents config/secret desync that makes backup permanently broken~~
 
-#### 55. Structured Error Types (Rust)
-- Replace `Result<T, String>` across all commands with a typed error enum
-- Consistent error categorization: NotFound, PermissionDenied, InvalidInput, Network, Internal
-- Better error messages and frontend mapping
+#### 55. Structured Error Types (Rust) — **Done**
+- ~~Replace `Result<T, String>` across all commands with a typed error enum (`FolioError` + `FolioResult<T>` in `src-tauri/src/error.rs`)~~
+- ~~Consistent error categorization: `NotFound`, `PermissionDenied`, `InvalidInput`, `Network`, `Database`, `Io`, `Serialization`, `Internal`~~
+- ~~`From` conversions for `rusqlite`, `r2d2`, `std::io`, `serde_json`, `reqwest`, `zip`, `quick_xml`, `keyring`, `opendal`, `uuid`, `chrono`, `url`, `image`, `tauri`, `EpubError`, `SyncError`, `PoisonError`~~
+- ~~Structured JSON serialization at the Tauri boundary: `{kind, message}` — frontend `friendlyError()` maps by `kind` first, falls back to message matching~~
+- ~~All 107 Tauri commands, parser modules, backup, sync, web_server, and `db::create_pool` now return `FolioResult<T>`~~
+- ~~Unblocks `folio-core` extraction (#63)~~
 
 ### Accessibility
 
@@ -557,6 +525,84 @@ Improvements identified via codebase audit (April 2026). Security and stability 
 - When text selection spans multiple lines, the highlight color picker popup may be offscreen
 - Detect viewport bounds and reposition popup to opposite side when it would be clipped
 - Same pattern for any floating UI anchored to text selections
+
+## Phase 10: folio-core Refactor & Paid Server
+
+Open-core transition: after Folio 2.0 ships, the free desktop/web app enters maintenance mode. Future development effort pivots to a commercial multi-user server product. The free app stays MIT-licensed; the paid server lives in a **private** repository and depends on `folio-core` as a git dependency pinned to a tag.
+
+**Priority legend** (used throughout this roadmap for unfinished items): **P1** = do first, **P2** = do next, **P3** = planned but not urgent, **P4** = later / nice to have. Unmarked unfinished items default to P4.
+
+### 63. `folio-core` Workspace Refactor — **P2**
+- Extract shared library crate from `src-tauri/src/`
+- Moves into core: `models`, `db`, parsers (`epub/pdf/cbz/cbr`), `enrichment`, `backup`, `page_cache`, `sync`
+- Stays in `folio-desktop`: `commands.rs` (shrinks to thin adapters), Tauri-specific `AppState`, the current embedded web server
+- `folio-core` has zero Tauri or axum dependencies — pure library
+- Commands collapse to one-liners: `folio_core::library::list(&pool).map_err(Into::into)`
+- Extraction is incremental within one focused push: parsers → models → db → enrichment → backup → orchestration. Each step is one reviewable commit.
+- *Depends on: #55 Structured Errors (core needs a typed `CoreError`, not `Result<T, String>`)*
+
+### 64. Storage Abstraction Trait — **P2**
+- New `Storage` trait in `folio-core`, abstracting where book files, covers, EPUB inline images, and page caches live
+- Default implementation: local filesystem (no behavior change for the free app)
+- DB `file_path` column becomes a storage key, not a filesystem path
+- Paid server adds S3/object-store implementation in its own crate
+- Local disk cache layer in front of remote backends — page turns can't be raw S3 GETs
+- *Depends on: #63*
+
+### 65. `folio-server` — Headless Multi-User Server — **P3**
+
+Separate binary, private repo. Sold as a self-host license first; managed hosting added later only if demand is validated.
+
+**Scope:**
+- Headless HTTP server (axum). Linux primary target; Windows server optional.
+- **Multi-user accounts with isolated libraries** — professional model, not family/shared
+- Proper auth (password + session, API keys for programmatic access), not PIN-only
+- Admin cannot read user content (privacy requirement for professional use)
+- User self-service: registration, password reset, email verification
+- Per-user authenticated OPDS feeds
+- Admin dashboard: users, quotas, storage usage, audit log
+- Storage backends: local FS, AWS S3 (more later)
+- Deployment artifacts: Docker image (primary), raw Linux binaries
+- Audit log + per-user data export (GDPR-adjacent)
+- Offline license key validation — phone-home activation only if piracy becomes a real problem
+
+**Out of scope (at least initially):**
+- SSO / LDAP / SAML
+- Pure-SaaS hosted offering — high operator overhead; revisit only after self-host traction
+- Write-from-web (upload, edit metadata) — follows current read-only design
+
+**Distribution model:**
+- **Step 1** — ship self-host license. No infra on our side, no uptime obligation, no security SLA.
+- **Step 2** — add managed hosting as a premium tier once paying customers request it.
+- Launching pure SaaS from day one is too risky for a solo operator (support load, uptime obligation, security exposure, solo SPOF).
+
+*Depends on: #64*
+
+## Recommended Implementation Order
+
+The remaining free-app roadmap items ship first and mark Folio 2.0 as a stable cutoff. After that, development pivots to the refactor and the paid server. The sequence below avoids double-churn on the same code.
+
+1. ~~**#55 Structured Error Types — P1, do first.** Blocks clean `folio-core` extraction. Typed errors must exist before moving functions into the core crate; otherwise every function signature gets rewritten twice.~~ **Done** — `FolioError` enum + `FolioResult<T>` in `src-tauri/src/error.rs`, all commands migrated.
+2. **Remaining Phase 8 items** — #34 MOBI, #36 Navigation History, #40 Split View. Finishes the free app's feature set.
+3. **Tag Folio 2.0.** Publicly marks the free app as stable — a clean mental and marketing cutoff before the paid pivot.
+4. **#63 `folio-core` extraction.** Pure mechanical refactor once errors are typed. One focused push, incremental commits, each independently reviewable.
+5. **#64 Storage abstraction trait.** Added *inside* the now-clean `folio-core` crate, with a single local-FS implementation. No user-visible change in the desktop app.
+6. **#65 `folio-server` bootstrap** in the private repo. Pulls `folio-core` as a git dependency pinned to a tag.
+
+### Why not storage-trait-first
+
+Designing the `Storage` trait before the workspace refactor would mean touching files in `src-tauri/src/` that are about to be relocated during extraction — double churn on the same lines. The trait's shape also becomes clearer inside a pure library crate, where Tauri orchestration and direct filesystem access aren't mixed into the same modules.
+
+### Free app maintenance mode (post-2.0)
+
+- Bug fixes: yes
+- Security patches: yes
+- Dependency updates: yes
+- Small UX polish: case by case
+- New file formats: no
+- New feature requests: politely declined
+
+Document this publicly (README, issue template) to set user expectations before the pivot.
 
 ## Nice to Have
 
@@ -600,6 +646,41 @@ Lower priority features — high effort, niche audience, or dependent on other w
 - ~~Animated accordion sections with subtle background panels~~
 - Import/export themes for sharing (future)
 
+## Deferred: Mobile Apps
+
+Originally Phase 7. **Deprioritized — P4.** Rationale: the built-in web server (Phase 6) already lets phones and tablets access the library from a browser on the LAN, and the paid `folio-server` (Phase 10) extends that further with multi-user auth. That covers the primary mobile use case without the cross-compilation cost. A native mobile port stays technically possible but is no longer a near-term goal.
+
+### 23. Android & iOS App — **P4**
+
+Tauri v2 supports mobile targets. The React frontend renders in a mobile WebView and the Rust backend compiles to mobile via `cargo tauri android init` / `cargo tauri ios init`. ~70% of the codebase works as-is; the work is in dependencies and UX.
+
+**Works out of the box:**
+- SQLite (rusqlite bundled) — no changes needed
+- EPUB & CBZ parsing (zip, quick-xml, ammonia) — pure Rust
+- React frontend — renders in mobile WebView
+- Tauri IPC bridge — identical on mobile
+
+**Dependency porting required:**
+
+| Dependency | Effort | Issue |
+|------------|--------|-------|
+| pdfium-render | High | Needs platform-specific native binaries cross-compiled for Android (ARM64/ARM/x86) and iOS (ARM64) |
+| unrar | Medium | C++ library requiring NDK/Xcode cross-compilation toolchain setup |
+| keyring | Medium | Desktop credential stores (macOS Keychain, Windows Credential Manager) don't exist on mobile — switch to Android Keystore / iOS Keychain backends |
+
+**Platform adaptation required:**
+- **File storage:** `dirs` crate paths won't work on mobile; adapt to Android/iOS sandboxed storage
+- **File picker:** `tauri-plugin-dialog` needs mobile-compatible file picker equivalents
+- **Library path:** `~/Documents/folio/` assumption must be replaced with platform-appropriate app storage
+
+**UX changes required:**
+- Responsive layouts for phone and tablet screens (currently fixed 800x600 window)
+- Touch interactions: swipe to turn pages, pinch to zoom
+- Touch alternatives for keyboard shortcuts
+- Mobile-appropriate navigation patterns
+
+**Suggested approach (if revisited):** Ship an initial mobile version with EPUB + CBZ support only (skip PDF and CBR) to avoid the hardest native dependency work. Add PDF/CBR support in a follow-up once pdfium and unrar cross-compilation is solved.
+
 ## Summary
 
 | Phase | Features | Status | Theme |
@@ -610,7 +691,8 @@ Lower priority features — high effort, niche audience, or dependent on other w
 | 4 | Stats, Goodreads, Recents, Share, Recommendations | 4 done, 1 partial | Discovery & social |
 | 5 | Multiple Profiles | Done | Multi-user |
 | 6 | Remote Library Access, OPDS Server | Done | Remote access |
-| 7 | Android & iOS App | Not started | Mobile |
 | 8 | Sepia Theme, OpenDyslexic, Star Ratings, In-Book Search, Typography, Custom Fonts, Continuous Scroll, Time-to-Finish, Bookmark Naming, Series, Activity Log, MOBI, Nav History, Custom CSS, Dual-Page/Manga, Settings Reorg, i18n (EN+FR), PDF Zoom Quality, Go to Page, Animations, Comic Page Cache, Split View | 19 done | Reader & library enhancements |
-| 9 | DB Migration Versioning, Transaction Boundaries, Zip Bomb Protection, PDF Cache Memory Limits, Thread Pool, Backup Secret Atomicity, Screen Reader Live Regions, Loading Skeletons, Toast System, Search Nav, Bulk Actions, Highlight Positioning | 12 done, 1 remaining (#55 Structured Errors) | Hardening & polish |
+| 9 | DB Migration Versioning, Transaction Boundaries, Zip Bomb Protection, PDF Cache Memory Limits, Thread Pool, Backup Secret Atomicity, Screen Reader Live Regions, Loading Skeletons, Toast System, Search Nav, Bulk Actions, Highlight Positioning, Structured Errors | 13 done | Hardening & polish |
+| 10 | `folio-core` refactor, Storage trait, `folio-server` (private) | Not started — see Recommended Implementation Order | Open-core + paid server |
 | N/H | Dictionary, Vocabulary Builder, TTS, Library-Wide Search, Annotation Exports, Plugins/Hooks | Not started (User Themes done) | Nice to have |
+| Deferred | Android & iOS App (was Phase 7) | Deferred — web server covers the primary mobile use case | Mobile |

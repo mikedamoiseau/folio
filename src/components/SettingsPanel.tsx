@@ -670,7 +670,7 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
       setLibraryFolder(migrationDialog.newFolder);
       setMigrationDialog(null);
     } catch (err) {
-      setMigrationError(friendlyError(String(err), t));
+      setMigrationError(friendlyError(err, t));
     } finally {
       setMigrating(false);
     }
@@ -695,7 +695,7 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
       await invoke("export_library", { destPath: path, includeFiles });
       setBackupMessage(t("settings.exportedTo", { path }));
     } catch (err) {
-      setBackupMessage(t("settings.exportFailed", { error: friendlyError(String(err), t) }));
+      setBackupMessage(t("settings.exportFailed", { error: friendlyError(err, t) }));
     } finally {
       setExporting(false);
     }
@@ -741,7 +741,7 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
       setRestoreConfirmPath(null);
       setRestoreModalOpen(false);
     } catch (err) {
-      setBackupMessage(t("settings.importFailed", { error: friendlyError(String(err), t) }));
+      setBackupMessage(t("settings.importFailed", { error: friendlyError(err, t) }));
       setRestoreConfirmPath(null);
     } finally {
       setRestoring(false);
@@ -779,7 +779,7 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
       setSavedBackupConfig(config);
       setRemoteBackupMessage(t("settings.configSaved"));
     } catch (err) {
-      setRemoteBackupMessage(t("settings.saveFailed", { error: friendlyError(String(err), t) }));
+      setRemoteBackupMessage(t("settings.saveFailed", { error: friendlyError(err, t) }));
     } finally {
       setSavingBackupConfig(false);
     }
@@ -822,7 +822,7 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
       const status = await invoke<SyncManifest | null>("get_backup_status");
       setBackupStatus(status);
     } catch (err) {
-      setRemoteBackupMessage(t("settings.backupFailed", { error: friendlyError(String(err), t) }));
+      setRemoteBackupMessage(t("settings.backupFailed", { error: friendlyError(err, t) }));
     } finally {
       unlisten();
       setRunningBackup(false);
@@ -912,7 +912,7 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                       await invoke("set_autostart_enabled", { enabled: newValue });
                       setAutoStartEnabled(newValue);
                     } catch (e) {
-                      setAutoStartError(t("settings.autoStartFailed", { error: friendlyError(String(e), t) }));
+                      setAutoStartError(t("settings.autoStartFailed", { error: friendlyError(e, t) }));
                     }
                     setAutoStartLoading(false);
                   }}
@@ -1665,7 +1665,7 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                           setWebServerError(null);
                           setPinSaved(true);
                           setTimeout(() => setPinSaved(false), 2000);
-                        } catch (e) { setWebServerError(friendlyError(String(e), t)); }
+                        } catch (e) { setWebServerError(friendlyError(e, t)); }
                       }}
                       className="text-xs text-accent hover:underline"
                     >
@@ -1710,7 +1710,7 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                       setWebServerUrl(url);
                       try { const qr = await invoke<string>("web_server_get_qr"); setWebServerQr(qr); } catch {}
                     }
-                  } catch (e) { setWebServerError(friendlyError(String(e), t)); }
+                  } catch (e) { setWebServerError(friendlyError(e, t)); }
                   setWebServerLoading(false);
                 }}
                 className={`w-full px-3 py-2 text-sm font-medium rounded-xl transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${

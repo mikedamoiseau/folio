@@ -271,7 +271,9 @@ fn run_schema(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
-pub fn create_pool(db_path: &Path) -> Result<DbPool, Box<dyn std::error::Error>> {
+pub fn create_pool(db_path: &Path) -> crate::error::FolioResult<DbPool> {
+    use crate::error::FolioError;
+
     if let Some(parent) = db_path.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -285,7 +287,8 @@ pub fn create_pool(db_path: &Path) -> Result<DbPool, Box<dyn std::error::Error>>
     let pool = Pool::builder()
         .max_size(5)
         .connection_timeout(Duration::from_secs(5))
-        .build(manager)?;
+        .build(manager)
+        .map_err(|e| FolioError::database(e.to_string()))?;
 
     // Run schema migrations on startup using a pool connection.
     let conn = pool.get()?;

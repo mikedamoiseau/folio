@@ -1,5 +1,7 @@
 use super::{EnrichmentData, EnrichmentProvider, ProviderConfig};
 
+use crate::error::{FolioError, FolioResult};
+
 const SRU_ENDPOINT: &str = "https://catalogue.bnf.fr/api/SRU";
 
 #[derive(Default)]
@@ -30,7 +32,7 @@ impl EnrichmentProvider for BnfProvider {
         ""
     }
 
-    fn search_by_isbn(&self, isbn: &str) -> Result<Vec<EnrichmentData>, String> {
+    fn search_by_isbn(&self, isbn: &str) -> FolioResult<Vec<EnrichmentData>> {
         let query = format!("bib.isbn adj \"{}\"", isbn);
         let url = build_sru_url(&query, 3);
         fetch_and_parse(&url)
@@ -40,7 +42,7 @@ impl EnrichmentProvider for BnfProvider {
         &self,
         title: &str,
         author: Option<&str>,
-    ) -> Result<Vec<EnrichmentData>, String> {
+    ) -> FolioResult<Vec<EnrichmentData>> {
         let mut query = format!("(bib.title all \"{}\")", cql_escape(title));
         if let Some(a) = author {
             if !a.is_empty() {
@@ -69,16 +71,17 @@ fn build_sru_url(query: &str, max_records: u32) -> String {
     )
 }
 
-fn fetch_and_parse(url: &str) -> Result<Vec<EnrichmentData>, String> {
-    let resp = reqwest::blocking::get(url).map_err(|e| format!("BnF request failed: {e}"))?;
+fn fetch_and_parse(url: &str) -> FolioResult<Vec<EnrichmentData>> {
+    let resp = reqwest::blocking::get(url)
+        .map_err(|e| FolioError::network(format!("BnF request failed: {e}")))?;
 
     if !resp.status().is_success() {
-        return Err(format!("BnF HTTP {}", resp.status()));
+        return Err(FolioError::network(format!("BnF HTTP {}", resp.status())));
     }
 
     let body = resp
         .text()
-        .map_err(|e| format!("BnF response read error: {e}"))?;
+        .map_err(|e| FolioError::network(format!("BnF response read error: {e}")))?;
 
     // Split on <srw:record> to get individual records
     let records: Vec<EnrichmentData> = body

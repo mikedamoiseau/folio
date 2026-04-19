@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useTranslation } from "react-i18next";
+import { friendlyError } from "../lib/errors";
 
 interface Profile {
   name: string;
@@ -55,7 +56,7 @@ export default function ProfileSwitcher({ onSwitch }: ProfileSwitcherProps) {
       setOpen(false);
       onSwitch();
     } catch (err) {
-      setError(String(err));
+      setError(friendlyError(err, t));
     }
   };
 
@@ -72,7 +73,7 @@ export default function ProfileSwitcher({ onSwitch }: ProfileSwitcherProps) {
       setOpen(false);
       onSwitch();
     } catch (err) {
-      setError(String(err));
+      setError(friendlyError(err, t));
     }
   };
 
@@ -82,7 +83,7 @@ export default function ProfileSwitcher({ onSwitch }: ProfileSwitcherProps) {
       await invoke("delete_profile", { name });
       await loadProfiles();
     } catch (err) {
-      setError(String(err));
+      setError(friendlyError(err, t));
     }
   };
 

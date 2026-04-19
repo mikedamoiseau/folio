@@ -3,6 +3,16 @@
 All notable changes to this project will be documented in this file.
 This project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+- **Structured error types across the Rust backend** (ROADMAP #55) — every Tauri command now returns a typed `FolioError` enum (`NotFound`, `PermissionDenied`, `InvalidInput`, `Network`, `Database`, `Io`, `Serialization`, `Internal`) that serializes at the IPC boundary as `{kind, message}`. The frontend's `friendlyError()` helper now routes errors by `kind` first, translating all 8 categories via `errors.*` i18n keys in English and French. HTTP handlers in the embedded web server now map error kinds to the correct HTTP status (404/403/400/502/500) instead of always returning 500. Unblocks the upcoming `folio-core` crate extraction (#63).
+
+### Fixed
+- **App no longer panics on startup DB failures** — database initialisation errors now propagate through the Tauri setup closure instead of crashing via `.expect()`.
+- **Web-server auto-start survives poisoned locks** — if a mutex is poisoned on launch, the app logs a warning and skips web-server auto-start rather than crashing.
+- **Correct translations for archive corruption, chapter loading, keychain failures, JSON parse errors** — several mis-wired error kinds and translation keys were silently falling through to raw English messages. Users (especially on French locale) now see localised error copy for these paths.
+
 ## [1.4.1] - 2026-04-15
 
 ### Added

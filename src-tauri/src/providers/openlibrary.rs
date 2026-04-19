@@ -1,5 +1,7 @@
 use super::{EnrichmentData, EnrichmentProvider, ProviderConfig};
 
+use crate::error::{FolioError, FolioResult};
+
 #[derive(Default)]
 pub struct OpenLibraryProvider {
     config: ProviderConfig,
@@ -28,7 +30,7 @@ impl EnrichmentProvider for OpenLibraryProvider {
         "No API key required. OpenLibrary is a free, open service."
     }
 
-    fn search_by_isbn(&self, isbn: &str) -> Result<Vec<EnrichmentData>, String> {
+    fn search_by_isbn(&self, isbn: &str) -> FolioResult<Vec<EnrichmentData>> {
         let url = format!(
             "https://openlibrary.org/search.json?isbn={}&limit=3&fields=key,title,author_name,first_sentence,subject,isbn,ratings_average,cover_i,language",
             urlencoding(isbn)
@@ -40,7 +42,7 @@ impl EnrichmentProvider for OpenLibraryProvider {
         &self,
         title: &str,
         author: Option<&str>,
-    ) -> Result<Vec<EnrichmentData>, String> {
+    ) -> FolioResult<Vec<EnrichmentData>> {
         let mut query = format!("title={}", urlencoding(title));
         if let Some(a) = author {
             if !a.is_empty() {
@@ -63,17 +65,22 @@ impl EnrichmentProvider for OpenLibraryProvider {
     }
 }
 
-fn fetch_and_parse(url: &str) -> Result<Vec<EnrichmentData>, String> {
-    let resp =
-        reqwest::blocking::get(url).map_err(|e| format!("OpenLibrary search failed: {e}"))?;
+fn fetch_and_parse(url: &str) -> FolioResult<Vec<EnrichmentData>> {
+    let resp = reqwest::blocking::get(url)
+        .map_err(|e| FolioError::network(format!("OpenLibrary search failed: {e}")))?;
     if !resp.status().is_success() {
-        return Err(format!("OpenLibrary HTTP {}", resp.status()));
+        return Err(FolioError::network(format!(
+            "OpenLibrary HTTP {}",
+            resp.status()
+        )));
     }
-    let json: serde_json::Value = resp.json().map_err(|e| format!("JSON parse error: {e}"))?;
+    let json: serde_json::Value = resp
+        .json()
+        .map_err(|e| FolioError::network(format!("JSON parse error: {e}")))?;
 
     let docs = json["docs"]
         .as_array()
-        .ok_or_else(|| "Unexpected response format".to_string())?;
+        .ok_or_else(|| FolioError::internal("Unexpected response format"))?;
 
     Ok(docs.iter().filter_map(parse_search_doc).collect())
 }

@@ -8,6 +8,7 @@ use axum::{
 use std::net::SocketAddr;
 
 use super::WebState;
+use crate::error::{FolioError, FolioResult};
 
 const KEYRING_SERVICE: &str = "folio-web-server";
 const KEYRING_USER: &str = "pin";
@@ -60,10 +61,12 @@ pub fn hash_pin(pin: &str) -> String {
 }
 
 /// Store the PIN hash in the OS keychain.
-pub fn store_pin(pin: &str) -> Result<(), String> {
+pub fn store_pin(pin: &str) -> FolioResult<()> {
     let hash = hash_pin(pin);
-    let entry = keyring::Entry::new(KEYRING_SERVICE, KEYRING_USER).map_err(|e| e.to_string())?;
-    entry.set_password(&hash).map_err(|e| e.to_string())
+    let entry = keyring::Entry::new(KEYRING_SERVICE, KEYRING_USER)?;
+    entry
+        .set_password(&hash)
+        .map_err(|e| FolioError::internal(format!("keychain: {e}")))
 }
 
 /// Load the PIN hash from the OS keychain (None if not set).
@@ -78,12 +81,12 @@ pub fn verify_pin(pin: &str, stored_hash: &str) -> bool {
 }
 
 /// Create a new session token and store it. Returns an error if the session store is unavailable.
-pub fn create_session(state: &WebState) -> Result<String, String> {
+pub fn create_session(state: &WebState) -> FolioResult<String> {
     let token = uuid::Uuid::new_v4().to_string();
     let mut sessions = state
         .sessions
         .lock()
-        .map_err(|_| "Session store unavailable".to_string())?;
+        .map_err(|_| FolioError::internal("Session store unavailable"))?;
     sessions.insert(token.clone(), std::time::Instant::now());
     Ok(token)
 }
@@ -133,9 +136,10 @@ fn extract_cookie_token(req: &Request<Body>) -> Option<String> {
 }
 
 /// Generate a QR code as an SVG string for the given URL.
-pub fn generate_qr_svg(url: &str) -> Result<String, String> {
+pub fn generate_qr_svg(url: &str) -> FolioResult<String> {
     use qrcode::QrCode;
-    let code = QrCode::new(url.as_bytes()).map_err(|e| e.to_string())?;
+    let code =
+        QrCode::new(url.as_bytes()).map_err(|e| FolioError::internal(format!("QR encode: {e}")))?;
     let svg = code
         .render::<qrcode::render::svg::Color>()
         .min_dimensions(200, 200)

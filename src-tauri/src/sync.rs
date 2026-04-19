@@ -231,20 +231,21 @@ pub fn merge_remote_into_local(
         };
 
         match local_bookmarks.get(rb.id.as_str()) {
-            None => {
-                if db::upsert_bookmark_from_sync(conn, &bookmark).is_ok() {
-                    result.bookmarks_added += 1;
-                }
+            None if db::upsert_bookmark_from_sync(conn, &bookmark).is_ok() => {
+                result.bookmarks_added += 1;
             }
-            Some(lb) if rb.updated_at > lb.updated_at => {
-                if db::upsert_bookmark_from_sync(conn, &bookmark).is_ok() {
-                    result.bookmarks_updated += 1;
-                }
+            Some(lb)
+                if rb.updated_at > lb.updated_at
+                    && db::upsert_bookmark_from_sync(conn, &bookmark).is_ok() =>
+            {
+                result.bookmarks_updated += 1;
             }
-            Some(lb) if rb.updated_at == lb.updated_at && !bookmark_content_eq(rb, lb) => {
-                if db::upsert_bookmark_from_sync(conn, &bookmark).is_ok() {
-                    result.bookmarks_updated += 1;
-                }
+            Some(lb)
+                if rb.updated_at == lb.updated_at
+                    && !bookmark_content_eq(rb, lb)
+                    && db::upsert_bookmark_from_sync(conn, &bookmark).is_ok() =>
+            {
+                result.bookmarks_updated += 1;
             }
             _ => {}
         }
@@ -273,20 +274,21 @@ pub fn merge_remote_into_local(
         };
 
         match local_highlights.get(rh.id.as_str()) {
-            None => {
-                if db::upsert_highlight_from_sync(conn, &highlight).is_ok() {
-                    result.highlights_added += 1;
-                }
+            None if db::upsert_highlight_from_sync(conn, &highlight).is_ok() => {
+                result.highlights_added += 1;
             }
-            Some(lh) if rh.updated_at > lh.updated_at => {
-                if db::upsert_highlight_from_sync(conn, &highlight).is_ok() {
-                    result.highlights_updated += 1;
-                }
+            Some(lh)
+                if rh.updated_at > lh.updated_at
+                    && db::upsert_highlight_from_sync(conn, &highlight).is_ok() =>
+            {
+                result.highlights_updated += 1;
             }
-            Some(lh) if rh.updated_at == lh.updated_at && !highlight_content_eq(rh, lh) => {
-                if db::upsert_highlight_from_sync(conn, &highlight).is_ok() {
-                    result.highlights_updated += 1;
-                }
+            Some(lh)
+                if rh.updated_at == lh.updated_at
+                    && !highlight_content_eq(rh, lh)
+                    && db::upsert_highlight_from_sync(conn, &highlight).is_ok() =>
+            {
+                result.highlights_updated += 1;
             }
             _ => {}
         }

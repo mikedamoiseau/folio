@@ -1,34 +1,40 @@
 use base64::{engine::general_purpose, Engine as _};
 use std::path::Path;
 
+use crate::error::{FolioError, FolioResult};
+
 /// Maximum number of entries allowed in a CBR archive.
 const MAX_ARCHIVE_ENTRIES: usize = 10_000;
 /// Maximum decompressed size per archive entry (100 MB).
 const MAX_ENTRY_SIZE: u64 = 100 * 1024 * 1024;
 
+fn rar_err(ctx: &str, e: impl std::fmt::Display) -> FolioError {
+    FolioError::invalid(format!("{ctx}: {e}"))
+}
+
 /// Validate a RAR archive: reject archives with too many entries or oversized entries.
-fn validate_archive(path: &str) -> Result<(), String> {
+fn validate_archive(path: &str) -> FolioResult<()> {
     let archive = unrar::Archive::new(path)
         .open_for_listing()
-        .map_err(|e| format!("Cannot open RAR archive: {e}"))?;
+        .map_err(|e| rar_err("Cannot open RAR archive", e))?;
 
     let mut count: usize = 0;
     for result in archive {
-        let entry = result.map_err(|e| format!("Error reading RAR entry: {e}"))?;
+        let entry = result.map_err(|e| rar_err("Error reading RAR entry", e))?;
         count += 1;
         if count > MAX_ARCHIVE_ENTRIES {
-            return Err(format!(
+            return Err(FolioError::invalid(format!(
                 "Archive has more than {} entries (maximum {})",
                 MAX_ARCHIVE_ENTRIES, MAX_ARCHIVE_ENTRIES
-            ));
+            )));
         }
         if entry.unpacked_size > MAX_ENTRY_SIZE {
-            return Err(format!(
+            return Err(FolioError::invalid(format!(
                 "Archive entry '{}' decompressed size ({} MB) exceeds limit ({} MB)",
                 entry.filename.to_string_lossy(),
                 entry.unpacked_size / (1024 * 1024),
                 MAX_ENTRY_SIZE / (1024 * 1024)
-            ));
+            )));
         }
     }
     Ok(())
@@ -57,10 +63,10 @@ fn mime_for(name: &str) -> &'static str {
 }
 
 /// Collect sorted image entry names from a RAR archive.
-fn collect_image_names(path: &str) -> Result<Vec<String>, String> {
+fn collect_image_names(path: &str) -> FolioResult<Vec<String>> {
     let archive = unrar::Archive::new(path)
         .open_for_listing()
-        .map_err(|e| format!("Cannot open RAR archive: {e}"))?;
+        .map_err(|e| rar_err("Cannot open RAR archive", e))?;
 
     let mut names: Vec<String> = archive
         .filter_map(|entry| {
@@ -111,11 +117,13 @@ fn extract_comic_info(path: &str) -> Option<String> {
     }
 }
 
-pub fn import_cbr(path: &str) -> Result<CbrMeta, String> {
+pub fn import_cbr(path: &str) -> FolioResult<CbrMeta> {
     validate_archive(path)?;
     let images = collect_image_names(path)?;
     if images.is_empty() {
-        return Err("CBR archive contains no supported image files".to_string());
+        return Err(FolioError::invalid(
+            "CBR archive contains no supported image files",
+        ));
     }
     let title = Path::new(path)
         .file_stem()
@@ -164,48 +172,53 @@ pub fn import_cbr(path: &str) -> Result<CbrMeta, String> {
     })
 }
 
-pub fn get_page_count(path: &str) -> Result<u32, String> {
+pub fn get_page_count(path: &str) -> FolioResult<u32> {
     let images = collect_image_names(path)?;
     Ok(images.len() as u32)
 }
 
-pub fn get_page_image(path: &str, page_index: u32) -> Result<String, String> {
+pub fn get_page_image(path: &str, page_index: u32) -> FolioResult<String> {
     let images = collect_image_names(path)?;
     let target_name = images
         .get(page_index as usize)
         .ok_or_else(|| {
-            format!(
+            FolioError::not_found(format!(
                 "Page index {page_index} out of range (total pages: {})",
                 images.len()
-            )
+            ))
         })?
         .clone();
 
     // Open for processing — walk entries until we find the target, then .read() it
     let archive = unrar::Archive::new(path)
         .open_for_processing()
-        .map_err(|e| format!("Cannot open RAR archive: {e}"))?;
+        .map_err(|e| rar_err("Cannot open RAR archive", e))?;
 
     let mut cursor = archive;
     loop {
         let header = cursor
             .read_header()
-            .map_err(|e| format!("Error reading RAR entry: {e}"))?;
+            .map_err(|e| rar_err("Error reading RAR entry", e))?;
         match header {
-            None => return Err(format!("Page '{}' not found in archive", target_name)),
+            None => {
+                return Err(FolioError::not_found(format!(
+                    "Page '{}' not found in archive",
+                    target_name
+                )))
+            }
             Some(entry) => {
                 let name = entry.entry().filename.to_string_lossy().to_string();
                 if name == target_name {
                     let (data, _) = entry
                         .read()
-                        .map_err(|e| format!("Cannot extract page: {e}"))?;
+                        .map_err(|e| rar_err("Cannot extract page", e))?;
                     let mime = mime_for(&target_name);
                     let encoded = general_purpose::STANDARD.encode(&data);
                     return Ok(format!("data:{mime};base64,{encoded}"));
                 } else {
                     cursor = entry
                         .skip()
-                        .map_err(|e| format!("Error skipping RAR entry: {e}"))?;
+                        .map_err(|e| rar_err("Error skipping RAR entry", e))?;
                 }
             }
         }
@@ -213,41 +226,46 @@ pub fn get_page_image(path: &str, page_index: u32) -> Result<String, String> {
 }
 
 /// Extracts a single page image and returns raw bytes + mime type.
-pub fn get_page_image_bytes(path: &str, page_index: u32) -> Result<(Vec<u8>, String), String> {
+pub fn get_page_image_bytes(path: &str, page_index: u32) -> FolioResult<(Vec<u8>, String)> {
     let images = collect_image_names(path)?;
     let target_name = images
         .get(page_index as usize)
         .ok_or_else(|| {
-            format!(
+            FolioError::not_found(format!(
                 "Page index {page_index} out of range (total pages: {})",
                 images.len()
-            )
+            ))
         })?
         .clone();
 
     let archive = unrar::Archive::new(path)
         .open_for_processing()
-        .map_err(|e| format!("Cannot open RAR archive: {e}"))?;
+        .map_err(|e| rar_err("Cannot open RAR archive", e))?;
 
     let mut cursor = archive;
     loop {
         let header = cursor
             .read_header()
-            .map_err(|e| format!("Error reading RAR entry: {e}"))?;
+            .map_err(|e| rar_err("Error reading RAR entry", e))?;
         match header {
-            None => return Err(format!("Page '{}' not found in archive", target_name)),
+            None => {
+                return Err(FolioError::not_found(format!(
+                    "Page '{}' not found in archive",
+                    target_name
+                )))
+            }
             Some(entry) => {
                 let name = entry.entry().filename.to_string_lossy().to_string();
                 if name == target_name {
                     let (data, _) = entry
                         .read()
-                        .map_err(|e| format!("Cannot extract page: {e}"))?;
+                        .map_err(|e| rar_err("Cannot extract page", e))?;
                     let mime = mime_for(&target_name).to_string();
                     return Ok((data, mime));
                 } else {
                     cursor = entry
                         .skip()
-                        .map_err(|e| format!("Error skipping RAR entry: {e}"))?;
+                        .map_err(|e| rar_err("Error skipping RAR entry", e))?;
                 }
             }
         }

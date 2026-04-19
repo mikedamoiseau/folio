@@ -120,7 +120,7 @@ export default function EditBookDialog({
       }
       setTagInput("");
     } catch (err) {
-      setError(friendlyError(String(err), t));
+      setError(friendlyError(err, t));
       ok = false;
     } finally {
       await loadTags();
@@ -162,7 +162,7 @@ export default function EditBookDialog({
       });
       onSaved();
     } catch (err) {
-      setError(friendlyError(String(err), t));
+      setError(friendlyError(err, t));
     } finally {
       setSaving(false);
     }
@@ -178,7 +178,7 @@ export default function EditBookDialog({
       });
       setOlResults(results);
     } catch (err) {
-      setError(friendlyError(String(err), t));
+      setError(friendlyError(err, t));
     } finally {
       setOlSearching(false);
     }
@@ -202,7 +202,7 @@ export default function EditBookDialog({
       setOlEnriched(true);
       setOlResults([]);
     } catch (err) {
-      setError(friendlyError(String(err), t));
+      setError(friendlyError(err, t));
     } finally {
       setSaving(false);
     }
@@ -223,7 +223,7 @@ export default function EditBookDialog({
       });
       onSaved();
     } catch (err) {
-      setError(friendlyError(String(err), t));
+      setError(friendlyError(err, t));
     } finally {
       setSaving(false);
     }
@@ -465,7 +465,7 @@ export default function EditBookDialog({
                     await invoke("copy_to_library", { bookId });
                     onSaved(); // refresh book data and close dialog
                   } catch (err) {
-                    setError(friendlyError(String(err), t));
+                    setError(friendlyError(err, t));
                   } finally {
                     setCopyingToLibrary(false);
                   }

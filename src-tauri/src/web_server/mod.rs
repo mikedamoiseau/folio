@@ -4,7 +4,8 @@ pub mod opds_feed;
 pub mod web_ui;
 
 use crate::db::DbPool;
-use axum::{middleware, Router};
+use crate::error::{FolioError, FolioResult};
+use axum::{http::StatusCode, middleware, Router};
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -30,10 +31,28 @@ impl WebState {
     /// Get a database connection from the active pool.
     pub fn conn(
         &self,
-    ) -> Result<r2d2::PooledConnection<r2d2_sqlite::SqliteConnectionManager>, String> {
-        let pool = self.pool.lock().map_err(|e| e.to_string())?;
-        pool.get().map_err(|e| e.to_string())
+    ) -> FolioResult<r2d2::PooledConnection<r2d2_sqlite::SqliteConnectionManager>> {
+        let pool = self.pool.lock()?;
+        Ok(pool.get()?)
     }
+}
+
+/// Map any error convertible to [`FolioError`] into an HTTP `(status, message)`
+/// tuple for axum handlers.
+///
+/// `NotFound` → 404, `PermissionDenied` → 403, `InvalidInput` → 400,
+/// `Network` → 502; everything else → 500. Accepts `FolioError` directly or
+/// any source error with a `From<E> for FolioError` impl (e.g. `std::io::Error`).
+pub fn folio_status<E: Into<FolioError>>(e: E) -> (StatusCode, String) {
+    let err: FolioError = e.into();
+    let status = match err.kind() {
+        "NotFound" => StatusCode::NOT_FOUND,
+        "PermissionDenied" => StatusCode::FORBIDDEN,
+        "InvalidInput" => StatusCode::BAD_REQUEST,
+        "Network" => StatusCode::BAD_GATEWAY,
+        _ => StatusCode::INTERNAL_SERVER_ERROR,
+    };
+    (status, err.to_string())
 }
 
 /// Handle to a running web server instance.
@@ -110,17 +129,22 @@ pub fn build_router(state: WebState) -> Router {
 pub const DEFAULT_PORT: u16 = 7788;
 
 /// Start the web server on the given port. Returns a handle for shutdown.
-pub async fn start(state: WebState, port: u16) -> Result<WebServerHandle, String> {
+pub async fn start(state: WebState, port: u16) -> crate::error::FolioResult<WebServerHandle> {
+    use crate::error::FolioError;
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
     let router = build_router(state);
 
     let listener = tokio::net::TcpListener::bind(addr).await.map_err(|e| {
         if e.kind() == std::io::ErrorKind::AddrInUse {
-            format!("Port {port} is already in use. Try a different port (1024\u{2013}65535).")
+            FolioError::invalid(format!(
+                "Port {port} is already in use. Try a different port (1024\u{2013}65535)."
+            ))
         } else if e.kind() == std::io::ErrorKind::PermissionDenied {
-            format!("Permission denied for port {port}. Use a port above 1024.")
+            FolioError::permission(format!(
+                "Permission denied for port {port}. Use a port above 1024."
+            ))
         } else {
-            format!("Failed to start server on port {port}: {e}")
+            FolioError::network(format!("Failed to start server on port {port}: {e}"))
         }
     })?;
 

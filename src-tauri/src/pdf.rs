@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use std::sync::{LazyLock, Mutex, OnceLock};
 
 use crate::epub;
+use crate::error::{FolioError, FolioResult};
 
 // ---- PDF text cache ----
 
@@ -40,18 +41,23 @@ pub fn is_available() -> bool {
 
 // ---- Internal helpers ----
 
-fn bind_pdfium() -> Result<Pdfium, String> {
+fn bind_pdfium() -> FolioResult<Pdfium> {
     let bindings = match PDFIUM_LIBRARY_PATH.get().and_then(|p| p.as_deref()) {
         Some(path) => {
-            let path_str = path.to_str().ok_or("pdfium path is not valid UTF-8")?;
-            Pdfium::bind_to_library(path_str)
-                .map_err(|e| format!("failed to load bundled pdfium from {path_str}: {e}"))?
+            let path_str = path
+                .to_str()
+                .ok_or_else(|| FolioError::internal("pdfium path is not valid UTF-8"))?;
+            Pdfium::bind_to_library(path_str).map_err(|e| {
+                FolioError::internal(format!(
+                    "failed to load bundled pdfium from {path_str}: {e}"
+                ))
+            })?
         }
         None => Pdfium::bind_to_system_library().map_err(|e| {
-            format!(
+            FolioError::internal(format!(
                 "pdfium library not found: {e}. Install the pdfium shared library and ensure it \
                  is on your library path (e.g. DYLD_LIBRARY_PATH on macOS)."
-            )
+            ))
         })?,
     };
     Ok(Pdfium::new(bindings))
@@ -78,11 +84,11 @@ fn read_metadata_tag(document: &PdfDocument, tag: PdfDocumentMetadataTagType) ->
 // ---- Public API ----
 
 /// Parse a PDF file and return its title, author, and page count.
-pub fn import_pdf(path: &str) -> Result<PdfMeta, String> {
+pub fn import_pdf(path: &str) -> FolioResult<PdfMeta> {
     let pdfium = bind_pdfium()?;
     let document = pdfium
         .load_pdf_from_file(path, None)
-        .map_err(|e| format!("failed to open PDF: {e}"))?;
+        .map_err(|e| FolioError::invalid(format!("failed to open PDF: {e}")))?;
 
     let page_count = document.pages().len() as u32;
 
@@ -100,11 +106,11 @@ pub fn import_pdf(path: &str) -> Result<PdfMeta, String> {
 }
 
 /// Return the number of pages in a PDF.
-pub fn get_page_count(path: &str) -> Result<u32, String> {
+pub fn get_page_count(path: &str) -> FolioResult<u32> {
     let pdfium = bind_pdfium()?;
     let document = pdfium
         .load_pdf_from_file(path, None)
-        .map_err(|e| format!("failed to open PDF: {e}"))?;
+        .map_err(|e| FolioError::invalid(format!("failed to open PDF: {e}")))?;
     Ok(document.pages().len() as u32)
 }
 
@@ -112,34 +118,34 @@ pub fn get_page_count(path: &str) -> Result<u32, String> {
 ///
 /// `width` is the target pixel width; height is calculated to preserve aspect ratio.
 /// Uses JPEG encoding for fast encode times and small transfer sizes.
-pub fn get_page_image(path: &str, page_index: u32, width: u32) -> Result<String, String> {
+pub fn get_page_image(path: &str, page_index: u32, width: u32) -> FolioResult<String> {
     let pdfium = bind_pdfium()?;
     let document = pdfium
         .load_pdf_from_file(path, None)
-        .map_err(|e| format!("failed to open PDF: {e}"))?;
+        .map_err(|e| FolioError::invalid(format!("failed to open PDF: {e}")))?;
 
     let pages = document.pages();
     if page_index > u16::MAX as u32 {
-        return Err(format!(
+        return Err(FolioError::invalid(format!(
             "page index {page_index} exceeds maximum supported ({})",
             u16::MAX
-        ));
+        )));
     }
     let page = pages
         .get(page_index as u16)
-        .map_err(|e| format!("page {page_index} not found: {e}"))?;
+        .map_err(|e| FolioError::not_found(format!("page {page_index} not found: {e}")))?;
 
     let config = PdfRenderConfig::new().set_target_width(width as i32);
 
     let bitmap = page
         .render_with_config(&config)
-        .map_err(|e| format!("render failed: {e}"))?;
+        .map_err(|e| FolioError::internal(format!("render failed: {e}")))?;
 
     let img = bitmap.as_image();
     let mut jpeg_bytes: Vec<u8> = Vec::new();
     let encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpeg_bytes, 90);
     img.write_with_encoder(encoder)
-        .map_err(|e| format!("JPEG encode failed: {e}"))?;
+        .map_err(|e| FolioError::internal(format!("JPEG encode failed: {e}")))?;
 
     let b64 = base64::engine::general_purpose::STANDARD.encode(&jpeg_bytes);
     Ok(format!("data:image/jpeg;base64,{b64}"))
@@ -147,37 +153,34 @@ pub fn get_page_image(path: &str, page_index: u32, width: u32) -> Result<String,
 
 /// Render one PDF page to raw JPEG bytes + mime type.
 /// Avoids the base64 encode/decode round-trip for web serving.
-pub fn get_page_image_bytes(
-    path: &str,
-    page_index: u32,
-) -> Result<(Vec<u8>, &'static str), String> {
+pub fn get_page_image_bytes(path: &str, page_index: u32) -> FolioResult<(Vec<u8>, &'static str)> {
     let pdfium = bind_pdfium()?;
     let document = pdfium
         .load_pdf_from_file(path, None)
-        .map_err(|e| format!("failed to open PDF: {e}"))?;
+        .map_err(|e| FolioError::invalid(format!("failed to open PDF: {e}")))?;
 
     let pages = document.pages();
     if page_index > u16::MAX as u32 {
-        return Err(format!(
+        return Err(FolioError::invalid(format!(
             "page index {page_index} exceeds maximum supported ({})",
             u16::MAX
-        ));
+        )));
     }
     let page = pages
         .get(page_index as u16)
-        .map_err(|e| format!("page {page_index} not found: {e}"))?;
+        .map_err(|e| FolioError::not_found(format!("page {page_index} not found: {e}")))?;
 
     let config = PdfRenderConfig::new().set_target_width(1200);
 
     let bitmap = page
         .render_with_config(&config)
-        .map_err(|e| format!("render failed: {e}"))?;
+        .map_err(|e| FolioError::internal(format!("render failed: {e}")))?;
 
     let img = bitmap.as_image();
     let mut jpeg_bytes: Vec<u8> = Vec::new();
     let encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpeg_bytes, 90);
     img.write_with_encoder(encoder)
-        .map_err(|e| format!("JPEG encode failed: {e}"))?;
+        .map_err(|e| FolioError::internal(format!("JPEG encode failed: {e}")))?;
 
     Ok((jpeg_bytes, "image/jpeg"))
 }
@@ -195,11 +198,11 @@ pub struct PdfSearchResult {
 const MAX_SEARCH_RESULTS: usize = 200;
 
 /// Extract text from every page of a PDF and return as a Vec (one entry per page).
-fn extract_all_page_texts(path: &str) -> Result<Vec<String>, String> {
+fn extract_all_page_texts(path: &str) -> FolioResult<Vec<String>> {
     let pdfium = bind_pdfium()?;
     let document = pdfium
         .load_pdf_from_file(path, None)
-        .map_err(|e| format!("failed to open PDF: {e}"))?;
+        .map_err(|e| FolioError::invalid(format!("failed to open PDF: {e}")))?;
 
     let pages = document.pages();
     let page_count = pages.len();
@@ -208,10 +211,12 @@ fn extract_all_page_texts(path: &str) -> Result<Vec<String>, String> {
     for page_idx in 0..page_count {
         let page = pages
             .get(page_idx)
-            .map_err(|e| format!("page {page_idx} not found: {e}"))?;
+            .map_err(|e| FolioError::not_found(format!("page {page_idx} not found: {e}")))?;
         let text = page
             .text()
-            .map_err(|e| format!("failed to extract text from page {page_idx}: {e}"))?
+            .map_err(|e| {
+                FolioError::internal(format!("failed to extract text from page {page_idx}: {e}"))
+            })?
             .all();
         texts.push(text);
     }
@@ -220,11 +225,9 @@ fn extract_all_page_texts(path: &str) -> Result<Vec<String>, String> {
 }
 
 /// Return cached page texts for a PDF, extracting and caching if needed.
-fn get_cached_page_texts(path: &str) -> Result<Vec<String>, String> {
+fn get_cached_page_texts(path: &str) -> FolioResult<Vec<String>> {
     {
-        let cache = PDF_TEXT_CACHE
-            .lock()
-            .map_err(|e| format!("text cache lock poisoned: {e}"))?;
+        let cache = PDF_TEXT_CACHE.lock()?;
 
         if let Some(texts) = cache.get(path) {
             return Ok(texts.clone());
@@ -235,9 +238,7 @@ fn get_cached_page_texts(path: &str) -> Result<Vec<String>, String> {
     let texts = extract_all_page_texts(path)?;
 
     {
-        let mut cache = PDF_TEXT_CACHE
-            .lock()
-            .map_err(|e| format!("text cache lock poisoned: {e}"))?;
+        let mut cache = PDF_TEXT_CACHE.lock()?;
 
         // Evict all entries if the cache is at capacity.
         if cache.len() >= TEXT_CACHE_MAX_BOOKS && !cache.contains_key(path) {
@@ -252,7 +253,7 @@ fn get_cached_page_texts(path: &str) -> Result<Vec<String>, String> {
 
 /// Search all pages of a PDF for a query string (case-insensitive).
 /// Returns up to MAX_SEARCH_RESULTS matches with surrounding context snippets.
-pub fn search_pdf(path: &str, query: &str) -> Result<Vec<PdfSearchResult>, String> {
+pub fn search_pdf(path: &str, query: &str) -> FolioResult<Vec<PdfSearchResult>> {
     let query_lower = query.to_lowercase();
     let mut results = Vec::new();
 

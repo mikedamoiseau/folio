@@ -10,7 +10,7 @@ import HighlightsPanel, { HIGHLIGHT_COLORS } from "../components/HighlightsPanel
 import BookmarksPanel from "../components/BookmarksPanel";
 import BookmarkToast from "../components/BookmarkToast";
 import LanguageSwitcher from "../components/LanguageSwitcher";
-import { friendlyError } from "../lib/errors";
+import { friendlyError, toFolioError } from "../lib/errors";
 
 // ---- Types matching Rust backend ----
 
@@ -110,8 +110,12 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
   const userHasInteracted = useRef(false);
 
   const isFileNotFound = (err: unknown): boolean => {
-    const msg = String(err).toLowerCase();
-    return msg.includes("book file not found");
+    // Narrow: only the on-disk book file being absent should trigger the
+    // "reconnect drive" recovery dialog. NotFound is used broadly in the
+    // backend error system (missing EPUB entries, missing pages, missing
+    // profiles, …) and must not trigger this flow.
+    const { message } = toFolioError(err);
+    return message.toLowerCase().includes("book file not found");
   };
 
   // ---- Load book info, TOC, and saved progress on mount ----
@@ -175,7 +179,7 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
           if (isFileNotFound(err)) {
             setMissingFileDialog(true);
           }
-          setError(friendlyError(String(err), t));
+          setError(friendlyError(err, t));
         }
       } finally {
         if (!cancelled) {
@@ -218,7 +222,7 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
           setAllChaptersLoaded(true);
         }
       } catch (err) {
-        if (!cancelled) setChapterError(friendlyError(String(err), t));
+        if (!cancelled) setChapterError(friendlyError(err, t));
       }
     }
 
@@ -315,7 +319,7 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
           if (isFileNotFound(err)) {
             setMissingFileDialog(true);
           }
-          setChapterError(friendlyError(String(err), t));
+          setChapterError(friendlyError(err, t));
         }
       }
     }
@@ -1044,9 +1048,20 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
 
   if (error) {
     return (
-      <div className="flex flex-col items-center justify-center h-full gap-4 p-8 bg-paper">
-        <div className="text-ink font-medium">{t("reader.failedToLoad")}</div>
-        <p className="text-ink-muted text-sm max-w-md text-center">{error}</p>
+      <div
+        className="flex flex-col items-center justify-center h-full gap-4 p-8 bg-paper"
+        role="alert"
+        aria-live="assertive"
+      >
+        <h1 className="text-ink font-medium" id="reader-error-title">
+          {t("reader.failedToLoad")}
+        </h1>
+        <p
+          className="text-ink-muted text-sm max-w-md text-center"
+          aria-describedby="reader-error-title"
+        >
+          {error}
+        </p>
         <button
           onClick={() => navigate("/")}
           className="px-4 py-2 bg-accent text-white rounded-xl hover:bg-accent-hover transition-colors text-sm font-medium"

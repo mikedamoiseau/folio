@@ -5,6 +5,7 @@ pub mod commands;
 pub mod db;
 pub mod enrichment;
 pub mod epub;
+pub mod error;
 pub mod models;
 pub mod opds;
 pub mod openlibrary;
@@ -39,16 +40,14 @@ pub fn run() {
     builder
         .setup(|app| {
             let db_path = app.path().app_data_dir()?.join("library.db");
-            let pool = db::create_pool(&db_path).expect("Failed to initialize database");
+            let pool = db::create_pool(&db_path)?;
 
             // Ensure the library folder exists on first launch.
             {
-                let conn = pool.get().expect("Failed to get DB connection on startup");
-                let library_folder = match db::get_setting(&conn, "library_folder") {
-                    Ok(Some(f)) => f,
-                    _ => {
-                        commands::default_library_folder().expect("Cannot determine home directory")
-                    }
+                let conn = pool.get()?;
+                let library_folder = match db::get_setting(&conn, "library_folder").ok().flatten() {
+                    Some(f) => f,
+                    None => commands::default_library_folder()?,
                 };
                 let _ = std::fs::create_dir_all(&library_folder);
             }
@@ -157,10 +156,7 @@ pub fn run() {
             tauri::async_runtime::spawn(async move {
                 let state = app_handle.state::<AppState>();
                 let auto_start = {
-                    let conn = match state
-                        .active_db()
-                        .and_then(|p| p.get().map_err(|e| e.to_string()))
-                    {
+                    let conn = match state.active_db().and_then(|p| p.get().map_err(Into::into)) {
                         Ok(c) => c,
                         Err(_) => return,
                     };
@@ -172,9 +168,7 @@ pub fn run() {
                 };
                 if auto_start {
                     let port = {
-                        let conn = match state
-                            .active_db()
-                            .and_then(|p| p.get().map_err(|e| e.to_string()))
+                        let conn = match state.active_db().and_then(|p| p.get().map_err(Into::into))
                         {
                             Ok(c) => c,
                             Err(_) => return,
@@ -187,7 +181,15 @@ pub fn run() {
                     };
                     let pin_hash = web_server::auth::load_pin_hash();
                     {
-                        let mut ph = state.shared_pin_hash.lock().unwrap();
+                        let mut ph = match state.shared_pin_hash.lock() {
+                            Ok(g) => g,
+                            Err(_) => {
+                                log::error!(
+                                    "pin-hash mutex poisoned; skipping web-server auto-start"
+                                );
+                                return;
+                            }
+                        };
                         *ph = pin_hash;
                     }
                     let web_state = web_server::WebState {
@@ -203,7 +205,13 @@ pub fn run() {
                     };
                     if let Ok(handle) = web_server::start(web_state, port).await {
                         {
-                            let mut h = state.web_server_handle.lock().unwrap();
+                            let mut h = match state.web_server_handle.lock() {
+                                Ok(g) => g,
+                                Err(_) => {
+                                    log::error!("web-server handle mutex poisoned");
+                                    return;
+                                }
+                            };
                             *h = Some(handle);
                         }
                         // Update tray menu to show "Stop Web Server"

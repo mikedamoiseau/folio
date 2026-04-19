@@ -5,6 +5,8 @@ pub mod openlibrary;
 
 use serde::{Deserialize, Serialize};
 
+use crate::error::FolioResult;
+
 /// Common metadata returned by any enrichment provider.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -59,12 +61,12 @@ pub trait EnrichmentProvider: Send + Sync {
     fn name(&self) -> &str;
     fn requires_api_key(&self) -> bool;
     fn api_key_help(&self) -> &str;
-    fn search_by_isbn(&self, isbn: &str) -> Result<Vec<EnrichmentData>, String>;
+    fn search_by_isbn(&self, isbn: &str) -> FolioResult<Vec<EnrichmentData>>;
     fn search_by_title(
         &self,
         title: &str,
         author: Option<&str>,
-    ) -> Result<Vec<EnrichmentData>, String>;
+    ) -> FolioResult<Vec<EnrichmentData>>;
     fn configure(&mut self, config: ProviderConfig);
     fn config(&self) -> &ProviderConfig;
 }

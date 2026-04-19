@@ -2,6 +2,8 @@ use opendal::blocking::Operator;
 use serde::{Deserialize, Serialize};
 use std::sync::OnceLock;
 
+use crate::error::{FolioError, FolioResult};
+
 static FALLBACK_RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
 
 /// Identify which config fields contain secrets (passwords/keys).
@@ -17,7 +19,7 @@ pub fn secret_keys(provider_type: &ProviderType) -> Vec<&'static str> {
 
 /// Store secret values in the OS keychain. Returns the config with secrets removed.
 /// Returns an error if any keychain write fails — caller should NOT save config to DB.
-pub fn store_secrets(config: &BackupConfig) -> Result<BackupConfig, String> {
+pub fn store_secrets(config: &BackupConfig) -> FolioResult<BackupConfig> {
     let secrets = secret_keys(&config.provider_type);
     let mut clean = config.clone();
     for key in &secrets {
@@ -26,11 +28,20 @@ pub fn store_secrets(config: &BackupConfig) -> Result<BackupConfig, String> {
                 continue;
             }
             let service = format!("folio-backup-{:?}-{}", config.provider_type, key);
-            let entry = keyring::Entry::new(&service, "default")
-                .map_err(|e| format!("Failed to access keychain for {key}: {e}"))?;
-            entry
-                .set_password(value)
-                .map_err(|e| format!("Failed to store secret '{key}' in keychain: {e}"))?;
+            let entry = keyring::Entry::new(&service, "default").map_err(|e| match e {
+                keyring::Error::PlatformFailure(err) => {
+                    FolioError::internal(format!("Keychain unavailable for {key}: {err}"))
+                }
+                _ => FolioError::internal(format!("Failed to access keychain for {key}: {e}")),
+            })?;
+            entry.set_password(value).map_err(|e| match e {
+                keyring::Error::PlatformFailure(err) => FolioError::permission(format!(
+                    "Keychain access denied while storing '{key}': {err}"
+                )),
+                _ => {
+                    FolioError::internal(format!("Failed to store secret '{key}' in keychain: {e}"))
+                }
+            })?;
             clean.values.remove(*key);
         }
     }
@@ -38,18 +49,22 @@ pub fn store_secrets(config: &BackupConfig) -> Result<BackupConfig, String> {
 }
 
 /// Load secret values from the OS keychain into a config.
-pub fn load_secrets(config: &mut BackupConfig) -> Result<(), String> {
+pub fn load_secrets(config: &mut BackupConfig) -> FolioResult<()> {
     let secrets = secret_keys(&config.provider_type);
     for key in &secrets {
         if config.values.contains_key(*key) {
             continue; // already populated (e.g. test config)
         }
         let service = format!("folio-backup-{:?}-{}", config.provider_type, key);
-        let entry = keyring::Entry::new(&service, "default")
-            .map_err(|e| format!("Failed to access keychain for {key}: {e}"))?;
-        let pw = entry
-            .get_password()
-            .map_err(|e| format!("Failed to load secret '{key}' from keychain: {e}"))?;
+        let entry = keyring::Entry::new(&service, "default").map_err(|e| {
+            FolioError::internal(format!("Failed to access keychain for {key}: {e}"))
+        })?;
+        let pw = entry.get_password().map_err(|e| match e {
+            keyring::Error::NoEntry => {
+                FolioError::not_found(format!("Secret '{key}' not found in keychain"))
+            }
+            _ => FolioError::internal(format!("Failed to load secret '{key}' from keychain: {e}")),
+        })?;
         config.values.insert(key.to_string(), pw);
     }
     Ok(())
@@ -257,14 +272,16 @@ pub fn provider_schemas() -> Vec<ProviderInfo> {
 /// The blocking::Operator wraps the async Operator and requires a tokio runtime
 /// to be active. In tests we spin up a dedicated runtime; in Tauri commands
 /// the Tauri runtime satisfies this requirement.
-pub fn build_operator(config: &BackupConfig) -> Result<Operator, String> {
+pub fn build_operator(config: &BackupConfig) -> FolioResult<Operator> {
     // Helper: enter the current tokio handle if one exists, otherwise spin up a
     // temporary single-threaded runtime so that blocking::Operator::new succeeds
     // from any context (including unit tests with no ambient runtime).
-    fn make_blocking(async_op: opendal::Operator) -> Result<Operator, String> {
+    fn make_blocking(async_op: opendal::Operator) -> FolioResult<Operator> {
         if let Ok(handle) = tokio::runtime::Handle::try_current() {
             let _guard = handle.enter();
-            Operator::new(async_op).map_err(|e| format!("Failed to create blocking operator: {e}"))
+            Operator::new(async_op).map_err(|e| {
+                FolioError::internal(format!("Failed to create blocking operator: {e}"))
+            })
         } else {
             let rt = FALLBACK_RUNTIME.get_or_init(|| {
                 tokio::runtime::Builder::new_current_thread()
@@ -273,7 +290,9 @@ pub fn build_operator(config: &BackupConfig) -> Result<Operator, String> {
                     .expect("Failed to build fallback tokio runtime")
             });
             let _guard = rt.enter();
-            Operator::new(async_op).map_err(|e| format!("Failed to create blocking operator: {e}"))
+            Operator::new(async_op).map_err(|e| {
+                FolioError::internal(format!("Failed to create blocking operator: {e}"))
+            })
         }
     }
 
@@ -299,7 +318,7 @@ pub fn build_operator(config: &BackupConfig) -> Result<Operator, String> {
             }
             let async_op = opendal::Operator::new(builder)
                 .map(|b| b.finish())
-                .map_err(|e| format!("Failed to create S3 operator: {e}"))?;
+                .map_err(|e| FolioError::network(format!("Failed to create S3 operator: {e}")))?;
             make_blocking(async_op)
         }
         ProviderType::Ftp => {
@@ -329,7 +348,7 @@ pub fn build_operator(config: &BackupConfig) -> Result<Operator, String> {
             }
             let async_op = opendal::Operator::new(builder)
                 .map(|b| b.finish())
-                .map_err(|e| format!("Failed to create FTP operator: {e}"))?;
+                .map_err(|e| FolioError::network(format!("Failed to create FTP operator: {e}")))?;
             make_blocking(async_op)
         }
         #[cfg(feature = "sftp")]
@@ -358,12 +377,14 @@ pub fn build_operator(config: &BackupConfig) -> Result<Operator, String> {
             builder = builder.known_hosts_strategy(if skip_host_key { "accept" } else { "strict" });
             let async_op = opendal::Operator::new(builder)
                 .map(|b| b.finish())
-                .map_err(|e| format!("Failed to create SFTP operator: {e}"))?;
+                .map_err(|e| FolioError::network(format!("Failed to create SFTP operator: {e}")))?;
             make_blocking(async_op)
         }
         #[cfg(not(feature = "sftp"))]
         ProviderType::Sftp => {
-            return Err("SFTP is not available on this platform".to_string());
+            return Err(FolioError::invalid(
+                "SFTP is not available on this platform",
+            ));
         }
         ProviderType::Webdav => {
             let mut builder = opendal::services::Webdav::default();
@@ -383,7 +404,9 @@ pub fn build_operator(config: &BackupConfig) -> Result<Operator, String> {
             }
             let async_op = opendal::Operator::new(builder)
                 .map(|b| b.finish())
-                .map_err(|e| format!("Failed to create WebDAV operator: {e}"))?;
+                .map_err(|e| {
+                    FolioError::network(format!("Failed to create WebDAV operator: {e}"))
+                })?;
             make_blocking(async_op)
         }
         ProviderType::Fs => {
@@ -393,7 +416,7 @@ pub fn build_operator(config: &BackupConfig) -> Result<Operator, String> {
             }
             let async_op = opendal::Operator::new(builder)
                 .map(|b| b.finish())
-                .map_err(|e| format!("Failed to create FS operator: {e}"))?;
+                .map_err(|e| FolioError::io(format!("Failed to create FS operator: {e}")))?;
             make_blocking(async_op)
         }
     }
@@ -424,51 +447,53 @@ pub fn read_manifest(op: &Operator) -> SyncManifest {
     }
 }
 
-pub fn write_manifest(op: &Operator, manifest: &SyncManifest) -> Result<(), String> {
-    let json = serde_json::to_string_pretty(manifest).map_err(|e| e.to_string())?;
+pub fn write_manifest(op: &Operator, manifest: &SyncManifest) -> FolioResult<()> {
+    let json = serde_json::to_string_pretty(manifest)?;
     op.write("manifest.json", json.into_bytes())
         .map(|_| ())
-        .map_err(|e| format!("Failed to write manifest: {e}"))
+        .map_err(|e| FolioError::network(format!("Failed to write manifest: {e}")))
 }
 
-pub fn push_json(op: &Operator, path: &str, data: &impl Serialize) -> Result<(), String> {
-    let json = serde_json::to_string(data).map_err(|e| e.to_string())?;
+pub fn push_json(op: &Operator, path: &str, data: &impl Serialize) -> FolioResult<()> {
+    let json = serde_json::to_string(data)?;
     op.write(path, json.into_bytes())
         .map(|_| ())
-        .map_err(|e| format!("Failed to write {path}: {e}"))
+        .map_err(|e| FolioError::network(format!("Failed to write {path}: {e}")))
 }
 
-pub fn pull_json<T: serde::de::DeserializeOwned>(op: &Operator, path: &str) -> Result<T, String> {
+pub fn pull_json<T: serde::de::DeserializeOwned>(op: &Operator, path: &str) -> FolioResult<T> {
     let data = op
         .read(path)
-        .map_err(|e| format!("Failed to read {path}: {e}"))?;
-    serde_json::from_slice(&data.to_vec()).map_err(|e| format!("Failed to parse {path}: {e}"))
+        .map_err(|e| FolioError::network(format!("Failed to read {path}: {e}")))?;
+    serde_json::from_slice(&data.to_vec())
+        .map_err(|e| FolioError::invalid(format!("Failed to parse {path}: {e}")))
 }
 
 pub fn push_file_if_missing(
     op: &Operator,
     remote_path: &str,
     local_path: &str,
-) -> Result<bool, String> {
+) -> FolioResult<bool> {
     let local_size = std::fs::metadata(local_path)
         .map(|m| m.len())
-        .map_err(|e| format!("Cannot read {local_path}: {e}"))?;
+        .map_err(|e| FolioError::io(format!("Cannot read {local_path}: {e}")))?;
     // Skip upload if remote file exists and size matches (catches partial uploads)
     if let Ok(meta) = op.stat(remote_path) {
         if meta.content_length() == local_size {
             return Ok(false);
         }
     }
-    let data = std::fs::read(local_path).map_err(|e| format!("Cannot read {local_path}: {e}"))?;
+    let data = std::fs::read(local_path)
+        .map_err(|e| FolioError::io(format!("Cannot read {local_path}: {e}")))?;
     op.write(remote_path, data)
-        .map_err(|e| format!("Failed to upload {remote_path}: {e}"))?;
+        .map_err(|e| FolioError::network(format!("Failed to upload {remote_path}: {e}")))?;
     Ok(true)
 }
 
 pub fn run_incremental_backup(
     op: &Operator,
     conn: &rusqlite::Connection,
-) -> Result<SyncResult, String> {
+) -> FolioResult<SyncResult> {
     run_incremental_backup_with_progress(op, conn, &|_, _, _| {})
 }
 
@@ -476,7 +501,7 @@ pub fn run_incremental_backup_with_progress(
     op: &Operator,
     conn: &rusqlite::Connection,
     on_progress: &dyn Fn(&str, u32, u32),
-) -> Result<SyncResult, String> {
+) -> FolioResult<SyncResult> {
     let mut manifest = read_manifest(op);
     let since = manifest.last_sync_at;
     let now = std::time::SystemTime::now()
@@ -543,8 +568,8 @@ pub fn run_incremental_backup_with_progress(
 
     // Full set for metadata JSON
     let all_books: Vec<crate::models::Book> = {
-        let mut stmt = conn.prepare(book_query).map_err(|e| e.to_string())?;
-        let rows = stmt.query_map([], book_mapper).map_err(|e| e.to_string())?;
+        let mut stmt = conn.prepare(book_query)?;
+        let rows = stmt.query_map([], book_mapper)?;
         collect_rows(rows, "book", &mut result.warnings)
     };
     if !all_books.is_empty() {
@@ -555,12 +580,8 @@ pub fn run_incremental_backup_with_progress(
     // Changed books only — upload files
     let changed_books: Vec<crate::models::Book> = {
         let query_with_filter = format!("{} WHERE updated_at > ?1", book_query);
-        let mut stmt = conn
-            .prepare(&query_with_filter)
-            .map_err(|e| e.to_string())?;
-        let rows = stmt
-            .query_map(rusqlite::params![since], book_mapper)
-            .map_err(|e| e.to_string())?;
+        let mut stmt = conn.prepare(&query_with_filter)?;
+        let rows = stmt.query_map(rusqlite::params![since], book_mapper)?;
         collect_rows(rows, "book", &mut result.warnings)
     };
     if !changed_books.is_empty() {
@@ -604,21 +625,17 @@ pub fn run_incremental_backup_with_progress(
 
     // Reading progress — always full set
     let progress: Vec<crate::models::ReadingProgress> = {
-        let mut stmt = conn
-            .prepare(
-                "SELECT book_id, chapter_index, scroll_position, last_read_at FROM reading_progress",
-            )
-            .map_err(|e| e.to_string())?;
-        let rows = stmt
-            .query_map([], |row| {
-                Ok(crate::models::ReadingProgress {
-                    book_id: row.get(0)?,
-                    chapter_index: row.get(1)?,
-                    scroll_position: row.get(2)?,
-                    last_read_at: row.get(3)?,
-                })
+        let mut stmt = conn.prepare(
+            "SELECT book_id, chapter_index, scroll_position, last_read_at FROM reading_progress",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(crate::models::ReadingProgress {
+                book_id: row.get(0)?,
+                chapter_index: row.get(1)?,
+                scroll_position: row.get(2)?,
+                last_read_at: row.get(3)?,
             })
-            .map_err(|e| e.to_string())?;
+        })?;
         collect_rows(rows, "progress", &mut result.warnings)
     };
     if !progress.is_empty() {
@@ -629,26 +646,22 @@ pub fn run_incremental_backup_with_progress(
 
     // Bookmarks — always full set
     let bookmarks: Vec<crate::models::Bookmark> = {
-        let mut stmt = conn
-            .prepare(
-                "SELECT id, book_id, chapter_index, scroll_position, name, note, created_at, updated_at, deleted_at FROM bookmarks WHERE deleted_at IS NULL",
-            )
-            .map_err(|e| e.to_string())?;
-        let rows = stmt
-            .query_map([], |row| {
-                Ok(crate::models::Bookmark {
-                    id: row.get(0)?,
-                    book_id: row.get(1)?,
-                    chapter_index: row.get(2)?,
-                    scroll_position: row.get(3)?,
-                    name: row.get(4)?,
-                    note: row.get(5)?,
-                    created_at: row.get(6)?,
-                    updated_at: row.get(7)?,
-                    deleted_at: row.get(8)?,
-                })
+        let mut stmt = conn.prepare(
+            "SELECT id, book_id, chapter_index, scroll_position, name, note, created_at, updated_at, deleted_at FROM bookmarks WHERE deleted_at IS NULL",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(crate::models::Bookmark {
+                id: row.get(0)?,
+                book_id: row.get(1)?,
+                chapter_index: row.get(2)?,
+                scroll_position: row.get(3)?,
+                name: row.get(4)?,
+                note: row.get(5)?,
+                created_at: row.get(6)?,
+                updated_at: row.get(7)?,
+                deleted_at: row.get(8)?,
             })
-            .map_err(|e| e.to_string())?;
+        })?;
         collect_rows(rows, "bookmark", &mut result.warnings)
     };
     if !bookmarks.is_empty() {
@@ -659,28 +672,24 @@ pub fn run_incremental_backup_with_progress(
 
     // Highlights — always full set
     let highlights: Vec<crate::models::Highlight> = {
-        let mut stmt = conn
-            .prepare(
-                "SELECT id, book_id, chapter_index, text, color, note, start_offset, end_offset, created_at, updated_at, deleted_at FROM highlights WHERE deleted_at IS NULL",
-            )
-            .map_err(|e| e.to_string())?;
-        let rows = stmt
-            .query_map([], |row| {
-                Ok(crate::models::Highlight {
-                    id: row.get(0)?,
-                    book_id: row.get(1)?,
-                    chapter_index: row.get(2)?,
-                    text: row.get(3)?,
-                    color: row.get(4)?,
-                    note: row.get(5)?,
-                    start_offset: row.get(6)?,
-                    end_offset: row.get(7)?,
-                    created_at: row.get(8)?,
-                    updated_at: row.get(9)?,
-                    deleted_at: row.get(10)?,
-                })
+        let mut stmt = conn.prepare(
+            "SELECT id, book_id, chapter_index, text, color, note, start_offset, end_offset, created_at, updated_at, deleted_at FROM highlights WHERE deleted_at IS NULL",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(crate::models::Highlight {
+                id: row.get(0)?,
+                book_id: row.get(1)?,
+                chapter_index: row.get(2)?,
+                text: row.get(3)?,
+                color: row.get(4)?,
+                note: row.get(5)?,
+                start_offset: row.get(6)?,
+                end_offset: row.get(7)?,
+                created_at: row.get(8)?,
+                updated_at: row.get(9)?,
+                deleted_at: row.get(10)?,
             })
-            .map_err(|e| e.to_string())?;
+        })?;
         collect_rows(rows, "highlight", &mut result.warnings)
     };
     if !highlights.is_empty() {
@@ -690,7 +699,7 @@ pub fn run_incremental_backup_with_progress(
     }
 
     // Collections (always push full set)
-    let collections = crate::db::list_collections(conn).map_err(|e| e.to_string())?;
+    let collections = crate::db::list_collections(conn)?;
     if !collections.is_empty() {
         result.collections_pushed = collections.len() as u32;
         on_progress("Syncing collections", 0, 0);
