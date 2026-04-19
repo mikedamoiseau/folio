@@ -1,6 +1,5 @@
-// @ts-expect-error vitest runs under node; tsconfig has no node types
+// Vitest runs under node; these imports are resolved by the node runtime.
 import { readdirSync, readFileSync, statSync } from "node:fs";
-// @ts-expect-error vitest runs under node; tsconfig has no node types
 import { join, resolve } from "node:path";
 import { describe, it, expect } from "vitest";
 import { MESSAGE_KEYS } from "./errors";
