@@ -41,10 +41,16 @@ urlencoding = { workspace = true }
 # page_cache.rs
 log = { workspace = true }
 
+# backup.rs (tokio runtime guarding for blocking opendal calls)
+tokio = { workspace = true }
+
 [features]
 # Exposes test-only helpers like `db::init_db` so cross-crate integration
 # tests (e.g. in `src-tauri/`) can reach them. Never enable in release builds.
 test-utils = []
+# Enables SFTP as a backup provider. Opt-in because `opendal`'s SFTP service
+# pulls in an OpenSSH dependency chain that materially grows the build.
+sftp = ["opendal/services-sftp"]
 
 [dev-dependencies]
 tempfile = { workspace = true }

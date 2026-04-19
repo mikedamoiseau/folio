@@ -69,12 +69,11 @@ impl fmt::Display for SyncError {
     }
 }
 
-/// Bridge `SyncError` into the crate-wide [`folio_core::FolioError`]. Lives in
-/// this module (not in `folio_core::error`) because `SyncError` belongs to the
-/// desktop crate until sync migrates to folio-core (#63, M5).
-impl From<SyncError> for folio_core::FolioError {
+/// Bridge `SyncError` into the crate-wide [`crate::error::FolioError`]. Both
+/// types live in `folio-core` (M5), so the impl is colocated with `SyncError`.
+impl From<SyncError> for crate::error::FolioError {
     fn from(e: SyncError) -> Self {
-        use folio_core::FolioError;
+        use crate::error::FolioError;
         match e {
             SyncError::Transport(msg) => FolioError::network(msg),
             SyncError::Timeout => FolioError::network("Sync operation timed out"),
