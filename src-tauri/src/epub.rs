@@ -39,6 +39,23 @@ impl From<zip::result::ZipError> for EpubError {
     }
 }
 
+/// Bridge `EpubError` into the crate-wide [`folio_core::FolioError`]. Lives in
+/// this module (not in `folio_core::error`) because `EpubError` belongs to the
+/// desktop crate until the parser modules migrate to folio-core (#63, M3).
+impl From<EpubError> for folio_core::FolioError {
+    fn from(e: EpubError) -> Self {
+        use folio_core::FolioError;
+        match e {
+            EpubError::MissingFile(s) => {
+                FolioError::not_found(format!("Missing file in EPUB: {s}"))
+            }
+            EpubError::Io(err) => FolioError::from(err),
+            EpubError::InvalidFormat(s) => FolioError::invalid(format!("Invalid EPUB format: {s}")),
+            EpubError::ParseError(s) => FolioError::invalid(format!("Parse error: {s}")),
+        }
+    }
+}
+
 // ---- Data structures ----
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]

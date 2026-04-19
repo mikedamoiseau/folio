@@ -2447,14 +2447,11 @@ pub struct LibraryFolderInfo {
     pub total_size_bytes: u64,
 }
 
+/// Thin wrapper kept for backwards compatibility with the existing in-crate
+/// call sites; the implementation lives in [`folio_core::paths`] so both the
+/// desktop app and future headless binaries share a single definition.
 pub fn default_library_folder() -> FolioResult<String> {
-    let home = dirs::home_dir()
-        .ok_or_else(|| FolioError::internal("Could not determine home directory"))?;
-    Ok(home
-        .join("Documents")
-        .join("Folio Library")
-        .to_string_lossy()
-        .to_string())
+    folio_core::paths::default_library_folder()
 }
 
 #[tauri::command]
@@ -2791,7 +2788,10 @@ pub async fn import_library_backup(
     };
     std::fs::create_dir_all(&library_folder)?;
 
-    let data_dir = app.path().app_data_dir()?;
+    let data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| FolioError::internal(format!("tauri: {e}")))?;
     let mut imported = 0u32;
 
     // Helper: validate that a ZIP entry name is safe (no path traversal).
@@ -3534,7 +3534,11 @@ pub async fn import_custom_font(
         .to_string();
 
     let id = Uuid::new_v4().to_string();
-    let fonts_dir = app.path().app_data_dir()?.join("fonts");
+    let fonts_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| FolioError::internal(format!("tauri: {e}")))?
+        .join("fonts");
     std::fs::create_dir_all(&fonts_dir)?;
 
     let dest = fonts_dir.join(format!("{id}.{extension}"));

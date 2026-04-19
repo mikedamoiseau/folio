@@ -5,8 +5,6 @@ pub mod commands;
 pub mod db;
 pub mod enrichment;
 pub mod epub;
-pub mod error;
-pub mod models;
 pub mod opds;
 pub mod openlibrary;
 pub mod page_cache;
@@ -15,6 +13,11 @@ pub mod providers;
 pub mod sync;
 pub mod tray;
 pub mod web_server;
+
+// Re-export modules migrated to folio-core (#63) so existing `crate::error::…`
+// and `crate::models::…` call sites keep compiling during the incremental
+// extraction. New code should prefer `use folio_core::…` directly.
+pub use folio_core::{error, models};
 
 use commands::{AppState, LruCache, ProfileState};
 use tauri::Manager;

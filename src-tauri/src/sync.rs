@@ -69,6 +69,20 @@ impl fmt::Display for SyncError {
     }
 }
 
+/// Bridge `SyncError` into the crate-wide [`folio_core::FolioError`]. Lives in
+/// this module (not in `folio_core::error`) because `SyncError` belongs to the
+/// desktop crate until sync migrates to folio-core (#63, M5).
+impl From<SyncError> for folio_core::FolioError {
+    fn from(e: SyncError) -> Self {
+        use folio_core::FolioError;
+        match e {
+            SyncError::Transport(msg) => FolioError::network(msg),
+            SyncError::Timeout => FolioError::network("Sync operation timed out"),
+            SyncError::Malformed(msg) => FolioError::invalid(format!("Malformed sync data: {msg}")),
+        }
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct MergeResult {
     pub progress_updated: bool,

@@ -30,12 +30,14 @@
 //!
 //! ## Dependency direction (folio-core extraction, #63)
 //!
-//! This module currently depends on `crate::epub::EpubError` and
-//! `crate::sync::SyncError` via [`From`] impls. When folio-core is extracted,
-//! **this module must move into the core crate first**; parsers (epub, pdf,
-//! cbz, cbr, sync) then depend on it, not the other way around. Do not add
-//! any new `From<X> for FolioError` impl that requires tauri-, axum-, or
-//! GUI-layer types — those must stay in the application crate.
+//! This module lives at the root of `folio-core` with zero dependencies on
+//! application-layer crates. Every `From<X> for FolioError` impl targets a
+//! type owned by a third-party crate, `std`, or `folio-core` itself. Tauri-,
+//! axum-, and other GUI/IPC-layer error conversions must stay in the
+//! application crate (wrapping `FolioError` from the outside).
+//!
+//! `From<EpubError>` and `From<SyncError>` impls will be added here when
+//! those modules migrate into `folio-core` in later extraction milestones.
 
 use serde::{Serialize, Serializer};
 use std::fmt;
@@ -286,35 +288,6 @@ impl From<std::sync::mpsc::RecvError> for FolioError {
 impl From<image::ImageError> for FolioError {
     fn from(e: image::ImageError) -> Self {
         Self::Internal(format!("image: {e}"))
-    }
-}
-
-impl From<tauri::Error> for FolioError {
-    fn from(e: tauri::Error) -> Self {
-        Self::Internal(format!("tauri: {e}"))
-    }
-}
-
-impl From<crate::epub::EpubError> for FolioError {
-    fn from(e: crate::epub::EpubError) -> Self {
-        use crate::epub::EpubError;
-        match e {
-            EpubError::MissingFile(s) => Self::NotFound(format!("Missing file in EPUB: {s}")),
-            EpubError::Io(err) => Self::from(err),
-            EpubError::InvalidFormat(s) => Self::InvalidInput(format!("Invalid EPUB format: {s}")),
-            EpubError::ParseError(s) => Self::InvalidInput(format!("Parse error: {s}")),
-        }
-    }
-}
-
-impl From<crate::sync::SyncError> for FolioError {
-    fn from(e: crate::sync::SyncError) -> Self {
-        use crate::sync::SyncError;
-        match e {
-            SyncError::Transport(msg) => Self::Network(msg),
-            SyncError::Timeout => Self::Network("Sync operation timed out".to_string()),
-            SyncError::Malformed(msg) => Self::InvalidInput(format!("Malformed sync data: {msg}")),
-        }
     }
 }
 
