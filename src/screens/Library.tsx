@@ -201,6 +201,14 @@ export default function Library() {
         // empty-library lockout when persisted filterTagIds can't be resolved
         setFilterTagIds([]);
       }
+
+      // Refresh series sidebar so it reflects any metadata mutations
+      try {
+        const list = await invoke<Array<{ name: string; count: number }>>("get_series");
+        setSeriesList(list);
+      } catch {
+        // non-fatal
+      }
     } catch (err) {
       setError(friendlyError(err, t));
     } finally {
@@ -278,6 +286,15 @@ export default function Library() {
     },
     [loadBooks]
   );
+
+  const toggleSelected = useCallback((bookId: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(bookId)) next.delete(bookId);
+      else next.add(bookId);
+      return next;
+    });
+  }, []);
 
   const openBook = useCallback(
     async (bookId: string) => {
@@ -1092,16 +1109,29 @@ export default function Library() {
                         {!collapsedSeries.has(seriesName) && groups[seriesName].map((book) => (
                           <div
                             key={book.id}
-                            className="card-cv"
-                            onMouseDown={() => startDrag(book.id, book.cover_path ? convertFileSrc(book.cover_path) : undefined)}
-                            onMouseUp={() => endDrag()}
+                            className="relative card-cv"
+                            onMouseDown={() => !selectMode && startDrag(book.id, book.cover_path ? convertFileSrc(book.cover_path) : undefined)}
+                            onMouseUp={() => !selectMode && endDrag()}
                             onDragStart={(e) => e.preventDefault()}
                           >
+                            {selectMode && (
+                              <SelectCheckbox
+                                checked={selectedIds.has(book.id)}
+                                title={book.title}
+                                onToggle={() => toggleSelected(book.id)}
+                              />
+                            )}
                             <BookCard
                               book={toCardData(book)}
                               actions={{
-                                onClick: () => openBook(book.id),
-                                onDelete: handleRemoveBook,
+                                onClick: () => {
+                                  if (selectMode) {
+                                    toggleSelected(book.id);
+                                  } else {
+                                    openBook(book.id);
+                                  }
+                                },
+                                onDelete: selectMode ? undefined : handleRemoveBook,
                                 onInfo: handleShowBookDetail,
                                 onRemoveFromCollection:
                                   isManualCollectionView && activeCollectionId
@@ -1115,6 +1145,7 @@ export default function Library() {
                                     : undefined,
                               }}
                               isScanning={scanningBookId === book.id}
+                              isSelected={selectMode && selectedIds.has(book.id)}
                             />
                           </div>
                         ))}
@@ -1145,19 +1176,33 @@ export default function Library() {
                     {!collapsedSeries.has("__other__") && nonSeriesBooks.map((book) => (
                       <div
                         key={book.id}
-                        className="card-cv"
-                        onMouseDown={() => startDrag(book.id, book.cover_path ? convertFileSrc(book.cover_path) : undefined)}
-                        onMouseUp={() => endDrag()}
+                        className="relative card-cv"
+                        onMouseDown={() => !selectMode && startDrag(book.id, book.cover_path ? convertFileSrc(book.cover_path) : undefined)}
+                        onMouseUp={() => !selectMode && endDrag()}
                         onDragStart={(e) => e.preventDefault()}
                       >
+                        {selectMode && (
+                          <SelectCheckbox
+                            checked={selectedIds.has(book.id)}
+                            title={book.title}
+                            onToggle={() => toggleSelected(book.id)}
+                          />
+                        )}
                         <BookCard
                           book={toCardData(book)}
                           actions={{
-                            onClick: () => openBook(book.id),
-                            onDelete: handleRemoveBook,
+                            onClick: () => {
+                              if (selectMode) {
+                                toggleSelected(book.id);
+                              } else {
+                                openBook(book.id);
+                              }
+                            },
+                            onDelete: selectMode ? undefined : handleRemoveBook,
                             onInfo: handleShowBookDetail,
                           }}
                           isScanning={scanningBookId === book.id}
+                          isSelected={selectMode && selectedIds.has(book.id)}
                         />
                       </div>
                     ))}
@@ -1174,37 +1219,18 @@ export default function Library() {
                   onDragStart={(e) => e.preventDefault()}
                 >
                   {selectMode && (
-                    <div
-                      className="absolute top-2 left-2 z-10"
-                      onClick={(e) => { e.stopPropagation(); }}
-                    >
-                      <input
-                        type="checkbox"
-                        checked={selectedIds.has(book.id)}
-                        onChange={() => {
-                          setSelectedIds((prev) => {
-                            const next = new Set(prev);
-                            if (next.has(book.id)) next.delete(book.id);
-                            else next.add(book.id);
-                            return next;
-                          });
-                        }}
-                        className="w-5 h-5 accent-accent rounded cursor-pointer"
-                        aria-label={`Select ${book.title}`}
-                      />
-                    </div>
+                    <SelectCheckbox
+                      checked={selectedIds.has(book.id)}
+                      title={book.title}
+                      onToggle={() => toggleSelected(book.id)}
+                    />
                   )}
                   <BookCard
                     book={toCardData(book)}
                     actions={{
                       onClick: () => {
                         if (selectMode) {
-                          setSelectedIds((prev) => {
-                            const next = new Set(prev);
-                            if (next.has(book.id)) next.delete(book.id);
-                            else next.add(book.id);
-                            return next;
-                          });
+                          toggleSelected(book.id);
                         } else {
                           openBook(book.id);
                         }
@@ -1223,6 +1249,7 @@ export default function Library() {
                           : undefined,
                     }}
                     isScanning={scanningBookId === book.id}
+                    isSelected={selectMode && selectedIds.has(book.id)}
                   />
                 </div>
               ))
@@ -1530,7 +1557,7 @@ export default function Library() {
             }}
             className="text-red-400 hover:text-red-300 text-xs font-medium"
           >
-            {t("library.delete")}
+            {t("common.delete")}
           </button>
           <button
             type="button"
@@ -1567,6 +1594,44 @@ export default function Library() {
             : scanToastMessage || ""
         }
       />
+    </div>
+  );
+}
+
+function SelectCheckbox({
+  checked,
+  title,
+  onToggle,
+}: {
+  checked: boolean;
+  title: string;
+  onToggle: () => void;
+}) {
+  return (
+    <div
+      className={`absolute top-2 left-2 z-10 w-7 h-7 flex items-center justify-center rounded-full border-2 shadow-md cursor-pointer transition-colors ${
+        checked
+          ? "bg-accent border-accent text-paper"
+          : "bg-paper/90 border-warm-border text-transparent"
+      }`}
+      onClick={(e) => {
+        e.stopPropagation();
+        onToggle();
+      }}
+      role="checkbox"
+      aria-checked={checked}
+      aria-label={`Select ${title}`}
+      tabIndex={0}
+      onKeyDown={(e) => {
+        if (e.key === " " || e.key === "Enter") {
+          e.preventDefault();
+          onToggle();
+        }
+      }}
+    >
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
+        <path d="M5 12l5 5L20 7" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
     </div>
   );
 }
