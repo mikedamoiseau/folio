@@ -110,8 +110,12 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
   const userHasInteracted = useRef(false);
 
   const isFileNotFound = (err: unknown): boolean => {
-    const { kind, message } = toFolioError(err);
-    return kind === "NotFound" || message.toLowerCase().includes("book file not found");
+    // Narrow: only the on-disk book file being absent should trigger the
+    // "reconnect drive" recovery dialog. NotFound is used broadly in the
+    // backend error system (missing EPUB entries, missing pages, missing
+    // profiles, …) and must not trigger this flow.
+    const { message } = toFolioError(err);
+    return message.toLowerCase().includes("book file not found");
   };
 
   // ---- Load book info, TOC, and saved progress on mount ----
