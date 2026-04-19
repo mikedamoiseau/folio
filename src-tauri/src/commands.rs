@@ -5,6 +5,7 @@ use crate::cbr;
 use crate::cbz;
 use crate::db::{self, DbPool};
 use crate::epub;
+use crate::error::{FolioError, FolioResult};
 use crate::models::{
     AutoBackup, Book, BookFormat, BookGridItem, Bookmark, CleanupEntry, CleanupProgress,
     CleanupResult, Collection, CollectionRule, CollectionType, CustomFont, Highlight, NewRuleInput,
@@ -181,15 +182,15 @@ pub struct AppState {
 impl AppState {
     /// Returns the DB pool for the active profile.
     /// Uses a single lock to read profile name and look up the pool atomically.
-    pub fn active_db(&self) -> Result<DbPool, String> {
-        let ps = self.profile_state.lock().map_err(|e| e.to_string())?;
+    pub fn active_db(&self) -> FolioResult<DbPool> {
+        let ps = self.profile_state.lock()?;
         if ps.active == "default" {
             return Ok(self.db.clone());
         }
         ps.pools
             .get(&ps.active)
             .cloned()
-            .ok_or_else(|| format!("Profile '{}' not found", ps.active))
+            .ok_or_else(|| FolioError::not_found(format!("Profile '{}' not found", ps.active)))
     }
 }
 
@@ -280,7 +281,7 @@ pub async fn import_book(
     file_path: String,
     state: State<'_, AppState>,
     app: AppHandle,
-) -> Result<Book, String> {
+) -> FolioResult<Book> {
     use sha2::{Digest, Sha256};
     use std::io::Read;
 
@@ -291,7 +292,7 @@ pub async fn import_book(
             std::fs::File::open(&file_path).map_err(|e| format!("Cannot open file: {e}"))?;
         let mut buf = [0u8; 65536];
         loop {
-            let n = file.read(&mut buf).map_err(|e| e.to_string())?;
+            let n = file.read(&mut buf)?;
             if n == 0 {
                 break;
             }
@@ -302,10 +303,8 @@ pub async fn import_book(
 
     // Step 2: Hash-based duplicate check — return existing book if already imported.
     {
-        let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
-        if let Some(existing) =
-            db::get_book_by_file_hash(&conn, &hash).map_err(|e| e.to_string())?
-        {
+        let conn = state.active_db()?.get()?;
+        if let Some(existing) = db::get_book_by_file_hash(&conn, &hash)? {
             return Ok(existing);
         }
     }
@@ -318,9 +317,9 @@ pub async fn import_book(
             std::fs::metadata(&file_path).map_err(|e| format!("Cannot stat file: {e}"))?;
         if metadata.len() > MAX_IMPORT_SIZE_BYTES {
             let size_mb = metadata.len() / (1024 * 1024);
-            return Err(format!(
+            return Err(FolioError::invalid(format!(
                 "File is too large ({size_mb} MB). Maximum supported import size is 500 MB."
-            ));
+            )));
         }
     }
 
@@ -353,7 +352,11 @@ pub async fn import_book(
             }
         }
         "pdf" => BookFormat::Pdf,
-        _ => return Err(format!("unsupported file format: .{extension}")),
+        _ => {
+            return Err(FolioError::invalid(format!(
+                "unsupported file format: .{extension}"
+            )))
+        }
     };
 
     let book_id = Uuid::new_v4().to_string();
@@ -367,19 +370,19 @@ pub async fn import_book(
 
     // Step 3: Resolve library folder, creating it if necessary.
     let library_folder = {
-        let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
-        match db::get_setting(&conn, "library_folder").map_err(|e| e.to_string())? {
+        let conn = state.active_db()?.get()?;
+        match db::get_setting(&conn, "library_folder")? {
             Some(f) => f,
             None => default_library_folder()?,
         }
     };
-    std::fs::create_dir_all(&library_folder).map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(&library_folder)?;
 
     // Step 4: Copy source file into library folder as {book_id}.{ext},
     // or keep original path if import_mode is "link".
     // URL imports always copy (file was downloaded to a temp location).
     let import_mode = {
-        let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
+        let conn = state.active_db()?.get()?;
         db::get_setting(&conn, "import_mode")
             .ok()
             .flatten()
@@ -673,8 +676,8 @@ pub async fn import_book(
         }
     };
 
-    let mut conn = state.active_db()?.get().map_err(|e| e.to_string())?;
-    let tx = conn.transaction().map_err(|e| e.to_string())?;
+    let mut conn = state.active_db()?.get()?;
+    let tx = conn.transaction()?;
     if let Err(e) = db::insert_book(&tx, &book) {
         // If the insert failed due to a duplicate hash, clean up the new copy
         // and return the existing book instead of surfacing a cryptic error.
@@ -697,7 +700,7 @@ pub async fn import_book(
         if let Some(dir) = cover_dir {
             let _ = std::fs::remove_dir_all(dir);
         }
-        return Err(e.to_string());
+        return Err(e.into());
     }
 
     log_activity(
@@ -724,23 +727,23 @@ pub async fn import_book(
 }
 
 #[tauri::command]
-pub async fn get_library(state: State<'_, AppState>) -> Result<Vec<Book>, String> {
-    let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
-    db::list_books(&conn).map_err(|e| e.to_string())
+pub async fn get_library(state: State<'_, AppState>) -> FolioResult<Vec<Book>> {
+    let conn = state.active_db()?.get()?;
+    Ok(db::list_books(&conn)?)
 }
 
 #[tauri::command]
-pub async fn get_library_grid(state: State<'_, AppState>) -> Result<Vec<BookGridItem>, String> {
-    let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
-    db::list_books_grid(&conn).map_err(|e| e.to_string())
+pub async fn get_library_grid(state: State<'_, AppState>) -> FolioResult<Vec<BookGridItem>> {
+    let conn = state.active_db()?.get()?;
+    Ok(db::list_books_grid(&conn)?)
 }
 
 #[tauri::command]
-pub async fn remove_book(book_id: String, state: State<'_, AppState>) -> Result<(), String> {
-    let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
+pub async fn remove_book(book_id: String, state: State<'_, AppState>) -> FolioResult<()> {
+    let conn = state.active_db()?.get()?;
 
     // Fetch book before deleting so we can remove the library file and log.
-    let existing_book = db::get_book(&conn, &book_id).map_err(|e| e.to_string())?;
+    let existing_book = db::get_book(&conn, &book_id)?;
     let file_path = existing_book.as_ref().map(|b| b.file_path.clone());
 
     log_activity(
@@ -752,7 +755,7 @@ pub async fn remove_book(book_id: String, state: State<'_, AppState>) -> Result<
         None,
     );
 
-    db::delete_book(&conn, &book_id).map_err(|e| e.to_string())?;
+    db::delete_book(&conn, &book_id)?;
 
     // Evict the EPUB archive cache entry for this file.
     if let Some(ref path) = file_path {
@@ -787,18 +790,21 @@ pub async fn remove_book(book_id: String, state: State<'_, AppState>) -> Result<
 }
 
 #[tauri::command]
-pub async fn get_book(book_id: String, state: State<'_, AppState>) -> Result<Option<Book>, String> {
-    let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
-    db::get_book(&conn, &book_id).map_err(|e| e.to_string())
+pub async fn get_book(book_id: String, state: State<'_, AppState>) -> FolioResult<Option<Book>> {
+    let conn = state.active_db()?.get()?;
+    Ok(db::get_book(&conn, &book_id)?)
 }
 
 // --- Folder Scan ---
 
 #[tauri::command]
-pub async fn scan_folder_for_books(folder_path: String) -> Result<Vec<String>, String> {
+pub async fn scan_folder_for_books(folder_path: String) -> FolioResult<Vec<String>> {
     let dir = std::path::Path::new(&folder_path);
     if !dir.is_dir() {
-        return Err(format!("'{}' is not a directory", folder_path));
+        return Err(FolioError::invalid(format!(
+            "'{}' is not a directory",
+            folder_path
+        )));
     }
 
     let supported = ["epub", "cbz", "cbr", "pdf"];
@@ -848,11 +854,10 @@ pub async fn update_book_metadata(
     rating: Option<f64>,
     state: State<'_, AppState>,
     app: AppHandle,
-) -> Result<Book, String> {
-    let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
-    let mut book = db::get_book(&conn, &book_id)
-        .map_err(|e| e.to_string())?
-        .ok_or_else(|| format!("Book '{book_id}' not found"))?;
+) -> FolioResult<Book> {
+    let conn = state.active_db()?.get()?;
+    let mut book = db::get_book(&conn, &book_id)?
+        .ok_or_else(|| FolioError::not_found(format!("Book '{book_id}' not found")))?;
 
     let has_title = title.is_some();
     let has_author = author.is_some();
@@ -887,7 +892,7 @@ pub async fn update_book_metadata(
     if let Some(t) = title {
         let t = normalize(t, 500);
         if t.is_empty() {
-            return Err("Title cannot be empty.".to_string());
+            return Err(FolioError::invalid("Title cannot be empty."));
         }
         book.title = t;
     }
@@ -916,7 +921,7 @@ pub async fn update_book_metadata(
         // Copy new cover image into the covers directory
         if let Ok(data_dir) = app.path().app_data_dir() {
             let dir = data_dir.join("covers").join(&book_id);
-            std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+            std::fs::create_dir_all(&dir)?;
             let ext = std::path::Path::new(&image_path)
                 .extension()
                 .and_then(|e| e.to_str())
@@ -928,7 +933,7 @@ pub async fn update_book_metadata(
         }
     }
 
-    db::update_book(&conn, &book).map_err(|e| e.to_string())?;
+    db::update_book(&conn, &book)?;
 
     let mut changes = Vec::new();
     if has_title {
@@ -979,9 +984,9 @@ pub async fn update_book_metadata(
 pub async fn get_recently_read(
     limit: Option<u32>,
     state: State<'_, AppState>,
-) -> Result<Vec<Book>, String> {
-    let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
-    db::get_recently_read_books(&conn, limit.unwrap_or(5)).map_err(|e| e.to_string())
+) -> FolioResult<Vec<Book>> {
+    let conn = state.active_db()?.get()?;
+    Ok(db::get_recently_read_books(&conn, limit.unwrap_or(5))?)
 }
 
 // --- Reading ---
@@ -991,25 +996,28 @@ pub async fn get_chapter_content(
     book_id: String,
     chapter_index: u32,
     state: State<'_, AppState>,
-) -> Result<String, String> {
+) -> FolioResult<String> {
     let file_path = {
-        let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
-        db::get_book(&conn, &book_id)
-            .map_err(|e| e.to_string())?
-            .ok_or_else(|| format!("Book '{book_id}' not found"))?
+        let conn = state.active_db()?.get()?;
+        db::get_book(&conn, &book_id)?
+            .ok_or_else(|| FolioError::not_found(format!("Book '{book_id}' not found")))?
             .file_path
     };
 
     validate_file_exists(&file_path)?;
     let data_dir = state.data_dir.to_string_lossy().to_string();
 
-    let mut cache = state.epub_cache.lock().map_err(|e| e.to_string())?;
+    let mut cache = state.epub_cache.lock()?;
     ensure_epub_cached(&mut cache, &file_path);
     let cached = cache
         .get_mut(&file_path)
-        .ok_or("Failed to open EPUB archive")?;
-    epub::get_chapter_content_from_cache(cached, chapter_index as usize, &data_dir, &book_id)
-        .map_err(|e| e.to_string())
+        .ok_or_else(|| FolioError::internal("Failed to open EPUB archive"))?;
+    Ok(epub::get_chapter_content_from_cache(
+        cached,
+        chapter_index as usize,
+        &data_dir,
+        &book_id,
+    )?)
 }
 
 #[tauri::command]
@@ -1017,16 +1025,15 @@ pub async fn search_book_content(
     book_id: String,
     query: String,
     state: State<'_, AppState>,
-) -> Result<Vec<epub::SearchResult>, String> {
+) -> FolioResult<Vec<epub::SearchResult>> {
     if query.trim().is_empty() {
         return Ok(Vec::new());
     }
 
     let book = {
-        let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
-        db::get_book(&conn, &book_id)
-            .map_err(|e| e.to_string())?
-            .ok_or_else(|| format!("Book '{book_id}' not found"))?
+        let conn = state.active_db()?.get()?;
+        db::get_book(&conn, &book_id)?
+            .ok_or_else(|| FolioError::not_found(format!("Book '{book_id}' not found")))?
     };
 
     validate_file_exists(&book.file_path)?;
@@ -1044,12 +1051,12 @@ pub async fn search_book_content(
                 .collect())
         }
         BookFormat::Epub => {
-            let mut cache = state.epub_cache.lock().map_err(|e| e.to_string())?;
+            let mut cache = state.epub_cache.lock()?;
             ensure_epub_cached(&mut cache, &book.file_path);
             let cached = cache
                 .get_mut(&book.file_path)
-                .ok_or("Failed to open EPUB archive")?;
-            epub::search_book(cached, &query).map_err(|e| e.to_string())
+                .ok_or_else(|| FolioError::internal("Failed to open EPUB archive"))?;
+            Ok(epub::search_book(cached, &query)?)
         }
         _ => Ok(Vec::new()), // CBZ/CBR are image-only, no text to search
     }
@@ -1059,42 +1066,40 @@ pub async fn search_book_content(
 pub async fn get_chapter_word_counts(
     book_id: String,
     state: State<'_, AppState>,
-) -> Result<Vec<usize>, String> {
+) -> FolioResult<Vec<usize>> {
     let file_path = {
-        let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
-        db::get_book(&conn, &book_id)
-            .map_err(|e| e.to_string())?
-            .ok_or_else(|| format!("Book '{book_id}' not found"))?
+        let conn = state.active_db()?.get()?;
+        db::get_book(&conn, &book_id)?
+            .ok_or_else(|| FolioError::not_found(format!("Book '{book_id}' not found")))?
             .file_path
     };
 
     validate_file_exists(&file_path)?;
 
-    let mut cache = state.epub_cache.lock().map_err(|e| e.to_string())?;
+    let mut cache = state.epub_cache.lock()?;
     ensure_epub_cached(&mut cache, &file_path);
     let cached = cache
         .get_mut(&file_path)
         .ok_or("Failed to open EPUB archive")?;
-    epub::get_chapter_word_counts(cached).map_err(|e| e.to_string())
+    Ok(epub::get_chapter_word_counts(cached)?)
 }
 
 #[tauri::command]
 pub async fn get_all_chapters(
     book_id: String,
     state: State<'_, AppState>,
-) -> Result<Vec<String>, String> {
+) -> FolioResult<Vec<String>> {
     let (file_path, total_chapters) = {
-        let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
-        let book = db::get_book(&conn, &book_id)
-            .map_err(|e| e.to_string())?
-            .ok_or_else(|| format!("Book '{book_id}' not found"))?;
+        let conn = state.active_db()?.get()?;
+        let book = db::get_book(&conn, &book_id)?
+            .ok_or_else(|| FolioError::not_found(format!("Book '{book_id}' not found")))?;
         (book.file_path, book.total_chapters)
     };
 
     validate_file_exists(&file_path)?;
     let data_dir = state.data_dir.to_string_lossy().to_string();
 
-    let mut cache = state.epub_cache.lock().map_err(|e| e.to_string())?;
+    let mut cache = state.epub_cache.lock()?;
     ensure_epub_cached(&mut cache, &file_path);
     let cached = cache
         .get_mut(&file_path)
@@ -1102,8 +1107,7 @@ pub async fn get_all_chapters(
 
     let mut chapters = Vec::with_capacity(total_chapters as usize);
     for i in 0..total_chapters as usize {
-        let html = epub::get_chapter_content_from_cache(cached, i, &data_dir, &book_id)
-            .map_err(|e| e.to_string())?;
+        let html = epub::get_chapter_content_from_cache(cached, i, &data_dir, &book_id)?;
         chapters.push(html);
     }
     Ok(chapters)
@@ -1113,23 +1117,22 @@ pub async fn get_all_chapters(
 pub async fn get_toc(
     book_id: String,
     state: State<'_, AppState>,
-) -> Result<Vec<epub::TocEntry>, String> {
+) -> FolioResult<Vec<epub::TocEntry>> {
     let file_path = {
-        let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
-        db::get_book(&conn, &book_id)
-            .map_err(|e| e.to_string())?
-            .ok_or_else(|| format!("Book '{book_id}' not found"))?
+        let conn = state.active_db()?.get()?;
+        db::get_book(&conn, &book_id)?
+            .ok_or_else(|| FolioError::not_found(format!("Book '{book_id}' not found")))?
             .file_path
     };
 
     validate_file_exists(&file_path)?;
 
-    let mut cache = state.epub_cache.lock().map_err(|e| e.to_string())?;
+    let mut cache = state.epub_cache.lock()?;
     ensure_epub_cached(&mut cache, &file_path);
     let cached = cache
         .get_mut(&file_path)
         .ok_or("Failed to open EPUB archive")?;
-    epub::get_toc_from_cache(cached).map_err(|e| e.to_string())
+    Ok(epub::get_toc_from_cache(cached)?)
 }
 
 // --- Progress ---
@@ -1138,26 +1141,26 @@ pub async fn get_toc(
 pub async fn get_reading_progress(
     book_id: String,
     state: State<'_, AppState>,
-) -> Result<Option<ReadingProgress>, String> {
-    let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
-    db::get_reading_progress(&conn, &book_id).map_err(|e| e.to_string())
+) -> FolioResult<Option<ReadingProgress>> {
+    let conn = state.active_db()?.get()?;
+    Ok(db::get_reading_progress(&conn, &book_id)?)
 }
 
 #[tauri::command]
 pub async fn get_all_reading_progress(
     state: State<'_, AppState>,
-) -> Result<Vec<ReadingProgress>, String> {
-    let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
-    db::get_all_reading_progress(&conn).map_err(|e| e.to_string())
+) -> FolioResult<Vec<ReadingProgress>> {
+    let conn = state.active_db()?.get()?;
+    Ok(db::get_all_reading_progress(&conn)?)
 }
 
-fn validate_file_exists(file_path: &str) -> Result<(), String> {
+fn validate_file_exists(file_path: &str) -> FolioResult<()> {
     let path = std::path::Path::new(file_path);
     if !path.exists() {
-        return Err(format!(
+        return Err(FolioError::not_found(format!(
             "Book file not found at '{}'. It may have been moved or deleted.",
             file_path
-        ));
+        )));
     }
     // Reject symlinks to prevent traversal attacks
     if path
@@ -1165,7 +1168,9 @@ fn validate_file_exists(file_path: &str) -> Result<(), String> {
         .map(|m| m.file_type().is_symlink())
         .unwrap_or(false)
     {
-        return Err("Symbolic links are not supported for book files.".to_string());
+        return Err(FolioError::invalid(
+            "Symbolic links are not supported for book files.",
+        ));
     }
     Ok(())
 }
@@ -1173,20 +1178,25 @@ fn validate_file_exists(file_path: &str) -> Result<(), String> {
 /// Validate that a path, once canonicalized, lies within an expected parent directory.
 /// Returns the canonical path on success.
 #[allow(dead_code)]
-fn validate_path_within(path: &str, parent: &str) -> Result<std::path::PathBuf, String> {
+fn validate_path_within(path: &str, parent: &str) -> FolioResult<std::path::PathBuf> {
     let canonical = std::fs::canonicalize(path)
         .map_err(|e| format!("Cannot resolve path '{}': {}", path, e))?;
     let canonical_parent = std::fs::canonicalize(parent)
         .map_err(|e| format!("Cannot resolve library folder '{}': {}", parent, e))?;
     if !canonical.starts_with(&canonical_parent) {
-        return Err(format!("Path '{}' is outside the library folder.", path));
+        return Err(FolioError::invalid(format!(
+            "Path '{}' is outside the library folder.",
+            path
+        )));
     }
     Ok(canonical)
 }
 
-fn validate_scroll_position(pos: f64) -> Result<f64, String> {
+fn validate_scroll_position(pos: f64) -> FolioResult<f64> {
     if pos.is_nan() || pos.is_infinite() {
-        return Err("scroll_position must be a finite number".to_string());
+        return Err(FolioError::invalid(
+            "scroll_position must be a finite number",
+        ));
     }
     Ok(pos.clamp(0.0, 1.0))
 }
@@ -1197,21 +1207,20 @@ pub async fn save_reading_progress(
     chapter_index: u32,
     scroll_position: f64,
     state: State<'_, AppState>,
-) -> Result<(), String> {
+) -> FolioResult<()> {
     let scroll_position = validate_scroll_position(scroll_position)?;
 
-    let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
+    let conn = state.active_db()?.get()?;
 
     // Validate chapter_index against the book's total chapters
-    let book = db::get_book(&conn, &book_id)
-        .map_err(|e| e.to_string())?
-        .ok_or_else(|| format!("Book not found: {}", book_id))?;
+    let book = db::get_book(&conn, &book_id)?
+        .ok_or_else(|| FolioError::not_found(format!("Book not found: {}", book_id)))?;
 
     if book.total_chapters > 0 && chapter_index >= book.total_chapters {
-        return Err(format!(
+        return Err(FolioError::invalid(format!(
             "chapter_index {} is out of range (book has {} chapters)",
             chapter_index, book.total_chapters
-        ));
+        )));
     }
 
     let progress = ReadingProgress {
@@ -1224,7 +1233,7 @@ pub async fn save_reading_progress(
             .as_secs() as i64,
     };
 
-    db::upsert_reading_progress(&conn, &progress).map_err(|e| e.to_string())
+    Ok(db::upsert_reading_progress(&conn, &progress)?)
 }
 
 // --- Bookmarks ---
@@ -1233,9 +1242,9 @@ pub async fn save_reading_progress(
 pub async fn get_bookmarks(
     book_id: String,
     state: State<'_, AppState>,
-) -> Result<Vec<Bookmark>, String> {
-    let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
-    db::list_bookmarks(&conn, &book_id).map_err(|e| e.to_string())
+) -> FolioResult<Vec<Bookmark>> {
+    let conn = state.active_db()?.get()?;
+    Ok(db::list_bookmarks(&conn, &book_id)?)
 }
 
 #[tauri::command]
@@ -1245,7 +1254,7 @@ pub async fn add_bookmark(
     scroll_position: f64,
     note: Option<String>,
     state: State<'_, AppState>,
-) -> Result<Bookmark, String> {
+) -> FolioResult<Bookmark> {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
@@ -1262,19 +1271,16 @@ pub async fn add_bookmark(
         deleted_at: None,
     };
 
-    let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
-    db::insert_bookmark(&conn, &bookmark).map_err(|e| e.to_string())?;
+    let conn = state.active_db()?.get()?;
+    db::insert_bookmark(&conn, &bookmark)?;
 
     Ok(bookmark)
 }
 
 #[tauri::command]
-pub async fn remove_bookmark(
-    bookmark_id: String,
-    state: State<'_, AppState>,
-) -> Result<(), String> {
-    let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
-    db::soft_delete_bookmark(&conn, &bookmark_id).map_err(|e| e.to_string())
+pub async fn remove_bookmark(bookmark_id: String, state: State<'_, AppState>) -> FolioResult<()> {
+    let conn = state.active_db()?.get()?;
+    Ok(db::soft_delete_bookmark(&conn, &bookmark_id)?)
 }
 
 #[tauri::command]
@@ -1282,38 +1288,34 @@ pub async fn update_bookmark(
     bookmark_id: String,
     name: Option<String>,
     state: State<'_, AppState>,
-) -> Result<(), String> {
+) -> FolioResult<()> {
     let truncated_name: Option<String> = name
         .as_deref()
         .filter(|s| !s.trim().is_empty())
         .map(|s| s.chars().take(100).collect::<String>());
     let name_ref = truncated_name.as_deref();
-    let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
-    db::update_bookmark_name(&conn, &bookmark_id, name_ref).map_err(|e| e.to_string())
+    let conn = state.active_db()?.get()?;
+    Ok(db::update_bookmark_name(&conn, &bookmark_id, name_ref)?)
 }
 
 // --- Comic (CBZ / CBR) ---
 
 #[tauri::command]
-pub async fn get_comic_page_count(
-    book_id: String,
-    state: State<'_, AppState>,
-) -> Result<u32, String> {
+pub async fn get_comic_page_count(book_id: String, state: State<'_, AppState>) -> FolioResult<u32> {
     let book = {
-        let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
-        db::get_book(&conn, &book_id)
-            .map_err(|e| e.to_string())?
-            .ok_or_else(|| format!("Book '{book_id}' not found"))?
+        let conn = state.active_db()?.get()?;
+        db::get_book(&conn, &book_id)?
+            .ok_or_else(|| FolioError::not_found(format!("Book '{book_id}' not found")))?
     };
 
     validate_file_exists(&book.file_path)?;
     match book.format {
         BookFormat::Cbz => cbz::get_page_count(&book.file_path),
         BookFormat::Cbr => cbr::get_page_count(&book.file_path),
-        _ => Err(format!(
+        _ => Err(FolioError::invalid(format!(
             "get_comic_page_count is not supported for {:?}",
             book.format
-        )),
+        ))),
     }
 }
 
@@ -1323,7 +1325,7 @@ pub async fn get_comic_page(
     page_index: u32,
     state: State<'_, AppState>,
     app: AppHandle,
-) -> Result<String, String> {
+) -> FolioResult<String> {
     let start = std::time::Instant::now();
     page_cache::page_dbg!(
         "get_comic_page called: book={} page={}",
@@ -1332,10 +1334,9 @@ pub async fn get_comic_page(
     );
 
     let book = {
-        let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
-        db::get_book(&conn, &book_id)
-            .map_err(|e| e.to_string())?
-            .ok_or_else(|| format!("Book '{book_id}' not found"))?
+        let conn = state.active_db()?.get()?;
+        db::get_book(&conn, &book_id)?
+            .ok_or_else(|| FolioError::not_found(format!("Book '{book_id}' not found")))?
     };
     page_cache::page_dbg!("DB lookup: {:?}", start.elapsed());
 
@@ -1371,10 +1372,10 @@ pub async fn get_comic_page(
     let result = match book.format {
         BookFormat::Cbz => cbz::get_page_image(&book.file_path, page_index),
         BookFormat::Cbr => cbr::get_page_image(&book.file_path, page_index),
-        _ => Err(format!(
+        _ => Err(FolioError::invalid(format!(
             "get_comic_page is not supported for {:?}",
             book.format
-        )),
+        ))),
     };
     page_cache::page_dbg!(
         "archive read done: page={} ok={} total={:?}",
@@ -1390,12 +1391,11 @@ pub async fn prepare_comic(
     book_id: String,
     state: State<'_, AppState>,
     app: AppHandle,
-) -> Result<page_cache::CacheManifest, String> {
+) -> FolioResult<page_cache::CacheManifest> {
     let (book, max_size_mb) = {
-        let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
-        let book = db::get_book(&conn, &book_id)
-            .map_err(|e| e.to_string())?
-            .ok_or_else(|| format!("Book '{book_id}' not found"))?;
+        let conn = state.active_db()?.get()?;
+        let book = db::get_book(&conn, &book_id)?
+            .ok_or_else(|| FolioError::not_found(format!("Book '{book_id}' not found")))?;
         let max_size_mb = db::get_setting(&conn, "page_cache_max_size_mb")
             .ok()
             .flatten()
@@ -1407,7 +1407,9 @@ pub async fn prepare_comic(
     validate_file_exists(&book.file_path)?;
 
     if book.format != BookFormat::Cbz && book.format != BookFormat::Cbr {
-        return Err("prepare_comic only supports CBZ/CBR formats".to_string());
+        return Err(FolioError::invalid(
+            "prepare_comic only supports CBZ/CBR formats",
+        ));
     }
 
     let book_hash = book.file_hash.as_deref().ok_or("Book has no file hash")?;
@@ -1447,7 +1449,7 @@ pub async fn prepare_comic(
 }
 
 #[tauri::command]
-pub async fn get_cache_stats(app: AppHandle) -> Result<page_cache::CacheStats, String> {
+pub async fn get_cache_stats(app: AppHandle) -> FolioResult<page_cache::CacheStats> {
     let cache_dir = app
         .path()
         .app_cache_dir()
@@ -1456,11 +1458,11 @@ pub async fn get_cache_stats(app: AppHandle) -> Result<page_cache::CacheStats, S
 }
 
 #[tauri::command]
-pub async fn clear_page_cache(app: AppHandle) -> Result<(), String> {
+pub async fn clear_page_cache(app: AppHandle) -> FolioResult<()> {
     let cache_dir = app
         .path()
         .app_cache_dir()
-        .map_err(|e| format!("Failed to get cache dir: {e}"))?;
+        .map_err(|e| FolioError::internal(format!("Failed to get cache dir: {e}")))?;
     page_cache::clear_cache(&cache_dir)
 }
 
@@ -1473,20 +1475,26 @@ pub async fn record_reading_session(
     duration_secs: i64,
     pages_read: i32,
     state: State<'_, AppState>,
-) -> Result<(), String> {
+) -> FolioResult<()> {
     if duration_secs < 10 {
         return Ok(());
     } // Skip very short sessions
-    let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
+    let conn = state.active_db()?.get()?;
     let id = Uuid::new_v4().to_string();
-    db::insert_reading_session(&conn, &id, &book_id, started_at, duration_secs, pages_read)
-        .map_err(|e| e.to_string())
+    Ok(db::insert_reading_session(
+        &conn,
+        &id,
+        &book_id,
+        started_at,
+        duration_secs,
+        pages_read,
+    )?)
 }
 
 #[tauri::command]
-pub async fn get_reading_stats(state: State<'_, AppState>) -> Result<db::ReadingStats, String> {
-    let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
-    db::get_reading_stats(&conn).map_err(|e| e.to_string())
+pub async fn get_reading_stats(state: State<'_, AppState>) -> FolioResult<db::ReadingStats> {
+    let conn = state.active_db()?.get()?;
+    Ok(db::get_reading_stats(&conn)?)
 }
 
 // --- Highlights ---
@@ -1502,7 +1510,7 @@ pub async fn add_highlight(
     end_offset: u32,
     note: Option<String>,
     state: State<'_, AppState>,
-) -> Result<Highlight, String> {
+) -> FolioResult<Highlight> {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
@@ -1520,8 +1528,8 @@ pub async fn add_highlight(
         updated_at: now,
         deleted_at: None,
     };
-    let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
-    db::insert_highlight(&conn, &highlight).map_err(|e| e.to_string())?;
+    let conn = state.active_db()?.get()?;
+    db::insert_highlight(&conn, &highlight)?;
     Ok(highlight)
 }
 
@@ -1529,9 +1537,9 @@ pub async fn add_highlight(
 pub async fn get_highlights(
     book_id: String,
     state: State<'_, AppState>,
-) -> Result<Vec<Highlight>, String> {
-    let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
-    db::list_highlights(&conn, &book_id).map_err(|e| e.to_string())
+) -> FolioResult<Vec<Highlight>> {
+    let conn = state.active_db()?.get()?;
+    Ok(db::list_highlights(&conn, &book_id)?)
 }
 
 #[tauri::command]
@@ -1539,9 +1547,9 @@ pub async fn get_chapter_highlights(
     book_id: String,
     chapter_index: u32,
     state: State<'_, AppState>,
-) -> Result<Vec<Highlight>, String> {
-    let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
-    db::get_chapter_highlights(&conn, &book_id, chapter_index).map_err(|e| e.to_string())
+) -> FolioResult<Vec<Highlight>> {
+    let conn = state.active_db()?.get()?;
+    Ok(db::get_chapter_highlights(&conn, &book_id, chapter_index)?)
 }
 
 #[tauri::command]
@@ -1549,30 +1557,30 @@ pub async fn update_highlight_note(
     highlight_id: String,
     note: Option<String>,
     state: State<'_, AppState>,
-) -> Result<(), String> {
-    let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
-    db::update_highlight_note(&conn, &highlight_id, note.as_deref()).map_err(|e| e.to_string())
+) -> FolioResult<()> {
+    let conn = state.active_db()?.get()?;
+    Ok(db::update_highlight_note(
+        &conn,
+        &highlight_id,
+        note.as_deref(),
+    )?)
 }
 
 #[tauri::command]
-pub async fn remove_highlight(
-    highlight_id: String,
-    state: State<'_, AppState>,
-) -> Result<(), String> {
-    let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
-    db::soft_delete_highlight(&conn, &highlight_id).map_err(|e| e.to_string())
+pub async fn remove_highlight(highlight_id: String, state: State<'_, AppState>) -> FolioResult<()> {
+    let conn = state.active_db()?.get()?;
+    Ok(db::soft_delete_highlight(&conn, &highlight_id)?)
 }
 
 #[tauri::command]
 pub async fn export_highlights_markdown(
     book_id: String,
     state: State<'_, AppState>,
-) -> Result<String, String> {
-    let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
-    let book = db::get_book(&conn, &book_id)
-        .map_err(|e| e.to_string())?
-        .ok_or_else(|| format!("Book '{book_id}' not found"))?;
-    let highlights = db::list_highlights(&conn, &book_id).map_err(|e| e.to_string())?;
+) -> FolioResult<String> {
+    let conn = state.active_db()?.get()?;
+    let book = db::get_book(&conn, &book_id)?
+        .ok_or_else(|| FolioError::not_found(format!("Book '{book_id}' not found")))?;
+    let highlights = db::list_highlights(&conn, &book_id)?;
 
     let mut md = format!("# Highlights: {}\n\n", book.title);
     if !book.author.is_empty() {
@@ -1602,9 +1610,9 @@ pub struct Tag {
 }
 
 #[tauri::command]
-pub async fn get_all_tags(state: State<'_, AppState>) -> Result<Vec<Tag>, String> {
-    let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
-    let tags = db::list_tags(&conn).map_err(|e| e.to_string())?;
+pub async fn get_all_tags(state: State<'_, AppState>) -> FolioResult<Vec<Tag>> {
+    let conn = state.active_db()?.get()?;
+    let tags = db::list_tags(&conn)?;
     Ok(tags
         .into_iter()
         .map(|(id, name)| Tag { id, name })
@@ -1612,12 +1620,9 @@ pub async fn get_all_tags(state: State<'_, AppState>) -> Result<Vec<Tag>, String
 }
 
 #[tauri::command]
-pub async fn get_book_tags(
-    book_id: String,
-    state: State<'_, AppState>,
-) -> Result<Vec<Tag>, String> {
-    let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
-    let tags = db::get_book_tags(&conn, &book_id).map_err(|e| e.to_string())?;
+pub async fn get_book_tags(book_id: String, state: State<'_, AppState>) -> FolioResult<Vec<Tag>> {
+    let conn = state.active_db()?.get()?;
+    let tags = db::get_book_tags(&conn, &book_id)?;
     Ok(tags
         .into_iter()
         .map(|(id, name)| Tag { id, name })
@@ -1629,18 +1634,17 @@ pub async fn add_tag_to_book(
     book_id: String,
     tag_name: String,
     state: State<'_, AppState>,
-) -> Result<Tag, String> {
-    let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
+) -> FolioResult<Tag> {
+    let conn = state.active_db()?.get()?;
     // Find or create tag
-    let tag_id =
-        if let Some(id) = db::get_tag_by_name(&conn, &tag_name).map_err(|e| e.to_string())? {
-            id
-        } else {
-            let id = Uuid::new_v4().to_string();
-            db::get_or_create_tag(&conn, &id, &tag_name).map_err(|e| e.to_string())?;
-            id
-        };
-    db::add_tag_to_book(&conn, &book_id, &tag_id).map_err(|e| e.to_string())?;
+    let tag_id = if let Some(id) = db::get_tag_by_name(&conn, &tag_name)? {
+        id
+    } else {
+        let id = Uuid::new_v4().to_string();
+        db::get_or_create_tag(&conn, &id, &tag_name)?;
+        id
+    };
+    db::add_tag_to_book(&conn, &book_id, &tag_id)?;
     Ok(Tag {
         id: tag_id,
         name: tag_name,
@@ -1652,9 +1656,9 @@ pub async fn remove_tag_from_book(
     book_id: String,
     tag_id: String,
     state: State<'_, AppState>,
-) -> Result<(), String> {
-    let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
-    db::remove_tag_from_book(&conn, &book_id, &tag_id).map_err(|e| e.to_string())
+) -> FolioResult<()> {
+    let conn = state.active_db()?.get()?;
+    Ok(db::remove_tag_from_book(&conn, &book_id, &tag_id)?)
 }
 
 #[derive(serde::Serialize)]
@@ -1664,9 +1668,9 @@ pub struct BookTagAssoc {
 }
 
 #[tauri::command]
-pub async fn get_all_book_tags(state: State<'_, AppState>) -> Result<Vec<BookTagAssoc>, String> {
-    let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
-    let assocs = db::list_all_book_tags(&conn).map_err(|e| e.to_string())?;
+pub async fn get_all_book_tags(state: State<'_, AppState>) -> FolioResult<Vec<BookTagAssoc>> {
+    let conn = state.active_db()?.get()?;
+    let assocs = db::list_all_book_tags(&conn)?;
     Ok(assocs
         .into_iter()
         .map(|(book_id, tag_id)| BookTagAssoc { book_id, tag_id })
@@ -1692,16 +1696,16 @@ const VALID_RULE_PAIRS: &[(&str, &str)] = &[
     ("reading_progress", "equals"),
 ];
 
-fn validate_collection_rules(rules: &[NewRuleInput]) -> Result<(), String> {
+fn validate_collection_rules(rules: &[NewRuleInput]) -> FolioResult<()> {
     for rule in rules {
         if !VALID_RULE_PAIRS
             .iter()
             .any(|(f, o)| *f == rule.field && *o == rule.operator)
         {
-            return Err(format!(
+            return Err(FolioError::invalid(format!(
                 "Invalid collection rule: field '{}' with operator '{}'",
                 rule.field, rule.operator
-            ));
+            )));
         }
     }
     Ok(())
@@ -1715,7 +1719,7 @@ pub async fn create_collection(
     color: Option<String>,
     rules: Vec<NewRuleInput>,
     state: State<'_, AppState>,
-) -> Result<Collection, String> {
+) -> FolioResult<Collection> {
     validate_collection_rules(&rules)?;
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -1751,8 +1755,8 @@ pub async fn create_collection(
         rules: rule_structs,
     };
 
-    let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
-    db::insert_collection(&conn, &collection).map_err(|e| e.to_string())?;
+    let conn = state.active_db()?.get()?;
+    db::insert_collection(&conn, &collection)?;
 
     log_activity(
         &conn,
@@ -1775,7 +1779,7 @@ pub async fn update_collection(
     color: Option<String>,
     rules: Vec<NewRuleInput>,
     state: State<'_, AppState>,
-) -> Result<Collection, String> {
+) -> FolioResult<Collection> {
     validate_collection_rules(&rules)?;
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -1798,15 +1802,13 @@ pub async fn update_collection(
         })
         .collect();
 
-    let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
+    let conn = state.active_db()?.get()?;
 
-    let created_at: i64 = conn
-        .query_row(
-            "SELECT created_at FROM collections WHERE id = ?1",
-            rusqlite::params![&id],
-            |row| row.get(0),
-        )
-        .map_err(|e| e.to_string())?;
+    let created_at: i64 = conn.query_row(
+        "SELECT created_at FROM collections WHERE id = ?1",
+        rusqlite::params![&id],
+        |row| row.get(0),
+    )?;
 
     let collection = Collection {
         id,
@@ -1819,7 +1821,7 @@ pub async fn update_collection(
         rules: rule_structs,
     };
 
-    db::update_collection(&conn, &collection).map_err(|e| e.to_string())?;
+    db::update_collection(&conn, &collection)?;
 
     log_activity(
         &conn,
@@ -1834,14 +1836,14 @@ pub async fn update_collection(
 }
 
 #[tauri::command]
-pub async fn get_collections(state: State<'_, AppState>) -> Result<Vec<Collection>, String> {
-    let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
-    db::list_collections(&conn).map_err(|e| e.to_string())
+pub async fn get_collections(state: State<'_, AppState>) -> FolioResult<Vec<Collection>> {
+    let conn = state.active_db()?.get()?;
+    Ok(db::list_collections(&conn)?)
 }
 
 #[tauri::command]
-pub async fn delete_collection(id: String, state: State<'_, AppState>) -> Result<(), String> {
-    let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
+pub async fn delete_collection(id: String, state: State<'_, AppState>) -> FolioResult<()> {
+    let conn = state.active_db()?.get()?;
     log_activity(
         &conn,
         "collection_deleted",
@@ -1850,7 +1852,7 @@ pub async fn delete_collection(id: String, state: State<'_, AppState>) -> Result
         None,
         None,
     );
-    db::delete_collection(&conn, &id).map_err(|e| e.to_string())
+    Ok(db::delete_collection(&conn, &id)?)
 }
 
 #[tauri::command]
@@ -1858,19 +1860,19 @@ pub async fn add_book_to_collection(
     book_id: String,
     collection_id: String,
     state: State<'_, AppState>,
-) -> Result<(), String> {
-    let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
-    let coll_type: String = conn
-        .query_row(
-            "SELECT type FROM collections WHERE id = ?1",
-            rusqlite::params![collection_id],
-            |row| row.get(0),
-        )
-        .map_err(|e| e.to_string())?;
+) -> FolioResult<()> {
+    let conn = state.active_db()?.get()?;
+    let coll_type: String = conn.query_row(
+        "SELECT type FROM collections WHERE id = ?1",
+        rusqlite::params![collection_id],
+        |row| row.get(0),
+    )?;
     if coll_type == "automated" {
-        return Err("Cannot manually add books to an automated collection".to_string());
+        return Err(FolioError::invalid(
+            "Cannot manually add books to an automated collection",
+        ));
     }
-    db::add_book_to_collection(&conn, &book_id, &collection_id).map_err(|e| e.to_string())?;
+    db::add_book_to_collection(&conn, &book_id, &collection_id)?;
     log_activity(
         &conn,
         "collection_modified",
@@ -1887,9 +1889,9 @@ pub async fn remove_book_from_collection(
     book_id: String,
     collection_id: String,
     state: State<'_, AppState>,
-) -> Result<(), String> {
-    let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
-    db::remove_book_from_collection(&conn, &book_id, &collection_id).map_err(|e| e.to_string())?;
+) -> FolioResult<()> {
+    let conn = state.active_db()?.get()?;
+    db::remove_book_from_collection(&conn, &book_id, &collection_id)?;
     log_activity(
         &conn,
         "collection_modified",
@@ -1905,18 +1907,18 @@ pub async fn remove_book_from_collection(
 pub async fn get_books_in_collection(
     collection_id: String,
     state: State<'_, AppState>,
-) -> Result<Vec<Book>, String> {
-    let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
-    db::get_books_in_collection(&conn, &collection_id).map_err(|e| e.to_string())
+) -> FolioResult<Vec<Book>> {
+    let conn = state.active_db()?.get()?;
+    Ok(db::get_books_in_collection(&conn, &collection_id)?)
 }
 
 #[tauri::command]
 pub async fn get_books_in_collection_grid(
     collection_id: String,
     state: State<'_, AppState>,
-) -> Result<Vec<BookGridItem>, String> {
-    let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
-    db::get_books_in_collection_grid(&conn, &collection_id).map_err(|e| e.to_string())
+) -> FolioResult<Vec<BookGridItem>> {
+    let conn = state.active_db()?.get()?;
+    Ok(db::get_books_in_collection_grid(&conn, &collection_id)?)
 }
 
 // --- Share Collections ---
@@ -1925,19 +1927,17 @@ pub async fn get_books_in_collection_grid(
 pub async fn export_collection_markdown(
     collection_id: String,
     state: State<'_, AppState>,
-) -> Result<String, String> {
-    let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
+) -> FolioResult<String> {
+    let conn = state.active_db()?.get()?;
 
     // Get collection name
-    let name: String = conn
-        .query_row(
-            "SELECT name FROM collections WHERE id = ?1",
-            rusqlite::params![collection_id],
-            |row| row.get(0),
-        )
-        .map_err(|e| e.to_string())?;
+    let name: String = conn.query_row(
+        "SELECT name FROM collections WHERE id = ?1",
+        rusqlite::params![collection_id],
+        |row| row.get(0),
+    )?;
 
-    let books = db::get_books_in_collection(&conn, &collection_id).map_err(|e| e.to_string())?;
+    let books = db::get_books_in_collection(&conn, &collection_id)?;
 
     let mut md = format!("# {}\n\n", name);
     md.push_str(&format!("{} books\n\n", books.len()));
@@ -1955,17 +1955,15 @@ pub async fn export_collection_markdown(
 pub async fn export_collection_json(
     collection_id: String,
     state: State<'_, AppState>,
-) -> Result<String, String> {
-    let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
-    let name: String = conn
-        .query_row(
-            "SELECT name FROM collections WHERE id = ?1",
-            rusqlite::params![collection_id],
-            |row| row.get(0),
-        )
-        .map_err(|e| e.to_string())?;
+) -> FolioResult<String> {
+    let conn = state.active_db()?.get()?;
+    let name: String = conn.query_row(
+        "SELECT name FROM collections WHERE id = ?1",
+        rusqlite::params![collection_id],
+        |row| row.get(0),
+    )?;
 
-    let books = db::get_books_in_collection(&conn, &collection_id).map_err(|e| e.to_string())?;
+    let books = db::get_books_in_collection(&conn, &collection_id)?;
 
     let list: Vec<serde_json::Value> = books
         .iter()
@@ -1983,7 +1981,7 @@ pub async fn export_collection_json(
         "books": list,
     });
 
-    serde_json::to_string_pretty(&export).map_err(|e| e.to_string())
+    Ok(serde_json::to_string_pretty(&export)?)
 }
 
 // --- OpenLibrary ---
@@ -1992,12 +1990,12 @@ pub async fn export_collection_json(
 pub async fn search_openlibrary(
     title: String,
     author: Option<String>,
-) -> Result<Vec<openlibrary::OpenLibraryResult>, String> {
+) -> FolioResult<Vec<openlibrary::OpenLibraryResult>> {
     let (tx, rx) = std::sync::mpsc::channel();
     tauri::async_runtime::spawn_blocking(move || {
         let _ = tx.send(openlibrary::search(&title, author.as_deref()));
     });
-    rx.recv().map_err(|e| format!("Thread error: {e}"))?
+    rx.recv()?
 }
 
 #[tauri::command]
@@ -2005,20 +2003,19 @@ pub async fn enrich_book_from_openlibrary(
     book_id: String,
     openlibrary_key: String,
     state: State<'_, AppState>,
-) -> Result<Book, String> {
+) -> FolioResult<Book> {
     // Fetch detailed metadata from OpenLibrary (on a separate thread)
     let key = openlibrary_key.clone();
     let (tx, rx) = std::sync::mpsc::channel();
     tauri::async_runtime::spawn_blocking(move || {
         let _ = tx.send(openlibrary::get_work(&key));
     });
-    let work = rx.recv().map_err(|e| format!("Thread error: {e}"))??;
+    let work = rx.recv()??;
 
     // Also get search result for rating/isbn (work endpoint doesn't have them)
-    let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
-    let mut book = db::get_book(&conn, &book_id)
-        .map_err(|e| e.to_string())?
-        .ok_or_else(|| format!("Book '{book_id}' not found"))?;
+    let conn = state.active_db()?.get()?;
+    let mut book = db::get_book(&conn, &book_id)?
+        .ok_or_else(|| FolioError::not_found(format!("Book '{book_id}' not found")))?;
 
     // Do a quick search to get rating and ISBN
     let search_title = book.title.clone();
@@ -2031,10 +2028,7 @@ pub async fn enrich_book_from_openlibrary(
     tauri::async_runtime::spawn_blocking(move || {
         let _ = tx2.send(openlibrary::search(&search_title, search_author.as_deref()));
     });
-    let search_results = rx2
-        .recv()
-        .map_err(|e| format!("Thread error: {e}"))?
-        .unwrap_or_default();
+    let search_results = rx2.recv()?.unwrap_or_default();
     let matched = search_results.iter().find(|r| r.key == openlibrary_key);
 
     // Update book with enriched data
@@ -2057,8 +2051,7 @@ pub async fn enrich_book_from_openlibrary(
         rating,
         isbn.as_deref(),
         Some(&openlibrary_key),
-    )
-    .map_err(|e| e.to_string())?;
+    )?;
 
     // Return updated book
     book.description = description;
@@ -2097,14 +2090,11 @@ const DEFAULT_CATALOGS: &[(&str, &str)] = &[
 ];
 
 #[tauri::command]
-pub async fn get_opds_catalogs(
-    state: State<'_, AppState>,
-) -> Result<Vec<OpdsCatalogSource>, String> {
-    let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
+pub async fn get_opds_catalogs(state: State<'_, AppState>) -> FolioResult<Vec<OpdsCatalogSource>> {
+    let conn = state.active_db()?.get()?;
     // Load custom catalogs from settings
-    let custom_json = db::get_setting(&conn, "opds_custom_catalogs")
-        .map_err(|e| e.to_string())?
-        .unwrap_or_else(|| "[]".to_string());
+    let custom_json =
+        db::get_setting(&conn, "opds_custom_catalogs")?.unwrap_or_else(|| "[]".to_string());
     let custom: Vec<OpdsCatalogSource> = serde_json::from_str(&custom_json).unwrap_or_default();
 
     let mut result: Vec<OpdsCatalogSource> = DEFAULT_CATALOGS
@@ -2123,27 +2113,25 @@ pub async fn add_opds_catalog(
     name: String,
     url: String,
     state: State<'_, AppState>,
-) -> Result<(), String> {
-    let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
-    let custom_json = db::get_setting(&conn, "opds_custom_catalogs")
-        .map_err(|e| e.to_string())?
-        .unwrap_or_else(|| "[]".to_string());
+) -> FolioResult<()> {
+    let conn = state.active_db()?.get()?;
+    let custom_json =
+        db::get_setting(&conn, "opds_custom_catalogs")?.unwrap_or_else(|| "[]".to_string());
     let mut custom: Vec<OpdsCatalogSource> = serde_json::from_str(&custom_json).unwrap_or_default();
     custom.push(OpdsCatalogSource { name, url });
-    let json = serde_json::to_string(&custom).map_err(|e| e.to_string())?;
-    db::set_setting(&conn, "opds_custom_catalogs", &json).map_err(|e| e.to_string())
+    let json = serde_json::to_string(&custom)?;
+    Ok(db::set_setting(&conn, "opds_custom_catalogs", &json)?)
 }
 
 #[tauri::command]
-pub async fn remove_opds_catalog(url: String, state: State<'_, AppState>) -> Result<(), String> {
-    let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
-    let custom_json = db::get_setting(&conn, "opds_custom_catalogs")
-        .map_err(|e| e.to_string())?
-        .unwrap_or_else(|| "[]".to_string());
+pub async fn remove_opds_catalog(url: String, state: State<'_, AppState>) -> FolioResult<()> {
+    let conn = state.active_db()?.get()?;
+    let custom_json =
+        db::get_setting(&conn, "opds_custom_catalogs")?.unwrap_or_else(|| "[]".to_string());
     let mut custom: Vec<OpdsCatalogSource> = serde_json::from_str(&custom_json).unwrap_or_default();
     custom.retain(|c| c.url != url);
-    let json = serde_json::to_string(&custom).map_err(|e| e.to_string())?;
-    db::set_setting(&conn, "opds_custom_catalogs", &json).map_err(|e| e.to_string())
+    let json = serde_json::to_string(&custom)?;
+    Ok(db::set_setting(&conn, "opds_custom_catalogs", &json)?)
 }
 
 /// Search all configured OPDS catalogs in parallel and return aggregated results.
@@ -2151,7 +2139,7 @@ pub async fn remove_opds_catalog(url: String, state: State<'_, AppState>) -> Res
 pub async fn search_all_catalogs(
     query: String,
     state: State<'_, AppState>,
-) -> Result<Vec<opds::OpdsEntry>, String> {
+) -> FolioResult<Vec<opds::OpdsEntry>> {
     // Collect all catalog URLs
     let catalogs = get_opds_catalogs(state).await?;
 
@@ -2223,13 +2211,11 @@ pub async fn search_all_catalogs(
 /// Returns a cached list of popular/new books from all configured catalogs.
 /// Results are cached for 24 hours in the settings DB to avoid slowing down startup.
 #[tauri::command]
-pub async fn get_discover_books(
-    state: State<'_, AppState>,
-) -> Result<Vec<opds::OpdsEntry>, String> {
-    let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
+pub async fn get_discover_books(state: State<'_, AppState>) -> FolioResult<Vec<opds::OpdsEntry>> {
+    let conn = state.active_db()?.get()?;
 
     // Check cache (stored as JSON with a timestamp)
-    if let Some(cached) = db::get_setting(&conn, "discover_cache_v3").map_err(|e| e.to_string())? {
+    if let Some(cached) = db::get_setting(&conn, "discover_cache_v3")? {
         if let Ok(cache) = serde_json::from_str::<serde_json::Value>(&cached) {
             let cached_at = cache["cached_at"].as_i64().unwrap_or(0);
             let now = std::time::SystemTime::now()
@@ -2305,12 +2291,12 @@ pub async fn get_discover_books(
 }
 
 #[tauri::command]
-pub async fn browse_opds(url: String) -> Result<opds::OpdsFeed, String> {
+pub async fn browse_opds(url: String) -> FolioResult<opds::OpdsFeed> {
     let (tx, rx) = std::sync::mpsc::channel();
     tauri::async_runtime::spawn_blocking(move || {
         let _ = tx.send(opds::fetch_feed(&url));
     });
-    rx.recv().map_err(|e| format!("Thread error: {e}"))?
+    rx.recv()?
 }
 
 #[tauri::command]
@@ -2318,7 +2304,7 @@ pub async fn download_opds_book(
     download_url: String,
     state: State<'_, AppState>,
     app: AppHandle,
-) -> Result<Book, String> {
+) -> FolioResult<Book> {
     // Determine file extension from URL
     let ext = if download_url.contains(".pdf") {
         "pdf"
@@ -2341,7 +2327,7 @@ pub async fn download_opds_book(
         tauri::async_runtime::spawn_blocking(move || {
             let _ = tx.send(opds::download_file(&dl_url, &dl_dest));
         });
-        rx.recv().map_err(|e| format!("Thread error: {e}"))??;
+        rx.recv()??;
     }
 
     // Import via the standard import pipeline
@@ -2362,8 +2348,8 @@ pub struct Profile {
 }
 
 #[tauri::command]
-pub async fn get_profiles(state: State<'_, AppState>) -> Result<Vec<Profile>, String> {
-    let ps = state.profile_state.lock().map_err(|e| e.to_string())?;
+pub async fn get_profiles(state: State<'_, AppState>) -> FolioResult<Vec<Profile>> {
+    let ps = state.profile_state.lock()?;
     let mut result = vec![Profile {
         name: "default".to_string(),
         is_active: ps.active == "default",
@@ -2379,35 +2365,37 @@ pub async fn get_profiles(state: State<'_, AppState>) -> Result<Vec<Profile>, St
 }
 
 #[tauri::command]
-pub async fn create_profile(name: String, state: State<'_, AppState>) -> Result<(), String> {
+pub async fn create_profile(name: String, state: State<'_, AppState>) -> FolioResult<()> {
     let name = name.trim().to_string();
     if name.is_empty() || name == "default" {
-        return Err("Invalid profile name".to_string());
+        return Err(FolioError::invalid("Invalid profile name"));
     }
     let db_path = state.data_dir.join(format!("library-{name}.db"));
     if db_path.exists() {
-        return Err(format!("Profile '{name}' already exists"));
+        return Err(FolioError::invalid(format!(
+            "Profile '{name}' already exists"
+        )));
     }
-    let pool = db::create_pool(&db_path).map_err(|e| e.to_string())?;
+    let pool = db::create_pool(&db_path)?;
 
     // Ensure library folder for this profile
-    let conn = pool.get().map_err(|e| e.to_string())?;
+    let conn = pool.get()?;
     let library_folder = default_library_folder()?;
     let profile_folder = format!("{} - {}", library_folder, name);
     let _ = std::fs::create_dir_all(&profile_folder);
-    db::set_setting(&conn, "library_folder", &profile_folder).map_err(|e| e.to_string())?;
+    db::set_setting(&conn, "library_folder", &profile_folder)?;
 
-    let mut ps = state.profile_state.lock().map_err(|e| e.to_string())?;
+    let mut ps = state.profile_state.lock()?;
     ps.pools.insert(name, pool);
     Ok(())
 }
 
 #[tauri::command]
-pub async fn switch_profile(name: String, state: State<'_, AppState>) -> Result<(), String> {
+pub async fn switch_profile(name: String, state: State<'_, AppState>) -> FolioResult<()> {
     {
-        let mut ps = state.profile_state.lock().map_err(|e| e.to_string())?;
+        let mut ps = state.profile_state.lock()?;
         if name != "default" && !ps.pools.contains_key(&name) {
-            return Err(format!("Profile '{name}' not found"));
+            return Err(FolioError::invalid(format!("Profile '{name}' not found")));
         }
         ps.active = name.clone();
     }
@@ -2415,11 +2403,11 @@ pub async fn switch_profile(name: String, state: State<'_, AppState>) -> Result<
     // Sync the shared pool used by the web server
     let new_pool = state.active_db()?;
     {
-        let mut shared = state.shared_active_pool.lock().map_err(|e| e.to_string())?;
+        let mut shared = state.shared_active_pool.lock()?;
         *shared = new_pool;
     }
 
-    let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
+    let conn = state.active_db()?.get()?;
     log_activity(
         &conn,
         "profile_switched",
@@ -2433,15 +2421,15 @@ pub async fn switch_profile(name: String, state: State<'_, AppState>) -> Result<
 }
 
 #[tauri::command]
-pub async fn delete_profile(name: String, state: State<'_, AppState>) -> Result<(), String> {
+pub async fn delete_profile(name: String, state: State<'_, AppState>) -> FolioResult<()> {
     if name == "default" {
-        return Err("Cannot delete the default profile".to_string());
+        return Err(FolioError::invalid("Cannot delete the default profile"));
     }
-    let mut ps = state.profile_state.lock().map_err(|e| e.to_string())?;
+    let mut ps = state.profile_state.lock()?;
     if ps.active == name {
-        return Err(
-            "Cannot delete the active profile. Switch to another profile first.".to_string(),
-        );
+        return Err(FolioError::invalid(
+            "Cannot delete the active profile. Switch to another profile first.",
+        ));
     }
     ps.pools.remove(&name);
     // Remove DB file
@@ -2459,8 +2447,9 @@ pub struct LibraryFolderInfo {
     pub total_size_bytes: u64,
 }
 
-pub fn default_library_folder() -> Result<String, String> {
-    let home = dirs::home_dir().ok_or_else(|| "Could not determine home directory".to_string())?;
+pub fn default_library_folder() -> FolioResult<String> {
+    let home = dirs::home_dir()
+        .ok_or_else(|| FolioError::internal("Could not determine home directory"))?;
     Ok(home
         .join("Documents")
         .join("Folio Library")
@@ -2469,9 +2458,9 @@ pub fn default_library_folder() -> Result<String, String> {
 }
 
 #[tauri::command]
-pub async fn get_library_folder(state: State<'_, AppState>) -> Result<String, String> {
-    let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
-    if let Some(folder) = db::get_setting(&conn, "library_folder").map_err(|e| e.to_string())? {
+pub async fn get_library_folder(state: State<'_, AppState>) -> FolioResult<String> {
+    let conn = state.active_db()?.get()?;
+    if let Some(folder) = db::get_setting(&conn, "library_folder")? {
         Ok(folder)
     } else {
         default_library_folder()
@@ -2479,17 +2468,14 @@ pub async fn get_library_folder(state: State<'_, AppState>) -> Result<String, St
 }
 
 #[tauri::command]
-pub async fn get_library_folder_info(
-    state: State<'_, AppState>,
-) -> Result<LibraryFolderInfo, String> {
-    let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
-    let path =
-        if let Some(f) = db::get_setting(&conn, "library_folder").map_err(|e| e.to_string())? {
-            f
-        } else {
-            default_library_folder()?
-        };
-    let books = db::list_books(&conn).map_err(|e| e.to_string())?;
+pub async fn get_library_folder_info(state: State<'_, AppState>) -> FolioResult<LibraryFolderInfo> {
+    let conn = state.active_db()?.get()?;
+    let path = if let Some(f) = db::get_setting(&conn, "library_folder")? {
+        f
+    } else {
+        default_library_folder()?
+    };
+    let books = db::list_books(&conn)?;
 
     // Only count books whose path is inside the current library folder — those
     // are the files that would actually be moved on a folder change.
@@ -2524,28 +2510,28 @@ pub async fn set_library_folder(
     new_folder: String,
     move_files: bool,
     state: State<'_, AppState>,
-) -> Result<(), String> {
+) -> FolioResult<()> {
     // Validate the folder path: reject obviously dangerous values.
     let folder_path = std::path::Path::new(&new_folder);
     if new_folder.is_empty() || new_folder == "/" || new_folder == "\\" {
-        return Err("Invalid library folder path.".to_string());
+        return Err(FolioError::invalid("Invalid library folder path."));
     }
     // Ensure the folder exists (or can be created) then canonicalize.
-    std::fs::create_dir_all(&new_folder).map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(&new_folder)?;
     let canonical = std::fs::canonicalize(folder_path)
         .map_err(|e| format!("Cannot resolve library folder: {e}"))?;
     let canonical_str = canonical.to_string_lossy().to_string();
 
     if !move_files {
-        let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
-        db::set_setting(&conn, "library_folder", &canonical_str).map_err(|e| e.to_string())?;
+        let conn = state.active_db()?.get()?;
+        db::set_setting(&conn, "library_folder", &canonical_str)?;
         return Ok(());
     }
 
     // Atomic migration: gather books, plan moves, execute all-or-nothing.
     let books = {
-        let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
-        db::list_books(&conn).map_err(|e| e.to_string())?
+        let conn = state.active_db()?.get()?;
+        db::list_books(&conn)?
     };
 
     // Build (src, dest) pairs using canonical path.
@@ -2592,40 +2578,40 @@ pub async fn set_library_folder(
                     rollback_errors.join("; ")
                 );
             }
-            return Err(msg);
+            return Err(FolioError::io(msg));
         }
         completed.push((src.clone(), dest.clone()));
     }
 
     // All moves succeeded — persist new paths and setting atomically.
-    let mut conn = state.active_db()?.get().map_err(|e| e.to_string())?;
-    let tx = conn.transaction().map_err(|e| e.to_string())?;
+    let mut conn = state.active_db()?.get()?;
+    let tx = conn.transaction()?;
     for (book, (_, dest)) in books.iter().zip(moves.iter()) {
-        db::update_book_file_path(&tx, &book.id, dest).map_err(|e| e.to_string())?;
+        db::update_book_file_path(&tx, &book.id, dest)?;
     }
-    db::set_setting(&tx, "library_folder", &canonical_str).map_err(|e| e.to_string())?;
-    tx.commit().map_err(|e| e.to_string())?;
+    db::set_setting(&tx, "library_folder", &canonical_str)?;
+    tx.commit()?;
 
     Ok(())
 }
 
 #[tauri::command]
-pub async fn copy_to_library(book_id: String, state: State<'_, AppState>) -> Result<Book, String> {
-    let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
-    let book = db::get_book(&conn, &book_id)
-        .map_err(|e| e.to_string())?
-        .ok_or_else(|| "Book not found".to_string())?;
+pub async fn copy_to_library(book_id: String, state: State<'_, AppState>) -> FolioResult<Book> {
+    let conn = state.active_db()?.get()?;
+    let book =
+        db::get_book(&conn, &book_id)?.ok_or_else(|| FolioError::not_found("Book not found"))?;
 
     if book.is_imported {
-        return Err("Book is already in the library".to_string());
+        return Err(FolioError::invalid("Book is already in the library"));
     }
 
     if !std::path::Path::new(&book.file_path).exists() {
-        return Err("Source file not available. Reconnect the drive and try again.".to_string());
+        return Err(FolioError::invalid(
+            "Source file not available. Reconnect the drive and try again.",
+        ));
     }
 
-    let library_folder = db::get_setting(&conn, "library_folder")
-        .map_err(|e| e.to_string())?
+    let library_folder = db::get_setting(&conn, "library_folder")?
         .unwrap_or_else(|| default_library_folder().unwrap_or_default());
 
     let ext = std::path::Path::new(&book.file_path)
@@ -2637,7 +2623,7 @@ pub async fn copy_to_library(book_id: String, state: State<'_, AppState>) -> Res
     std::fs::copy(&book.file_path, &library_path)
         .map_err(|e| format!("Failed to copy file to library: {e}"))?;
 
-    db::update_book_path(&conn, &book.id, &library_path, true).map_err(|e| e.to_string())?;
+    db::update_book_path(&conn, &book.id, &library_path, true)?;
 
     log_activity(
         &conn,
@@ -2648,9 +2634,8 @@ pub async fn copy_to_library(book_id: String, state: State<'_, AppState>) -> Res
         Some("Copied to library"),
     );
 
-    db::get_book(&conn, &book_id)
-        .map_err(|e| e.to_string())?
-        .ok_or_else(|| "Book not found after update".to_string())
+    db::get_book(&conn, &book_id)?
+        .ok_or_else(|| FolioError::not_found("Book not found after update"))
 }
 
 // --- Library Export/Import ---
@@ -2661,12 +2646,12 @@ pub async fn export_library(
     include_files: bool,
     state: State<'_, AppState>,
     app: AppHandle,
-) -> Result<String, String> {
+) -> FolioResult<String> {
     use std::io::Write;
     use zip::write::SimpleFileOptions;
 
-    let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
-    let books = db::list_books(&conn).map_err(|e| e.to_string())?;
+    let conn = state.active_db()?.get()?;
+    let books = db::list_books(&conn)?;
 
     // Gather all metadata into a single export object
     let progress: Vec<ReadingProgress> = books
@@ -2681,8 +2666,8 @@ pub async fn export_library(
         .iter()
         .flat_map(|b| db::list_highlights(&conn, &b.id).unwrap_or_default())
         .collect();
-    let collections = db::list_collections(&conn).map_err(|e| e.to_string())?;
-    let tags = db::list_tags(&conn).map_err(|e| e.to_string())?;
+    let collections = db::list_collections(&conn)?;
+    let tags = db::list_tags(&conn)?;
     let book_tags: Vec<(String, String, String)> = books
         .iter()
         .flat_map(|b| {
@@ -2705,16 +2690,14 @@ pub async fn export_library(
         "book_tags": book_tags,
     });
 
-    let file = std::fs::File::create(&dest_path).map_err(|e| e.to_string())?;
+    let file = std::fs::File::create(&dest_path)?;
     let mut zip = zip::ZipWriter::new(file);
     let options = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
 
     // Add metadata JSON
-    let metadata_json = serde_json::to_string_pretty(&metadata).map_err(|e| e.to_string())?;
-    zip.start_file("library.json", options)
-        .map_err(|e| e.to_string())?;
-    zip.write_all(metadata_json.as_bytes())
-        .map_err(|e| e.to_string())?;
+    let metadata_json = serde_json::to_string_pretty(&metadata)?;
+    zip.start_file("library.json", options)?;
+    zip.write_all(metadata_json.as_bytes())?;
 
     let mut linked_count = 0u32;
     if include_files {
@@ -2733,9 +2716,8 @@ pub async fn export_library(
             let archive_name = format!("books/{}.{}", book.id, ext);
             // epub/cbz are already zips; pdf compresses poorly — use Stored for all
             if let Ok(data) = std::fs::read(&book.file_path) {
-                zip.start_file(&archive_name, stored_options)
-                    .map_err(|e| e.to_string())?;
-                zip.write_all(&data).map_err(|e| e.to_string())?;
+                zip.start_file(&archive_name, stored_options)?;
+                zip.write_all(&data)?;
             }
         }
 
@@ -2749,16 +2731,15 @@ pub async fn export_library(
                             .and_then(|e| e.to_str())
                             .unwrap_or("jpg");
                         let archive_name = format!("covers/{}/cover.{}", book.id, ext);
-                        zip.start_file(&archive_name, options)
-                            .map_err(|e| e.to_string())?;
-                        zip.write_all(&data).map_err(|e| e.to_string())?;
+                        zip.start_file(&archive_name, options)?;
+                        zip.write_all(&data)?;
                     }
                 }
             }
         }
     }
 
-    zip.finish().map_err(|e| e.to_string())?;
+    zip.finish()?;
 
     let export_detail = if include_files {
         if linked_count > 0 {
@@ -2789,29 +2770,28 @@ pub async fn import_library_backup(
     archive_path: String,
     state: State<'_, AppState>,
     app: AppHandle,
-) -> Result<u32, String> {
+) -> FolioResult<u32> {
     use std::io::Read;
 
-    let file = std::fs::File::open(&archive_path).map_err(|e| e.to_string())?;
-    let mut archive = zip::ZipArchive::new(file).map_err(|e| e.to_string())?;
+    let file = std::fs::File::open(&archive_path)?;
+    let mut archive = zip::ZipArchive::new(file)?;
 
     // Read library.json
     let books: Vec<Book> = {
-        let mut entry = archive.by_name("library.json").map_err(|e| e.to_string())?;
+        let mut entry = archive.by_name("library.json")?;
         let mut json = String::new();
-        entry.read_to_string(&mut json).map_err(|e| e.to_string())?;
-        serde_json::from_str(&json).map_err(|e| e.to_string())?
+        entry.read_to_string(&mut json)?;
+        serde_json::from_str(&json)?
     };
 
-    let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
-    let library_folder =
-        match db::get_setting(&conn, "library_folder").map_err(|e| e.to_string())? {
-            Some(f) => f,
-            None => default_library_folder()?,
-        };
-    std::fs::create_dir_all(&library_folder).map_err(|e| e.to_string())?;
+    let conn = state.active_db()?.get()?;
+    let library_folder = match db::get_setting(&conn, "library_folder")? {
+        Some(f) => f,
+        None => default_library_folder()?,
+    };
+    std::fs::create_dir_all(&library_folder)?;
 
-    let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let data_dir = app.path().app_data_dir()?;
     let mut imported = 0u32;
 
     // Helper: validate that a ZIP entry name is safe (no path traversal).
@@ -2822,10 +2802,7 @@ pub async fn import_library_backup(
     for book in &books {
         // Skip if book already exists by hash
         if let Some(ref hash) = book.file_hash {
-            if db::get_book_by_file_hash(&conn, hash)
-                .map_err(|e| e.to_string())?
-                .is_some()
-            {
+            if db::get_book_by_file_hash(&conn, hash)?.is_some() {
                 continue;
             }
         }
@@ -2859,8 +2836,8 @@ pub async fn import_library_backup(
                 continue;
             }
             let mut buf = Vec::new();
-            entry.read_to_end(&mut buf).map_err(|e| e.to_string())?;
-            std::fs::write(&library_path, &buf).map_err(|e| e.to_string())?;
+            entry.read_to_end(&mut buf)?;
+            std::fs::write(&library_path, &buf)?;
         } else {
             continue; // skip books without files
         }
@@ -2877,11 +2854,11 @@ pub async fn import_library_backup(
                     continue;
                 }
                 let dir = data_dir.join("covers").join(&book.id);
-                std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+                std::fs::create_dir_all(&dir)?;
                 let dest = dir.join(format!("cover.{ext_try}"));
                 let mut buf = Vec::new();
-                entry.read_to_end(&mut buf).map_err(|e| e.to_string())?;
-                std::fs::write(&dest, &buf).map_err(|e| e.to_string())?;
+                entry.read_to_end(&mut buf)?;
+                std::fs::write(&dest, &buf)?;
                 cover_path = Some(dest.to_string_lossy().to_string());
                 break;
             }
@@ -2918,15 +2895,11 @@ pub async fn check_pdf_support() -> bool {
 }
 
 #[tauri::command]
-pub async fn get_pdf_page_count(
-    book_id: String,
-    state: State<'_, AppState>,
-) -> Result<u32, String> {
+pub async fn get_pdf_page_count(book_id: String, state: State<'_, AppState>) -> FolioResult<u32> {
     let file_path = {
-        let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
-        db::get_book(&conn, &book_id)
-            .map_err(|e| e.to_string())?
-            .ok_or_else(|| format!("Book '{book_id}' not found"))?
+        let conn = state.active_db()?.get()?;
+        db::get_book(&conn, &book_id)?
+            .ok_or_else(|| FolioError::not_found(format!("Book '{book_id}' not found")))?
             .file_path
     };
     validate_file_exists(&file_path)?;
@@ -2939,13 +2912,12 @@ pub async fn get_pdf_page(
     page_index: u32,
     width: Option<u32>,
     state: State<'_, AppState>,
-) -> Result<String, String> {
+) -> FolioResult<String> {
     let render_width = width.unwrap_or(1200).min(9600);
     let file_path = {
-        let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
-        db::get_book(&conn, &book_id)
-            .map_err(|e| e.to_string())?
-            .ok_or_else(|| format!("Book '{book_id}' not found"))?
+        let conn = state.active_db()?.get()?;
+        db::get_book(&conn, &book_id)?
+            .ok_or_else(|| FolioError::not_found(format!("Book '{book_id}' not found")))?
             .file_path
     };
     validate_file_exists(&file_path)?;
@@ -2954,7 +2926,7 @@ pub async fn get_pdf_page(
 
     // Check cache (single lock for both map and LRU order)
     {
-        let mut cache = state.pdf_cache.lock().map_err(|e| e.to_string())?;
+        let mut cache = state.pdf_cache.lock()?;
         if let Some(data) = cache.get(&cache_key) {
             let result = data.clone();
             cache.touch(&cache_key);
@@ -2968,7 +2940,7 @@ pub async fn get_pdf_page(
     // Store in cache with LRU + memory eviction (#52)
     {
         let size = data.len();
-        let mut cache = state.pdf_cache.lock().map_err(|e| e.to_string())?;
+        let mut cache = state.pdf_cache.lock()?;
         cache.insert_with_size(cache_key, data.clone(), size);
     }
 
@@ -2978,7 +2950,7 @@ pub async fn get_pdf_page(
 // ---- Remote Backup Commands ----
 
 #[tauri::command]
-pub async fn get_backup_providers() -> Result<Vec<crate::backup::ProviderInfo>, String> {
+pub async fn get_backup_providers() -> FolioResult<Vec<crate::backup::ProviderInfo>> {
     Ok(crate::backup::provider_schemas())
 }
 
@@ -2986,23 +2958,22 @@ pub async fn get_backup_providers() -> Result<Vec<crate::backup::ProviderInfo>, 
 pub async fn save_backup_config(
     config: crate::backup::BackupConfig,
     state: State<'_, AppState>,
-) -> Result<(), String> {
+) -> FolioResult<()> {
     // Store secrets in OS keychain first — only save config to DB if all secrets stored
     let clean = crate::backup::store_secrets(&config)?;
-    let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
-    let json = serde_json::to_string(&clean).map_err(|e| e.to_string())?;
-    db::set_setting(&conn, "backup_config", &json).map_err(|e| e.to_string())
+    let conn = state.active_db()?.get()?;
+    let json = serde_json::to_string(&clean)?;
+    Ok(db::set_setting(&conn, "backup_config", &json)?)
 }
 
 #[tauri::command]
 pub async fn get_backup_config(
     state: State<'_, AppState>,
-) -> Result<Option<crate::backup::BackupConfig>, String> {
-    let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
-    match db::get_setting(&conn, "backup_config").map_err(|e| e.to_string())? {
+) -> FolioResult<Option<crate::backup::BackupConfig>> {
+    let conn = state.active_db()?.get()?;
+    match db::get_setting(&conn, "backup_config")? {
         Some(j) => {
-            let mut config: crate::backup::BackupConfig =
-                serde_json::from_str(&j).map_err(|e| e.to_string())?;
+            let mut config: crate::backup::BackupConfig = serde_json::from_str(&j)?;
             // Load secrets from OS keychain
             crate::backup::load_secrets(&mut config)?;
             Ok(Some(config))
@@ -3018,23 +2989,23 @@ static BACKUP_RUNNING: std::sync::LazyLock<std::sync::Mutex<std::collections::Ha
 pub async fn run_backup(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
-) -> Result<crate::backup::SyncResult, String> {
+) -> FolioResult<crate::backup::SyncResult> {
     let profile_name = {
-        let ps = state.profile_state.lock().map_err(|e| e.to_string())?;
+        let ps = state.profile_state.lock()?;
         ps.active.clone()
     };
     {
-        let mut running = BACKUP_RUNNING.lock().map_err(|e| e.to_string())?;
+        let mut running = BACKUP_RUNNING.lock()?;
         if !running.insert(profile_name.clone()) {
-            return Err("A backup is already in progress for this profile".to_string());
+            return Err(FolioError::invalid(
+                "A backup is already in progress for this profile",
+            ));
         }
     }
-    let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
-    let json = db::get_setting(&conn, "backup_config")
-        .map_err(|e| e.to_string())?
-        .ok_or_else(|| "No backup provider configured".to_string())?;
-    let mut config: crate::backup::BackupConfig =
-        serde_json::from_str(&json).map_err(|e| e.to_string())?;
+    let conn = state.active_db()?.get()?;
+    let json = db::get_setting(&conn, "backup_config")?
+        .ok_or_else(|| FolioError::not_found("No backup provider configured"))?;
+    let mut config: crate::backup::BackupConfig = serde_json::from_str(&json)?;
     crate::backup::load_secrets(&mut config)?;
     let provider_name = config.provider_type.clone();
     let op = crate::backup::build_operator(&config)?;
@@ -3057,8 +3028,8 @@ pub async fn run_backup(
         );
         let _ = tx.send(result);
     });
-    let result = rx.recv().map_err(|e| format!("Thread error: {e}"))?;
-    let log_conn = state.active_db()?.get().map_err(|e| e.to_string())?;
+    let result = rx.recv()?;
+    let log_conn = state.active_db()?.get()?;
     match &result {
         Ok(sync_result) => {
             log_activity(
@@ -3096,21 +3067,20 @@ pub async fn run_backup(
 #[tauri::command]
 pub async fn get_backup_status(
     state: State<'_, AppState>,
-) -> Result<Option<crate::backup::SyncManifest>, String> {
-    let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
-    let json = match db::get_setting(&conn, "backup_config").map_err(|e| e.to_string())? {
+) -> FolioResult<Option<crate::backup::SyncManifest>> {
+    let conn = state.active_db()?.get()?;
+    let json = match db::get_setting(&conn, "backup_config")? {
         Some(j) => j,
         None => return Ok(None),
     };
-    let mut config: crate::backup::BackupConfig =
-        serde_json::from_str(&json).map_err(|e| e.to_string())?;
+    let mut config: crate::backup::BackupConfig = serde_json::from_str(&json)?;
     crate::backup::load_secrets(&mut config)?;
     let op = crate::backup::build_operator(&config)?;
     let (tx, rx) = std::sync::mpsc::channel();
     tauri::async_runtime::spawn_blocking(move || {
         let _ = tx.send(crate::backup::read_manifest(&op));
     });
-    let manifest = rx.recv().map_err(|e| format!("Thread error: {e}"))?;
+    let manifest = rx.recv()?;
     Ok(Some(manifest))
 }
 
@@ -3132,18 +3102,17 @@ pub async fn start_scan(
     include_skipped: Option<bool>,
     state: State<'_, AppState>,
     app: AppHandle,
-) -> Result<(), String> {
+) -> FolioResult<()> {
     SCAN_CANCEL.store(false, Ordering::SeqCst);
-    let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
+    let conn = state.active_db()?.get()?;
     if include_skipped.unwrap_or(false) {
         // Re-queue previously skipped books so new providers can try them
         conn.execute(
             "UPDATE books SET enrichment_status = NULL WHERE enrichment_status = 'skipped'",
             [],
-        )
-        .map_err(|e| e.to_string())?;
+        )?;
     }
-    let books = db::list_unenriched_books(&conn).map_err(|e| e.to_string())?;
+    let books = db::list_unenriched_books(&conn)?;
     let total = books.len() as u32;
     if total == 0 {
         let _ = app.emit(
@@ -3158,10 +3127,7 @@ pub async fn start_scan(
         return Ok(());
     }
     let registry = {
-        let reg = state
-            .enrichment_registry
-            .lock()
-            .map_err(|e| e.to_string())?;
+        let reg = state.enrichment_registry.lock()?;
         let mut new_reg = crate::providers::ProviderRegistry::new();
         for info in reg.list_providers() {
             new_reg.configure_provider(&info.id, info.config.clone());
@@ -3280,17 +3246,16 @@ pub async fn start_scan(
 }
 
 #[tauri::command]
-pub async fn cancel_scan() -> Result<(), String> {
+pub async fn cancel_scan() -> FolioResult<()> {
     SCAN_CANCEL.store(true, Ordering::SeqCst);
     Ok(())
 }
 
 #[tauri::command]
-pub async fn scan_single_book(book_id: String, state: State<'_, AppState>) -> Result<Book, String> {
-    let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
-    let book = db::get_book(&conn, &book_id)
-        .map_err(|e| e.to_string())?
-        .ok_or_else(|| format!("Book '{}' not found", book_id))?;
+pub async fn scan_single_book(book_id: String, state: State<'_, AppState>) -> FolioResult<Book> {
+    let conn = state.active_db()?.get()?;
+    let book = db::get_book(&conn, &book_id)?
+        .ok_or_else(|| FolioError::not_found(format!("Book '{}' not found", book_id)))?;
     let parsed = crate::enrichment::parse_filename(
         std::path::Path::new(&book.file_path)
             .file_stem()
@@ -3309,10 +3274,7 @@ pub async fn scan_single_book(book_id: String, state: State<'_, AppState>) -> Re
     };
     let lookup_isbn = book.isbn.as_deref().or(parsed.isbn.as_deref());
     let registry = {
-        let reg = state
-            .enrichment_registry
-            .lock()
-            .map_err(|e| e.to_string())?;
+        let reg = state.enrichment_registry.lock()?;
         let mut new_reg = crate::providers::ProviderRegistry::new();
         for info in reg.list_providers() {
             new_reg.configure_provider(&info.id, info.config.clone());
@@ -3337,7 +3299,7 @@ pub async fn scan_single_book(book_id: String, state: State<'_, AppState>) -> Re
             &registry,
         ));
     });
-    let enrichment = rx.recv().map_err(|e| format!("Thread error: {e}"))?;
+    let enrichment = rx.recv()?;
     match enrichment {
         Some(result) => {
             let genres_json = if !result.data.genres.is_empty() {
@@ -3356,12 +3318,10 @@ pub async fn scan_single_book(book_id: String, state: State<'_, AppState>) -> Re
                     Some("") | None => None,
                     some => some,
                 },
-            )
-            .map_err(|e| e.to_string())?;
+            )?;
             // Apply new metadata fields if the book doesn't already have them
-            let mut book = db::get_book(&conn, &book_id)
-                .map_err(|e| e.to_string())?
-                .ok_or_else(|| "Book not found".to_string())?;
+            let mut book = db::get_book(&conn, &book_id)?
+                .ok_or_else(|| FolioError::not_found("Book not found"))?;
             let mut changed = false;
             if book.language.is_none() {
                 if let Some(ref v) = result.data.language {
@@ -3382,12 +3342,11 @@ pub async fn scan_single_book(book_id: String, state: State<'_, AppState>) -> Re
                 }
             }
             if changed {
-                db::update_book(&conn, &book).map_err(|e| e.to_string())?;
+                db::update_book(&conn, &book)?;
             }
-            db::set_enrichment_status(&conn, &book_id, "enriched").map_err(|e| e.to_string())?;
-            let updated_book = db::get_book(&conn, &book_id)
-                .map_err(|e| e.to_string())?
-                .ok_or_else(|| "Book not found".to_string())?;
+            db::set_enrichment_status(&conn, &book_id, "enriched")?;
+            let updated_book = db::get_book(&conn, &book_id)?
+                .ok_or_else(|| FolioError::not_found("Book not found"))?;
             let tried = result.providers_tried.join(", ");
             log_activity(
                 &conn,
@@ -3403,7 +3362,7 @@ pub async fn scan_single_book(book_id: String, state: State<'_, AppState>) -> Re
             Ok(updated_book)
         }
         None => {
-            db::set_enrichment_status(&conn, &book_id, "skipped").map_err(|e| e.to_string())?;
+            db::set_enrichment_status(&conn, &book_id, "skipped")?;
             let tried = enabled_provider_names.join(", ");
             log_activity(
                 &conn,
@@ -3413,27 +3372,24 @@ pub async fn scan_single_book(book_id: String, state: State<'_, AppState>) -> Re
                 Some(&book.title),
                 Some(&format!("No match found (searched: {})", tried)),
             );
-            Err("No match found".to_string())
+            Err(FolioError::not_found("No match found"))
         }
     }
 }
 
 #[tauri::command]
-pub async fn queue_book_for_scan(
-    book_id: String,
-    state: State<'_, AppState>,
-) -> Result<(), String> {
-    let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
-    db::set_enrichment_status(&conn, &book_id, "queued").map_err(|e| e.to_string())
+pub async fn queue_book_for_scan(book_id: String, state: State<'_, AppState>) -> FolioResult<()> {
+    let conn = state.active_db()?.get()?;
+    Ok(db::set_enrichment_status(&conn, &book_id, "queued")?)
 }
 
 #[tauri::command]
 pub async fn get_setting_value(
     key: String,
     state: State<'_, AppState>,
-) -> Result<Option<String>, String> {
-    let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
-    db::get_setting(&conn, &key).map_err(|e| e.to_string())
+) -> FolioResult<Option<String>> {
+    let conn = state.active_db()?.get()?;
+    Ok(db::get_setting(&conn, &key)?)
 }
 
 #[tauri::command]
@@ -3441,19 +3397,16 @@ pub async fn set_setting_value(
     key: String,
     value: String,
     state: State<'_, AppState>,
-) -> Result<(), String> {
-    let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
-    db::set_setting(&conn, &key, &value).map_err(|e| e.to_string())
+) -> FolioResult<()> {
+    let conn = state.active_db()?.get()?;
+    Ok(db::set_setting(&conn, &key, &value)?)
 }
 
 #[tauri::command]
 pub async fn get_enrichment_providers(
     state: State<'_, AppState>,
-) -> Result<Vec<crate::providers::ProviderInfo>, String> {
-    let reg = state
-        .enrichment_registry
-        .lock()
-        .map_err(|e| e.to_string())?;
+) -> FolioResult<Vec<crate::providers::ProviderInfo>> {
+    let reg = state.enrichment_registry.lock()?;
     Ok(reg.list_providers())
 }
 
@@ -3463,15 +3416,12 @@ pub async fn set_enrichment_provider_config(
     enabled: bool,
     api_key: Option<String>,
     state: State<'_, AppState>,
-) -> Result<(), String> {
+) -> FolioResult<()> {
     let config = crate::providers::ProviderConfig {
         enabled,
         api_key: api_key.filter(|k| !k.is_empty()),
     };
-    let mut reg = state
-        .enrichment_registry
-        .lock()
-        .map_err(|e| e.to_string())?;
+    let mut reg = state.enrichment_registry.lock()?;
     reg.configure_provider(&provider_id, config);
     // Persist all provider configs
     let all: std::collections::HashMap<String, crate::providers::ProviderConfig> = reg
@@ -3479,9 +3429,9 @@ pub async fn set_enrichment_provider_config(
         .into_iter()
         .map(|p| (p.id, p.config))
         .collect();
-    let json = serde_json::to_string(&all).map_err(|e| e.to_string())?;
-    let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
-    crate::db::set_setting(&conn, "enrichment_providers", &json).map_err(|e| e.to_string())?;
+    let json = serde_json::to_string(&all)?;
+    let conn = state.active_db()?.get()?;
+    crate::db::set_setting(&conn, "enrichment_providers", &json)?;
     Ok(())
 }
 
@@ -3489,16 +3439,13 @@ pub async fn set_enrichment_provider_config(
 pub async fn set_enrichment_provider_order(
     order: Vec<String>,
     state: State<'_, AppState>,
-) -> Result<(), String> {
-    let mut reg = state
-        .enrichment_registry
-        .lock()
-        .map_err(|e| e.to_string())?;
+) -> FolioResult<()> {
+    let mut reg = state.enrichment_registry.lock()?;
     reg.reorder(&order);
     // Persist the order
-    let json = serde_json::to_string(&order).map_err(|e| e.to_string())?;
-    let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
-    crate::db::set_setting(&conn, "enrichment_provider_order", &json).map_err(|e| e.to_string())?;
+    let json = serde_json::to_string(&order)?;
+    let conn = state.active_db()?.get()?;
+    crate::db::set_setting(&conn, "enrichment_provider_order", &json)?;
     Ok(())
 }
 
@@ -3510,24 +3457,23 @@ pub async fn get_activity_log(
     offset: Option<u32>,
     action_filter: Option<String>,
     state: State<'_, AppState>,
-) -> Result<Vec<crate::models::ActivityEntry>, String> {
-    let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
-    db::get_activity_log(
+) -> FolioResult<Vec<crate::models::ActivityEntry>> {
+    let conn = state.active_db()?.get()?;
+    Ok(db::get_activity_log(
         &conn,
         limit.unwrap_or(100),
         offset.unwrap_or(0),
         action_filter.as_deref(),
-    )
-    .map_err(|e| e.to_string())
+    )?)
 }
 
 #[tauri::command]
 pub async fn preview_collection_rules(
     rules: Vec<crate::models::NewRuleInput>,
     state: State<'_, AppState>,
-) -> Result<usize, String> {
-    let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
-    db::preview_collection_rules(&conn, &rules).map_err(|e| e.to_string())
+) -> FolioResult<usize> {
+    let conn = state.active_db()?.get()?;
+    Ok(db::preview_collection_rules(&conn, &rules)?)
 }
 
 fn derive_font_name(file_name: &str) -> String {
@@ -3563,10 +3509,10 @@ pub async fn import_custom_font(
     file_path: String,
     state: State<'_, AppState>,
     app: AppHandle,
-) -> Result<CustomFont, String> {
+) -> FolioResult<CustomFont> {
     let source = std::path::Path::new(&file_path);
     if !source.exists() {
-        return Err(format!("File not found: {file_path}"));
+        return Err(FolioError::invalid(format!("File not found: {file_path}")));
     }
 
     let extension = source
@@ -3576,7 +3522,9 @@ pub async fn import_custom_font(
         .to_lowercase();
 
     if !["ttf", "otf", "woff2"].contains(&extension.as_str()) {
-        return Err(format!("Unsupported font format: .{extension}"));
+        return Err(FolioError::invalid(format!(
+            "Unsupported font format: .{extension}"
+        )));
     }
 
     let file_name = source
@@ -3586,15 +3534,11 @@ pub async fn import_custom_font(
         .to_string();
 
     let id = Uuid::new_v4().to_string();
-    let fonts_dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| e.to_string())?
-        .join("fonts");
-    std::fs::create_dir_all(&fonts_dir).map_err(|e| e.to_string())?;
+    let fonts_dir = app.path().app_data_dir()?.join("fonts");
+    std::fs::create_dir_all(&fonts_dir)?;
 
     let dest = fonts_dir.join(format!("{id}.{extension}"));
-    std::fs::copy(source, &dest).map_err(|e| e.to_string())?;
+    std::fs::copy(source, &dest)?;
 
     let font = CustomFont {
         id,
@@ -3607,38 +3551,38 @@ pub async fn import_custom_font(
             .as_secs() as i64,
     };
 
-    let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
-    db::insert_custom_font(&conn, &font).map_err(|e| e.to_string())?;
+    let conn = state.active_db()?.get()?;
+    db::insert_custom_font(&conn, &font)?;
 
     Ok(font)
 }
 
 #[tauri::command]
-pub async fn get_custom_fonts(state: State<'_, AppState>) -> Result<Vec<CustomFont>, String> {
-    let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
-    db::list_custom_fonts(&conn).map_err(|e| e.to_string())
+pub async fn get_custom_fonts(state: State<'_, AppState>) -> FolioResult<Vec<CustomFont>> {
+    let conn = state.active_db()?.get()?;
+    Ok(db::list_custom_fonts(&conn)?)
 }
 
 #[tauri::command]
-pub async fn remove_custom_font(font_id: String, state: State<'_, AppState>) -> Result<(), String> {
-    let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
+pub async fn remove_custom_font(font_id: String, state: State<'_, AppState>) -> FolioResult<()> {
+    let conn = state.active_db()?.get()?;
 
-    if let Some(font) = db::get_custom_font(&conn, &font_id).map_err(|e| e.to_string())? {
+    if let Some(font) = db::get_custom_font(&conn, &font_id)? {
         let _ = std::fs::remove_file(&font.file_path);
     }
 
-    db::delete_custom_font(&conn, &font_id).map_err(|e| e.to_string())
+    Ok(db::delete_custom_font(&conn, &font_id)?)
 }
 
 #[tauri::command]
-pub async fn check_file_exists(file_path: String) -> Result<bool, String> {
+pub async fn check_file_exists(file_path: String) -> FolioResult<bool> {
     if std::path::Path::new(&file_path).exists() {
         Ok(true)
     } else {
-        Err(format!(
+        Err(FolioError::not_found(format!(
             "Book file not found at '{}'. It may have been moved or deleted.",
             file_path
-        ))
+        )))
     }
 }
 
@@ -3646,17 +3590,17 @@ pub async fn check_file_exists(file_path: String) -> Result<bool, String> {
 pub async fn cleanup_library(
     app: AppHandle,
     state: State<'_, AppState>,
-) -> Result<CleanupResult, String> {
+) -> FolioResult<CleanupResult> {
     use std::io::Write as _;
     use zip::write::SimpleFileOptions;
 
-    let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
-    let books = db::list_books(&conn).map_err(|e| e.to_string())?;
+    let conn = state.active_db()?.get()?;
+    let books = db::list_books(&conn)?;
     let total = books.len() as u32;
 
     // Auto-backup metadata before cleanup.
     let backups_dir = state.data_dir.join("backups");
-    std::fs::create_dir_all(&backups_dir).map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(&backups_dir)?;
     let timestamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
@@ -3676,8 +3620,8 @@ pub async fn cleanup_library(
             .iter()
             .flat_map(|b| db::list_highlights(&conn, &b.id).unwrap_or_default())
             .collect();
-        let collections = db::list_collections(&conn).map_err(|e| e.to_string())?;
-        let tags = db::list_tags(&conn).map_err(|e| e.to_string())?;
+        let collections = db::list_collections(&conn)?;
+        let tags = db::list_tags(&conn)?;
         let book_tags: Vec<(String, String, String)> = books
             .iter()
             .flat_map(|b| {
@@ -3700,16 +3644,14 @@ pub async fn cleanup_library(
             "book_tags": book_tags,
         });
 
-        let file = std::fs::File::create(&backup_path).map_err(|e| e.to_string())?;
+        let file = std::fs::File::create(&backup_path)?;
         let mut zip = zip::ZipWriter::new(file);
         let options =
             SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
-        let metadata_json = serde_json::to_string_pretty(&metadata).map_err(|e| e.to_string())?;
-        zip.start_file("library.json", options)
-            .map_err(|e| e.to_string())?;
-        zip.write_all(metadata_json.as_bytes())
-            .map_err(|e| e.to_string())?;
-        zip.finish().map_err(|e| e.to_string())?;
+        let metadata_json = serde_json::to_string_pretty(&metadata)?;
+        zip.start_file("library.json", options)?;
+        zip.write_all(metadata_json.as_bytes())?;
+        zip.finish()?;
     }
 
     let mut removed_books: Vec<CleanupEntry> = Vec::new();
@@ -3728,7 +3670,7 @@ pub async fn cleanup_library(
         }
 
         // Book file is missing — remove from database.
-        db::delete_book(&conn, &book.id).map_err(|e| e.to_string())?;
+        db::delete_book(&conn, &book.id)?;
 
         // Evict EPUB cache entry.
         if let Ok(mut cache) = state.epub_cache.lock() {
@@ -3771,7 +3713,7 @@ pub async fn cleanup_library(
 }
 
 #[tauri::command]
-pub async fn list_auto_backups(state: State<'_, AppState>) -> Result<Vec<AutoBackup>, String> {
+pub async fn list_auto_backups(state: State<'_, AppState>) -> FolioResult<Vec<AutoBackup>> {
     let backups_dir = state.data_dir.join("backups");
     if !backups_dir.exists() {
         return Ok(Vec::new());
@@ -3779,7 +3721,7 @@ pub async fn list_auto_backups(state: State<'_, AppState>) -> Result<Vec<AutoBac
 
     let mut backups: Vec<AutoBackup> = Vec::new();
 
-    let entries = std::fs::read_dir(&backups_dir).map_err(|e| e.to_string())?;
+    let entries = std::fs::read_dir(&backups_dir)?;
     for entry in entries.flatten() {
         let path = entry.path();
         if path.extension().and_then(|e| e.to_str()) != Some("zip") {
@@ -3818,9 +3760,9 @@ pub async fn list_auto_backups(state: State<'_, AppState>) -> Result<Vec<AutoBac
 }
 
 #[tauri::command]
-pub async fn get_series(state: State<'_, AppState>) -> Result<Vec<SeriesInfo>, String> {
-    let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
-    db::list_series(&conn).map_err(|e| e.to_string())
+pub async fn get_series(state: State<'_, AppState>) -> FolioResult<Vec<SeriesInfo>> {
+    let conn = state.active_db()?.get()?;
+    Ok(db::list_series(&conn)?)
 }
 
 // --- Sync orchestration ---
@@ -3873,32 +3815,31 @@ pub async fn sync_pull_book(
     book_id: String,
     app: AppHandle,
     state: State<'_, AppState>,
-) -> Result<(), String> {
-    let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
+) -> FolioResult<()> {
+    let conn = state.active_db()?.get()?;
 
     // Guard: sync must be enabled and backup provider configured
     if !db::is_sync_enabled(&conn) {
         return Ok(());
     }
-    let config_json = match db::get_setting(&conn, "backup_config").map_err(|e| e.to_string())? {
+    let config_json = match db::get_setting(&conn, "backup_config")? {
         Some(j) => j,
         None => return Ok(()),
     };
 
-    let mut config: crate::backup::BackupConfig =
-        serde_json::from_str(&config_json).map_err(|e| e.to_string())?;
+    let mut config: crate::backup::BackupConfig = serde_json::from_str(&config_json)?;
     crate::backup::load_secrets(&mut config)?;
     let op = crate::backup::build_operator(&config)?;
 
-    let book = match db::get_book(&conn, &book_id).map_err(|e| e.to_string())? {
+    let book = match db::get_book(&conn, &book_id)? {
         Some(b) => b,
-        None => return Err(format!("Book not found: {book_id}")),
+        None => return Err(FolioError::not_found(format!("Book not found: {book_id}"))),
     };
     let file_hash = match &book.file_hash {
         Some(h) => h.clone(),
         None => return Ok(()),
     };
-    let device_id = db::get_or_create_device_id(&conn).map_err(|e| e.to_string())?;
+    let device_id = db::get_or_create_device_id(&conn)?;
 
     // Spawn thread for network fetch only — keep DB connection on main thread
     let fh = file_hash.clone();
@@ -3969,32 +3910,31 @@ pub async fn sync_pull_book(
 }
 
 #[tauri::command]
-pub async fn sync_push_book(book_id: String, state: State<'_, AppState>) -> Result<(), String> {
-    let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
+pub async fn sync_push_book(book_id: String, state: State<'_, AppState>) -> FolioResult<()> {
+    let conn = state.active_db()?.get()?;
 
     // Guard: sync must be enabled and backup provider configured
     if !db::is_sync_enabled(&conn) {
         return Ok(());
     }
-    let config_json = match db::get_setting(&conn, "backup_config").map_err(|e| e.to_string())? {
+    let config_json = match db::get_setting(&conn, "backup_config")? {
         Some(j) => j,
         None => return Ok(()),
     };
 
-    let mut config: crate::backup::BackupConfig =
-        serde_json::from_str(&config_json).map_err(|e| e.to_string())?;
+    let mut config: crate::backup::BackupConfig = serde_json::from_str(&config_json)?;
     crate::backup::load_secrets(&mut config)?;
     let op = crate::backup::build_operator(&config)?;
 
-    let book = match db::get_book(&conn, &book_id).map_err(|e| e.to_string())? {
+    let book = match db::get_book(&conn, &book_id)? {
         Some(b) => b,
-        None => return Err(format!("Book not found: {book_id}")),
+        None => return Err(FolioError::not_found(format!("Book not found: {book_id}"))),
     };
     let file_hash = match &book.file_hash {
         Some(h) => h.clone(),
         None => return Ok(()),
     };
-    let device_id = db::get_or_create_device_id(&conn).map_err(|e| e.to_string())?;
+    let device_id = db::get_or_create_device_id(&conn)?;
     let book_title = book.title.clone();
 
     drop(conn);
@@ -4050,10 +3990,10 @@ pub async fn sync_push_book(book_id: String, state: State<'_, AppState>) -> Resu
 pub async fn bulk_delete_books(
     book_ids: Vec<String>,
     state: State<'_, AppState>,
-) -> Result<u32, String> {
-    let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
+) -> FolioResult<u32> {
+    let conn = state.active_db()?.get()?;
     let ids_ref: Vec<&str> = book_ids.iter().map(|s| s.as_str()).collect();
-    db::bulk_delete_books(&conn, &ids_ref).map_err(|e| e.to_string())?;
+    db::bulk_delete_books(&conn, &ids_ref)?;
     log_activity(
         &conn,
         "bulk_delete",
@@ -4070,10 +4010,10 @@ pub async fn bulk_add_to_collection(
     book_ids: Vec<String>,
     collection_id: String,
     state: State<'_, AppState>,
-) -> Result<(), String> {
-    let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
+) -> FolioResult<()> {
+    let conn = state.active_db()?.get()?;
     let ids_ref: Vec<&str> = book_ids.iter().map(|s| s.as_str()).collect();
-    db::bulk_add_to_collection(&conn, &ids_ref, &collection_id).map_err(|e| e.to_string())?;
+    db::bulk_add_to_collection(&conn, &ids_ref, &collection_id)?;
     Ok(())
 }
 
@@ -4082,10 +4022,10 @@ pub async fn bulk_add_tag(
     book_ids: Vec<String>,
     tag: String,
     state: State<'_, AppState>,
-) -> Result<(), String> {
-    let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
+) -> FolioResult<()> {
+    let conn = state.active_db()?.get()?;
     let ids_ref: Vec<&str> = book_ids.iter().map(|s| s.as_str()).collect();
-    db::bulk_add_tag(&conn, &ids_ref, &tag).map_err(|e| e.to_string())?;
+    db::bulk_add_tag(&conn, &ids_ref, &tag)?;
     Ok(())
 }
 
@@ -4104,8 +4044,8 @@ pub async fn bulk_update_metadata(
     book_ids: Vec<String>,
     fields: BulkEditFields,
     state: State<'_, AppState>,
-) -> Result<u32, String> {
-    let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
+) -> FolioResult<u32> {
+    let conn = state.active_db()?.get()?;
     let ids_ref: Vec<&str> = book_ids.iter().map(|s| s.as_str()).collect();
 
     // Normalize strings with the same rules as update_book_metadata:
@@ -4128,7 +4068,7 @@ pub async fn bulk_update_metadata(
     let author = if let Some(s) = fields.author {
         let t = normalize_str(s, 500);
         if t.is_empty() {
-            return Err("Author cannot be empty.".to_string());
+            return Err(FolioError::invalid("Author cannot be empty."));
         }
         Some(t)
     } else {
@@ -4147,8 +4087,7 @@ pub async fn bulk_update_metadata(
         fields.publish_year,
         language.as_deref(),
         publisher.as_deref(),
-    )
-    .map_err(|e| e.to_string())?;
+    )?;
 
     log_activity(
         &conn,
@@ -4169,21 +4108,21 @@ pub async fn web_server_start(
     app: AppHandle,
     port: Option<u16>,
     state: State<'_, AppState>,
-) -> Result<String, String> {
+) -> FolioResult<String> {
     let port = port.unwrap_or(crate::web_server::DEFAULT_PORT);
 
     // Check if already running
     {
-        let handle = state.web_server_handle.lock().map_err(|e| e.to_string())?;
+        let handle = state.web_server_handle.lock()?;
         if handle.is_some() {
-            return Err("Web server is already running".to_string());
+            return Err(FolioError::invalid("Web server is already running"));
         }
     }
 
     // Sync the shared PIN hash from keychain before starting
     {
         let fresh = crate::web_server::auth::load_pin_hash();
-        let mut ph = state.shared_pin_hash.lock().map_err(|e| e.to_string())?;
+        let mut ph = state.shared_pin_hash.lock()?;
         *ph = fresh;
     }
 
@@ -4199,11 +4138,11 @@ pub async fn web_server_start(
     let url = handle.url.clone();
 
     {
-        let mut h = state.web_server_handle.lock().map_err(|e| e.to_string())?;
+        let mut h = state.web_server_handle.lock()?;
         *h = Some(handle);
     }
 
-    let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
+    let conn = state.active_db()?.get()?;
     log_activity(
         &conn,
         "web_server_started",
@@ -4224,31 +4163,31 @@ pub async fn web_server_start(
 }
 
 #[tauri::command]
-pub async fn web_server_stop(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+pub async fn web_server_stop(app: AppHandle, state: State<'_, AppState>) -> FolioResult<()> {
     let handle = {
-        let mut h = state.web_server_handle.lock().map_err(|e| e.to_string())?;
+        let mut h = state.web_server_handle.lock()?;
         h.take()
     };
 
     match handle {
         Some(h) => {
             crate::web_server::stop(h);
-            let conn = state.active_db()?.get().map_err(|e| e.to_string())?;
+            let conn = state.active_db()?.get()?;
             log_activity(&conn, "web_server_stopped", "system", None, None, None);
             let _ = db::set_setting(&conn, "web_server_enabled", "false");
             // Rebuild tray menu to reflect server stopped state
             let _ = crate::tray::rebuild_tray_menu(&app);
             Ok(())
         }
-        None => Err("Web server is not running".to_string()),
+        None => Err(FolioError::not_found("Web server is not running")),
     }
 }
 
 #[tauri::command]
 pub async fn web_server_status(
     state: State<'_, AppState>,
-) -> Result<crate::web_server::WebServerStatus, String> {
-    let handle = state.web_server_handle.lock().map_err(|e| e.to_string())?;
+) -> FolioResult<crate::web_server::WebServerStatus> {
+    let handle = state.web_server_handle.lock()?;
     let has_pin = crate::web_server::auth::load_pin_hash().is_some();
     match handle.as_ref() {
         Some(h) => Ok(crate::web_server::WebServerStatus {
@@ -4267,27 +4206,27 @@ pub async fn web_server_status(
 }
 
 #[tauri::command]
-pub async fn web_server_set_pin(pin: String, state: State<'_, AppState>) -> Result<(), String> {
+pub async fn web_server_set_pin(pin: String, state: State<'_, AppState>) -> FolioResult<()> {
     if pin.is_empty() {
-        return Err("PIN cannot be empty".to_string());
+        return Err(FolioError::invalid("PIN cannot be empty"));
     }
     crate::web_server::auth::store_pin(&pin)?;
 
     // Propagate new hash to the running web server (if any) via the shared Arc
     let new_hash = crate::web_server::auth::hash_pin(&pin);
-    let mut ph = state.shared_pin_hash.lock().map_err(|e| e.to_string())?;
+    let mut ph = state.shared_pin_hash.lock()?;
     *ph = Some(new_hash);
 
     Ok(())
 }
 
 #[tauri::command]
-pub async fn web_server_get_qr(state: State<'_, AppState>) -> Result<String, String> {
-    let handle = state.web_server_handle.lock().map_err(|e| e.to_string())?;
+pub async fn web_server_get_qr(state: State<'_, AppState>) -> FolioResult<String> {
+    let handle = state.web_server_handle.lock()?;
     let url = handle
         .as_ref()
         .map(|h| h.url.clone())
-        .ok_or_else(|| "Web server is not running".to_string())?;
+        .ok_or_else(|| FolioError::not_found("Web server is not running"))?;
     crate::web_server::auth::generate_qr_svg(&url)
 }
 
@@ -4396,7 +4335,9 @@ mod tests {
     fn validate_file_exists_returns_clear_error_for_missing_file() {
         let result = validate_file_exists("/nonexistent/path/book.epub");
         assert!(result.is_err());
-        let msg = result.unwrap_err();
+        let err = result.unwrap_err();
+        assert_eq!(err.kind(), "NotFound");
+        let msg = err.to_string();
         assert!(
             msg.contains("not found"),
             "error should mention 'not found': {msg}"
@@ -4448,15 +4389,15 @@ mod tests {
 // ── Autostart ──────────────────────────────────────────────
 
 #[tauri::command]
-pub async fn get_autostart_enabled(app: AppHandle) -> Result<bool, String> {
+pub async fn get_autostart_enabled(app: AppHandle) -> FolioResult<bool> {
     use tauri_plugin_autostart::ManagerExt;
     app.autolaunch()
         .is_enabled()
-        .map_err(|e| format!("Failed to check autostart: {}", e))
+        .map_err(|e| FolioError::internal(format!("Failed to check autostart: {}", e)))
 }
 
 #[tauri::command]
-pub async fn set_autostart_enabled(app: AppHandle, enabled: bool) -> Result<(), String> {
+pub async fn set_autostart_enabled(app: AppHandle, enabled: bool) -> FolioResult<()> {
     use tauri_plugin_autostart::ManagerExt;
 
     let autostart = app.autolaunch();

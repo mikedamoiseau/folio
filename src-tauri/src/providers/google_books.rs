@@ -1,5 +1,7 @@
 use super::{EnrichmentData, EnrichmentProvider, ProviderConfig};
 
+use crate::error::{FolioError, FolioResult};
+
 #[derive(Default)]
 pub struct GoogleBooksProvider {
     config: ProviderConfig,
@@ -28,7 +30,7 @@ impl EnrichmentProvider for GoogleBooksProvider {
         "Optional. Get a free key at https://console.cloud.google.com/apis/credentials for higher rate limits."
     }
 
-    fn search_by_isbn(&self, isbn: &str) -> Result<Vec<EnrichmentData>, String> {
+    fn search_by_isbn(&self, isbn: &str) -> FolioResult<Vec<EnrichmentData>> {
         let url = build_search_url(&format!("isbn:{}", isbn), &self.config);
         fetch_and_parse(&url)
     }
@@ -37,7 +39,7 @@ impl EnrichmentProvider for GoogleBooksProvider {
         &self,
         title: &str,
         author: Option<&str>,
-    ) -> Result<Vec<EnrichmentData>, String> {
+    ) -> FolioResult<Vec<EnrichmentData>> {
         let mut query = format!("intitle:{}", title);
         if let Some(a) = author {
             if !a.is_empty() {
@@ -72,13 +74,18 @@ fn build_search_url(query: &str, config: &ProviderConfig) -> String {
     url
 }
 
-fn fetch_and_parse(url: &str) -> Result<Vec<EnrichmentData>, String> {
-    let resp =
-        reqwest::blocking::get(url).map_err(|e| format!("Google Books search failed: {e}"))?;
+fn fetch_and_parse(url: &str) -> FolioResult<Vec<EnrichmentData>> {
+    let resp = reqwest::blocking::get(url)
+        .map_err(|e| FolioError::network(format!("Google Books search failed: {e}")))?;
     if !resp.status().is_success() {
-        return Err(format!("Google Books HTTP {}", resp.status()));
+        return Err(FolioError::network(format!(
+            "Google Books HTTP {}",
+            resp.status()
+        )));
     }
-    let json: serde_json::Value = resp.json().map_err(|e| format!("JSON parse error: {e}"))?;
+    let json: serde_json::Value = resp
+        .json()
+        .map_err(|e| FolioError::network(format!("JSON parse error: {e}")))?;
 
     // Google Books returns no `items` key when 0 results
     let items = match json["items"].as_array() {

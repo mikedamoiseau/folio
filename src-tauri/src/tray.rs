@@ -125,18 +125,13 @@ async fn toggle_web_server(app: &AppHandle) {
         };
         if let Some(h) = handle {
             crate::web_server::stop(h);
-            if let Ok(conn) = state
-                .active_db()
-                .and_then(|p| p.get().map_err(|e| e.to_string()))
-            {
+            if let Ok(conn) = state.active_db().and_then(|p| p.get().map_err(Into::into)) {
                 let _ = crate::db::set_setting(&conn, "web_server_enabled", "false");
             }
         }
     } else {
         let port = {
-            let conn = state
-                .active_db()
-                .and_then(|p| p.get().map_err(|e| e.to_string()));
+            let conn = state.active_db().and_then(|p| p.get().map_err(Into::into));
             conn.ok()
                 .and_then(|c| crate::db::get_setting(&c, "web_server_port").ok().flatten())
                 .and_then(|s| s.parse::<u16>().ok())
@@ -160,10 +155,7 @@ async fn toggle_web_server(app: &AppHandle) {
         if let Ok(handle) = crate::web_server::start(web_state, port).await {
             let mut h = state.web_server_handle.lock().unwrap();
             *h = Some(handle);
-            if let Ok(conn) = state
-                .active_db()
-                .and_then(|p| p.get().map_err(|e| e.to_string()))
-            {
+            if let Ok(conn) = state.active_db().and_then(|p| p.get().map_err(Into::into)) {
                 let _ = crate::db::set_setting(&conn, "web_server_enabled", "true");
                 let _ = crate::db::set_setting(&conn, "web_server_port", &port.to_string());
             }

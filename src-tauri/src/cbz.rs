@@ -3,6 +3,8 @@ use std::io::Read;
 use std::path::Path;
 use zip::ZipArchive;
 
+use crate::error::{FolioError, FolioResult};
+
 fn is_image(name: &str) -> bool {
     let lower = name.to_lowercase();
     lower.ends_with(".jpg")
@@ -28,11 +30,12 @@ fn collect_image_names(archive: &mut ZipArchive<std::fs::File>) -> Vec<String> {
     names
 }
 
-fn open_archive(path: &str) -> Result<ZipArchive<std::fs::File>, String> {
-    let file = std::fs::File::open(path).map_err(|e| format!("Cannot open file: {e}"))?;
-    let mut archive =
-        ZipArchive::new(file).map_err(|e| format!("Not a valid ZIP/CBZ archive: {e}"))?;
-    crate::epub::validate_archive(&mut archive).map_err(|e| e.to_string())?;
+fn open_archive(path: &str) -> FolioResult<ZipArchive<std::fs::File>> {
+    let file =
+        std::fs::File::open(path).map_err(|e| FolioError::io(format!("Cannot open file: {e}")))?;
+    let mut archive = ZipArchive::new(file)
+        .map_err(|e| FolioError::invalid(format!("Not a valid ZIP/CBZ archive: {e}")))?;
+    crate::epub::validate_archive(&mut archive)?;
     Ok(archive)
 }
 
@@ -53,11 +56,13 @@ pub struct CbzMeta {
 /// Opens a CBZ archive and returns its title (filename stem) and page count.
 /// Also parses ComicInfo.xml if present for additional metadata.
 /// Returns an error if the file is not a valid ZIP or contains no supported images.
-pub fn import_cbz(path: &str) -> Result<CbzMeta, String> {
+pub fn import_cbz(path: &str) -> FolioResult<CbzMeta> {
     let mut archive = open_archive(path)?;
     let images = collect_image_names(&mut archive);
     if images.is_empty() {
-        return Err("CBZ archive contains no supported image files".to_string());
+        return Err(FolioError::invalid(
+            "CBZ archive contains no supported image files",
+        ));
     }
     let title = Path::new(path)
         .file_stem()
@@ -111,7 +116,7 @@ pub fn import_cbz(path: &str) -> Result<CbzMeta, String> {
 }
 
 /// Returns the number of image pages in a CBZ archive.
-pub fn get_page_count(path: &str) -> Result<u32, String> {
+pub fn get_page_count(path: &str) -> FolioResult<u32> {
     let mut archive = open_archive(path)?;
     let images = collect_image_names(&mut archive);
     Ok(images.len() as u32)
@@ -119,28 +124,28 @@ pub fn get_page_count(path: &str) -> Result<u32, String> {
 
 /// Extracts a single page image and returns it as a base64 data URI
 /// (e.g. `data:image/jpeg;base64,...`).
-pub fn get_page_image(path: &str, page_index: u32) -> Result<String, String> {
+pub fn get_page_image(path: &str, page_index: u32) -> FolioResult<String> {
     let mut archive = open_archive(path)?;
     let images = collect_image_names(&mut archive);
 
     let name = images
         .get(page_index as usize)
         .ok_or_else(|| {
-            format!(
+            FolioError::not_found(format!(
                 "Page index {page_index} out of range (total pages: {})",
                 images.len()
-            )
+            ))
         })?
         .clone();
 
     let mut entry = archive
         .by_name(&name)
-        .map_err(|e| format!("Cannot read page '{name}': {e}"))?;
+        .map_err(|e| FolioError::not_found(format!("Cannot read page '{name}': {e}")))?;
 
     let mut data = Vec::new();
     entry
         .read_to_end(&mut data)
-        .map_err(|e| format!("Cannot read image data: {e}"))?;
+        .map_err(|e| FolioError::io(format!("Cannot read image data: {e}")))?;
 
     let lower = name.to_lowercase();
     let mime = if lower.ends_with(".png") {
@@ -159,28 +164,28 @@ pub fn get_page_image(path: &str, page_index: u32) -> Result<String, String> {
 
 /// Extracts a single page image and returns raw bytes + mime type.
 /// Avoids the base64 encode/decode round-trip for web serving.
-pub fn get_page_image_bytes(path: &str, page_index: u32) -> Result<(Vec<u8>, String), String> {
+pub fn get_page_image_bytes(path: &str, page_index: u32) -> FolioResult<(Vec<u8>, String)> {
     let mut archive = open_archive(path)?;
     let images = collect_image_names(&mut archive);
 
     let name = images
         .get(page_index as usize)
         .ok_or_else(|| {
-            format!(
+            FolioError::not_found(format!(
                 "Page index {page_index} out of range (total pages: {})",
                 images.len()
-            )
+            ))
         })?
         .clone();
 
     let mut entry = archive
         .by_name(&name)
-        .map_err(|e| format!("Cannot read page '{name}': {e}"))?;
+        .map_err(|e| FolioError::not_found(format!("Cannot read page '{name}': {e}")))?;
 
     let mut data = Vec::new();
     entry
         .read_to_end(&mut data)
-        .map_err(|e| format!("Cannot read image data: {e}"))?;
+        .map_err(|e| FolioError::io(format!("Cannot read image data: {e}")))?;
 
     let lower = name.to_lowercase();
     let mime = if lower.ends_with(".png") {
@@ -288,7 +293,10 @@ mod tests {
 
         let result = import_cbz(cbz_path.to_str().unwrap());
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("no supported image files"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("no supported image files"));
     }
 
     #[test]
@@ -323,7 +331,7 @@ mod tests {
 
         let result = get_page_image(cbz_path.to_str().unwrap(), 5);
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("out of range"));
+        assert!(result.unwrap_err().to_string().contains("out of range"));
     }
 
     #[test]

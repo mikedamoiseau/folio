@@ -78,7 +78,7 @@ export default function CatalogBrowser({ onClose, onBookImported }: CatalogBrows
       setFeed(f);
       setHistory((prev) => [...prev, { url, title: title ?? f.title }]);
     } catch (err) {
-      setError(friendlyError(String(err), t));
+      setError(friendlyError(err, t));
     } finally {
       setLoading(false);
     }
@@ -109,7 +109,7 @@ export default function CatalogBrowser({ onClose, onBookImported }: CatalogBrows
       setFeed(f);
       setHistory((prev) => [...prev, { url, title: `Search: ${searchQuery}` }]);
     } catch (err) {
-      setError(friendlyError(String(err), t));
+      setError(friendlyError(err, t));
     } finally {
       setLoading(false);
     }
@@ -128,7 +128,7 @@ export default function CatalogBrowser({ onClose, onBookImported }: CatalogBrows
       setDownloadedIds((prev) => new Set(prev).add(entry.id));
       onBookImported();
     } catch (err) {
-      setError(t("catalog.downloadFailed", { title: entry.title, error: friendlyError(String(err), t) }));
+      setError(t("catalog.downloadFailed", { title: entry.title, error: friendlyError(err, t) }));
     } finally {
       setDownloading(null);
     }
@@ -143,7 +143,7 @@ export default function CatalogBrowser({ onClose, onBookImported }: CatalogBrows
       setShowAddCatalog(false);
       await loadCatalogs();
     } catch (err) {
-      setError(friendlyError(String(err), t));
+      setError(friendlyError(err, t));
     }
   };
 
@@ -152,7 +152,7 @@ export default function CatalogBrowser({ onClose, onBookImported }: CatalogBrows
       await invoke("remove_opds_catalog", { url });
       await loadCatalogs();
     } catch (err) {
-      setError(friendlyError(String(err), t));
+      setError(friendlyError(err, t));
     }
   };
 
@@ -164,7 +164,7 @@ export default function CatalogBrowser({ onClose, onBookImported }: CatalogBrows
       const results = await invoke<OpdsEntry[]>("search_all_catalogs", { query: unifiedQuery.trim() });
       setUnifiedResults(results);
     } catch (err) {
-      setError(friendlyError(String(err), t));
+      setError(friendlyError(err, t));
     } finally {
       setUnifiedLoading(false);
     }

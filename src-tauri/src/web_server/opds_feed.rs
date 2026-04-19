@@ -6,7 +6,7 @@ use axum::{
     Router,
 };
 
-use super::WebState;
+use super::{folio_status, WebState};
 use crate::db;
 use crate::models::Book;
 
@@ -148,11 +148,8 @@ async fn all_books(
     State(state): State<WebState>,
     Query(params): Query<PaginationQuery>,
 ) -> Result<Response, (StatusCode, String)> {
-    let conn = state
-        .conn()
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
-    let books =
-        db::list_books(&conn).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let conn = state.conn().map_err(folio_status)?;
+    let books = db::list_books(&conn).map_err(folio_status)?;
 
     let page = params.page.unwrap_or(0);
     let start = page * OPDS_PAGE_SIZE;
@@ -189,11 +186,8 @@ async fn all_books(
 }
 
 async fn new_books(State(state): State<WebState>) -> Result<Response, (StatusCode, String)> {
-    let conn = state
-        .conn()
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
-    let mut books =
-        db::list_books(&conn).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let conn = state.conn().map_err(folio_status)?;
+    let mut books = db::list_books(&conn).map_err(folio_status)?;
 
     // Sort by added_at descending, take 25 most recent
     books.sort_by(|a, b| b.added_at.cmp(&a.added_at));
@@ -221,11 +215,8 @@ async fn collection_feed(
     State(state): State<WebState>,
     Path(id): Path<String>,
 ) -> Result<Response, (StatusCode, String)> {
-    let conn = state
-        .conn()
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
-    let books = db::get_books_in_collection(&conn, &id)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let conn = state.conn().map_err(folio_status)?;
+    let books = db::get_books_in_collection(&conn, &id).map_err(folio_status)?;
 
     let entries: String = books
         .iter()
@@ -254,11 +245,8 @@ async fn search_books(
     State(state): State<WebState>,
     Query(params): Query<SearchQuery>,
 ) -> Result<Response, (StatusCode, String)> {
-    let conn = state
-        .conn()
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
-    let books =
-        db::list_books(&conn).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let conn = state.conn().map_err(folio_status)?;
+    let books = db::list_books(&conn).map_err(folio_status)?;
 
     let filtered: Vec<Book> = match params.q {
         Some(ref q) if !q.is_empty() => {

@@ -202,7 +202,7 @@ export default function Library() {
         setFilterTagIds([]);
       }
     } catch (err) {
-      setError(friendlyError(String(err), t));
+      setError(friendlyError(err, t));
     } finally {
       setLoaded(true);
     }
@@ -273,7 +273,7 @@ export default function Library() {
         await invoke("remove_book", { bookId });
         await loadBooks(activeCollectionIdRef.current);
       } catch (err) {
-        setError(friendlyError(String(err), t));
+        setError(friendlyError(err, t));
       }
     },
     [loadBooks]
@@ -287,7 +287,7 @@ export default function Library() {
         try {
           fullBook = await invoke<Book>("get_book", { bookId });
         } catch (err) {
-          setError(friendlyError(String(err), t));
+          setError(friendlyError(err, t));
           return;
         }
         if (fullBook) {
@@ -322,7 +322,7 @@ export default function Library() {
           if (msg.includes("duplicate") || msg.includes("already")) {
             results.duplicates++;
           } else {
-            results.errors.push(`${paths[i].split("/").pop()}: ${friendlyError(msg, t)}`);
+            results.errors.push(`${paths[i].split("/").pop()}: ${friendlyError(err, t)}`);
           }
         }
       }
@@ -369,7 +369,7 @@ export default function Library() {
       }
       await importFiles(files);
     } catch (err) {
-      setError(friendlyError(String(err), t));
+      setError(friendlyError(err, t));
       setImporting(false);
     }
   }, [importFiles]);
@@ -392,7 +392,7 @@ export default function Library() {
       const paths = Array.isArray(selected) ? selected : [selected];
       await importFiles(paths);
     } catch (err) {
-      setError(friendlyError(String(err), t));
+      setError(friendlyError(err, t));
     }
   }, [importFiles]);
 
@@ -403,7 +403,7 @@ export default function Library() {
       await invoke("download_opds_book", { downloadUrl: url });
       await loadBooks(activeCollectionIdRef.current);
     } catch (err) {
-      setError(friendlyError(String(err), t));
+      setError(friendlyError(err, t));
     } finally {
       setImporting(false);
     }
@@ -502,7 +502,7 @@ export default function Library() {
       const found = await invoke<Book>("get_book", { bookId: id });
       if (found && latestDetailRequestRef.current === id) setDetailBook(found);
     } catch (err) {
-      addToast(friendlyError(String(err), t), "error");
+      addToast(friendlyError(err, t), "error");
     } finally {
       if (latestDetailRequestRef.current === id) setDetailLoading(false);
     }
@@ -515,7 +515,7 @@ export default function Library() {
       const book = await invoke<Book>("get_book", { bookId: id });
       if (book && latestEditRequestRef.current === id) setEditingBook(book);
     } catch (err) {
-      addToast(friendlyError(String(err), t), "error");
+      addToast(friendlyError(err, t), "error");
     }
   }, [t, addToast]);
 
@@ -602,7 +602,7 @@ export default function Library() {
   }, [loadBooks]);
 
   const handleStartScan = useCallback(async () => {
-    try { await invoke("start_scan", { includeSkipped: true }); } catch (err) { setError(friendlyError(String(err), t)); }
+    try { await invoke("start_scan", { includeSkipped: true }); } catch (err) { setError(friendlyError(err, t)); }
   }, []);
   const handleCancelScan = useCallback(async () => {
     try { await invoke("cancel_scan"); } catch {}
@@ -999,7 +999,7 @@ export default function Library() {
                                 await loadBooks(activeCollectionIdRef.current);
                                 setDiscoverBooks((prev) => prev.filter((e) => e.id !== entry.id));
                               } catch (err) {
-                                setError(friendlyError(String(err), t));
+                                setError(friendlyError(err, t));
                               }
                             }}
                             className="mt-1 text-[10px] font-medium text-accent hover:text-accent-hover transition-colors"
@@ -1416,7 +1416,7 @@ export default function Library() {
             const updated = await invoke<Collection[]>("get_collections");
             setCollections(updated);
           } catch (err) {
-            setError(friendlyError(String(err), t));
+            setError(friendlyError(err, t));
           }
         }}
         onEdit={async (id: string, data: CreateCollectionData) => {
@@ -1435,7 +1435,7 @@ export default function Library() {
               await loadBooks(id);
             }
           } catch (err) {
-            setError(friendlyError(String(err), t));
+            setError(friendlyError(err, t));
           }
         }}
         onDelete={async (id: string) => {
@@ -1445,7 +1445,7 @@ export default function Library() {
             setCollections(updated);
             if (activeCollectionIdRef.current === id) setActiveCollectionId(null);
           } catch (err) {
-            setError(friendlyError(String(err), t));
+            setError(friendlyError(err, t));
           }
         }}
         onDropBook={async (bookId: string, collectionId: string) => {
@@ -1455,7 +1455,7 @@ export default function Library() {
               await loadBooks(collectionId);
             }
           } catch (err) {
-            setError(friendlyError(String(err), t));
+            setError(friendlyError(err, t));
           }
         }}
       />
@@ -1526,7 +1526,7 @@ export default function Library() {
                 setSelectedIds(new Set());
                 setSelectMode(false);
                 await loadBooks(activeCollectionIdRef.current);
-              } catch (e) { addToast(friendlyError(String(e), t), "error"); }
+              } catch (e) { addToast(friendlyError(e, t), "error"); }
             }}
             className="text-red-400 hover:text-red-300 text-xs font-medium"
           >

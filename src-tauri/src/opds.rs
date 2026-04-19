@@ -3,6 +3,8 @@ use quick_xml::Reader;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
+use crate::error::{FolioError, FolioResult};
+
 /// Maximum time to wait for an OPDS HTTP response.
 const HTTP_TIMEOUT: Duration = Duration::from_secs(15);
 
@@ -95,38 +97,42 @@ pub struct OpdsFeed {
 }
 
 /// Build a reqwest client with timeout.
-fn http_client() -> Result<reqwest::blocking::Client, String> {
+fn http_client() -> FolioResult<reqwest::blocking::Client> {
     reqwest::blocking::Client::builder()
         .timeout(HTTP_TIMEOUT)
         .redirect(reqwest::redirect::Policy::limited(5))
         .build()
-        .map_err(|e| format!("HTTP client error: {e}"))
+        .map_err(|e| FolioError::network(format!("HTTP client error: {e}")))
 }
 
 /// Fetch and parse an OPDS feed from a URL.
-pub fn fetch_feed(url: &str) -> Result<OpdsFeed, String> {
+pub fn fetch_feed(url: &str) -> FolioResult<OpdsFeed> {
     if !is_safe_url(url) {
-        return Err("URL blocked: only public HTTP/HTTPS URLs are allowed.".to_string());
+        return Err(FolioError::invalid(
+            "URL blocked: only public HTTP/HTTPS URLs are allowed.",
+        ));
     }
     let client = http_client()?;
     let response = client
         .get(url)
         .header("User-Agent", "Folio/1.2 (OPDS reader)")
         .send()
-        .map_err(|e| format!("HTTP error: {e}"))?;
+        .map_err(|e| FolioError::network(format!("HTTP error: {e}")))?;
     if !response.status().is_success() {
-        return Err(format!("HTTP {}", response.status()));
+        return Err(FolioError::network(format!("HTTP {}", response.status())));
     }
-    let bytes = response.bytes().map_err(|e| format!("Read error: {e}"))?;
+    let bytes = response
+        .bytes()
+        .map_err(|e| FolioError::network(format!("Read error: {e}")))?;
     if bytes.len() > MAX_RESPONSE_BYTES {
-        return Err("Response too large (limit: 5 MB).".to_string());
+        return Err(FolioError::invalid("Response too large (limit: 5 MB)."));
     }
     let xml = String::from_utf8_lossy(&bytes).to_string();
     parse_feed(&xml, url)
 }
 
 /// Parse OPDS/Atom XML into structured data.
-fn parse_feed(xml: &str, base_url: &str) -> Result<OpdsFeed, String> {
+fn parse_feed(xml: &str, base_url: &str) -> FolioResult<OpdsFeed> {
     let mut reader = Reader::from_str(xml);
     reader.config_mut().trim_text(true);
 
@@ -333,7 +339,7 @@ fn parse_feed(xml: &str, base_url: &str) -> Result<OpdsFeed, String> {
                 }
             }
             Ok(Event::Eof) => break,
-            Err(e) => return Err(format!("XML parse error: {e}")),
+            Err(e) => return Err(FolioError::invalid(format!("XML parse error: {e}"))),
             _ => {}
         }
         buf.clear();
@@ -639,22 +645,26 @@ pub fn url_encode(s: &str) -> String {
 }
 
 /// Download a file from a URL to a local path.
-pub fn download_file(url: &str, dest: &str) -> Result<(), String> {
+pub fn download_file(url: &str, dest: &str) -> FolioResult<()> {
     if !is_safe_url(url) {
-        return Err("URL blocked: only public HTTP/HTTPS URLs are allowed.".to_string());
+        return Err(FolioError::invalid(
+            "URL blocked: only public HTTP/HTTPS URLs are allowed.",
+        ));
     }
     let client = reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(120)) // longer timeout for file downloads
         .build()
-        .map_err(|e| format!("HTTP client error: {e}"))?;
+        .map_err(|e| FolioError::network(format!("HTTP client error: {e}")))?;
     let response = client
         .get(url)
         .send()
-        .map_err(|e| format!("Download failed: {e}"))?;
+        .map_err(|e| FolioError::network(format!("Download failed: {e}")))?;
     if !response.status().is_success() {
-        return Err(format!("HTTP {}", response.status()));
+        return Err(FolioError::network(format!("HTTP {}", response.status())));
     }
-    let bytes = response.bytes().map_err(|e| format!("Read error: {e}"))?;
-    std::fs::write(dest, &bytes).map_err(|e| format!("Write error: {e}"))?;
+    let bytes = response
+        .bytes()
+        .map_err(|e| FolioError::network(format!("Read error: {e}")))?;
+    std::fs::write(dest, &bytes).map_err(|e| FolioError::io(format!("Write error: {e}")))?;
     Ok(())
 }

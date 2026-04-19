@@ -559,6 +559,9 @@
     "tooLarge": "The file or response is too large.",
     "notZip": "This file is not a valid ZIP/CBZ archive. It may be a RAR file with a .cbz extension \u2014 try renaming it to .cbr.",
     "notRar": "This file is not a valid RAR/CBR archive.",
+    "invalidInput": "The input was not valid. Please check and try again.",
+    "database": "A database error occurred. Please try again.",
+    "io": "A file system error occurred. Please try again.",
     "generic": "Something went wrong. Please try again."
   },
 

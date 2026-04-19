@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use zip::ZipArchive;
 
+use crate::error::{FolioError, FolioResult};
 use crate::models::BookFormat;
 
 /// Enable with: FOLIO_DEBUG_PAGES=1
@@ -82,11 +83,12 @@ pub fn write_manifest(
     app_cache_dir: &Path,
     book_hash: &str,
     manifest: &CacheManifest,
-) -> Result<(), String> {
+) -> FolioResult<()> {
     let dir = book_cache_dir(app_cache_dir, book_hash);
     let manifest_path = dir.join("manifest.json");
-    let json = serde_json::to_string_pretty(manifest).map_err(|e| e.to_string())?;
-    fs::write(manifest_path, json).map_err(|e| format!("Failed to write manifest: {e}"))
+    let json = serde_json::to_string_pretty(manifest)?;
+    fs::write(manifest_path, json)
+        .map_err(|e| FolioError::io(format!("Failed to write manifest: {e}")))
 }
 
 fn now_iso() -> String {
@@ -123,9 +125,11 @@ pub fn extract_cbz(
     book_id: &str,
     book_hash: &str,
     file_path: &str,
-) -> Result<CacheManifest, String> {
-    let file = fs::File::open(file_path).map_err(|e| format!("Failed to open CBZ: {e}"))?;
-    let mut archive = ZipArchive::new(file).map_err(|e| format!("Invalid CBZ archive: {e}"))?;
+) -> FolioResult<CacheManifest> {
+    let file = fs::File::open(file_path)
+        .map_err(|e| FolioError::io(format!("Failed to open CBZ: {e}")))?;
+    let mut archive = ZipArchive::new(file)
+        .map_err(|e| FolioError::invalid(format!("Invalid CBZ archive: {e}")))?;
 
     let mut image_names: Vec<String> = (0..archive.len())
         .filter_map(|i| {
@@ -141,7 +145,8 @@ pub fn extract_cbz(
     image_names.sort();
 
     let dir = book_cache_dir(app_cache_dir, book_hash);
-    fs::create_dir_all(&dir).map_err(|e| format!("Failed to create cache dir: {e}"))?;
+    fs::create_dir_all(&dir)
+        .map_err(|e| FolioError::io(format!("Failed to create cache dir: {e}")))?;
 
     let mut pages: Vec<String> = Vec::new();
     let mut total_size: u64 = 0;
@@ -149,16 +154,17 @@ pub fn extract_cbz(
     for (idx, name) in image_names.iter().enumerate() {
         let mut entry = archive
             .by_name(name)
-            .map_err(|e| format!("Failed to read entry {name}: {e}"))?;
+            .map_err(|e| FolioError::invalid(format!("Failed to read entry {name}: {e}")))?;
         let mut data = Vec::new();
         entry
             .read_to_end(&mut data)
-            .map_err(|e| format!("Failed to extract {name}: {e}"))?;
+            .map_err(|e| FolioError::io(format!("Failed to extract {name}: {e}")))?;
 
         let ext = file_extension(name).to_lowercase();
         let page_filename = format!("{:03}{}", idx, ext);
         let page_path = dir.join(&page_filename);
-        fs::write(&page_path, &data).map_err(|e| format!("Failed to write page {idx}: {e}"))?;
+        fs::write(&page_path, &data)
+            .map_err(|e| FolioError::io(format!("Failed to write page {idx}: {e}")))?;
 
         total_size += data.len() as u64;
         pages.push(page_filename);
@@ -188,15 +194,16 @@ pub fn extract_cbr(
     book_id: &str,
     book_hash: &str,
     file_path: &str,
-) -> Result<CacheManifest, String> {
+) -> FolioResult<CacheManifest> {
     // First pass: collect sorted image names
     let mut image_names: Vec<String> = Vec::new();
     {
         let archive = unrar::Archive::new(file_path)
             .open_for_listing()
-            .map_err(|e| format!("Failed to open CBR for listing: {e}"))?;
+            .map_err(|e| FolioError::invalid(format!("Failed to open CBR for listing: {e}")))?;
         for entry in archive {
-            let entry = entry.map_err(|e| format!("Failed to read CBR entry: {e}"))?;
+            let entry =
+                entry.map_err(|e| FolioError::invalid(format!("Failed to read CBR entry: {e}")))?;
             let name = entry.filename.to_string_lossy().to_string();
             if !entry.is_directory() && is_image_ext(&name) {
                 image_names.push(name);
@@ -206,7 +213,8 @@ pub fn extract_cbr(
     image_names.sort();
 
     let dir = book_cache_dir(app_cache_dir, book_hash);
-    fs::create_dir_all(&dir).map_err(|e| format!("Failed to create cache dir: {e}"))?;
+    fs::create_dir_all(&dir)
+        .map_err(|e| FolioError::io(format!("Failed to create cache dir: {e}")))?;
 
     // Build name->index map
     let name_to_idx: HashMap<String, usize> = image_names
@@ -219,32 +227,32 @@ pub fn extract_cbr(
 
     let archive = unrar::Archive::new(file_path)
         .open_for_processing()
-        .map_err(|e| format!("Failed to open CBR for processing: {e}"))?;
+        .map_err(|e| FolioError::invalid(format!("Failed to open CBR for processing: {e}")))?;
 
     let mut cursor = archive;
     loop {
         let header = cursor
             .read_header()
-            .map_err(|e| format!("Error reading CBR header: {e}"))?;
+            .map_err(|e| FolioError::invalid(format!("Error reading CBR header: {e}")))?;
         match header {
             None => break,
             Some(entry) => {
                 let entry_name = entry.entry().filename.to_string_lossy().to_string();
                 if let Some(&idx) = name_to_idx.get(&entry_name) {
-                    let (data, next) = entry
-                        .read()
-                        .map_err(|e| format!("Failed to extract CBR entry: {e}"))?;
+                    let (data, next) = entry.read().map_err(|e| {
+                        FolioError::invalid(format!("Failed to extract CBR entry: {e}"))
+                    })?;
                     let ext = file_extension(&entry_name).to_lowercase();
                     let page_filename = format!("{:03}{}", idx, ext);
                     let page_path = dir.join(&page_filename);
                     fs::write(&page_path, &data)
-                        .map_err(|e| format!("Failed to write page {idx}: {e}"))?;
+                        .map_err(|e| FolioError::io(format!("Failed to write page {idx}: {e}")))?;
                     pages_data.push((idx, page_filename, data.len() as u64));
                     cursor = next;
                 } else {
-                    cursor = entry
-                        .skip()
-                        .map_err(|e| format!("Failed to skip CBR entry: {e}"))?;
+                    cursor = entry.skip().map_err(|e| {
+                        FolioError::invalid(format!("Failed to skip CBR entry: {e}"))
+                    })?;
                 }
             }
         }
@@ -277,20 +285,20 @@ pub fn get_cached_page(
     app_cache_dir: &Path,
     book_hash: &str,
     page_index: u32,
-) -> Result<(Vec<u8>, String), String> {
+) -> FolioResult<(Vec<u8>, String)> {
     let manifest = read_manifest(app_cache_dir, book_hash)
-        .ok_or_else(|| "Cache manifest not found".to_string())?;
+        .ok_or_else(|| FolioError::not_found("Cache manifest not found"))?;
 
     let page_name = manifest.pages.get(page_index as usize).ok_or_else(|| {
-        format!(
+        FolioError::not_found(format!(
             "Page index {page_index} out of range (total: {})",
             manifest.page_count
-        )
+        ))
     })?;
 
     let page_path = book_cache_dir(app_cache_dir, book_hash).join(page_name);
     let data = fs::read(&page_path)
-        .map_err(|e| format!("Failed to read cached page {page_index}: {e}"))?;
+        .map_err(|e| FolioError::io(format!("Failed to read cached page {page_index}: {e}")))?;
 
     let mime = if page_name.ends_with(".png") {
         "image/png"
@@ -311,7 +319,7 @@ pub fn ensure_cached(
     book_hash: &str,
     file_path: &str,
     format: &BookFormat,
-) -> Result<CacheManifest, String> {
+) -> FolioResult<CacheManifest> {
     if let Some(mut manifest) = read_manifest(app_cache_dir, book_hash) {
         let dir = book_cache_dir(app_cache_dir, book_hash);
         let first_ok = manifest.pages.first().is_some_and(|p| dir.join(p).exists());
@@ -339,7 +347,10 @@ pub fn ensure_cached(
     let result = match format {
         BookFormat::Cbz => extract_cbz(app_cache_dir, book_id, book_hash, file_path),
         BookFormat::Cbr => extract_cbr(app_cache_dir, book_id, book_hash, file_path),
-        _ => Err(format!("Page cache not supported for format: {:?}", format)),
+        _ => Err(FolioError::invalid(format!(
+            "Page cache not supported for format: {:?}",
+            format
+        ))),
     };
     page_dbg!("ensure_cached: extraction took {:?}", start.elapsed());
     result
@@ -365,12 +376,13 @@ fn collect_cached_books(app_cache_dir: &Path) -> Vec<CacheManifest> {
         .collect()
 }
 
-fn evict_book(app_cache_dir: &Path, book_hash: &str) -> Result<(), String> {
+fn evict_book(app_cache_dir: &Path, book_hash: &str) -> FolioResult<()> {
     let dir = book_cache_dir(app_cache_dir, book_hash);
-    fs::remove_dir_all(dir).map_err(|e| format!("Failed to evict cache for {book_hash}: {e}"))
+    fs::remove_dir_all(dir)
+        .map_err(|e| FolioError::io(format!("Failed to evict cache for {book_hash}: {e}")))
 }
 
-pub fn run_eviction(app_cache_dir: &Path, max_size_mb: u64) -> Result<(), String> {
+pub fn run_eviction(app_cache_dir: &Path, max_size_mb: u64) -> FolioResult<()> {
     let mut books = collect_cached_books(app_cache_dir);
     books.sort_by(|a, b| a.last_accessed.cmp(&b.last_accessed));
 
@@ -427,10 +439,11 @@ pub fn get_cache_stats(app_cache_dir: &Path) -> CacheStats {
     }
 }
 
-pub fn clear_cache(app_cache_dir: &Path) -> Result<(), String> {
+pub fn clear_cache(app_cache_dir: &Path) -> FolioResult<()> {
     let root = cache_root(app_cache_dir);
     if root.exists() {
-        fs::remove_dir_all(root).map_err(|e| format!("Failed to clear cache: {e}"))?;
+        fs::remove_dir_all(root)
+            .map_err(|e| FolioError::io(format!("Failed to clear cache: {e}")))?;
     }
     Ok(())
 }

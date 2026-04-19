@@ -6,7 +6,7 @@ use axum::{
     Json, Router,
 };
 
-use super::WebState;
+use super::{folio_status, WebState};
 use crate::db;
 use crate::models::BookFormat;
 
@@ -93,8 +93,7 @@ async fn login(
     // Successful login — clear rate limit entries for this IP
     state.login_limiter.clear(&client_ip);
 
-    let token =
-        super::auth::create_session(&state).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    let token = super::auth::create_session(&state).map_err(folio_status)?;
     let cookie = format!("folio_session={token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=86400");
     let body = Json(LoginResponse {
         token: token.clone(),
@@ -116,11 +115,8 @@ async fn list_books(
     State(state): State<WebState>,
     Query(params): Query<BookQuery>,
 ) -> Result<Json<Vec<crate::models::BookGridItem>>, (StatusCode, String)> {
-    let conn = state
-        .conn()
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
-    let books = db::list_books_grid(&conn)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let conn = state.conn().map_err(folio_status)?;
+    let books = db::list_books_grid(&conn).map_err(folio_status)?;
 
     let books = match params.series {
         Some(ref s) if !s.is_empty() => books
@@ -181,11 +177,9 @@ async fn get_book(
     State(state): State<WebState>,
     Path(id): Path<String>,
 ) -> Result<Json<crate::models::Book>, (StatusCode, String)> {
-    let conn = state
-        .conn()
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    let conn = state.conn().map_err(folio_status)?;
     let book = db::get_book(&conn, &id)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .map_err(folio_status)?
         .ok_or_else(|| (StatusCode::NOT_FOUND, "Book not found".to_string()))?;
     Ok(Json(book))
 }
@@ -196,19 +190,16 @@ async fn get_cover(
     State(state): State<WebState>,
     Path(id): Path<String>,
 ) -> Result<Response, (StatusCode, String)> {
-    let conn = state
-        .conn()
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    let conn = state.conn().map_err(folio_status)?;
     let book = db::get_book(&conn, &id)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .map_err(folio_status)?
         .ok_or_else(|| (StatusCode::NOT_FOUND, "Book not found".to_string()))?;
 
     let cover_path = book
         .cover_path
         .ok_or_else(|| (StatusCode::NOT_FOUND, "No cover available".to_string()))?;
 
-    let bytes = std::fs::read(&cover_path)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let bytes = std::fs::read(&cover_path).map_err(folio_status)?;
 
     let mime = mime_guess::from_path(&cover_path)
         .first_or_octet_stream()
@@ -230,19 +221,16 @@ async fn get_chapters(
     State(state): State<WebState>,
     Path(id): Path<String>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    let conn = state
-        .conn()
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    let conn = state.conn().map_err(folio_status)?;
     let book = db::get_book(&conn, &id)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .map_err(folio_status)?
         .ok_or_else(|| (StatusCode::NOT_FOUND, "Book not found".to_string()))?;
 
     if book.format != BookFormat::Epub {
         return Err((StatusCode::BAD_REQUEST, "Not an EPUB book".to_string()));
     }
 
-    let toc = crate::epub::get_toc(&book.file_path)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let toc = crate::epub::get_toc(&book.file_path).map_err(folio_status)?;
 
     Ok(Json(serde_json::to_value(toc).unwrap_or_default()))
 }
@@ -251,11 +239,9 @@ async fn get_chapter_content(
     State(state): State<WebState>,
     Path((id, index)): Path<(String, usize)>,
 ) -> Result<Response, (StatusCode, String)> {
-    let conn = state
-        .conn()
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    let conn = state.conn().map_err(folio_status)?;
     let book = db::get_book(&conn, &id)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .map_err(folio_status)?
         .ok_or_else(|| (StatusCode::NOT_FOUND, "Book not found".to_string()))?;
 
     if book.format != BookFormat::Epub {
@@ -264,7 +250,7 @@ async fn get_chapter_content(
 
     let data_dir = state.data_dir.to_string_lossy().to_string();
     let html = crate::epub::get_chapter_content(&book.file_path, index, &data_dir, &id)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(folio_status)?;
 
     // Rewrite asset:// URLs to HTTP URLs for web serving
     let html = rewrite_asset_urls_to_http(&html, &id, index);
@@ -418,27 +404,25 @@ async fn get_page_image(
     State(state): State<WebState>,
     Path((id, index)): Path<(String, u32)>,
 ) -> Result<Response, (StatusCode, String)> {
-    let conn = state
-        .conn()
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    let conn = state.conn().map_err(folio_status)?;
     let book = db::get_book(&conn, &id)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .map_err(folio_status)?
         .ok_or_else(|| (StatusCode::NOT_FOUND, "Book not found".to_string()))?;
 
     match book.format {
         BookFormat::Pdf => {
-            let (bytes, mime) = crate::pdf::get_page_image_bytes(&book.file_path, index)
-                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+            let (bytes, mime) =
+                crate::pdf::get_page_image_bytes(&book.file_path, index).map_err(folio_status)?;
             Ok(([(header::CONTENT_TYPE, mime.to_string())], bytes).into_response())
         }
         BookFormat::Cbz => {
-            let (bytes, mime) = crate::cbz::get_page_image_bytes(&book.file_path, index)
-                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+            let (bytes, mime) =
+                crate::cbz::get_page_image_bytes(&book.file_path, index).map_err(folio_status)?;
             Ok(([(header::CONTENT_TYPE, mime)], bytes).into_response())
         }
         BookFormat::Cbr => {
-            let (bytes, mime) = crate::cbr::get_page_image_bytes(&book.file_path, index)
-                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+            let (bytes, mime) =
+                crate::cbr::get_page_image_bytes(&book.file_path, index).map_err(folio_status)?;
             Ok(([(header::CONTENT_TYPE, mime)], bytes).into_response())
         }
         _ => Err((
@@ -452,20 +436,15 @@ async fn get_page_count(
     State(state): State<WebState>,
     Path(id): Path<String>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    let conn = state
-        .conn()
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    let conn = state.conn().map_err(folio_status)?;
     let book = db::get_book(&conn, &id)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .map_err(folio_status)?
         .ok_or_else(|| (StatusCode::NOT_FOUND, "Book not found".to_string()))?;
 
     let count = match book.format {
-        BookFormat::Pdf => crate::pdf::get_page_count(&book.file_path)
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?,
-        BookFormat::Cbz => crate::cbz::get_page_count(&book.file_path)
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?,
-        BookFormat::Cbr => crate::cbr::get_page_count(&book.file_path)
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?,
+        BookFormat::Pdf => crate::pdf::get_page_count(&book.file_path).map_err(folio_status)?,
+        BookFormat::Cbz => crate::cbz::get_page_count(&book.file_path).map_err(folio_status)?,
+        BookFormat::Cbr => crate::cbr::get_page_count(&book.file_path).map_err(folio_status)?,
         _ => {
             return Err((
                 StatusCode::BAD_REQUEST,
@@ -483,22 +462,17 @@ async fn download_book(
     State(state): State<WebState>,
     Path(id): Path<String>,
 ) -> Result<Response, (StatusCode, String)> {
-    let conn = state
-        .conn()
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    let conn = state.conn().map_err(folio_status)?;
     let book = db::get_book(&conn, &id)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .map_err(folio_status)?
         .ok_or_else(|| (StatusCode::NOT_FOUND, "Book not found".to_string()))?;
 
     // R3-2: Stream the file instead of reading entirely into memory
     let file = tokio::fs::File::open(&book.file_path)
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(folio_status)?;
 
-    let metadata = file
-        .metadata()
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let metadata = file.metadata().await.map_err(folio_status)?;
 
     let filename = std::path::Path::new(&book.file_path)
         .file_name()
@@ -531,22 +505,16 @@ async fn download_book(
 async fn list_series(
     State(state): State<WebState>,
 ) -> Result<Json<Vec<crate::models::SeriesInfo>>, (StatusCode, String)> {
-    let conn = state
-        .conn()
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
-    let series =
-        db::list_series(&conn).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let conn = state.conn().map_err(folio_status)?;
+    let series = db::list_series(&conn).map_err(folio_status)?;
     Ok(Json(series))
 }
 
 async fn list_collections(
     State(state): State<WebState>,
 ) -> Result<Json<Vec<crate::models::Collection>>, (StatusCode, String)> {
-    let conn = state
-        .conn()
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
-    let collections = db::list_collections(&conn)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let conn = state.conn().map_err(folio_status)?;
+    let collections = db::list_collections(&conn).map_err(folio_status)?;
     Ok(Json(collections))
 }
 
@@ -554,11 +522,8 @@ async fn get_collection_books(
     State(state): State<WebState>,
     Path(id): Path<String>,
 ) -> Result<Json<Vec<crate::models::BookGridItem>>, (StatusCode, String)> {
-    let conn = state
-        .conn()
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
-    let books = db::get_books_in_collection_grid(&conn, &id)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let conn = state.conn().map_err(folio_status)?;
+    let books = db::get_books_in_collection_grid(&conn, &id).map_err(folio_status)?;
     Ok(Json(books))
 }
 

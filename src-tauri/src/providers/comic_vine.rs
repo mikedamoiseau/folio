@@ -1,5 +1,7 @@
 use super::{EnrichmentData, EnrichmentProvider, ProviderConfig};
 
+use crate::error::{FolioError, FolioResult};
+
 const BASE_URL: &str = "https://comicvine.gamespot.com/api";
 const USER_AGENT: &str = "Folio/1.0 (Desktop eBook Reader)";
 
@@ -36,7 +38,7 @@ impl EnrichmentProvider for ComicVineProvider {
         "Free key from comicvine.gamespot.com/api"
     }
 
-    fn search_by_isbn(&self, _isbn: &str) -> Result<Vec<EnrichmentData>, String> {
+    fn search_by_isbn(&self, _isbn: &str) -> FolioResult<Vec<EnrichmentData>> {
         // Comic Vine has no ISBN field
         Ok(Vec::new())
     }
@@ -45,13 +47,13 @@ impl EnrichmentProvider for ComicVineProvider {
         &self,
         title: &str,
         author: Option<&str>,
-    ) -> Result<Vec<EnrichmentData>, String> {
+    ) -> FolioResult<Vec<EnrichmentData>> {
         let api_key = self
             .config
             .api_key
             .as_deref()
             .filter(|k| !k.is_empty())
-            .ok_or_else(|| "Comic Vine requires an API key".to_string())?;
+            .ok_or_else(|| FolioError::invalid("Comic Vine requires an API key"))?;
 
         let query = match author {
             Some(a) if !a.is_empty() => format!("{} {}", title, a),
@@ -89,19 +91,22 @@ impl EnrichmentProvider for ComicVineProvider {
 fn fetch_and_parse(
     url: &str,
     parser: fn(&serde_json::Value) -> Option<EnrichmentData>,
-) -> Result<Vec<EnrichmentData>, String> {
+) -> FolioResult<Vec<EnrichmentData>> {
     let client = reqwest::blocking::Client::new();
     let resp = client
         .get(url)
         .header("User-Agent", USER_AGENT)
         .send()
-        .map_err(|e| format!("Comic Vine request failed: {e}"))?;
+        .map_err(|e| FolioError::network(format!("Comic Vine request failed: {e}")))?;
 
     if !resp.status().is_success() {
-        return Err(format!("Comic Vine HTTP {}", resp.status()));
+        return Err(FolioError::network(format!(
+            "Comic Vine HTTP {}",
+            resp.status()
+        )));
     }
 
-    let json: serde_json::Value = resp.json().map_err(|e| format!("JSON parse error: {e}"))?;
+    let json: serde_json::Value = resp.json()?;
 
     let results = match json["results"].as_array() {
         Some(arr) => arr,
@@ -318,7 +323,7 @@ mod tests {
         let provider = ComicVineProvider::new();
         let result = provider.search_by_title("Astérix", None);
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("API key"));
+        assert!(result.unwrap_err().to_string().contains("API key"));
     }
 
     #[test]

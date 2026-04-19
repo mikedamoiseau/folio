@@ -556,7 +556,12 @@
     "timeout": "La requ\u00eate a expir\u00e9. Le serveur est peut-\u00eatre lent ou inaccessible.",
     "networkError": "Impossible de se connecter au serveur. V\u00e9rifiez votre connexion internet.",
     "urlBlocked": "Cette URL a \u00e9t\u00e9 bloqu\u00e9e pour des raisons de s\u00e9curit\u00e9.",
-    "tooLarge": "Le fichier ou la r\u00e9ponse est trop volumineux.",
+    "tooLarge": "Le fichier ou la r\u00e9ponse est trop volumineuse.",
+    "notZip": "Ce fichier n\u2019est pas une archive ZIP/CBZ valide. Il s\u2019agit peut-\u00eatre d\u2019un fichier RAR avec une extension .cbz \u2014 essayez de le renommer en .cbr.",
+    "notRar": "Ce fichier n\u2019est pas une archive RAR/CBR valide.",
+    "invalidInput": "L\u2019entr\u00e9e n\u2019est pas valide. Veuillez v\u00e9rifier et r\u00e9essayer.",
+    "database": "Une erreur de base de donn\u00e9es s\u2019est produite. Veuillez r\u00e9essayer.",
+    "io": "Une erreur de syst\u00e8me de fichiers s\u2019est produite. Veuillez r\u00e9essayer.",
     "generic": "Une erreur s\u2019est produite. Veuillez r\u00e9essayer."
   },
 
