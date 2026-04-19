@@ -7,10 +7,16 @@
 //!
 //! See `docs/ROADMAP.md` #63 for the extraction plan.
 
+pub mod cbr;
+pub mod cbz;
 pub mod db;
+pub mod epub;
 pub mod error;
+pub mod isbn;
 pub mod models;
+pub mod page_cache;
 pub mod paths;
+pub mod pdf;
 
 // Flat re-exports for common types so consumers can write
 // `use folio_core::{FolioError, FolioResult, Book}` without the extra

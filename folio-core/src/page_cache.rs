@@ -16,6 +16,7 @@ pub fn page_debug_enabled() -> bool {
     *ENABLED.get_or_init(|| std::env::var("FOLIO_DEBUG_PAGES").unwrap_or_default() == "1")
 }
 
+#[macro_export]
 macro_rules! page_dbg {
     ($($arg:tt)*) => {
         if $crate::page_cache::page_debug_enabled() {
@@ -24,7 +25,7 @@ macro_rules! page_dbg {
     };
 }
 
-pub(crate) use page_dbg;
+pub use page_dbg;
 
 const MAX_CACHED_BOOKS: usize = 5;
 pub const DEFAULT_MAX_CACHE_SIZE_MB: u64 = 500;

@@ -39,12 +39,11 @@ impl From<zip::result::ZipError> for EpubError {
     }
 }
 
-/// Bridge `EpubError` into the crate-wide [`folio_core::FolioError`]. Lives in
-/// this module (not in `folio_core::error`) because `EpubError` belongs to the
-/// desktop crate until the parser modules migrate to folio-core (#63, M3).
-impl From<EpubError> for folio_core::FolioError {
+/// Bridge `EpubError` into the crate-wide [`crate::error::FolioError`]. Both
+/// types live in `folio-core` (M3), so the impl is colocated with `EpubError`.
+impl From<EpubError> for crate::error::FolioError {
     fn from(e: EpubError) -> Self {
-        use folio_core::FolioError;
+        use crate::error::FolioError;
         match e {
             EpubError::MissingFile(s) => {
                 FolioError::not_found(format!("Missing file in EPUB: {s}"))
@@ -481,7 +480,7 @@ pub fn parse_epub_metadata_from_archive(
     let isbn = extract_all_tag_texts(&opf, "dc:identifier")
         .iter()
         .chain(extract_all_tag_texts(&opf, "identifier").iter())
-        .find_map(|id| crate::enrichment::extract_isbn(id));
+        .find_map(|id| crate::isbn::extract_isbn(id));
 
     let genres = {
         let mut subjects = extract_all_tag_texts(&opf, "dc:subject");
