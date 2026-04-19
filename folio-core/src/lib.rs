@@ -7,6 +7,7 @@
 //!
 //! See `docs/ROADMAP.md` #63 for the extraction plan.
 
+pub mod backup;
 pub mod cbr;
 pub mod cbz;
 pub mod db;
@@ -21,6 +22,7 @@ pub mod page_cache;
 pub mod paths;
 pub mod pdf;
 pub mod providers;
+pub mod sync;
 
 // Flat re-exports for common types so consumers can write
 // `use folio_core::{FolioError, FolioResult, Book}` without the extra

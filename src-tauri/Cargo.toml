@@ -67,5 +67,7 @@ folio-core = { path = "../folio-core", features = ["test-utils"] }
 
 [features]
 default = ["sftp"]
-sftp = ["opendal/services-sftp"]
+# Delegate to folio-core's sftp feature since `backup` now lives in the core
+# crate (#63 M5). Keeping the desktop flag as a convenience pass-through.
+sftp = ["folio-core/sftp"]
 

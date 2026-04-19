@@ -1,14 +1,13 @@
-pub mod backup;
 pub mod commands;
-pub mod sync;
 pub mod tray;
 pub mod web_server;
 
-// Re-export modules migrated to folio-core (#63) so existing call sites keep
-// compiling during the incremental extraction. New code should prefer
-// `use folio_core::…` directly.
+// Re-export every module that now lives in folio-core so existing `crate::…`
+// call sites in commands.rs, web_server, and tray keep compiling unchanged.
+// New code should prefer `use folio_core::…` directly.
 pub use folio_core::{
-    cbr, cbz, db, enrichment, epub, error, models, opds, openlibrary, page_cache, pdf, providers,
+    backup, cbr, cbz, db, enrichment, epub, error, models, opds, openlibrary, page_cache, paths,
+    pdf, providers, sync,
 };
 
 use commands::{AppState, LruCache, ProfileState};
