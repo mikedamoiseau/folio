@@ -120,6 +120,31 @@ pub fn validate_key(key: &str) -> FolioResult<()> {
     Ok(())
 }
 
+/// Derive the storage key for an absolute local path under a given root.
+///
+/// Used by the desktop app's M4 migration (converting legacy absolute
+/// `file_path` values to storage keys) and by the `remove_book` path
+/// when it receives a legacy row. Returns `None` when `path` does not
+/// sit under `root` — for linked books whose file lives elsewhere, and
+/// for rows imported under a different library folder that has since
+/// been changed.
+///
+/// Returned keys use `/` as the separator, matching the [`Storage`]
+/// contract, regardless of the underlying platform.
+pub fn key_for_local_path(root: &Path, path: &Path) -> Option<String> {
+    path.strip_prefix(root).ok().and_then(|rel| {
+        let parts: Vec<String> = rel
+            .components()
+            .map(|c| c.as_os_str().to_string_lossy().into_owned())
+            .collect();
+        if parts.is_empty() {
+            None
+        } else {
+            Some(parts.join("/"))
+        }
+    })
+}
+
 /// Filesystem-backed [`Storage`] rooted at a directory on disk.
 ///
 /// The desktop app configures one `LocalStorage` per profile, pointing at
@@ -538,5 +563,46 @@ mod tests {
         storage.put("book.epub", b"v1").unwrap();
         storage.put("book.epub", b"v2-longer-than-v1").unwrap();
         assert_eq!(storage.get("book.epub").unwrap(), b"v2-longer-than-v1");
+    }
+
+    // --- key_for_local_path (#64 M4) ---
+
+    #[test]
+    fn key_for_local_path_strips_root_prefix() {
+        let root = Path::new("/library");
+        let path = Path::new("/library/abc.epub");
+        assert_eq!(key_for_local_path(root, path), Some("abc.epub".to_string()));
+    }
+
+    #[test]
+    fn key_for_local_path_handles_nested_paths() {
+        let root = Path::new("/library");
+        let path = Path::new("/library/books/abc.epub");
+        assert_eq!(
+            key_for_local_path(root, path),
+            Some("books/abc.epub".to_string())
+        );
+    }
+
+    #[test]
+    fn key_for_local_path_returns_none_for_external_path() {
+        let root = Path::new("/library");
+        let path = Path::new("/elsewhere/book.epub");
+        assert!(key_for_local_path(root, path).is_none());
+    }
+
+    #[test]
+    fn key_for_local_path_handles_trailing_slash_on_root() {
+        // Path::strip_prefix normalizes trailing separators.
+        let root = Path::new("/library/");
+        let path = Path::new("/library/abc.epub");
+        assert_eq!(key_for_local_path(root, path), Some("abc.epub".to_string()));
+    }
+
+    #[test]
+    fn key_for_local_path_none_when_path_equals_root() {
+        let root = Path::new("/library");
+        let path = Path::new("/library");
+        assert!(key_for_local_path(root, path).is_none());
     }
 }

@@ -228,7 +228,8 @@ async fn get_chapters(
         return Err((StatusCode::BAD_REQUEST, "Not an EPUB book".to_string()));
     }
 
-    let toc = crate::epub::get_toc(&book.file_path).map_err(folio_status)?;
+    let file_path = state.resolve_book_path(&book).map_err(folio_status)?;
+    let toc = crate::epub::get_toc(&file_path).map_err(folio_status)?;
 
     Ok(Json(serde_json::to_value(toc).unwrap_or_default()))
 }
@@ -246,8 +247,9 @@ async fn get_chapter_content(
         return Err((StatusCode::BAD_REQUEST, "Not an EPUB book".to_string()));
     }
 
+    let file_path = state.resolve_book_path(&book).map_err(folio_status)?;
     let data_dir = state.data_dir.to_string_lossy().to_string();
-    let html = crate::epub::get_chapter_content(&book.file_path, index, &data_dir, &id)
+    let html = crate::epub::get_chapter_content(&file_path, index, &data_dir, &id)
         .map_err(folio_status)?;
 
     // Rewrite asset:// URLs to HTTP URLs for web serving
@@ -407,20 +409,22 @@ async fn get_page_image(
         .map_err(folio_status)?
         .ok_or_else(|| (StatusCode::NOT_FOUND, "Book not found".to_string()))?;
 
+    let file_path = state.resolve_book_path(&book).map_err(folio_status)?;
+
     match book.format {
         BookFormat::Pdf => {
             let (bytes, mime) =
-                crate::pdf::get_page_image_bytes(&book.file_path, index).map_err(folio_status)?;
+                crate::pdf::get_page_image_bytes(&file_path, index).map_err(folio_status)?;
             Ok(([(header::CONTENT_TYPE, mime.to_string())], bytes).into_response())
         }
         BookFormat::Cbz => {
             let (bytes, mime) =
-                crate::cbz::get_page_image_bytes(&book.file_path, index).map_err(folio_status)?;
+                crate::cbz::get_page_image_bytes(&file_path, index).map_err(folio_status)?;
             Ok(([(header::CONTENT_TYPE, mime)], bytes).into_response())
         }
         BookFormat::Cbr => {
             let (bytes, mime) =
-                crate::cbr::get_page_image_bytes(&book.file_path, index).map_err(folio_status)?;
+                crate::cbr::get_page_image_bytes(&file_path, index).map_err(folio_status)?;
             Ok(([(header::CONTENT_TYPE, mime)], bytes).into_response())
         }
         _ => Err((
@@ -439,10 +443,12 @@ async fn get_page_count(
         .map_err(folio_status)?
         .ok_or_else(|| (StatusCode::NOT_FOUND, "Book not found".to_string()))?;
 
+    let file_path = state.resolve_book_path(&book).map_err(folio_status)?;
+
     let count = match book.format {
-        BookFormat::Pdf => crate::pdf::get_page_count(&book.file_path).map_err(folio_status)?,
-        BookFormat::Cbz => crate::cbz::get_page_count(&book.file_path).map_err(folio_status)?,
-        BookFormat::Cbr => crate::cbr::get_page_count(&book.file_path).map_err(folio_status)?,
+        BookFormat::Pdf => crate::pdf::get_page_count(&file_path).map_err(folio_status)?,
+        BookFormat::Cbz => crate::cbz::get_page_count(&file_path).map_err(folio_status)?,
+        BookFormat::Cbr => crate::cbr::get_page_count(&file_path).map_err(folio_status)?,
         _ => {
             return Err((
                 StatusCode::BAD_REQUEST,
@@ -465,19 +471,21 @@ async fn download_book(
         .map_err(folio_status)?
         .ok_or_else(|| (StatusCode::NOT_FOUND, "Book not found".to_string()))?;
 
+    let file_path = state.resolve_book_path(&book).map_err(folio_status)?;
+
     // R3-2: Stream the file instead of reading entirely into memory
-    let file = tokio::fs::File::open(&book.file_path)
+    let file = tokio::fs::File::open(&file_path)
         .await
         .map_err(folio_status)?;
 
     let metadata = file.metadata().await.map_err(folio_status)?;
 
-    let filename = std::path::Path::new(&book.file_path)
+    let filename = std::path::Path::new(&file_path)
         .file_name()
         .and_then(|n| n.to_str())
         .unwrap_or("book");
 
-    let mime = mime_guess::from_path(&book.file_path)
+    let mime = mime_guess::from_path(&file_path)
         .first_or_octet_stream()
         .to_string();
 

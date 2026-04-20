@@ -223,6 +223,33 @@ impl AppState {
             root,
         )?))
     }
+
+    /// Resolve a book's stored `file_path` value to an absolute local
+    /// filesystem path that can be handed to parsers.
+    ///
+    /// Semantics after #64 M4:
+    /// * **Imported books** — `file_path` is a storage key relative to
+    ///   the library `Storage`. Resolves through `storage.local_path`.
+    /// * **Linked books** — `file_path` is an absolute external path.
+    ///   Returned unchanged.
+    /// * **Legacy imported rows** — rows that predate M4 and weren't
+    ///   caught by the migration (library folder changed, etc.) still
+    ///   carry an absolute path. Detected via `Path::is_absolute()` and
+    ///   returned as-is so the old read flow keeps working.
+    pub fn resolve_book_path(&self, book: &Book) -> FolioResult<String> {
+        if !book.is_imported {
+            return Ok(book.file_path.clone());
+        }
+        let p = std::path::Path::new(&book.file_path);
+        if p.is_absolute() {
+            return Ok(book.file_path.clone());
+        }
+        let storage = self.active_storage()?;
+        Ok(storage
+            .local_path(&book.file_path)?
+            .to_string_lossy()
+            .to_string())
+    }
 }
 
 /// Build the storage key for a book file from its ID and the (already
@@ -234,23 +261,17 @@ pub fn book_storage_key(book_id: &str, extension: &str) -> String {
 }
 
 /// Derive the storage key for an existing book from its absolute
-/// `file_path` column (the legacy format pre-M4). Returns `None` when the
-/// path is not under the library folder — for linked books that reference
-/// external files, storage deletes must be skipped.
+/// `file_path` column (legacy rows that weren't migrated by the M4
+/// schema pass — e.g. because the library folder changed after import).
+/// Returns `None` when the path is not under the library folder; linked
+/// books sit outside the library folder by design.
+///
+/// Thin wrapper over [`folio_core::storage::key_for_local_path`].
 pub fn book_key_from_path(file_path: &str, library_folder: &str) -> Option<String> {
-    let p = std::path::Path::new(file_path);
-    let base = std::path::Path::new(library_folder);
-    p.strip_prefix(base).ok().and_then(|rel| {
-        let parts: Vec<String> = rel
-            .components()
-            .map(|c| c.as_os_str().to_string_lossy().into_owned())
-            .collect();
-        if parts.is_empty() {
-            None
-        } else {
-            Some(parts.join("/"))
-        }
-    })
+    folio_core::storage::key_for_local_path(
+        std::path::Path::new(library_folder),
+        std::path::Path::new(file_path),
+    )
 }
 
 /// Ensure a file_path is loaded in the EPUB LRU cache. If it's already present,
@@ -488,16 +509,24 @@ pub async fn import_book(
     let is_url_import = file_path.starts_with("http://") || file_path.starts_with("https://");
     let should_copy = import_mode != "link" || is_url_import;
 
-    let (final_path, is_imported) = if should_copy {
+    // #64 M4: imported books now store the storage *key* in `file_path`,
+    // not the absolute filesystem path. Parsers still need a real path,
+    // so we materialize one (`parser_path`) locally while recording the
+    // key in the DB. Linked books continue to store the original
+    // external absolute path.
+    let (file_path_value, parser_path, is_imported) = if should_copy {
         let key = book_storage_key(&book_id, &extension);
         storage
             .put_path(&key, std::path::Path::new(&file_path))
             .map_err(|e| FolioError::internal(format!("Failed to copy file to library: {e}")))?;
-        let library_path = storage.local_path(&key)?.to_string_lossy().to_string();
-        (library_path, true)
+        let parser_path = storage.local_path(&key)?.to_string_lossy().to_string();
+        (key, parser_path, true)
     } else {
-        (file_path.clone(), false)
+        (file_path.clone(), file_path.clone(), false)
     };
+    // Kept as `final_path` to minimize churn in the parser match arms
+    // below — all of them use it as a real filesystem path today.
+    let final_path = parser_path;
 
     // Steps 5 & 6: Parse using library-internal path; store hash in Book.
     //
@@ -574,7 +603,7 @@ pub async fn import_book(
                 id: book_id,
                 title: metadata.title,
                 author: metadata.author,
-                file_path: final_path.clone(),
+                file_path: file_path_value.clone(),
                 cover_path,
                 total_chapters: chapters.len() as u32,
                 added_at: std::time::SystemTime::now()
@@ -621,7 +650,7 @@ pub async fn import_book(
                 id: book_id,
                 title: meta.title,
                 author: meta.author.unwrap_or_default(),
-                file_path: final_path.clone(),
+                file_path: file_path_value.clone(),
                 cover_path,
                 total_chapters: meta.page_count,
                 added_at: std::time::SystemTime::now()
@@ -671,7 +700,7 @@ pub async fn import_book(
                 id: book_id,
                 title: meta.title,
                 author: meta.author.unwrap_or_default(),
-                file_path: final_path.clone(),
+                file_path: file_path_value.clone(),
                 cover_path,
                 total_chapters: meta.page_count,
                 added_at: std::time::SystemTime::now()
@@ -732,7 +761,7 @@ pub async fn import_book(
                 id: book_id,
                 title,
                 author: meta.author,
-                file_path: final_path.clone(),
+                file_path: file_path_value.clone(),
                 cover_path,
                 total_chapters: meta.page_count,
                 added_at: std::time::SystemTime::now()
@@ -872,19 +901,25 @@ pub async fn remove_book(book_id: String, state: State<'_, AppState>) -> FolioRe
     // Remove the physical file only if it was imported (copied) into the library.
     // Linked books reference external files that should not be deleted.
     //
-    // The DB still stores an absolute `file_path` (M4 migrates it to a
-    // storage key), so we derive the key by stripping the library folder
-    // prefix. A linked book's path sits outside that prefix and resolves
-    // to `None`, which skips deletion — preserving the pre-refactor
-    // behavior.
+    // #64 M4: `file_path` is now a storage key for imported rows written
+    // after the migration. Legacy imported rows may still hold an
+    // absolute path (library folder changed before the migration caught
+    // them) — we detect that via `Path::is_absolute` and fall through
+    // to the path-based removal so legacy data stays cleanable.
     if let (Some(path), Some((library_folder, storage))) = (file_path, cleanup) {
-        if let Some(key) = book_key_from_path(&path, &library_folder) {
+        let p = std::path::Path::new(&path);
+        if !p.is_absolute() {
+            // M4 storage key — delete directly.
+            if let Err(e) = storage.delete(&path) {
+                eprintln!("Warning: could not delete library file '{}': {}", path, e);
+            }
+        } else if let Some(key) = book_key_from_path(&path, &library_folder) {
             if let Err(e) = storage.delete(&key) {
                 eprintln!("Warning: could not delete library file '{}': {}", path, e);
             }
         } else {
-            // Fallback: path isn't under the library folder (legacy
-            // import, profile migration, etc.). Remove it directly.
+            // Fallback: absolute path that isn't under the library folder
+            // (legacy import, profile migration, etc.). Remove directly.
             if let Err(e) = std::fs::remove_file(&path) {
                 if e.kind() != std::io::ErrorKind::NotFound {
                     eprintln!("Warning: could not delete library file '{}': {}", path, e);
@@ -1117,9 +1152,9 @@ pub async fn get_chapter_content(
 ) -> FolioResult<String> {
     let file_path = {
         let conn = state.active_db()?.get()?;
-        db::get_book(&conn, &book_id)?
-            .ok_or_else(|| FolioError::not_found(format!("Book '{book_id}' not found")))?
-            .file_path
+        let book = db::get_book(&conn, &book_id)?
+            .ok_or_else(|| FolioError::not_found(format!("Book '{book_id}' not found")))?;
+        state.resolve_book_path(&book)?
     };
 
     validate_file_exists(&file_path)?;
@@ -1153,12 +1188,13 @@ pub async fn search_book_content(
         db::get_book(&conn, &book_id)?
             .ok_or_else(|| FolioError::not_found(format!("Book '{book_id}' not found")))?
     };
+    let file_path = state.resolve_book_path(&book)?;
 
-    validate_file_exists(&book.file_path)?;
+    validate_file_exists(&file_path)?;
 
     match book.format {
         BookFormat::Pdf => {
-            let results = pdf::search_pdf(&book.file_path, &query)?;
+            let results = pdf::search_pdf(&file_path, &query)?;
             Ok(results
                 .into_iter()
                 .map(|r| epub::SearchResult {
@@ -1170,9 +1206,9 @@ pub async fn search_book_content(
         }
         BookFormat::Epub => {
             let mut cache = state.epub_cache.lock()?;
-            ensure_epub_cached(&mut cache, &book.file_path);
+            ensure_epub_cached(&mut cache, &file_path);
             let cached = cache
-                .get_mut(&book.file_path)
+                .get_mut(&file_path)
                 .ok_or_else(|| FolioError::internal("Failed to open EPUB archive"))?;
             Ok(epub::search_book(cached, &query)?)
         }
@@ -1187,9 +1223,9 @@ pub async fn get_chapter_word_counts(
 ) -> FolioResult<Vec<usize>> {
     let file_path = {
         let conn = state.active_db()?.get()?;
-        db::get_book(&conn, &book_id)?
-            .ok_or_else(|| FolioError::not_found(format!("Book '{book_id}' not found")))?
-            .file_path
+        let book = db::get_book(&conn, &book_id)?
+            .ok_or_else(|| FolioError::not_found(format!("Book '{book_id}' not found")))?;
+        state.resolve_book_path(&book)?
     };
 
     validate_file_exists(&file_path)?;
@@ -1211,7 +1247,8 @@ pub async fn get_all_chapters(
         let conn = state.active_db()?.get()?;
         let book = db::get_book(&conn, &book_id)?
             .ok_or_else(|| FolioError::not_found(format!("Book '{book_id}' not found")))?;
-        (book.file_path, book.total_chapters)
+        let total = book.total_chapters;
+        (state.resolve_book_path(&book)?, total)
     };
 
     validate_file_exists(&file_path)?;
@@ -1238,9 +1275,9 @@ pub async fn get_toc(
 ) -> FolioResult<Vec<epub::TocEntry>> {
     let file_path = {
         let conn = state.active_db()?.get()?;
-        db::get_book(&conn, &book_id)?
-            .ok_or_else(|| FolioError::not_found(format!("Book '{book_id}' not found")))?
-            .file_path
+        let book = db::get_book(&conn, &book_id)?
+            .ok_or_else(|| FolioError::not_found(format!("Book '{book_id}' not found")))?;
+        state.resolve_book_path(&book)?
     };
 
     validate_file_exists(&file_path)?;
@@ -1425,11 +1462,12 @@ pub async fn get_comic_page_count(book_id: String, state: State<'_, AppState>) -
         db::get_book(&conn, &book_id)?
             .ok_or_else(|| FolioError::not_found(format!("Book '{book_id}' not found")))?
     };
+    let file_path = state.resolve_book_path(&book)?;
 
-    validate_file_exists(&book.file_path)?;
+    validate_file_exists(&file_path)?;
     match book.format {
-        BookFormat::Cbz => cbz::get_page_count(&book.file_path),
-        BookFormat::Cbr => cbr::get_page_count(&book.file_path),
+        BookFormat::Cbz => cbz::get_page_count(&file_path),
+        BookFormat::Cbr => cbr::get_page_count(&file_path),
         _ => Err(FolioError::invalid(format!(
             "get_comic_page_count is not supported for {:?}",
             book.format
@@ -1457,8 +1495,9 @@ pub async fn get_comic_page(
             .ok_or_else(|| FolioError::not_found(format!("Book '{book_id}' not found")))?
     };
     page_cache::page_dbg!("DB lookup: {:?}", start.elapsed());
+    let file_path = state.resolve_book_path(&book)?;
 
-    validate_file_exists(&book.file_path)?;
+    validate_file_exists(&file_path)?;
 
     // Try cache first
     if let Ok(cache_dir) = app.path().app_cache_dir() {
@@ -1488,8 +1527,8 @@ pub async fn get_comic_page(
     // Fallback to direct archive read
     page_cache::page_dbg!("falling back to archive read: format={:?}", book.format);
     let result = match book.format {
-        BookFormat::Cbz => cbz::get_page_image(&book.file_path, page_index),
-        BookFormat::Cbr => cbr::get_page_image(&book.file_path, page_index),
+        BookFormat::Cbz => cbz::get_page_image(&file_path, page_index),
+        BookFormat::Cbr => cbr::get_page_image(&file_path, page_index),
         _ => Err(FolioError::invalid(format!(
             "get_comic_page is not supported for {:?}",
             book.format
@@ -1521,8 +1560,9 @@ pub async fn prepare_comic(
             .unwrap_or(page_cache::DEFAULT_MAX_CACHE_SIZE_MB);
         (book, max_size_mb)
     };
+    let file_path = state.resolve_book_path(&book)?;
 
-    validate_file_exists(&book.file_path)?;
+    validate_file_exists(&file_path)?;
 
     if book.format != BookFormat::Cbz && book.format != BookFormat::Cbr {
         return Err(FolioError::invalid(
@@ -1543,13 +1583,8 @@ pub async fn prepare_comic(
         book.format,
         book_hash
     );
-    let manifest = page_cache::ensure_cached(
-        &cache_dir,
-        &book_id,
-        book_hash,
-        &book.file_path,
-        &book.format,
-    )?;
+    let manifest =
+        page_cache::ensure_cached(&cache_dir, &book_id, book_hash, &file_path, &book.format)?;
     page_cache::page_dbg!(
         "prepare_comic done: pages={} size={}KB elapsed={:?}",
         manifest.page_count,
@@ -2592,8 +2627,10 @@ pub async fn get_library_folder_info(state: State<'_, AppState>) -> FolioResult<
     };
     let books = db::list_books(&conn)?;
 
-    // Only count books whose path is inside the current library folder — those
-    // are the files that would actually be moved on a folder change.
+    // #64 M4: `file_path` is now a storage key for imported books, so we
+    // resolve each book through `AppState::resolve_book_path` before
+    // comparing to the requested folder. Linked books whose absolute path
+    // sits elsewhere are naturally excluded.
     let prefix = if path.ends_with('/') {
         path.clone()
     } else {
@@ -2602,10 +2639,14 @@ pub async fn get_library_folder_info(state: State<'_, AppState>) -> FolioResult<
     let mut file_count = 0u64;
     let mut total_size_bytes = 0u64;
     for book in &books {
-        if !book.file_path.starts_with(&prefix) {
+        let resolved = match state.resolve_book_path(book) {
+            Ok(p) => p,
+            Err(_) => continue,
+        };
+        if !resolved.starts_with(&prefix) {
             continue;
         }
-        if let Ok(meta) = std::fs::metadata(&book.file_path) {
+        if let Ok(meta) = std::fs::metadata(&resolved) {
             if meta.is_file() {
                 file_count += 1;
                 total_size_bytes += meta.len();
@@ -2649,22 +2690,38 @@ pub async fn set_library_folder(
         db::list_books(&conn)?
     };
 
-    // Build (src, dest) pairs using canonical path.
-    let moves: Vec<(String, String)> = books
+    // #64 M4: `book.file_path` is a storage key for imported books and an
+    // absolute path for linked ones. Resolve each imported source to an
+    // absolute path via the *current* library storage before moving, and
+    // persist the new key (`{book_id}.{ext}`) back to the DB on success.
+    // Linked books are not relocated.
+    let current_storage = state.active_storage()?;
+    let moves: Vec<(String, String, String)> = books
         .iter()
+        .filter(|b| b.is_imported)
         .map(|book| {
+            // Use the key's extension where possible (matches the on-disk
+            // filename); fall back to reading it from the resolved path.
             let ext = std::path::Path::new(&book.file_path)
                 .extension()
                 .and_then(|e| e.to_str())
-                .unwrap_or("");
-            let dest = format!("{}/{}.{}", canonical_str, book.id, ext);
-            (book.file_path.clone(), dest)
+                .unwrap_or("")
+                .to_string();
+            let new_key = format!("{}.{}", book.id, ext);
+            let dest = format!("{}/{}", canonical_str, new_key);
+            let src = match current_storage.local_path(&book.file_path) {
+                Ok(p) => p.to_string_lossy().to_string(),
+                // Legacy row with absolute path that escaped the M4
+                // migration — move it as-is.
+                Err(_) => book.file_path.clone(),
+            };
+            (src, dest, new_key)
         })
         .collect();
 
     // Attempt all moves; roll back on first failure.
     let mut completed: Vec<(String, String)> = Vec::new();
-    for (src, dest) in &moves {
+    for (src, dest, _new_key) in &moves {
         let result = std::fs::rename(src, dest).or_else(|_| {
             // Cross-device fallback: copy then delete source.
             std::fs::copy(src, dest)
@@ -2698,11 +2755,12 @@ pub async fn set_library_folder(
         completed.push((src.clone(), dest.clone()));
     }
 
-    // All moves succeeded — persist new paths and setting atomically.
+    // All moves succeeded — persist new keys and setting atomically.
     let mut conn = state.active_db()?.get()?;
     let tx = conn.transaction()?;
-    for (book, (_, dest)) in books.iter().zip(moves.iter()) {
-        db::update_book_file_path(&tx, &book.id, dest)?;
+    let imported_books: Vec<&Book> = books.iter().filter(|b| b.is_imported).collect();
+    for (book, (_, _, new_key)) in imported_books.iter().zip(moves.iter()) {
+        db::update_book_file_path(&tx, &book.id, new_key)?;
     }
     db::set_setting(&tx, "library_folder", &canonical_str)?;
     tx.commit()?;
@@ -2720,25 +2778,26 @@ pub async fn copy_to_library(book_id: String, state: State<'_, AppState>) -> Fol
         return Err(FolioError::invalid("Book is already in the library"));
     }
 
+    // Linked book: `file_path` is an external absolute path. Verify it still exists,
+    // then import it through the library storage (#64 M2/M4).
     if !std::path::Path::new(&book.file_path).exists() {
         return Err(FolioError::invalid(
             "Source file not available. Reconnect the drive and try again.",
         ));
     }
 
-    let library_folder = db::get_setting(&conn, "library_folder")?
-        .unwrap_or_else(|| default_library_folder().unwrap_or_default());
-
     let ext = std::path::Path::new(&book.file_path)
         .extension()
         .and_then(|e| e.to_str())
-        .unwrap_or("epub");
-    let library_path = format!("{}/{}.{}", library_folder, book.id, ext);
+        .unwrap_or("epub")
+        .to_string();
+    let storage = state.active_storage()?;
+    let key = book_storage_key(&book.id, &ext);
+    storage
+        .put_path(&key, std::path::Path::new(&book.file_path))
+        .map_err(|e| FolioError::internal(format!("Failed to copy file to library: {e}")))?;
 
-    std::fs::copy(&book.file_path, &library_path)
-        .map_err(|e| format!("Failed to copy file to library: {e}"))?;
-
-    db::update_book_path(&conn, &book.id, &library_path, true)?;
+    db::update_book_path(&conn, &book.id, &key, true)?;
 
     log_activity(
         &conn,
@@ -2824,13 +2883,18 @@ pub async fn export_library(
                 linked_count += 1;
                 continue;
             }
-            let ext = std::path::Path::new(&book.file_path)
+            // #64 M4: resolve the storage key to an absolute path for reading.
+            let resolved = match state.resolve_book_path(book) {
+                Ok(p) => p,
+                Err(_) => continue,
+            };
+            let ext = std::path::Path::new(&resolved)
                 .extension()
                 .and_then(|e| e.to_str())
                 .unwrap_or("");
             let archive_name = format!("books/{}.{}", book.id, ext);
             // epub/cbz are already zips; pdf compresses poorly — use Stored for all
-            if let Ok(data) = std::fs::read(&book.file_path) {
+            if let Ok(data) = std::fs::read(&resolved) {
                 zip.start_file(&archive_name, stored_options)?;
                 zip.write_all(&data)?;
             }
@@ -2921,6 +2985,9 @@ pub async fn import_library_backup(
             }
         }
 
+        // Derive the extension for the archive entry. For post-M4 backups
+        // `book.file_path` is a storage key (e.g. `abc.epub`); for older
+        // backups it's an absolute path. `Path::extension` handles both.
         let ext = std::path::Path::new(&book.file_path)
             .extension()
             .and_then(|e| e.to_str())
@@ -2932,18 +2999,11 @@ pub async fn import_library_backup(
             continue;
         }
 
-        // Extract book file — validate destination is within library folder.
-        let library_path = format!("{}/{}.{}", library_folder, book.id, ext);
-        // Ensure the destination path doesn't escape the library folder via
-        // a crafted book ID containing path separators.
-        {
-            let dest = std::path::Path::new(&library_path);
-            let parent = dest.parent().unwrap_or(std::path::Path::new(""));
-            let lib = std::path::Path::new(&library_folder);
-            if parent != lib {
-                continue; // path escapes library folder
-            }
-        }
+        // Extract book file through the library storage — storage owns the
+        // on-disk layout, and the key (`{book_id}.{ext}`) is what the DB
+        // now stores (#64 M4).
+        let storage = state.active_storage()?;
+        let book_key = book_storage_key(&book.id, ext);
         if let Ok(mut entry) = archive.by_name(&book_archive_name) {
             // Validate the actual entry name from the archive as well
             if !is_safe_zip_entry(entry.name()) {
@@ -2951,7 +3011,7 @@ pub async fn import_library_backup(
             }
             let mut buf = Vec::new();
             entry.read_to_end(&mut buf)?;
-            std::fs::write(&library_path, &buf)?;
+            storage.put(&book_key, &buf)?;
         } else {
             continue; // skip books without files
         }
@@ -2985,7 +3045,7 @@ pub async fn import_library_backup(
         }
 
         let restored_book = Book {
-            file_path: library_path,
+            file_path: book_key.clone(),
             cover_path,
             ..book.clone()
         };
@@ -3018,9 +3078,9 @@ pub async fn check_pdf_support() -> bool {
 pub async fn get_pdf_page_count(book_id: String, state: State<'_, AppState>) -> FolioResult<u32> {
     let file_path = {
         let conn = state.active_db()?.get()?;
-        db::get_book(&conn, &book_id)?
-            .ok_or_else(|| FolioError::not_found(format!("Book '{book_id}' not found")))?
-            .file_path
+        let book = db::get_book(&conn, &book_id)?
+            .ok_or_else(|| FolioError::not_found(format!("Book '{book_id}' not found")))?;
+        state.resolve_book_path(&book)?
     };
     validate_file_exists(&file_path)?;
     pdf::get_page_count(&file_path)
@@ -3036,9 +3096,9 @@ pub async fn get_pdf_page(
     let render_width = width.unwrap_or(1200).min(9600);
     let file_path = {
         let conn = state.active_db()?.get()?;
-        db::get_book(&conn, &book_id)?
-            .ok_or_else(|| FolioError::not_found(format!("Book '{book_id}' not found")))?
-            .file_path
+        let book = db::get_book(&conn, &book_id)?
+            .ok_or_else(|| FolioError::not_found(format!("Book '{book_id}' not found")))?;
+        state.resolve_book_path(&book)?
     };
     validate_file_exists(&file_path)?;
 
@@ -3789,7 +3849,13 @@ pub async fn cleanup_library(
             },
         );
 
-        if std::path::Path::new(&book.file_path).exists() {
+        // #64 M4: resolve the key (or legacy absolute path) to a real
+        // filesystem path before the existence check.
+        let resolved = match state.resolve_book_path(book) {
+            Ok(p) => p,
+            Err(_) => continue,
+        };
+        if std::path::Path::new(&resolved).exists() {
             continue;
         }
 
@@ -3798,7 +3864,7 @@ pub async fn cleanup_library(
 
         // Evict EPUB cache entry.
         if let Ok(mut cache) = state.epub_cache.lock() {
-            cache.remove(&book.file_path);
+            cache.remove(&resolved);
         }
 
         // Remove any cover artifacts for this book via the covers storage.
