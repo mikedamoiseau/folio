@@ -192,6 +192,55 @@ impl AppState {
             .cloned()
             .ok_or_else(|| FolioError::not_found(format!("Profile '{}' not found", ps.active)))
     }
+
+    /// Returns the library folder path for the active profile. Reads the
+    /// `library_folder` setting, falling back to the platform default.
+    pub fn active_library_folder(&self) -> FolioResult<String> {
+        let conn = self.active_db()?.get()?;
+        match db::get_setting(&conn, "library_folder")? {
+            Some(f) => Ok(f),
+            None => default_library_folder(),
+        }
+    }
+
+    /// Returns a `Storage` handle rooted at the active profile's library
+    /// folder. Each call constructs a fresh `LocalStorage`; this is cheap
+    /// (stores a PathBuf) and keeps the handle in sync when the user
+    /// changes the library folder at runtime.
+    pub fn active_storage(&self) -> FolioResult<std::sync::Arc<dyn folio_core::storage::Storage>> {
+        let folder = self.active_library_folder()?;
+        Ok(std::sync::Arc::new(folio_core::storage::LocalStorage::new(
+            folder,
+        )?))
+    }
+}
+
+/// Build the storage key for a book file from its ID and the (already
+/// lowercased) extension. The key is what `Storage::put_path` writes to
+/// and what `Storage::delete` removes — the on-disk file for `LocalStorage`
+/// ends up at `{library_folder}/{book_id}.{extension}`.
+pub fn book_storage_key(book_id: &str, extension: &str) -> String {
+    format!("{book_id}.{extension}")
+}
+
+/// Derive the storage key for an existing book from its absolute
+/// `file_path` column (the legacy format pre-M4). Returns `None` when the
+/// path is not under the library folder — for linked books that reference
+/// external files, storage deletes must be skipped.
+pub fn book_key_from_path(file_path: &str, library_folder: &str) -> Option<String> {
+    let p = std::path::Path::new(file_path);
+    let base = std::path::Path::new(library_folder);
+    p.strip_prefix(base).ok().and_then(|rel| {
+        let parts: Vec<String> = rel
+            .components()
+            .map(|c| c.as_os_str().to_string_lossy().into_owned())
+            .collect();
+        if parts.is_empty() {
+            None
+        } else {
+            Some(parts.join("/"))
+        }
+    })
 }
 
 /// Ensure a file_path is loaded in the EPUB LRU cache. If it's already present,
@@ -368,15 +417,10 @@ pub async fn import_book(
         .map(|s| s.to_string_lossy().to_string())
         .unwrap_or_else(|| "Unknown".to_string());
 
-    // Step 3: Resolve library folder, creating it if necessary.
-    let library_folder = {
-        let conn = state.active_db()?.get()?;
-        match db::get_setting(&conn, "library_folder")? {
-            Some(f) => f,
-            None => default_library_folder()?,
-        }
-    };
-    std::fs::create_dir_all(&library_folder)?;
+    // Step 3: Resolve library storage (#64 M2). `active_storage` creates
+    // the library folder on first use and returns a `LocalStorage` handle
+    // rooted there.
+    let storage = state.active_storage()?;
 
     // Step 4: Copy source file into library folder as {book_id}.{ext},
     // or keep original path if import_mode is "link".
@@ -392,9 +436,11 @@ pub async fn import_book(
     let should_copy = import_mode != "link" || is_url_import;
 
     let (final_path, is_imported) = if should_copy {
-        let library_path = format!("{}/{}.{}", library_folder, book_id, extension);
-        std::fs::copy(&file_path, &library_path)
-            .map_err(|e| format!("Failed to copy file to library: {e}"))?;
+        let key = book_storage_key(&book_id, &extension);
+        storage
+            .put_path(&key, std::path::Path::new(&file_path))
+            .map_err(|e| FolioError::internal(format!("Failed to copy file to library: {e}")))?;
+        let library_path = storage.local_path(&key)?.to_string_lossy().to_string();
         (library_path, true)
     } else {
         (file_path.clone(), false)
@@ -755,6 +801,30 @@ pub async fn remove_book(book_id: String, state: State<'_, AppState>) -> FolioRe
         None,
     );
 
+    // #64 M2: resolve the storage handle and library folder *before* the
+    // DB delete, and degrade any failure to a logged warning. Doing the
+    // fallible storage setup after `db::delete_book` would leave the row
+    // gone but return `Err` to the UI — the caller can't retry because
+    // the book no longer exists, and the physical file stays orphaned.
+    let is_imported = existing_book
+        .as_ref()
+        .map(|b| b.is_imported)
+        .unwrap_or(true);
+    let cleanup = if is_imported {
+        match (state.active_library_folder(), state.active_storage()) {
+            (Ok(folder), Ok(storage)) => Some((folder, storage)),
+            (Err(e), _) | (_, Err(e)) => {
+                eprintln!(
+                    "Warning: could not resolve library storage for delete of '{}': {}",
+                    book_id, e
+                );
+                None
+            }
+        }
+    } else {
+        None
+    };
+
     db::delete_book(&conn, &book_id)?;
 
     // Evict the EPUB archive cache entry for this file.
@@ -766,12 +836,20 @@ pub async fn remove_book(book_id: String, state: State<'_, AppState>) -> FolioRe
 
     // Remove the physical file only if it was imported (copied) into the library.
     // Linked books reference external files that should not be deleted.
-    let is_imported = existing_book
-        .as_ref()
-        .map(|b| b.is_imported)
-        .unwrap_or(true);
-    if is_imported {
-        if let Some(path) = file_path {
+    //
+    // The DB still stores an absolute `file_path` (M4 migrates it to a
+    // storage key), so we derive the key by stripping the library folder
+    // prefix. A linked book's path sits outside that prefix and resolves
+    // to `None`, which skips deletion — preserving the pre-refactor
+    // behavior.
+    if let (Some(path), Some((library_folder, storage))) = (file_path, cleanup) {
+        if let Some(key) = book_key_from_path(&path, &library_folder) {
+            if let Err(e) = storage.delete(&key) {
+                eprintln!("Warning: could not delete library file '{}': {}", path, e);
+            }
+        } else {
+            // Fallback: path isn't under the library folder (legacy
+            // import, profile migration, etc.). Remove it directly.
             if let Err(e) = std::fs::remove_file(&path) {
                 if e.kind() != std::io::ErrorKind::NotFound {
                     eprintln!("Warning: could not delete library file '{}': {}", path, e);
@@ -4387,6 +4465,39 @@ mod tests {
         assert!(cache.get("a").is_none());
         assert!(cache.get("b").is_some() || cache.get("c").is_some());
         assert!(cache.total_bytes() <= 25);
+    }
+
+    // --- #64 M2: book storage key helpers ---
+
+    #[test]
+    fn book_storage_key_joins_id_and_extension() {
+        assert_eq!(book_storage_key("abc123", "epub"), "abc123.epub");
+        assert_eq!(book_storage_key("abc", "pdf"), "abc.pdf");
+    }
+
+    #[test]
+    fn book_key_from_path_strips_library_folder() {
+        let key = book_key_from_path("/library/abc123.epub", "/library").unwrap();
+        assert_eq!(key, "abc123.epub");
+    }
+
+    #[test]
+    fn book_key_from_path_handles_nested_paths() {
+        let key = book_key_from_path("/library/books/abc.epub", "/library").unwrap();
+        assert_eq!(key, "books/abc.epub");
+    }
+
+    #[test]
+    fn book_key_from_path_returns_none_for_external_file() {
+        // Linked books reference files outside the library folder.
+        assert!(book_key_from_path("/elsewhere/book.epub", "/library").is_none());
+    }
+
+    #[test]
+    fn book_key_from_path_handles_trailing_slash_on_folder() {
+        // strip_prefix normalizes — `/library/` and `/library` both work.
+        let key = book_key_from_path("/library/abc.epub", "/library/").unwrap();
+        assert_eq!(key, "abc.epub");
     }
 }
 
