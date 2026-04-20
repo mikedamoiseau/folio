@@ -3,14 +3,16 @@
 //! Book files, covers, and related blobs are accessed through a `Storage`
 //! trait so the backend can be swapped (local filesystem today, S3 or other
 //! object stores in the paid `folio-server`). The desktop app uses
-//! [`LocalStorage`] rooted at the library folder; this keeps on-disk layout
-//! and behavior identical to the pre-refactor code.
+//! [`LocalStorage`] rooted at the library folder; on-disk layout stays
+//! identical to the pre-refactor code, with the one behavior *improvement*
+//! that overwriting writes are now atomic (temp-file + rename) so a failed
+//! write cannot truncate an existing object.
 //!
 //! # Key scheme
 //!
-//! Keys are opaque UTF-8 strings using `/` as a separator. They are always
-//! relative — leading slashes, empty segments, and `..` segments are
-//! rejected. Valid examples:
+//! Keys are opaque UTF-8 strings using `/` as the one and only separator.
+//! They are always relative — leading slashes, backslashes anywhere,
+//! empty segments, and `..` / `.` segments are rejected. Valid examples:
 //!
 //! - `books/abc123.epub`
 //! - `covers/42/cover.jpg`
@@ -21,6 +23,7 @@
 //! See `docs/ROADMAP.md` #64.
 
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use crate::error::{FolioError, FolioResult};
@@ -71,7 +74,14 @@ pub trait Storage: Send + Sync {
     fn local_path(&self, key: &str) -> FolioResult<PathBuf>;
 }
 
-/// Reject keys that are absolute, empty, or contain `..` / empty segments.
+/// Reject keys that are absolute, empty, contain `..` / empty segments, or
+/// contain a backslash.
+///
+/// Backslashes are rejected outright: the documented separator is `/`, and
+/// accepting `\` would let the same logical key map to different on-disk
+/// layouts depending on platform (Unix treats `books\x` as one filename
+/// with a literal backslash; Windows-flavored callers might expect it to
+/// behave as a path separator). Rejecting keeps the contract backend-stable.
 ///
 /// Returned error is [`FolioError::InvalidInput`] so callers surface a
 /// consistent message to users.
@@ -79,7 +89,12 @@ pub fn validate_key(key: &str) -> FolioResult<()> {
     if key.is_empty() {
         return Err(FolioError::invalid("storage key is empty"));
     }
-    if key.starts_with('/') || key.starts_with('\\') {
+    if key.contains('\\') {
+        return Err(FolioError::invalid(format!(
+            "storage key must not contain backslashes: {key}"
+        )));
+    }
+    if key.starts_with('/') {
         return Err(FolioError::invalid(format!(
             "storage key must be relative: {key}"
         )));
@@ -90,7 +105,7 @@ pub fn validate_key(key: &str) -> FolioResult<()> {
             "storage key must be relative: {key}"
         )));
     }
-    for segment in key.split(['/', '\\']) {
+    for segment in key.split('/') {
         if segment.is_empty() {
             return Err(FolioError::invalid(format!(
                 "storage key has empty segment: {key}"
@@ -140,12 +155,8 @@ impl LocalStorage {
 
 impl Storage for LocalStorage {
     fn put(&self, key: &str, bytes: &[u8]) -> FolioResult<()> {
-        let path = self.resolve(key)?;
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        fs::write(&path, bytes)?;
-        Ok(())
+        let dest = self.resolve(key)?;
+        write_atomic(&dest, |f| f.write_all(bytes))
     }
 
     fn get(&self, key: &str) -> FolioResult<Vec<u8>> {
@@ -171,12 +182,12 @@ impl Storage for LocalStorage {
         // A prefix is a starts-with filter — not a key. Reject absolute and
         // traversal forms, but accept trailing slashes and other shapes that
         // are invalid as keys.
-        if prefix.starts_with('/') || prefix.starts_with('\\') {
+        if prefix.starts_with('/') || prefix.contains('\\') {
             return Err(FolioError::invalid(format!(
-                "list prefix must be relative: {prefix}"
+                "list prefix must be relative and slash-separated: {prefix}"
             )));
         }
-        if prefix.split(['/', '\\']).any(|s| s == "..") {
+        if prefix.split('/').any(|s| s == "..") {
             return Err(FolioError::invalid(format!(
                 "list prefix contains traversal segment: {prefix}"
             )));
@@ -196,16 +207,59 @@ impl Storage for LocalStorage {
 
     fn put_path(&self, key: &str, src: &Path) -> FolioResult<()> {
         let dest = self.resolve(key)?;
-        if let Some(parent) = dest.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        fs::copy(src, &dest)?;
-        Ok(())
+        write_atomic(&dest, |f| {
+            let mut src_file = fs::File::open(src)?;
+            std::io::copy(&mut src_file, f)?;
+            Ok(())
+        })
     }
 
     fn local_path(&self, key: &str) -> FolioResult<PathBuf> {
         self.resolve(key)
     }
+}
+
+/// Write to `dest` atomically: the caller's closure writes into a temp file
+/// in the same parent directory, the file is flushed to disk, and only on
+/// success is it renamed over `dest`. A failure partway through leaves the
+/// existing destination untouched, and the temp file is cleaned up.
+fn write_atomic<F>(dest: &Path, write: F) -> FolioResult<()>
+where
+    F: FnOnce(&mut fs::File) -> std::io::Result<()>,
+{
+    let parent = dest
+        .parent()
+        .ok_or_else(|| FolioError::invalid("destination has no parent directory"))?;
+    fs::create_dir_all(parent)?;
+
+    // Unique sibling temp name so we can rename atomically onto `dest`.
+    let tmp_name = format!(
+        ".{}.tmp.{}",
+        dest.file_name().and_then(|n| n.to_str()).unwrap_or("folio"),
+        uuid::Uuid::new_v4()
+    );
+    let tmp_path = parent.join(tmp_name);
+
+    let write_result = (|| -> std::io::Result<()> {
+        let mut f = fs::File::create(&tmp_path)?;
+        write(&mut f)?;
+        f.flush()?;
+        f.sync_all()?;
+        Ok(())
+    })();
+
+    if let Err(e) = write_result {
+        // Best-effort cleanup; ignore errors (e.g. temp already gone).
+        let _ = fs::remove_file(&tmp_path);
+        return Err(e.into());
+    }
+
+    if let Err(e) = fs::rename(&tmp_path, dest) {
+        let _ = fs::remove_file(&tmp_path);
+        return Err(e.into());
+    }
+
+    Ok(())
 }
 
 fn walk(base: &Path, dir: &Path, out: &mut Vec<String>) -> FolioResult<()> {
@@ -429,5 +483,60 @@ mod tests {
         let dyn_storage: &dyn Storage = &storage;
         dyn_storage.put("k", b"v").unwrap();
         assert_eq!(dyn_storage.get("k").unwrap(), b"v");
+    }
+
+    // --- backslash rejection ---
+
+    #[test]
+    fn validate_key_rejects_backslash_anywhere() {
+        assert!(validate_key("books\\x.epub").is_err());
+        assert!(validate_key("a\\b").is_err());
+        // Even a single trailing backslash.
+        assert!(validate_key("a\\").is_err());
+    }
+
+    #[test]
+    fn put_rejects_backslash_key() {
+        let (_d, storage) = temp_storage();
+        assert!(storage.put("books\\x.epub", b"data").is_err());
+    }
+
+    // --- atomic overwrite behavior ---
+
+    #[test]
+    fn put_path_failure_preserves_existing_object() {
+        let (_d, storage) = temp_storage();
+        storage.put("book.epub", b"original-contents").unwrap();
+        // Source does not exist; the copy into the temp file must fail.
+        let missing = PathBuf::from("/definitely/does/not/exist/source.epub");
+        let result = storage.put_path("book.epub", &missing);
+        assert!(result.is_err(), "put_path should fail on missing source");
+        // Original bytes must be untouched — no truncation, no partial write.
+        assert_eq!(storage.get("book.epub").unwrap(), b"original-contents");
+    }
+
+    #[test]
+    fn put_path_failure_leaves_no_temp_files_behind() {
+        let (d, storage) = temp_storage();
+        storage.put("book.epub", b"original").unwrap();
+        let missing = PathBuf::from("/definitely/does/not/exist/source.epub");
+        let _ = storage.put_path("book.epub", &missing);
+        // The parent directory should only contain the original file, no
+        // `.tmp.*` stragglers.
+        let entries: Vec<_> = fs::read_dir(d.path())
+            .unwrap()
+            .filter_map(Result::ok)
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(entries, vec!["book.epub".to_string()]);
+    }
+
+    #[test]
+    fn put_overwrites_existing_object() {
+        // Happy-path sanity check: atomic writes still overwrite.
+        let (_d, storage) = temp_storage();
+        storage.put("book.epub", b"v1").unwrap();
+        storage.put("book.epub", b"v2-longer-than-v1").unwrap();
+        assert_eq!(storage.get("book.epub").unwrap(), b"v2-longer-than-v1");
     }
 }
