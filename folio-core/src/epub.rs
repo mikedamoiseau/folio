@@ -3,7 +3,6 @@ use quick_xml::events::Event;
 use quick_xml::Reader;
 use std::collections::HashMap;
 use std::io::Read;
-use std::path::Path;
 use zip::ZipArchive;
 
 // ---- Error type ----
@@ -560,11 +559,25 @@ fn sanitize_cover_ext(ext: &str) -> &'static str {
     }
 }
 
-/// Extract cover image from an already-opened EPUB zip archive to dest_dir.
+/// Raw cover image data extracted from an EPUB: the image bytes plus a
+/// sanitized file extension (`png`, `jpg`, `webp`, `gif`, `svg`). Callers
+/// decide where to persist the bytes — typically via
+/// `folio_core::storage::Storage::put`. Introduced for #64 M3 so the
+/// parser no longer assumes a local filesystem destination.
+pub struct ExtractedCover {
+    pub bytes: Vec<u8>,
+    pub ext: String,
+}
+
+/// Extract the cover image bytes from an already-opened EPUB zip archive.
+///
+/// Returns `Ok(None)` when the EPUB has no cover or the referenced entry
+/// is missing/unsafe. The caller is responsible for writing the bytes to
+/// whichever storage layer it owns (previous versions of this function
+/// wrote directly to disk).
 pub fn extract_cover_from_archive(
     archive: &mut ZipArchive<std::fs::File>,
-    dest_dir: &str,
-) -> Result<Option<String>, EpubError> {
+) -> Result<Option<ExtractedCover>, EpubError> {
     let opf_path = find_opf_path(archive)?;
     let opf = read_zip_entry(archive, &opf_path)?;
     let base_dir = opf_base_dir(&opf_path).to_string();
@@ -590,20 +603,16 @@ pub fn extract_cover_from_archive(
 
     // Derive extension from href, restricted to known image types
     let raw_ext = cover_href.rsplit('.').next().unwrap_or("jpg");
-    let ext = sanitize_cover_ext(raw_ext);
-    let dest = Path::new(dest_dir).join(format!("cover.{ext}"));
+    let ext = sanitize_cover_ext(raw_ext).to_string();
 
-    std::fs::create_dir_all(dest_dir).map_err(EpubError::Io)?;
-    std::fs::write(&dest, bytes).map_err(EpubError::Io)?;
-
-    Ok(Some(dest.to_string_lossy().to_string()))
+    Ok(Some(ExtractedCover { bytes, ext }))
 }
 
-/// Extract cover image to dest_dir, return the destination path if found.
-pub fn extract_cover(file_path: &str, dest_dir: &str) -> Result<Option<String>, EpubError> {
+/// Extract cover image bytes from an EPUB file on disk.
+pub fn extract_cover(file_path: &str) -> Result<Option<ExtractedCover>, EpubError> {
     let file = std::fs::File::open(file_path).map_err(EpubError::Io)?;
     let mut archive = ZipArchive::new(file)?;
-    extract_cover_from_archive(&mut archive, dest_dir)
+    extract_cover_from_archive(&mut archive)
 }
 
 /// Get ordered list of chapters (spine order) from an already-opened archive.

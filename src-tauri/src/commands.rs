@@ -213,6 +213,16 @@ impl AppState {
             folder,
         )?))
     }
+
+    /// Returns a `Storage` handle for cover images, rooted at
+    /// `{data_dir}/covers` — the same on-disk layout used before #64 M3.
+    /// Cover keys take the form `{book_id}/cover.{ext}`.
+    pub fn covers_storage(&self) -> FolioResult<std::sync::Arc<dyn folio_core::storage::Storage>> {
+        let root = self.data_dir.join("covers");
+        Ok(std::sync::Arc::new(folio_core::storage::LocalStorage::new(
+            root,
+        )?))
+    }
 }
 
 /// Build the storage key for a book file from its ID and the (already
@@ -281,46 +291,89 @@ fn log_activity(
     let _ = db::prune_activity_log(conn, 1000);
 }
 
-// --- Cover helpers ---
+// --- Cover helpers (#64 M3) ---
 
-/// Decode a `data:<mime>;base64,<payload>` URI and write it to
-/// `{data_dir}/covers/{book_id}/cover.{ext}`. Returns the file path on success.
-fn save_cover_from_data_uri(
-    data_uri: &str,
-    data_dir: &std::path::Path,
-    book_id: &str,
-) -> Option<String> {
+/// Build the storage key for a book's cover image. The `covers_storage`
+/// on [`AppState`] is rooted at `{data_dir}/covers`, so a key of
+/// `{book_id}/cover.{ext}` resolves to the same on-disk path this app
+/// has always used.
+pub fn cover_storage_key(book_id: &str, ext: &str) -> String {
+    format!("{book_id}/cover.{ext}")
+}
+
+/// Decode a `data:<mime>;base64,<payload>` cover URI. Returns the raw
+/// image bytes plus a sanitized file extension (`png` / `jpg` / `webp`
+/// / `gif`). Callers persist the bytes via [`Storage::put`] rather than
+/// writing to disk directly.
+fn decode_cover_data_uri(data_uri: &str, book_id: &str) -> Option<(Vec<u8>, &'static str)> {
     use base64::{engine::general_purpose, Engine as _};
 
     let rest = data_uri.strip_prefix("data:")?;
     let (header, encoded) = rest.split_once(',')?;
     let mime = header.strip_suffix(";base64")?;
-    let ext = match mime {
+    let ext: &'static str = match mime {
         "image/png" => "png",
         "image/webp" => "webp",
         "image/gif" => "gif",
         _ => "jpg",
     };
-    let bytes = match general_purpose::STANDARD.decode(encoded) {
-        Ok(b) => b,
+    match general_purpose::STANDARD.decode(encoded) {
+        Ok(bytes) => Some((bytes, ext)),
         Err(e) => {
             log::warn!("cover extraction failed for book {book_id}: base64 decode error: {e}");
-            return None;
+            None
         }
-    };
-    let dir = data_dir.join("covers").join(book_id);
-    if let Err(e) = std::fs::create_dir_all(&dir) {
-        log::warn!(
-            "cover extraction failed for book {book_id}: could not create cover directory: {e}"
-        );
+    }
+}
+
+/// Write cover bytes through the covers storage and return the resulting
+/// local path (what the DB stores). On LocalStorage this is the usual
+/// `{data_dir}/covers/{book_id}/cover.{ext}` path; a future remote
+/// backend would materialize the key to a cache and return that.
+fn save_cover_via_storage(
+    storage: &dyn folio_core::storage::Storage,
+    book_id: &str,
+    bytes: &[u8],
+    ext: &str,
+) -> Option<String> {
+    let key = cover_storage_key(book_id, ext);
+    if let Err(e) = storage.put(&key, bytes) {
+        log::warn!("cover extraction failed for book {book_id}: could not write cover: {e}");
         return None;
     }
-    let path = dir.join(format!("cover.{ext}"));
-    if let Err(e) = std::fs::write(&path, &bytes) {
-        log::warn!("cover extraction failed for book {book_id}: could not write cover file: {e}");
-        return None;
+    match storage.local_path(&key) {
+        Ok(p) => Some(p.to_string_lossy().to_string()),
+        Err(e) => {
+            log::warn!("cover extraction failed for book {book_id}: could not resolve path: {e}");
+            None
+        }
     }
-    Some(path.to_string_lossy().to_string())
+}
+
+/// Save a decoded data-URI cover via the covers storage.
+fn save_cover_from_data_uri(
+    storage: &dyn folio_core::storage::Storage,
+    book_id: &str,
+    data_uri: &str,
+) -> Option<String> {
+    let (bytes, ext) = decode_cover_data_uri(data_uri, book_id)?;
+    save_cover_via_storage(storage, book_id, &bytes, ext)
+}
+
+/// Remove every cover artifact owned by a given book from the covers
+/// storage. Idempotent; missing entries are silently skipped.
+fn delete_book_covers(
+    storage: &dyn folio_core::storage::Storage,
+    book_id: &str,
+) -> FolioResult<()> {
+    let prefix = format!("{book_id}/");
+    let keys = storage.list(&prefix)?;
+    for key in keys {
+        if let Err(e) = storage.delete(&key) {
+            log::warn!("could not delete cover '{key}' for book {book_id}: {e}");
+        }
+    }
+    Ok(())
 }
 
 // --- Library management ---
@@ -329,7 +382,7 @@ fn save_cover_from_data_uri(
 pub async fn import_book(
     file_path: String,
     state: State<'_, AppState>,
-    app: AppHandle,
+    _app: AppHandle,
 ) -> FolioResult<Book> {
     use sha2::{Digest, Sha256};
     use std::io::Read;
@@ -447,9 +500,13 @@ pub async fn import_book(
     };
 
     // Steps 5 & 6: Parse using library-internal path; store hash in Book.
-    // cover_dir is set by the EPUB arm if a cover was extracted; the outer
-    // error handler uses it to clean up on DB insert failure.
-    let mut cover_dir: Option<std::path::PathBuf> = None;
+    //
+    // #64 M3: covers flow through the covers storage instead of writing
+    // directly to `{data_dir}/covers/…`. `cover_saved` tracks whether we
+    // persisted any cover artifact so the error-cleanup paths below can
+    // tear them back out via `delete_book_covers`.
+    let covers_storage = state.covers_storage()?;
+    let mut cover_saved = false;
 
     let book = match format {
         BookFormat::Epub => {
@@ -481,22 +538,24 @@ pub async fn import_book(
                 e.to_string()
             })?;
 
-            let cover_path = if let Ok(data_dir) = app.path().app_data_dir() {
-                let dir = data_dir.join("covers").join(&book_id);
-                let dest = dir.to_string_lossy().to_string();
-                match epub::extract_cover_from_archive(&mut archive, &dest) {
-                    Ok(Some(path)) => {
-                        cover_dir = Some(dir);
-                        Some(path)
+            let cover_path = match epub::extract_cover_from_archive(&mut archive) {
+                Ok(Some(cover)) => {
+                    let saved = save_cover_via_storage(
+                        &*covers_storage,
+                        &book_id,
+                        &cover.bytes,
+                        &cover.ext,
+                    );
+                    if saved.is_some() {
+                        cover_saved = true;
                     }
-                    Ok(None) => None,
-                    Err(e) => {
-                        log::warn!("cover extraction failed for book {book_id}: {e}");
-                        None
-                    }
+                    saved
                 }
-            } else {
-                None
+                Ok(None) => None,
+                Err(e) => {
+                    log::warn!("cover extraction failed for book {book_id}: {e}");
+                    None
+                }
             };
 
             let chapters = epub::get_chapter_list_from_archive(&mut archive).map_err(|e| {
@@ -548,24 +607,16 @@ pub async fn import_book(
                     let _ = std::fs::remove_file(&final_path);
                 }
             })?;
-            let cover_path = if let Ok(data_dir) = app.path().app_data_dir() {
-                let dir = data_dir.join("covers").join(&book_id);
-                let page_result = cbz::get_page_image(&final_path, 0);
-                if let Err(ref e) = page_result {
-                    log::warn!("cover extraction failed for book {book_id}: {e}");
-                }
-                if let Some(path) = page_result
-                    .ok()
-                    .and_then(|uri| save_cover_from_data_uri(&uri, &data_dir, &book_id))
-                {
-                    cover_dir = Some(dir);
-                    Some(path)
-                } else {
-                    None
-                }
-            } else {
-                None
-            };
+            let page_result = cbz::get_page_image(&final_path, 0);
+            if let Err(ref e) = page_result {
+                log::warn!("cover extraction failed for book {book_id}: {e}");
+            }
+            let cover_path = page_result
+                .ok()
+                .and_then(|uri| save_cover_from_data_uri(&*covers_storage, &book_id, &uri));
+            if cover_path.is_some() {
+                cover_saved = true;
+            }
             Book {
                 id: book_id,
                 title: meta.title,
@@ -606,24 +657,16 @@ pub async fn import_book(
                     let _ = std::fs::remove_file(&final_path);
                 }
             })?;
-            let cover_path = if let Ok(data_dir) = app.path().app_data_dir() {
-                let dir = data_dir.join("covers").join(&book_id);
-                let page_result = cbr::get_page_image(&final_path, 0);
-                if let Err(ref e) = page_result {
-                    log::warn!("cover extraction failed for book {book_id}: {e}");
-                }
-                if let Some(path) = page_result
-                    .ok()
-                    .and_then(|uri| save_cover_from_data_uri(&uri, &data_dir, &book_id))
-                {
-                    cover_dir = Some(dir);
-                    Some(path)
-                } else {
-                    None
-                }
-            } else {
-                None
-            };
+            let page_result = cbr::get_page_image(&final_path, 0);
+            if let Err(ref e) = page_result {
+                log::warn!("cover extraction failed for book {book_id}: {e}");
+            }
+            let cover_path = page_result
+                .ok()
+                .and_then(|uri| save_cover_from_data_uri(&*covers_storage, &book_id, &uri));
+            if cover_path.is_some() {
+                cover_saved = true;
+            }
             Book {
                 id: book_id,
                 title: meta.title,
@@ -675,24 +718,16 @@ pub async fn import_book(
                 meta.title
             };
             // Extract first page as cover thumbnail.
-            let cover_path = if let Ok(data_dir) = app.path().app_data_dir() {
-                let dir = data_dir.join("covers").join(&book_id);
-                let page_result = pdf::get_page_image(&final_path, 0, 400);
-                if let Err(ref e) = page_result {
-                    log::warn!("cover extraction failed for book {book_id}: {e}");
-                }
-                if let Some(path) = page_result
-                    .ok()
-                    .and_then(|uri| save_cover_from_data_uri(&uri, &data_dir, &book_id))
-                {
-                    cover_dir = Some(dir);
-                    Some(path)
-                } else {
-                    None
-                }
-            } else {
-                None
-            };
+            let page_result = pdf::get_page_image(&final_path, 0, 400);
+            if let Err(ref e) = page_result {
+                log::warn!("cover extraction failed for book {book_id}: {e}");
+            }
+            let cover_path = page_result
+                .ok()
+                .and_then(|uri| save_cover_from_data_uri(&*covers_storage, &book_id, &uri));
+            if cover_path.is_some() {
+                cover_saved = true;
+            }
             Book {
                 id: book_id,
                 title,
@@ -735,16 +770,16 @@ pub async fn import_book(
             if should_copy {
                 let _ = std::fs::remove_file(&final_path);
             }
-            if let Some(dir) = cover_dir {
-                let _ = std::fs::remove_dir_all(dir);
+            if cover_saved {
+                let _ = delete_book_covers(&*covers_storage, &book.id);
             }
             return Ok(existing);
         }
         if should_copy {
             let _ = std::fs::remove_file(&final_path);
         }
-        if let Some(dir) = cover_dir {
-            let _ = std::fs::remove_dir_all(dir);
+        if cover_saved {
+            let _ = delete_book_covers(&*covers_storage, &book.id);
         }
         return Err(e.into());
     }
@@ -763,8 +798,8 @@ pub async fn import_book(
         if should_copy {
             let _ = std::fs::remove_file(&final_path);
         }
-        if let Some(ref dir) = cover_dir {
-            let _ = std::fs::remove_dir_all(dir);
+        if cover_saved {
+            let _ = delete_book_covers(&*covers_storage, &book.id);
         }
         e.to_string()
     })?;
@@ -931,7 +966,7 @@ pub async fn update_book_metadata(
     publish_year: Option<u16>,
     rating: Option<f64>,
     state: State<'_, AppState>,
-    app: AppHandle,
+    _app: AppHandle,
 ) -> FolioResult<Book> {
     let conn = state.active_db()?.get()?;
     let mut book = db::get_book(&conn, &book_id)?
@@ -996,19 +1031,24 @@ pub async fn update_book_metadata(
         book.rating = if r <= 0.0 { None } else { Some(r.min(5.0)) };
     }
     if let Some(image_path) = cover_image_path {
-        // Copy new cover image into the covers directory
-        if let Ok(data_dir) = app.path().app_data_dir() {
-            let dir = data_dir.join("covers").join(&book_id);
-            std::fs::create_dir_all(&dir)?;
-            let ext = std::path::Path::new(&image_path)
-                .extension()
-                .and_then(|e| e.to_str())
-                .unwrap_or("jpg");
-            let dest = dir.join(format!("cover.{ext}"));
-            std::fs::copy(&image_path, &dest)
-                .map_err(|e| format!("Failed to copy cover image: {e}"))?;
-            book.cover_path = Some(dest.to_string_lossy().to_string());
-        }
+        // #64 M3: route user-supplied cover replacement through the covers
+        // storage instead of copying directly to `{data_dir}/covers/…`.
+        let covers_storage = state.covers_storage()?;
+        let ext = std::path::Path::new(&image_path)
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("jpg")
+            .to_string();
+        let key = cover_storage_key(&book_id, &ext);
+        covers_storage
+            .put_path(&key, std::path::Path::new(&image_path))
+            .map_err(|e| FolioError::internal(format!("Failed to copy cover image: {e}")))?;
+        book.cover_path = Some(
+            covers_storage
+                .local_path(&key)?
+                .to_string_lossy()
+                .to_string(),
+        );
     }
 
     db::update_book(&conn, &book)?;
@@ -2844,7 +2884,7 @@ pub async fn export_library(
 pub async fn import_library_backup(
     archive_path: String,
     state: State<'_, AppState>,
-    app: AppHandle,
+    _app: AppHandle,
 ) -> FolioResult<u32> {
     use std::io::Read;
 
@@ -2866,10 +2906,6 @@ pub async fn import_library_backup(
     };
     std::fs::create_dir_all(&library_folder)?;
 
-    let data_dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| FolioError::internal(format!("tauri: {e}")))?;
     let mut imported = 0u32;
 
     // Helper: validate that a ZIP entry name is safe (no path traversal).
@@ -2920,8 +2956,11 @@ pub async fn import_library_backup(
             continue; // skip books without files
         }
 
-        // Extract cover if present
+        // Extract cover if present — route through the covers storage
+        // (#64 M3) so on-disk layout stays identical whether restore writes
+        // locally or (eventually) to a remote backend.
         let mut cover_path = book.cover_path.clone();
+        let covers_storage = state.covers_storage()?;
         for ext_try in &["jpg", "png", "webp", "gif"] {
             let cover_name = format!("covers/{}/cover.{}", book.id, ext_try);
             if !is_safe_zip_entry(&cover_name) {
@@ -2931,13 +2970,16 @@ pub async fn import_library_backup(
                 if !is_safe_zip_entry(entry.name()) {
                     continue;
                 }
-                let dir = data_dir.join("covers").join(&book.id);
-                std::fs::create_dir_all(&dir)?;
-                let dest = dir.join(format!("cover.{ext_try}"));
                 let mut buf = Vec::new();
                 entry.read_to_end(&mut buf)?;
-                std::fs::write(&dest, &buf)?;
-                cover_path = Some(dest.to_string_lossy().to_string());
+                let key = cover_storage_key(&book.id, ext_try);
+                covers_storage.put(&key, &buf)?;
+                cover_path = Some(
+                    covers_storage
+                        .local_path(&key)?
+                        .to_string_lossy()
+                        .to_string(),
+                );
                 break;
             }
         }
@@ -3759,10 +3801,9 @@ pub async fn cleanup_library(
             cache.remove(&book.file_path);
         }
 
-        // Remove cover directory.
-        let cover_dir = state.data_dir.join("covers").join(&book.id);
-        if cover_dir.exists() {
-            let _ = std::fs::remove_dir_all(&cover_dir);
+        // Remove any cover artifacts for this book via the covers storage.
+        if let Ok(covers) = state.covers_storage() {
+            let _ = delete_book_covers(&*covers, &book.id);
         }
 
         // Remove extracted image cache.
@@ -4316,11 +4357,17 @@ pub async fn web_server_get_qr(state: State<'_, AppState>) -> FolioResult<String
 mod tests {
     use super::*;
 
+    fn temp_covers_storage() -> (tempfile::TempDir, folio_core::storage::LocalStorage) {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = folio_core::storage::LocalStorage::new(dir.path()).unwrap();
+        (dir, storage)
+    }
+
     #[test]
     fn save_cover_png_data_uri() {
-        let dir = tempfile::tempdir().unwrap();
+        let (_d, storage) = temp_covers_storage();
         let data_uri = "data:image/png;base64,iVBORw0KGgo=";
-        let result = save_cover_from_data_uri(data_uri, dir.path(), "book-123");
+        let result = save_cover_from_data_uri(&storage, "book-123", data_uri);
         assert!(result.is_some());
         let path = result.unwrap();
         assert!(path.contains("cover.png"));
@@ -4329,9 +4376,9 @@ mod tests {
 
     #[test]
     fn save_cover_jpeg_data_uri() {
-        let dir = tempfile::tempdir().unwrap();
+        let (_d, storage) = temp_covers_storage();
         let data_uri = "data:image/jpeg;base64,/9j/4AAQ";
-        let result = save_cover_from_data_uri(data_uri, dir.path(), "book-456");
+        let result = save_cover_from_data_uri(&storage, "book-456", data_uri);
         assert!(result.is_some());
         let path = result.unwrap();
         assert!(path.contains("cover.jpg"));
@@ -4339,9 +4386,9 @@ mod tests {
 
     #[test]
     fn save_cover_webp_data_uri() {
-        let dir = tempfile::tempdir().unwrap();
+        let (_d, storage) = temp_covers_storage();
         let data_uri = "data:image/webp;base64,UklGRg==";
-        let result = save_cover_from_data_uri(data_uri, dir.path(), "book-789");
+        let result = save_cover_from_data_uri(&storage, "book-789", data_uri);
         assert!(result.is_some());
         let path = result.unwrap();
         assert!(path.contains("cover.webp"));
@@ -4349,32 +4396,54 @@ mod tests {
 
     #[test]
     fn save_cover_invalid_data_uri_returns_none() {
-        let dir = tempfile::tempdir().unwrap();
+        let (_d, storage) = temp_covers_storage();
         // Missing data: prefix
-        assert!(save_cover_from_data_uri("not-a-data-uri", dir.path(), "book").is_none());
+        assert!(save_cover_from_data_uri(&storage, "book", "not-a-data-uri").is_none());
         // Missing ;base64
-        assert!(save_cover_from_data_uri("data:image/png,abc", dir.path(), "book").is_none());
+        assert!(save_cover_from_data_uri(&storage, "book", "data:image/png,abc").is_none());
         // Missing comma
-        assert!(save_cover_from_data_uri("data:image/png;base64", dir.path(), "book").is_none());
+        assert!(save_cover_from_data_uri(&storage, "book", "data:image/png;base64").is_none());
     }
 
     #[test]
     fn save_cover_creates_directory_structure() {
-        let dir = tempfile::tempdir().unwrap();
+        let (d, storage) = temp_covers_storage();
         let data_uri = "data:image/gif;base64,R0lGODlh";
-        let result = save_cover_from_data_uri(data_uri, dir.path(), "new-book");
+        let result = save_cover_from_data_uri(&storage, "new-book", data_uri);
         assert!(result.is_some());
-        // Verify the covers/new-book/ directory was created
-        assert!(dir.path().join("covers").join("new-book").exists());
+        // Verify the `new-book/` subdirectory and cover file were created.
+        assert!(d.path().join("new-book").exists());
+        assert!(d.path().join("new-book").join("cover.gif").exists());
     }
 
     #[test]
     fn save_cover_unknown_mime_defaults_to_jpg() {
-        let dir = tempfile::tempdir().unwrap();
+        let (_d, storage) = temp_covers_storage();
         let data_uri = "data:image/bmp;base64,Qk0=";
-        let result = save_cover_from_data_uri(data_uri, dir.path(), "book");
+        let result = save_cover_from_data_uri(&storage, "book", data_uri);
         assert!(result.is_some());
         assert!(result.unwrap().contains("cover.jpg"));
+    }
+
+    #[test]
+    fn delete_book_covers_removes_all_entries_for_book() {
+        let (_d, storage) = temp_covers_storage();
+        // Populate 2 covers for the book we care about and 1 for another.
+        save_cover_from_data_uri(&storage, "target", "data:image/png;base64,iVBORw0KGgo=").unwrap();
+        save_cover_from_data_uri(&storage, "target", "data:image/jpeg;base64,/9j/4AAQ").unwrap();
+        save_cover_from_data_uri(&storage, "other", "data:image/png;base64,iVBORw0KGgo=").unwrap();
+
+        delete_book_covers(&storage, "target").unwrap();
+
+        use folio_core::storage::Storage;
+        assert!(storage.list("target/").unwrap().is_empty());
+        assert_eq!(storage.list("other/").unwrap().len(), 1);
+    }
+
+    #[test]
+    fn cover_storage_key_format() {
+        assert_eq!(cover_storage_key("abc", "png"), "abc/cover.png");
+        assert_eq!(cover_storage_key("book-42", "jpg"), "book-42/cover.jpg");
     }
 
     #[test]
