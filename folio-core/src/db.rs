@@ -12,7 +12,7 @@ use crate::models::{
 pub type DbPool = Pool<SqliteConnectionManager>;
 
 /// Current schema version. Bump this when adding new migrations.
-const SCHEMA_VERSION: i64 = 1;
+const SCHEMA_VERSION: i64 = 2;
 
 /// Get the current schema version from the database (0 if not yet set).
 pub fn get_schema_version(conn: &Connection) -> Result<i64> {
@@ -38,6 +38,53 @@ fn set_schema_version(conn: &Connection, version: i64) -> Result<()> {
         "INSERT OR REPLACE INTO schema_version (id, version, applied_at) VALUES (1, ?1, strftime('%s','now'))",
         params![version],
     )?;
+    Ok(())
+}
+
+/// Migrate legacy absolute `file_path` values to storage keys (#64 M4).
+///
+/// Before M4, imported books stored their absolute filesystem path in
+/// `file_path`. The storage abstraction now treats `file_path` as an
+/// opaque key owned by the library `Storage` (relative to the library
+/// folder). This migration converts paths that still sit under the
+/// recorded `library_folder` setting into keys; rows that point
+/// elsewhere (linked books, or old imports from a since-changed
+/// library folder) are left untouched.
+fn migrate_file_path_to_key(conn: &Connection) -> Result<()> {
+    use rusqlite::OptionalExtension;
+
+    let library_folder: Option<String> = conn
+        .query_row(
+            "SELECT value FROM settings WHERE key = 'library_folder'",
+            [],
+            |row| row.get(0),
+        )
+        .optional()?;
+
+    let Some(library_folder) = library_folder else {
+        return Ok(()); // fresh install — no setting yet, nothing to migrate.
+    };
+    let root = Path::new(&library_folder);
+
+    let mut stmt = conn.prepare("SELECT id, file_path FROM books WHERE is_imported = 1")?;
+    let rows: Vec<(String, String)> = stmt
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?
+        .collect::<Result<Vec<_>>>()?;
+
+    for (id, file_path) in rows {
+        let path = Path::new(&file_path);
+        if let Some(key) = crate::storage::key_for_local_path(root, path) {
+            if key != file_path {
+                conn.execute(
+                    "UPDATE books SET file_path = ?1 WHERE id = ?2",
+                    params![key, id],
+                )?;
+            }
+        }
+    }
+
     Ok(())
 }
 
@@ -263,6 +310,14 @@ fn run_schema(conn: &Connection) -> Result<()> {
             DROP TABLE collection_rules;
             ALTER TABLE collection_rules_new RENAME TO collection_rules;",
         )?;
+    }
+
+    // #64 M4: convert legacy absolute `file_path` values to storage keys
+    // for imported books. Runs only when upgrading from schema_version < 2;
+    // new installs have no rows to migrate.
+    let prev_version = get_schema_version(conn)?;
+    if prev_version < 2 {
+        migrate_file_path_to_key(conn)?;
     }
 
     // Record schema version (#49)
@@ -2883,6 +2938,118 @@ mod tests {
             )
             .unwrap();
         assert_eq!(count, 1);
+    }
+
+    // #64 M4: file_path → storage key migration
+
+    /// Insert a pre-M4 book row bypassing the `UNIQUE(file_path)`
+    /// constraint that we would hit with two identical paths, by writing
+    /// the insert directly.
+    fn insert_pre_m4_book(conn: &Connection, id: &str, path: &str, is_imported: i32) {
+        conn.execute(
+            "INSERT INTO books (id, title, author, file_path, cover_path, total_chapters, added_at, format, is_imported) VALUES (?1, 'T', 'A', ?2, NULL, 0, 0, 'epub', ?3)",
+            params![id, path, is_imported],
+        )
+        .unwrap();
+    }
+
+    fn reset_schema_version(conn: &Connection, version: i64) {
+        conn.execute(
+            "INSERT OR REPLACE INTO schema_version (id, version, applied_at) VALUES (1, ?1, 0)",
+            params![version],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn test_m4_migration_converts_imported_paths_to_keys() {
+        let (_dir, conn) = setup();
+        set_setting(&conn, "library_folder", "/library").unwrap();
+        // Drop every row (setup already ran the migration on an empty db)
+        // and insert pre-M4 rows with absolute paths.
+        conn.execute("DELETE FROM books", []).unwrap();
+        insert_pre_m4_book(&conn, "a", "/library/a.epub", 1);
+        insert_pre_m4_book(&conn, "b", "/library/sub/b.pdf", 1);
+
+        // Rewind schema_version so run_schema re-runs the migration.
+        reset_schema_version(&conn, 1);
+        run_schema(&conn).unwrap();
+
+        let a: String = conn
+            .query_row("SELECT file_path FROM books WHERE id = 'a'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        let b: String = conn
+            .query_row("SELECT file_path FROM books WHERE id = 'b'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(a, "a.epub");
+        assert_eq!(b, "sub/b.pdf");
+    }
+
+    #[test]
+    fn test_m4_migration_leaves_linked_books_alone() {
+        let (_dir, conn) = setup();
+        set_setting(&conn, "library_folder", "/library").unwrap();
+        conn.execute("DELETE FROM books", []).unwrap();
+        // is_imported = 0 → linked book whose file lives outside the library.
+        insert_pre_m4_book(&conn, "linked", "/elsewhere/book.epub", 0);
+
+        reset_schema_version(&conn, 1);
+        run_schema(&conn).unwrap();
+
+        let got: String = conn
+            .query_row("SELECT file_path FROM books WHERE id = 'linked'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(got, "/elsewhere/book.epub");
+    }
+
+    #[test]
+    fn test_m4_migration_leaves_foreign_paths_alone() {
+        // Imported row whose path doesn't match the current library folder
+        // (e.g. profile was reconfigured). Leave it as-is; `remove_book`
+        // has a fallback for such rows.
+        let (_dir, conn) = setup();
+        set_setting(&conn, "library_folder", "/current-library").unwrap();
+        conn.execute("DELETE FROM books", []).unwrap();
+        insert_pre_m4_book(&conn, "old", "/old-library/book.epub", 1);
+
+        reset_schema_version(&conn, 1);
+        run_schema(&conn).unwrap();
+
+        let got: String = conn
+            .query_row("SELECT file_path FROM books WHERE id = 'old'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(got, "/old-library/book.epub");
+    }
+
+    #[test]
+    fn test_m4_migration_is_idempotent() {
+        // Running the migration twice must be a no-op on already-converted
+        // rows (keys don't sit under the library folder, so the second run
+        // leaves them alone).
+        let (_dir, conn) = setup();
+        set_setting(&conn, "library_folder", "/library").unwrap();
+        conn.execute("DELETE FROM books", []).unwrap();
+        insert_pre_m4_book(&conn, "a", "/library/a.epub", 1);
+
+        reset_schema_version(&conn, 1);
+        run_schema(&conn).unwrap();
+        reset_schema_version(&conn, 1);
+        run_schema(&conn).unwrap();
+
+        let a: String = conn
+            .query_row("SELECT file_path FROM books WHERE id = 'a'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(a, "a.epub");
     }
 
     #[test]

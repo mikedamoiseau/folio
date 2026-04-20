@@ -35,6 +35,35 @@ impl WebState {
         let pool = self.pool.lock()?;
         Ok(pool.get()?)
     }
+
+    /// Resolve a book's stored `file_path` to an absolute local path,
+    /// applying the same #64 M4 semantics the Tauri app uses:
+    /// - linked books → return unchanged
+    /// - legacy imported rows with an absolute path → return unchanged
+    /// - imported rows with a storage key → resolve through the library
+    ///   folder setting (falls back to the platform default)
+    pub fn resolve_book_path(&self, book: &folio_core::models::Book) -> FolioResult<String> {
+        if !book.is_imported {
+            return Ok(book.file_path.clone());
+        }
+        let p = std::path::Path::new(&book.file_path);
+        if p.is_absolute() {
+            return Ok(book.file_path.clone());
+        }
+        let folder = {
+            let conn = self.conn()?;
+            match folio_core::db::get_setting(&conn, "library_folder")? {
+                Some(f) => f,
+                None => folio_core::paths::default_library_folder()?,
+            }
+        };
+        let storage = folio_core::storage::LocalStorage::new(folder)?;
+        use folio_core::storage::Storage;
+        Ok(storage
+            .local_path(&book.file_path)?
+            .to_string_lossy()
+            .to_string())
+    }
 }
 
 /// Map any error convertible to [`FolioError`] into an HTTP `(status, message)`

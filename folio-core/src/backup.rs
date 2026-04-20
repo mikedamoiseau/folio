@@ -587,6 +587,25 @@ pub fn run_incremental_backup_with_progress(
     if !changed_books.is_empty() {
         result.books_pushed = changed_books.len() as u32;
         let total_files = changed_books.len() as u32;
+
+        // #64 M4: imported books store a storage key in `file_path`, not an
+        // absolute filesystem path. Resolve it through a `LocalStorage`
+        // rooted at the current library folder before handing a real path
+        // to `push_file_if_missing`. Legacy rows whose `file_path` is still
+        // absolute (e.g. migration skipped them because the folder
+        // changed) are detected via `Path::is_absolute` and passed through
+        // unchanged.
+        let library_storage: Option<crate::storage::LocalStorage> = {
+            let folder: Option<String> = conn
+                .query_row(
+                    "SELECT value FROM settings WHERE key = 'library_folder'",
+                    [],
+                    |row| row.get(0),
+                )
+                .ok();
+            folder.and_then(|f| crate::storage::LocalStorage::new(f).ok())
+        };
+
         for (i, book) in changed_books.iter().enumerate() {
             on_progress("Uploading books", (i + 1) as u32, total_files);
             // Skip file upload for linked books — they're not in the library folder
@@ -599,7 +618,26 @@ pub fn run_incremental_backup_with_progress(
                     .and_then(|e| e.to_str())
                     .unwrap_or("epub");
                 let remote_path = format!("files/{}.{}", hash, ext);
-                if push_file_if_missing(op, &remote_path, &book.file_path)? {
+
+                let local_path: String = if std::path::Path::new(&book.file_path).is_absolute() {
+                    book.file_path.clone()
+                } else if let Some(ref storage) = library_storage {
+                    use crate::storage::Storage;
+                    storage
+                        .local_path(&book.file_path)?
+                        .to_string_lossy()
+                        .into_owned()
+                } else {
+                    // No library folder setting and a key-form `file_path` —
+                    // we'd resolve against CWD, which is worse than skipping
+                    // with a clear warning.
+                    result.warnings.push(format!(
+                        "Book '{}' has a storage-key file_path but no library_folder setting — skipped",
+                        book.title
+                    ));
+                    continue;
+                };
+                if push_file_if_missing(op, &remote_path, &local_path)? {
                     result.files_pushed += 1;
                 }
             } else {
@@ -856,5 +894,98 @@ mod tests {
         assert!(manifest.last_sync_at > 0);
         let result2 = run_incremental_backup(&op, &conn).unwrap();
         assert_eq!(result2.books_pushed, 0);
+    }
+
+    /// Regression test for #64 M4: imported books store a storage key in
+    /// `file_path` rather than an absolute filesystem path. Incremental
+    /// backup must resolve the key through the configured library folder
+    /// before reading the file — otherwise `push_file_if_missing` hits
+    /// `std::fs::metadata("id.epub")` which resolves against the process
+    /// cwd and fails.
+    #[test]
+    fn incremental_backup_resolves_m4_storage_keys() {
+        // Remote backup destination.
+        let remote_dir = tempfile::tempdir().unwrap();
+        let config = BackupConfig {
+            provider_type: ProviderType::Fs,
+            values: [(
+                "root".to_string(),
+                remote_dir.path().to_string_lossy().to_string(),
+            )]
+            .into(),
+        };
+        let op = build_operator(&config).unwrap();
+
+        // Local library folder with one book file at `{folder}/b1.epub`.
+        let library_dir = tempfile::tempdir().unwrap();
+        let library_folder = library_dir.path().to_string_lossy().to_string();
+        std::fs::write(library_dir.path().join("b1.epub"), b"epub-bytes").unwrap();
+
+        // DB with the matching key-form row and the library_folder setting.
+        let db_dir = tempfile::tempdir().unwrap();
+        let conn = crate::db::init_db(db_dir.path().join("test.db").as_path()).unwrap();
+        crate::db::set_setting(&conn, "library_folder", &library_folder).unwrap();
+        conn.execute(
+            "INSERT INTO books (id, title, author, file_path, total_chapters, added_at, format, file_hash, is_imported, updated_at) VALUES ('b1', 'Test Book', 'Author', 'b1.epub', 5, 100, 'epub', 'deadbeef', 1, 100)",
+            [],
+        )
+        .unwrap();
+
+        let result = run_incremental_backup(&op, &conn).unwrap();
+        assert_eq!(result.books_pushed, 1);
+        assert_eq!(
+            result.files_pushed, 1,
+            "file should have been uploaded via resolved storage key"
+        );
+
+        // Verify the file landed at the expected remote path.
+        let remote_file = remote_dir.path().join("files").join("deadbeef.epub");
+        assert!(
+            remote_file.exists(),
+            "remote file should exist at {:?}",
+            remote_file
+        );
+        assert_eq!(std::fs::read(&remote_file).unwrap(), b"epub-bytes");
+    }
+
+    #[test]
+    fn incremental_backup_passes_legacy_absolute_paths_unchanged() {
+        // A pre-M4 imported row still holds an absolute path (its library
+        // folder changed so the migration left it alone). Backup must not
+        // rewrite it through LocalStorage — passing `Path::is_absolute`
+        // short-circuits the resolver.
+        let remote_dir = tempfile::tempdir().unwrap();
+        let config = BackupConfig {
+            provider_type: ProviderType::Fs,
+            values: [(
+                "root".to_string(),
+                remote_dir.path().to_string_lossy().to_string(),
+            )]
+            .into(),
+        };
+        let op = build_operator(&config).unwrap();
+
+        let book_dir = tempfile::tempdir().unwrap();
+        let book_path = book_dir.path().join("legacy.epub");
+        std::fs::write(&book_path, b"legacy-bytes").unwrap();
+
+        // `library_folder` setting points somewhere else — the legacy row
+        // sits outside it and must be handled by the absolute-path branch.
+        let library_dir = tempfile::tempdir().unwrap();
+        let library_folder = library_dir.path().to_string_lossy().to_string();
+
+        let db_dir = tempfile::tempdir().unwrap();
+        let conn = crate::db::init_db(db_dir.path().join("test.db").as_path()).unwrap();
+        crate::db::set_setting(&conn, "library_folder", &library_folder).unwrap();
+        conn.execute(
+            "INSERT INTO books (id, title, author, file_path, total_chapters, added_at, format, file_hash, is_imported, updated_at) VALUES ('b1', 'Legacy', 'Author', ?1, 5, 100, 'epub', 'legacyhash', 1, 100)",
+            [book_path.to_string_lossy().to_string()],
+        )
+        .unwrap();
+
+        let result = run_incremental_backup(&op, &conn).unwrap();
+        assert_eq!(result.files_pushed, 1);
+        let remote_file = remote_dir.path().join("files").join("legacyhash.epub");
+        assert_eq!(std::fs::read(&remote_file).unwrap(), b"legacy-bytes");
     }
 }
