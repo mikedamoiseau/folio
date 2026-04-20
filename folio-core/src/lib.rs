@@ -22,6 +22,7 @@ pub mod page_cache;
 pub mod paths;
 pub mod pdf;
 pub mod providers;
+pub mod storage;
 pub mod sync;
 
 // Flat re-exports for common types so consumers can write
