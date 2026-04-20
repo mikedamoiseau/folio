@@ -801,6 +801,30 @@ pub async fn remove_book(book_id: String, state: State<'_, AppState>) -> FolioRe
         None,
     );
 
+    // #64 M2: resolve the storage handle and library folder *before* the
+    // DB delete, and degrade any failure to a logged warning. Doing the
+    // fallible storage setup after `db::delete_book` would leave the row
+    // gone but return `Err` to the UI — the caller can't retry because
+    // the book no longer exists, and the physical file stays orphaned.
+    let is_imported = existing_book
+        .as_ref()
+        .map(|b| b.is_imported)
+        .unwrap_or(true);
+    let cleanup = if is_imported {
+        match (state.active_library_folder(), state.active_storage()) {
+            (Ok(folder), Ok(storage)) => Some((folder, storage)),
+            (Err(e), _) | (_, Err(e)) => {
+                eprintln!(
+                    "Warning: could not resolve library storage for delete of '{}': {}",
+                    book_id, e
+                );
+                None
+            }
+        }
+    } else {
+        None
+    };
+
     db::delete_book(&conn, &book_id)?;
 
     // Evict the EPUB archive cache entry for this file.
@@ -813,30 +837,22 @@ pub async fn remove_book(book_id: String, state: State<'_, AppState>) -> FolioRe
     // Remove the physical file only if it was imported (copied) into the library.
     // Linked books reference external files that should not be deleted.
     //
-    // #64 M2: route the delete through the Storage trait. The DB still
-    // stores an absolute `file_path` (M4 migrates it to a storage key), so
-    // we derive the key by stripping the library folder prefix. A linked
-    // book's path sits outside that prefix and resolves to `None`, which
-    // skips deletion — preserving the pre-refactor behavior.
-    let is_imported = existing_book
-        .as_ref()
-        .map(|b| b.is_imported)
-        .unwrap_or(true);
-    if is_imported {
-        if let Some(path) = file_path {
-            let storage = state.active_storage()?;
-            let library_folder = state.active_library_folder()?;
-            if let Some(key) = book_key_from_path(&path, &library_folder) {
-                if let Err(e) = storage.delete(&key) {
+    // The DB still stores an absolute `file_path` (M4 migrates it to a
+    // storage key), so we derive the key by stripping the library folder
+    // prefix. A linked book's path sits outside that prefix and resolves
+    // to `None`, which skips deletion — preserving the pre-refactor
+    // behavior.
+    if let (Some(path), Some((library_folder, storage))) = (file_path, cleanup) {
+        if let Some(key) = book_key_from_path(&path, &library_folder) {
+            if let Err(e) = storage.delete(&key) {
+                eprintln!("Warning: could not delete library file '{}': {}", path, e);
+            }
+        } else {
+            // Fallback: path isn't under the library folder (legacy
+            // import, profile migration, etc.). Remove it directly.
+            if let Err(e) = std::fs::remove_file(&path) {
+                if e.kind() != std::io::ErrorKind::NotFound {
                     eprintln!("Warning: could not delete library file '{}': {}", path, e);
-                }
-            } else {
-                // Fallback: path isn't under the library folder (legacy
-                // import, profile migration, etc.). Remove it directly.
-                if let Err(e) = std::fs::remove_file(&path) {
-                    if e.kind() != std::io::ErrorKind::NotFound {
-                        eprintln!("Warning: could not delete library file '{}': {}", path, e);
-                    }
                 }
             }
         }
