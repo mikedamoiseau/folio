@@ -64,6 +64,15 @@ impl WebState {
             .to_string_lossy()
             .to_string())
     }
+
+    /// Returns a `Storage` handle for EPUB inline chapter images, rooted at
+    /// `{data_dir}/images`. Mirrors `AppState::images_storage` so the Tauri
+    /// and web-server flows write to the same physical layout. Introduced
+    /// for #64 M6.
+    pub fn images_storage(&self) -> FolioResult<Arc<dyn folio_core::storage::Storage>> {
+        let root = self.data_dir.join("images");
+        Ok(Arc::new(folio_core::storage::LocalStorage::new(root)?))
+    }
 }
 
 /// Map any error convertible to [`FolioError`] into an HTTP `(status, message)`

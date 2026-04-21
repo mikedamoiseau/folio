@@ -248,8 +248,8 @@ async fn get_chapter_content(
     }
 
     let file_path = state.resolve_book_path(&book).map_err(folio_status)?;
-    let data_dir = state.data_dir.to_string_lossy().to_string();
-    let html = crate::epub::get_chapter_content(&file_path, index, &data_dir, &id)
+    let images_storage = state.images_storage().map_err(folio_status)?;
+    let html = crate::epub::get_chapter_content(&file_path, index, images_storage.as_ref(), &id)
         .map_err(folio_status)?;
 
     // Rewrite asset:// URLs to HTTP URLs for web serving

@@ -224,6 +224,16 @@ impl AppState {
         )?))
     }
 
+    /// Returns a `Storage` handle for EPUB inline chapter images, rooted at
+    /// `{data_dir}/images` — matches the on-disk layout used before #64 M6.
+    /// Image keys take the form `{book_id}/{chapter_index}/{basename}`.
+    pub fn images_storage(&self) -> FolioResult<std::sync::Arc<dyn folio_core::storage::Storage>> {
+        let root = self.data_dir.join("images");
+        Ok(std::sync::Arc::new(folio_core::storage::LocalStorage::new(
+            root,
+        )?))
+    }
+
     /// Resolve a book's stored `file_path` value to an absolute local
     /// filesystem path that can be handed to parsers.
     ///
@@ -392,6 +402,23 @@ fn delete_book_covers(
     for key in keys {
         if let Err(e) = storage.delete(&key) {
             log::warn!("could not delete cover '{key}' for book {book_id}: {e}");
+        }
+    }
+    Ok(())
+}
+
+/// Remove every extracted EPUB inline image owned by a given book from the
+/// images storage (all chapters). Idempotent; missing entries are silently
+/// skipped. Introduced for #64 M6.
+fn delete_book_images(
+    storage: &dyn folio_core::storage::Storage,
+    book_id: &str,
+) -> FolioResult<()> {
+    let prefix = format!("{book_id}/");
+    let keys = storage.list(&prefix)?;
+    for key in keys {
+        if let Err(e) = storage.delete(&key) {
+            log::warn!("could not delete image '{key}' for book {book_id}: {e}");
         }
     }
     Ok(())
@@ -942,10 +969,9 @@ pub async fn remove_book(book_id: String, state: State<'_, AppState>) -> FolioRe
         }
     }
 
-    // Clean up extracted image cache for this book.
-    let image_cache_dir = state.data_dir.join("images").join(&book_id);
-    if image_cache_dir.exists() {
-        let _ = std::fs::remove_dir_all(&image_cache_dir);
+    // Clean up extracted inline images for this book via the images storage.
+    if let Ok(images) = state.images_storage() {
+        let _ = delete_book_images(&*images, &book_id);
     }
 
     Ok(())
@@ -1172,7 +1198,7 @@ pub async fn get_chapter_content(
     };
 
     validate_file_exists(&file_path)?;
-    let data_dir = state.data_dir.to_string_lossy().to_string();
+    let images_storage = state.images_storage()?;
 
     let mut cache = state.epub_cache.lock()?;
     ensure_epub_cached(&mut cache, &file_path);
@@ -1182,7 +1208,7 @@ pub async fn get_chapter_content(
     Ok(epub::get_chapter_content_from_cache(
         cached,
         chapter_index as usize,
-        &data_dir,
+        images_storage.as_ref(),
         &book_id,
     )?)
 }
@@ -1266,7 +1292,7 @@ pub async fn get_all_chapters(
     };
 
     validate_file_exists(&file_path)?;
-    let data_dir = state.data_dir.to_string_lossy().to_string();
+    let images_storage = state.images_storage()?;
 
     let mut cache = state.epub_cache.lock()?;
     ensure_epub_cached(&mut cache, &file_path);
@@ -1276,7 +1302,8 @@ pub async fn get_all_chapters(
 
     let mut chapters = Vec::with_capacity(total_chapters as usize);
     for i in 0..total_chapters as usize {
-        let html = epub::get_chapter_content_from_cache(cached, i, &data_dir, &book_id)?;
+        let html =
+            epub::get_chapter_content_from_cache(cached, i, images_storage.as_ref(), &book_id)?;
         chapters.push(html);
     }
     Ok(chapters)
@@ -3876,10 +3903,9 @@ pub async fn cleanup_library(
             let _ = delete_book_covers(&*covers, &book.id);
         }
 
-        // Remove extracted image cache.
-        let image_cache_dir = state.data_dir.join("images").join(&book.id);
-        if image_cache_dir.exists() {
-            let _ = std::fs::remove_dir_all(&image_cache_dir);
+        // Remove extracted inline images via the images storage.
+        if let Ok(images) = state.images_storage() {
+            let _ = delete_book_images(&*images, &book.id);
         }
 
         log_activity(
