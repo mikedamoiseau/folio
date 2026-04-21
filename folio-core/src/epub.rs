@@ -649,11 +649,12 @@ pub fn get_chapter_list(file_path: &str) -> Result<Vec<ChapterInfo>, EpubError> 
 
 /// Get HTML content of a specific chapter by index.
 /// Relative `<img src>` attributes are rewritten to `asset://` URLs pointing to
-/// images extracted from the EPUB to disk, avoiding large base64 strings in memory.
+/// images extracted from the EPUB into `storage`, avoiding large base64
+/// strings in memory. Keys land under `{book_id}/{chapter_index}/{basename}`.
 pub fn get_chapter_content(
     file_path: &str,
     chapter_index: usize,
-    data_dir: &str,
+    storage: &dyn crate::storage::Storage,
     book_id: &str,
 ) -> Result<String, EpubError> {
     let file = std::fs::File::open(file_path).map_err(EpubError::Io)?;
@@ -692,13 +693,14 @@ pub fn get_chapter_content(
         }
     };
 
-    let image_dir = format!("{}/images/{}/{}", data_dir, book_id, chapter_index);
+    let key_prefix = format!("{book_id}/{chapter_index}");
 
     Ok(rewrite_img_srcs_to_asset_urls(
         &cleaned,
         &mut archive,
         &chapter_dir,
-        &image_dir,
+        storage,
+        &key_prefix,
     ))
 }
 
@@ -707,7 +709,7 @@ pub fn get_chapter_content(
 pub fn get_chapter_content_from_cache(
     cached: &mut CachedEpubArchive,
     chapter_index: usize,
-    data_dir: &str,
+    storage: &dyn crate::storage::Storage,
     book_id: &str,
 ) -> Result<String, EpubError> {
     let idref = cached.spine.get(chapter_index).ok_or_else(|| {
@@ -735,13 +737,14 @@ pub fn get_chapter_content_from_cache(
         }
     };
 
-    let image_dir = format!("{}/images/{}/{}", data_dir, book_id, chapter_index);
+    let key_prefix = format!("{book_id}/{chapter_index}");
 
     Ok(rewrite_img_srcs_to_asset_urls(
         &cleaned,
         &mut cached.archive,
         &chapter_dir,
-        &image_dir,
+        storage,
+        &key_prefix,
     ))
 }
 
@@ -968,19 +971,25 @@ fn replace_attr_value(tag: &str, attr: &str, old_val: &str, new_val: &str) -> St
 }
 
 /// Walk the sanitized chapter HTML and replace relative `<img src>` values
-/// with `asset://localhost/` URLs pointing to images extracted from the EPUB zip
-/// to disk. This avoids base64-encoding large images into the HTML string, which
-/// can cause memory issues with illustrated books.
+/// with `asset://localhost/` URLs pointing to images extracted from the EPUB
+/// zip through `storage`. This avoids base64-encoding large images into the
+/// HTML string, which can cause memory issues with illustrated books.
 ///
-/// Images are cached in `{image_dir}/` — if a file already exists on disk it is
-/// not re-extracted. External URLs and SVG images are left untouched.
-/// Missing images fail silently (the tag is left as-is) so a single broken
-/// asset doesn't abort the whole chapter.
+/// Images are keyed as `{key_prefix}/{basename}` — if `storage.exists(key)`
+/// is already true the zip entry is not re-extracted. External URLs and SVG
+/// images are left untouched. Missing images and storage failures fall back
+/// to leaving the `<img>` tag unchanged so a single broken asset doesn't
+/// abort the whole chapter.
+///
+/// The `asset://` URL is derived from `storage.local_path(key)` — remote
+/// backends that need a command-fetch fallback should implement a
+/// caching-aware `local_path` or return an error to trigger the fallback.
 fn rewrite_img_srcs_to_asset_urls(
     html: &str,
     archive: &mut ZipArchive<std::fs::File>,
     chapter_dir: &str,
-    image_dir: &str,
+    storage: &dyn crate::storage::Storage,
+    key_prefix: &str,
 ) -> String {
     let mut result = String::with_capacity(html.len());
     let mut rest = html;
@@ -1040,26 +1049,27 @@ fn rewrite_img_srcs_to_asset_urls(
                         let resolved = resolve_zip_path(chapter_dir, clean_src);
                         // Derive a safe filename from the image path basename.
                         let basename = clean_src.rsplit('/').next().unwrap_or(clean_src);
-                        let dest_path = std::path::Path::new(image_dir).join(basename);
+                        let key = format!("{key_prefix}/{basename}");
 
-                        // Extract to disk if not already cached.
-                        let written = if dest_path.exists() {
+                        // Extract through storage if not already cached.
+                        let written = if storage.exists(&key).unwrap_or(false) {
                             true
                         } else if let Ok(bytes) = read_zip_entry_bytes(archive, &resolved) {
-                            if std::fs::create_dir_all(image_dir).is_ok() {
-                                std::fs::write(&dest_path, bytes).is_ok()
-                            } else {
-                                false
-                            }
+                            storage.put(&key, &bytes).is_ok()
                         } else {
                             false
                         };
 
                         if written {
-                            let abs_path = dest_path.to_string_lossy();
-                            let encoded = urlencoding::encode(&abs_path);
-                            let asset_url = format!("asset://localhost/{}", encoded);
-                            replace_attr_value(tag, "src", &src, &asset_url)
+                            match storage.local_path(&key) {
+                                Ok(p) => {
+                                    let abs_path = p.to_string_lossy();
+                                    let encoded = urlencoding::encode(&abs_path);
+                                    let asset_url = format!("asset://localhost/{}", encoded);
+                                    replace_attr_value(tag, "src", &src, &asset_url)
+                                }
+                                Err(_) => tag.to_string(),
+                            }
                         } else {
                             tag.to_string()
                         }
@@ -1687,12 +1697,16 @@ mod tests {
 
         let file = std::fs::File::open(&zip_path).unwrap();
         let mut archive = ZipArchive::new(file).unwrap();
-        let image_dir = tmp.path().join("images").join("book1").join("0");
-        let image_dir_str = image_dir.to_string_lossy().to_string();
+        let storage = crate::storage::LocalStorage::new(tmp.path().join("images")).unwrap();
 
         let html = r#"<p>Text</p><img src="../images/photo.jpg"/><p>More</p>"#;
-        let result =
-            rewrite_img_srcs_to_asset_urls(html, &mut archive, "OEBPS/Text/", &image_dir_str);
+        let result = rewrite_img_srcs_to_asset_urls(
+            html,
+            &mut archive,
+            "OEBPS/Text/",
+            &storage,
+            "book1/0",
+        );
 
         assert!(
             result.contains("asset://localhost/"),
@@ -1706,8 +1720,9 @@ mod tests {
             result.contains("photo.jpg"),
             "should reference the image filename"
         );
-        // Verify image was written to disk
-        assert!(image_dir.join("photo.jpg").exists());
+        // Verify image was written through storage
+        use crate::storage::Storage;
+        assert!(storage.exists("book1/0/photo.jpg").unwrap());
     }
 
     #[test]
@@ -1720,17 +1735,17 @@ mod tests {
             &[0x89, 0x50, 0x4E, 0x47], // PNG magic bytes
         );
 
-        let image_dir = tmp.path().join("images").join("book1").join("0");
-        let image_dir_str = image_dir.to_string_lossy().to_string();
+        let storage = crate::storage::LocalStorage::new(tmp.path().join("images")).unwrap();
         let html = r#"<img src="images/icon.png"/>"#;
 
         // First call: extracts image
         {
             let file = std::fs::File::open(&zip_path).unwrap();
             let mut archive = ZipArchive::new(file).unwrap();
-            rewrite_img_srcs_to_asset_urls(html, &mut archive, "", &image_dir_str);
+            rewrite_img_srcs_to_asset_urls(html, &mut archive, "", &storage, "book1/0");
         }
-        let dest = image_dir.join("icon.png");
+        use crate::storage::Storage;
+        let dest = storage.local_path("book1/0/icon.png").unwrap();
         assert!(dest.exists());
         let mtime_first = std::fs::metadata(&dest).unwrap().modified().unwrap();
 
@@ -1741,7 +1756,7 @@ mod tests {
         {
             let file = std::fs::File::open(&zip_path).unwrap();
             let mut archive = ZipArchive::new(file).unwrap();
-            rewrite_img_srcs_to_asset_urls(html, &mut archive, "", &image_dir_str);
+            rewrite_img_srcs_to_asset_urls(html, &mut archive, "", &storage, "book1/0");
         }
         let mtime_second = std::fs::metadata(&dest).unwrap().modified().unwrap();
         assert_eq!(
@@ -1757,12 +1772,11 @@ mod tests {
 
         let file = std::fs::File::open(&zip_path).unwrap();
         let mut archive = ZipArchive::new(file).unwrap();
-        let image_dir = tmp.path().join("out");
-        let image_dir_str = image_dir.to_string_lossy().to_string();
+        let storage = crate::storage::LocalStorage::new(tmp.path().join("out")).unwrap();
 
         let html =
             r#"<img src="https://example.com/photo.jpg"/><img src="data:image/png;base64,abc"/>"#;
-        let result = rewrite_img_srcs_to_asset_urls(html, &mut archive, "", &image_dir_str);
+        let result = rewrite_img_srcs_to_asset_urls(html, &mut archive, "", &storage, "b/0");
 
         assert_eq!(result, html, "external URLs should be unchanged");
     }
@@ -1774,13 +1788,68 @@ mod tests {
 
         let file = std::fs::File::open(&zip_path).unwrap();
         let mut archive = ZipArchive::new(file).unwrap();
-        let image_dir = tmp.path().join("out");
-        let image_dir_str = image_dir.to_string_lossy().to_string();
+        let storage = crate::storage::LocalStorage::new(tmp.path().join("out")).unwrap();
 
         let html = r#"<img src="icon.svg"/>"#;
-        let result = rewrite_img_srcs_to_asset_urls(html, &mut archive, "", &image_dir_str);
+        let result = rewrite_img_srcs_to_asset_urls(html, &mut archive, "", &storage, "b/0");
 
         assert_eq!(result, html, "SVG images should be left as-is");
+    }
+
+    #[test]
+    fn test_rewrite_img_srcs_leaves_tag_unchanged_when_local_path_errors() {
+        // Mock Storage whose put() succeeds but local_path() always errors
+        // — simulates a remote backend that accepted a write but could not
+        // materialize a local filesystem path. The rewriter must fall back
+        // to leaving the <img> tag unchanged rather than emitting a broken
+        // asset:// URL.
+        use crate::storage::Storage;
+
+        struct NoLocalPathStorage;
+        impl Storage for NoLocalPathStorage {
+            fn put(&self, _key: &str, _bytes: &[u8]) -> crate::error::FolioResult<()> {
+                Ok(())
+            }
+            fn get(&self, _key: &str) -> crate::error::FolioResult<Vec<u8>> {
+                Ok(Vec::new())
+            }
+            fn exists(&self, _key: &str) -> crate::error::FolioResult<bool> {
+                Ok(false)
+            }
+            fn delete(&self, _key: &str) -> crate::error::FolioResult<()> {
+                Ok(())
+            }
+            fn list(&self, _prefix: &str) -> crate::error::FolioResult<Vec<String>> {
+                Ok(Vec::new())
+            }
+            fn size(&self, _key: &str) -> crate::error::FolioResult<u64> {
+                Ok(0)
+            }
+            fn local_path(&self, key: &str) -> crate::error::FolioResult<std::path::PathBuf> {
+                Err(crate::error::FolioError::internal(format!(
+                    "remote backend cannot resolve {key}"
+                )))
+            }
+        }
+
+        let tmp = tempfile::tempdir().unwrap();
+        let zip_path = create_test_zip_with_image(
+            tmp.path(),
+            "test.zip",
+            "photo.jpg",
+            &[0xFF, 0xD8, 0xFF, 0xE0],
+        );
+        let file = std::fs::File::open(&zip_path).unwrap();
+        let mut archive = ZipArchive::new(file).unwrap();
+        let storage = NoLocalPathStorage;
+
+        let html = r#"<img src="photo.jpg"/>"#;
+        let result = rewrite_img_srcs_to_asset_urls(html, &mut archive, "", &storage, "b/0");
+
+        assert_eq!(
+            result, html,
+            "tag should be unchanged when local_path cannot resolve"
+        );
     }
 
     #[test]
@@ -1791,11 +1860,10 @@ mod tests {
 
         let file = std::fs::File::open(&zip_path).unwrap();
         let mut archive = ZipArchive::new(file).unwrap();
-        let image_dir = tmp.path().join("out");
-        let image_dir_str = image_dir.to_string_lossy().to_string();
+        let storage = crate::storage::LocalStorage::new(tmp.path().join("out")).unwrap();
 
         let html = r#"<img src="missing.jpg"/>"#;
-        let result = rewrite_img_srcs_to_asset_urls(html, &mut archive, "", &image_dir_str);
+        let result = rewrite_img_srcs_to_asset_urls(html, &mut archive, "", &storage, "b/0");
 
         assert_eq!(result, html, "missing images should leave tag unchanged");
     }
