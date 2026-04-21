@@ -1,13 +1,12 @@
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use std::fs;
+use std::collections::{HashMap, HashSet};
 use std::io::Read;
-use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use zip::ZipArchive;
 
 use crate::error::{FolioError, FolioResult};
 use crate::models::BookFormat;
+use crate::storage::Storage;
 
 /// Enable with: FOLIO_DEBUG_PAGES=1
 /// Prints to stderr so it shows in the terminal running `npm run tauri dev`.
@@ -30,6 +29,10 @@ pub use page_dbg;
 const MAX_CACHED_BOOKS: usize = 5;
 pub const DEFAULT_MAX_CACHE_SIZE_MB: u64 = 500;
 const MAX_AGE_DAYS: u64 = 7;
+
+/// Top-level key prefix under which every page-cache artifact lives.
+/// `{CACHE_PREFIX}{book_hash}/manifest.json` + `{CACHE_PREFIX}{book_hash}/{NNN}.{ext}`.
+const CACHE_PREFIX: &str = "page-cache/";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -63,33 +66,37 @@ pub struct CacheBookInfo {
 }
 
 // ---------------------------------------------------------------------------
-// Disk helpers
+// Key helpers
 // ---------------------------------------------------------------------------
 
-pub fn cache_root(app_cache_dir: &Path) -> PathBuf {
-    app_cache_dir.join("page-cache")
+fn manifest_key(book_hash: &str) -> String {
+    format!("{CACHE_PREFIX}{book_hash}/manifest.json")
 }
 
-pub fn book_cache_dir(app_cache_dir: &Path, book_hash: &str) -> PathBuf {
-    cache_root(app_cache_dir).join(book_hash)
+fn page_key(book_hash: &str, page_name: &str) -> String {
+    format!("{CACHE_PREFIX}{book_hash}/{page_name}")
 }
 
-pub fn read_manifest(app_cache_dir: &Path, book_hash: &str) -> Option<CacheManifest> {
-    let manifest_path = book_cache_dir(app_cache_dir, book_hash).join("manifest.json");
-    let data = fs::read_to_string(manifest_path).ok()?;
-    serde_json::from_str(&data).ok()
+fn book_prefix(book_hash: &str) -> String {
+    format!("{CACHE_PREFIX}{book_hash}/")
+}
+
+// ---------------------------------------------------------------------------
+// Manifest I/O
+// ---------------------------------------------------------------------------
+
+pub fn read_manifest(storage: &dyn Storage, book_hash: &str) -> Option<CacheManifest> {
+    let bytes = storage.get(&manifest_key(book_hash)).ok()?;
+    serde_json::from_slice(&bytes).ok()
 }
 
 pub fn write_manifest(
-    app_cache_dir: &Path,
+    storage: &dyn Storage,
     book_hash: &str,
     manifest: &CacheManifest,
 ) -> FolioResult<()> {
-    let dir = book_cache_dir(app_cache_dir, book_hash);
-    let manifest_path = dir.join("manifest.json");
     let json = serde_json::to_string_pretty(manifest)?;
-    fs::write(manifest_path, json)
-        .map_err(|e| FolioError::io(format!("Failed to write manifest: {e}")))
+    storage.put(&manifest_key(book_hash), json.as_bytes())
 }
 
 fn now_iso() -> String {
@@ -122,12 +129,12 @@ fn file_extension(name: &str) -> &str {
 // ---------------------------------------------------------------------------
 
 pub fn extract_cbz(
-    app_cache_dir: &Path,
+    storage: &dyn Storage,
     book_id: &str,
     book_hash: &str,
     file_path: &str,
 ) -> FolioResult<CacheManifest> {
-    let file = fs::File::open(file_path)
+    let file = std::fs::File::open(file_path)
         .map_err(|e| FolioError::io(format!("Failed to open CBZ: {e}")))?;
     let mut archive = ZipArchive::new(file)
         .map_err(|e| FolioError::invalid(format!("Invalid CBZ archive: {e}")))?;
@@ -145,10 +152,6 @@ pub fn extract_cbz(
         .collect();
     image_names.sort();
 
-    let dir = book_cache_dir(app_cache_dir, book_hash);
-    fs::create_dir_all(&dir)
-        .map_err(|e| FolioError::io(format!("Failed to create cache dir: {e}")))?;
-
     let mut pages: Vec<String> = Vec::new();
     let mut total_size: u64 = 0;
 
@@ -163,8 +166,8 @@ pub fn extract_cbz(
 
         let ext = file_extension(name).to_lowercase();
         let page_filename = format!("{:03}{}", idx, ext);
-        let page_path = dir.join(&page_filename);
-        fs::write(&page_path, &data)
+        storage
+            .put(&page_key(book_hash, &page_filename), &data)
             .map_err(|e| FolioError::io(format!("Failed to write page {idx}: {e}")))?;
 
         total_size += data.len() as u64;
@@ -182,7 +185,7 @@ pub fn extract_cbz(
         pages,
     };
 
-    write_manifest(app_cache_dir, book_hash, &manifest)?;
+    write_manifest(storage, book_hash, &manifest)?;
     Ok(manifest)
 }
 
@@ -191,7 +194,7 @@ pub fn extract_cbz(
 // ---------------------------------------------------------------------------
 
 pub fn extract_cbr(
-    app_cache_dir: &Path,
+    storage: &dyn Storage,
     book_id: &str,
     book_hash: &str,
     file_path: &str,
@@ -212,10 +215,6 @@ pub fn extract_cbr(
         }
     }
     image_names.sort();
-
-    let dir = book_cache_dir(app_cache_dir, book_hash);
-    fs::create_dir_all(&dir)
-        .map_err(|e| FolioError::io(format!("Failed to create cache dir: {e}")))?;
 
     // Build name->index map
     let name_to_idx: HashMap<String, usize> = image_names
@@ -245,8 +244,8 @@ pub fn extract_cbr(
                     })?;
                     let ext = file_extension(&entry_name).to_lowercase();
                     let page_filename = format!("{:03}{}", idx, ext);
-                    let page_path = dir.join(&page_filename);
-                    fs::write(&page_path, &data)
+                    storage
+                        .put(&page_key(book_hash, &page_filename), &data)
                         .map_err(|e| FolioError::io(format!("Failed to write page {idx}: {e}")))?;
                     pages_data.push((idx, page_filename, data.len() as u64));
                     cursor = next;
@@ -274,7 +273,7 @@ pub fn extract_cbr(
         pages,
     };
 
-    write_manifest(app_cache_dir, book_hash, &manifest)?;
+    write_manifest(storage, book_hash, &manifest)?;
     Ok(manifest)
 }
 
@@ -283,11 +282,11 @@ pub fn extract_cbr(
 // ---------------------------------------------------------------------------
 
 pub fn get_cached_page(
-    app_cache_dir: &Path,
+    storage: &dyn Storage,
     book_hash: &str,
     page_index: u32,
 ) -> FolioResult<(Vec<u8>, String)> {
-    let manifest = read_manifest(app_cache_dir, book_hash)
+    let manifest = read_manifest(storage, book_hash)
         .ok_or_else(|| FolioError::not_found("Cache manifest not found"))?;
 
     let page_name = manifest.pages.get(page_index as usize).ok_or_else(|| {
@@ -297,8 +296,8 @@ pub fn get_cached_page(
         ))
     })?;
 
-    let page_path = book_cache_dir(app_cache_dir, book_hash).join(page_name);
-    let data = fs::read(&page_path)
+    let data = storage
+        .get(&page_key(book_hash, page_name))
         .map_err(|e| FolioError::io(format!("Failed to read cached page {page_index}: {e}")))?;
 
     let mime = if page_name.ends_with(".png") {
@@ -315,16 +314,23 @@ pub fn get_cached_page(
 }
 
 pub fn ensure_cached(
-    app_cache_dir: &Path,
+    storage: &dyn Storage,
     book_id: &str,
     book_hash: &str,
     file_path: &str,
     format: &BookFormat,
 ) -> FolioResult<CacheManifest> {
-    if let Some(mut manifest) = read_manifest(app_cache_dir, book_hash) {
-        let dir = book_cache_dir(app_cache_dir, book_hash);
-        let first_ok = manifest.pages.first().is_some_and(|p| dir.join(p).exists());
-        let last_ok = manifest.pages.last().is_some_and(|p| dir.join(p).exists());
+    if let Some(mut manifest) = read_manifest(storage, book_hash) {
+        let first_ok = manifest
+            .pages
+            .first()
+            .and_then(|p| storage.exists(&page_key(book_hash, p)).ok())
+            .unwrap_or(false);
+        let last_ok = manifest
+            .pages
+            .last()
+            .and_then(|p| storage.exists(&page_key(book_hash, p)).ok())
+            .unwrap_or(false);
 
         if first_ok && last_ok {
             page_dbg!(
@@ -333,21 +339,21 @@ pub fn ensure_cached(
                 manifest.page_count
             );
             manifest.last_accessed = now_iso();
-            let _ = write_manifest(app_cache_dir, book_hash, &manifest);
+            let _ = write_manifest(storage, book_hash, &manifest);
             return Ok(manifest);
         }
         page_dbg!(
             "ensure_cached: cache corrupted for {}, re-extracting",
             book_hash
         );
-        let _ = fs::remove_dir_all(book_cache_dir(app_cache_dir, book_hash));
+        let _ = evict_book(storage, book_hash);
     }
 
     page_dbg!("ensure_cached: extracting {:?} {}", format, book_hash);
     let start = std::time::Instant::now();
     let result = match format {
-        BookFormat::Cbz => extract_cbz(app_cache_dir, book_id, book_hash, file_path),
-        BookFormat::Cbr => extract_cbr(app_cache_dir, book_id, book_hash, file_path),
+        BookFormat::Cbz => extract_cbz(storage, book_id, book_hash, file_path),
+        BookFormat::Cbr => extract_cbr(storage, book_id, book_hash, file_path),
         _ => Err(FolioError::invalid(format!(
             "Page cache not supported for format: {:?}",
             format
@@ -361,36 +367,53 @@ pub fn ensure_cached(
 // Eviction
 // ---------------------------------------------------------------------------
 
-fn collect_cached_books(app_cache_dir: &Path) -> Vec<CacheManifest> {
-    let root = cache_root(app_cache_dir);
-    let entries = match fs::read_dir(root) {
-        Ok(e) => e,
+/// Enumerate every `{hash}` directly under `CACHE_PREFIX`, then read each
+/// book's manifest. Books whose manifest is missing or corrupt are skipped
+/// — they remain as dead keys until `clear_cache` or another eviction pass
+/// wipes them, but their absence from this result set means they won't be
+/// counted toward LRU / size / age budgets.
+fn collect_cached_books(storage: &dyn Storage) -> Vec<CacheManifest> {
+    let keys = match storage.list(CACHE_PREFIX) {
+        Ok(k) => k,
         Err(_) => return Vec::new(),
     };
-    entries
-        .filter_map(|e| e.ok())
-        .filter(|e| e.path().is_dir())
-        .filter_map(|e| {
-            let hash = e.file_name().to_string_lossy().to_string();
-            read_manifest(app_cache_dir, &hash)
-        })
+    let mut hashes: HashSet<String> = HashSet::new();
+    for key in keys {
+        if let Some(rest) = key.strip_prefix(CACHE_PREFIX) {
+            if let Some(hash) = rest.split('/').next() {
+                if !hash.is_empty() {
+                    hashes.insert(hash.to_string());
+                }
+            }
+        }
+    }
+    hashes
+        .into_iter()
+        .filter_map(|h| read_manifest(storage, &h))
         .collect()
 }
 
-fn evict_book(app_cache_dir: &Path, book_hash: &str) -> FolioResult<()> {
-    let dir = book_cache_dir(app_cache_dir, book_hash);
-    fs::remove_dir_all(dir)
-        .map_err(|e| FolioError::io(format!("Failed to evict cache for {book_hash}: {e}")))
+fn evict_book(storage: &dyn Storage, book_hash: &str) -> FolioResult<()> {
+    let prefix = book_prefix(book_hash);
+    let keys = storage
+        .list(&prefix)
+        .map_err(|e| FolioError::io(format!("Failed to list cache for {book_hash}: {e}")))?;
+    for key in keys {
+        storage
+            .delete(&key)
+            .map_err(|e| FolioError::io(format!("Failed to evict cache key '{key}': {e}")))?;
+    }
+    Ok(())
 }
 
-pub fn run_eviction(app_cache_dir: &Path, max_size_mb: u64) -> FolioResult<()> {
-    let mut books = collect_cached_books(app_cache_dir);
+pub fn run_eviction(storage: &dyn Storage, max_size_mb: u64) -> FolioResult<()> {
+    let mut books = collect_cached_books(storage);
     books.sort_by(|a, b| a.last_accessed.cmp(&b.last_accessed));
 
     // Layer 1: LRU by book count
     while books.len() > MAX_CACHED_BOOKS {
         let oldest = &books[0];
-        evict_book(app_cache_dir, &oldest.book_hash)?;
+        evict_book(storage, &oldest.book_hash)?;
         books.remove(0);
     }
 
@@ -400,7 +423,7 @@ pub fn run_eviction(app_cache_dir: &Path, max_size_mb: u64) -> FolioResult<()> {
     while total_size > max_size_bytes && !books.is_empty() {
         let oldest = &books[0];
         total_size -= oldest.total_size_bytes;
-        evict_book(app_cache_dir, &oldest.book_hash)?;
+        evict_book(storage, &oldest.book_hash)?;
         books.remove(0);
     }
 
@@ -413,14 +436,14 @@ pub fn run_eviction(app_cache_dir: &Path, max_size_mb: u64) -> FolioResult<()> {
         .map(|b| b.book_hash.clone())
         .collect();
     for hash in expired {
-        evict_book(app_cache_dir, &hash)?;
+        evict_book(storage, &hash)?;
     }
 
     Ok(())
 }
 
-pub fn get_cache_stats(app_cache_dir: &Path) -> CacheStats {
-    let books = collect_cached_books(app_cache_dir);
+pub fn get_cache_stats(storage: &dyn Storage) -> CacheStats {
+    let books = collect_cached_books(storage);
     let total_size_bytes: u64 = books.iter().map(|b| b.total_size_bytes).sum();
     let book_count = books.len();
     let book_infos: Vec<CacheBookInfo> = books
@@ -440,11 +463,14 @@ pub fn get_cache_stats(app_cache_dir: &Path) -> CacheStats {
     }
 }
 
-pub fn clear_cache(app_cache_dir: &Path) -> FolioResult<()> {
-    let root = cache_root(app_cache_dir);
-    if root.exists() {
-        fs::remove_dir_all(root)
-            .map_err(|e| FolioError::io(format!("Failed to clear cache: {e}")))?;
+pub fn clear_cache(storage: &dyn Storage) -> FolioResult<()> {
+    let keys = storage
+        .list(CACHE_PREFIX)
+        .map_err(|e| FolioError::io(format!("Failed to list page cache: {e}")))?;
+    for key in keys {
+        storage
+            .delete(&key)
+            .map_err(|e| FolioError::io(format!("Failed to delete cache key '{key}': {e}")))?;
     }
     Ok(())
 }
@@ -456,24 +482,30 @@ pub fn clear_cache(app_cache_dir: &Path) -> FolioResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::storage::LocalStorage;
     use tempfile::TempDir;
+
+    fn temp_storage() -> (TempDir, LocalStorage) {
+        let dir = TempDir::new().unwrap();
+        let storage = LocalStorage::new(dir.path()).unwrap();
+        (dir, storage)
+    }
 
     /// Helper: create a fake cached book with a manifest and dummy page files.
     fn create_fake_cache(
-        app_cache_dir: &Path,
+        storage: &dyn Storage,
         book_id: &str,
         book_hash: &str,
         page_count: u32,
         total_size_bytes: u64,
         last_accessed: &str,
     ) -> CacheManifest {
-        let dir = book_cache_dir(app_cache_dir, book_hash);
-        fs::create_dir_all(&dir).unwrap();
-
         let mut pages = Vec::new();
         for i in 0..page_count {
             let name = format!("{:03}.jpg", i);
-            fs::write(dir.join(&name), b"fake image data").unwrap();
+            storage
+                .put(&page_key(book_hash, &name), b"fake image data")
+                .unwrap();
             pages.push(name);
         }
 
@@ -486,18 +518,14 @@ mod tests {
             last_accessed: last_accessed.to_string(),
             pages,
         };
-        write_manifest(app_cache_dir, book_hash, &manifest).unwrap();
+        write_manifest(storage, book_hash, &manifest).unwrap();
         manifest
     }
 
     #[test]
     fn manifest_roundtrip() {
-        let tmp = TempDir::new().unwrap();
-        let dir = tmp.path();
+        let (_d, storage) = temp_storage();
         let hash = "abc123";
-
-        // Ensure the book cache dir exists before writing
-        fs::create_dir_all(book_cache_dir(dir, hash)).unwrap();
 
         let manifest = CacheManifest {
             book_id: "book1".to_string(),
@@ -513,8 +541,8 @@ mod tests {
             ],
         };
 
-        write_manifest(dir, hash, &manifest).unwrap();
-        let loaded = read_manifest(dir, hash).expect("manifest should be readable");
+        write_manifest(&storage, hash, &manifest).unwrap();
+        let loaded = read_manifest(&storage, hash).expect("manifest should be readable");
 
         assert_eq!(loaded.book_id, "book1");
         assert_eq!(loaded.book_hash, hash);
@@ -525,21 +553,20 @@ mod tests {
 
     #[test]
     fn read_manifest_missing_returns_none() {
-        let tmp = TempDir::new().unwrap();
-        assert!(read_manifest(tmp.path(), "nonexistent").is_none());
+        let (_d, storage) = temp_storage();
+        assert!(read_manifest(&storage, "nonexistent").is_none());
     }
 
     #[test]
     fn lru_count_eviction() {
-        let tmp = TempDir::new().unwrap();
-        let dir = tmp.path();
+        let (_d, storage) = temp_storage();
 
         // Create 7 books with increasing last_accessed timestamps (recent, within MAX_AGE_DAYS)
         let base = chrono::Utc::now();
         for i in 0..7 {
             let ts = base + chrono::Duration::seconds(i as i64);
             create_fake_cache(
-                dir,
+                &storage,
                 &format!("book{i}"),
                 &format!("hash{i}"),
                 2,
@@ -548,33 +575,32 @@ mod tests {
             );
         }
 
-        let before = collect_cached_books(dir);
+        let before = collect_cached_books(&storage);
         assert_eq!(before.len(), 7);
 
         // Run eviction — should trim to MAX_CACHED_BOOKS (5)
-        run_eviction(dir, DEFAULT_MAX_CACHE_SIZE_MB).unwrap();
+        run_eviction(&storage, DEFAULT_MAX_CACHE_SIZE_MB).unwrap();
 
-        let after = collect_cached_books(dir);
+        let after = collect_cached_books(&storage);
         assert_eq!(after.len(), 5);
 
         // The two oldest (hash0, hash1) should have been evicted
-        assert!(read_manifest(dir, "hash0").is_none());
-        assert!(read_manifest(dir, "hash1").is_none());
+        assert!(read_manifest(&storage, "hash0").is_none());
+        assert!(read_manifest(&storage, "hash1").is_none());
         // The newest should remain
-        assert!(read_manifest(dir, "hash6").is_some());
+        assert!(read_manifest(&storage, "hash6").is_some());
     }
 
     #[test]
     fn size_cap_eviction() {
-        let tmp = TempDir::new().unwrap();
-        let dir = tmp.path();
+        let (_d, storage) = temp_storage();
 
         // Create 3 books, each 200 MB in manifest (tiny actual files)
         let base = chrono::Utc::now();
         for i in 0..3 {
             let ts = base + chrono::Duration::seconds(i as i64);
             create_fake_cache(
-                dir,
+                &storage,
                 &format!("book{i}"),
                 &format!("hash{i}"),
                 1,
@@ -584,62 +610,177 @@ mod tests {
         }
 
         // Total = 600 MB; cap at 500 MB → should evict the oldest
-        run_eviction(dir, 500).unwrap();
+        run_eviction(&storage, 500).unwrap();
 
-        let after = collect_cached_books(dir);
+        let after = collect_cached_books(&storage);
         // Need to remove at least 1 to get under 500 MB (200*2 = 400 < 500)
         assert!(after.len() <= 2);
-        assert!(read_manifest(dir, "hash0").is_none());
+        assert!(read_manifest(&storage, "hash0").is_none());
     }
 
     #[test]
     fn age_expiry() {
-        let tmp = TempDir::new().unwrap();
-        let dir = tmp.path();
+        let (_d, storage) = temp_storage();
 
-        // One old book (30 days ago)
-        create_fake_cache(dir, "old", "hash_old", 1, 100, "2020-01-01T00:00:00+00:00");
+        // One old book (well outside MAX_AGE_DAYS)
+        create_fake_cache(
+            &storage,
+            "old",
+            "hash_old",
+            1,
+            100,
+            "2020-01-01T00:00:00+00:00",
+        );
 
         // One recent book
         let now = now_iso();
-        create_fake_cache(dir, "new", "hash_new", 1, 100, &now);
+        create_fake_cache(&storage, "new", "hash_new", 1, 100, &now);
 
-        run_eviction(dir, DEFAULT_MAX_CACHE_SIZE_MB).unwrap();
+        run_eviction(&storage, DEFAULT_MAX_CACHE_SIZE_MB).unwrap();
 
-        assert!(read_manifest(dir, "hash_old").is_none());
-        assert!(read_manifest(dir, "hash_new").is_some());
+        assert!(read_manifest(&storage, "hash_old").is_none());
+        assert!(read_manifest(&storage, "hash_new").is_some());
     }
 
     #[test]
     fn cache_stats_counts_and_sizes() {
-        let tmp = TempDir::new().unwrap();
-        let dir = tmp.path();
+        let (_d, storage) = temp_storage();
 
-        create_fake_cache(dir, "a", "hash_a", 3, 1000, "2026-01-01T00:00:00+00:00");
-        create_fake_cache(dir, "b", "hash_b", 5, 2000, "2026-01-02T00:00:00+00:00");
+        create_fake_cache(
+            &storage,
+            "a",
+            "hash_a",
+            3,
+            1000,
+            "2026-01-01T00:00:00+00:00",
+        );
+        create_fake_cache(
+            &storage,
+            "b",
+            "hash_b",
+            5,
+            2000,
+            "2026-01-02T00:00:00+00:00",
+        );
 
-        let stats = get_cache_stats(dir);
+        let stats = get_cache_stats(&storage);
         assert_eq!(stats.book_count, 2);
         assert_eq!(stats.total_size_bytes, 3000);
         assert_eq!(stats.books.len(), 2);
     }
 
     #[test]
-    fn clear_cache_removes_directory() {
-        let tmp = TempDir::new().unwrap();
-        let dir = tmp.path();
+    fn clear_cache_removes_all_entries() {
+        let (_d, storage) = temp_storage();
 
-        create_fake_cache(dir, "a", "hash_a", 1, 100, "2026-01-01T00:00:00+00:00");
-        assert!(cache_root(dir).exists());
+        create_fake_cache(
+            &storage,
+            "a",
+            "hash_a",
+            2,
+            100,
+            "2026-01-01T00:00:00+00:00",
+        );
+        assert!(!storage.list(CACHE_PREFIX).unwrap().is_empty());
 
-        clear_cache(dir).unwrap();
-        assert!(!cache_root(dir).exists());
+        clear_cache(&storage).unwrap();
+        assert!(storage.list(CACHE_PREFIX).unwrap().is_empty());
     }
 
     #[test]
     fn clear_nonexistent_cache_no_error() {
-        let tmp = TempDir::new().unwrap();
+        let (_d, storage) = temp_storage();
         // No cache created — clearing should be fine
-        assert!(clear_cache(tmp.path()).is_ok());
+        assert!(clear_cache(&storage).is_ok());
+    }
+
+    // --- New behavior (#64 M5) ---
+
+    #[test]
+    fn collect_cached_books_groups_keys_by_hash() {
+        // Exercises storage.list()-based enumeration: multiple books, each
+        // with a manifest + several pages. collect_cached_books must group
+        // all keys under a single `{hash}` into one manifest entry.
+        let (_d, storage) = temp_storage();
+        let now = now_iso();
+        create_fake_cache(&storage, "a", "hash_a", 3, 300, &now);
+        create_fake_cache(&storage, "b", "hash_b", 4, 400, &now);
+        create_fake_cache(&storage, "c", "hash_c", 1, 100, &now);
+
+        let mut books = collect_cached_books(&storage);
+        books.sort_by(|a, b| a.book_hash.cmp(&b.book_hash));
+
+        assert_eq!(books.len(), 3);
+        assert_eq!(books[0].book_hash, "hash_a");
+        assert_eq!(books[0].page_count, 3);
+        assert_eq!(books[1].book_hash, "hash_b");
+        assert_eq!(books[1].page_count, 4);
+        assert_eq!(books[2].book_hash, "hash_c");
+        assert_eq!(books[2].page_count, 1);
+    }
+
+    #[test]
+    fn evict_book_removes_only_that_books_keys() {
+        let (_d, storage) = temp_storage();
+        let now = now_iso();
+        create_fake_cache(&storage, "a", "hash_a", 2, 100, &now);
+        create_fake_cache(&storage, "b", "hash_b", 2, 100, &now);
+
+        evict_book(&storage, "hash_a").unwrap();
+
+        // hash_a gone; hash_b untouched
+        assert!(read_manifest(&storage, "hash_a").is_none());
+        assert!(read_manifest(&storage, "hash_b").is_some());
+
+        // No stray hash_a keys remain
+        let remaining_a = storage.list(&book_prefix("hash_a")).unwrap();
+        assert!(remaining_a.is_empty());
+
+        // hash_b still has its manifest + 2 pages
+        let remaining_b = storage.list(&book_prefix("hash_b")).unwrap();
+        assert_eq!(remaining_b.len(), 3);
+    }
+
+    #[test]
+    fn get_cached_page_reads_bytes_through_storage() {
+        let (_d, storage) = temp_storage();
+        let now = now_iso();
+        create_fake_cache(&storage, "a", "hash_a", 2, 100, &now);
+
+        let (data, mime) = get_cached_page(&storage, "hash_a", 0).unwrap();
+        assert_eq!(data, b"fake image data");
+        assert_eq!(mime, "image/jpeg");
+    }
+
+    #[test]
+    fn get_cached_page_out_of_range_errors() {
+        let (_d, storage) = temp_storage();
+        let now = now_iso();
+        create_fake_cache(&storage, "a", "hash_a", 2, 100, &now);
+
+        assert!(get_cached_page(&storage, "hash_a", 99).is_err());
+    }
+
+    #[test]
+    fn ensure_cached_hit_updates_last_accessed() {
+        let (_d, storage) = temp_storage();
+        create_fake_cache(
+            &storage,
+            "a",
+            "hash_a",
+            1,
+            100,
+            "2020-01-01T00:00:00+00:00",
+        );
+
+        // Use Cbz format — with an existing valid manifest, the archive is
+        // never touched, so the file_path can be bogus.
+        let result = ensure_cached(&storage, "a", "hash_a", "/nope.cbz", &BookFormat::Cbz).unwrap();
+
+        // `last_accessed` got bumped to ~now
+        assert_ne!(result.last_accessed, "2020-01-01T00:00:00+00:00");
+        // Persisted change is readable
+        let reloaded = read_manifest(&storage, "hash_a").unwrap();
+        assert_ne!(reloaded.last_accessed, "2020-01-01T00:00:00+00:00");
     }
 }

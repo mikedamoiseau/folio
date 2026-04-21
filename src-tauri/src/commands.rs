@@ -397,6 +397,20 @@ fn delete_book_covers(
     Ok(())
 }
 
+// --- Page cache storage (#64 M5) ---
+
+/// Build a `LocalStorage` rooted at the platform's app cache directory.
+/// `page_cache::*` takes `&dyn Storage`; this helper keeps the `AppHandle`
+/// → cache-dir resolution in one place so every command site gets the same
+/// root.
+fn page_cache_storage(app: &AppHandle) -> FolioResult<folio_core::storage::LocalStorage> {
+    let dir = app
+        .path()
+        .app_cache_dir()
+        .map_err(|e| FolioError::internal(format!("Failed to get cache dir: {e}")))?;
+    folio_core::storage::LocalStorage::new(dir)
+}
+
 // --- Library management ---
 
 #[tauri::command]
@@ -1500,11 +1514,10 @@ pub async fn get_comic_page(
     validate_file_exists(&file_path)?;
 
     // Try cache first
-    if let Ok(cache_dir) = app.path().app_cache_dir() {
+    if let Ok(storage) = page_cache_storage(&app) {
         if let Some(ref book_hash) = book.file_hash {
             let cache_start = std::time::Instant::now();
-            if let Ok((data, mime)) = page_cache::get_cached_page(&cache_dir, book_hash, page_index)
-            {
+            if let Ok((data, mime)) = page_cache::get_cached_page(&storage, book_hash, page_index) {
                 use base64::{engine::general_purpose, Engine as _};
                 let encoded = general_purpose::STANDARD.encode(&data);
                 page_cache::page_dbg!(
@@ -1571,10 +1584,7 @@ pub async fn prepare_comic(
     }
 
     let book_hash = book.file_hash.as_deref().ok_or("Book has no file hash")?;
-    let cache_dir = app
-        .path()
-        .app_cache_dir()
-        .map_err(|e| format!("Failed to get cache dir: {e}"))?;
+    let storage = page_cache_storage(&app)?;
 
     let prep_start = std::time::Instant::now();
     page_cache::page_dbg!(
@@ -1584,7 +1594,7 @@ pub async fn prepare_comic(
         book_hash
     );
     let manifest =
-        page_cache::ensure_cached(&cache_dir, &book_id, book_hash, &file_path, &book.format)?;
+        page_cache::ensure_cached(&storage, &book_id, book_hash, &file_path, &book.format)?;
     page_cache::page_dbg!(
         "prepare_comic done: pages={} size={}KB elapsed={:?}",
         manifest.page_count,
@@ -1593,9 +1603,9 @@ pub async fn prepare_comic(
     );
 
     // Run eviction in background
-    let evict_cache_dir = cache_dir.clone();
+    let evict_storage = page_cache_storage(&app)?;
     tauri::async_runtime::spawn_blocking(move || {
-        let _ = page_cache::run_eviction(&evict_cache_dir, max_size_mb);
+        let _ = page_cache::run_eviction(&evict_storage, max_size_mb);
     });
 
     Ok(manifest)
@@ -1603,20 +1613,14 @@ pub async fn prepare_comic(
 
 #[tauri::command]
 pub async fn get_cache_stats(app: AppHandle) -> FolioResult<page_cache::CacheStats> {
-    let cache_dir = app
-        .path()
-        .app_cache_dir()
-        .map_err(|e| format!("Failed to get cache dir: {e}"))?;
-    Ok(page_cache::get_cache_stats(&cache_dir))
+    let storage = page_cache_storage(&app)?;
+    Ok(page_cache::get_cache_stats(&storage))
 }
 
 #[tauri::command]
 pub async fn clear_page_cache(app: AppHandle) -> FolioResult<()> {
-    let cache_dir = app
-        .path()
-        .app_cache_dir()
-        .map_err(|e| FolioError::internal(format!("Failed to get cache dir: {e}")))?;
-    page_cache::clear_cache(&cache_dir)
+    let storage = page_cache_storage(&app)?;
+    page_cache::clear_cache(&storage)
 }
 
 // --- Reading Stats ---

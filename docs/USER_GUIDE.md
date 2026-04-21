@@ -68,6 +68,8 @@ Go to the [GitHub Releases page](https://github.com/mikedamoiseau/folio/releases
 
 The first time you open the app, you'll see an empty library with a prompt to import your first book. Your data stays on your machine — nothing is sent to the cloud.
 
+![Folio library in light theme](../screenshots/01-library-light.png)
+
 ---
 
 ## 2. Managing Your Library
@@ -111,11 +113,15 @@ In the full library view, a **"Continue Reading"** row at the top shows your mos
 
 All filters combine, so you can search for "asimov" within "epub" books tagged "sci-fi" that are "in progress."
 
-### Editing and removing books
+### Book details and editing
+
+Click the **(i)** button on a book card (visible on hover) to open the book detail popup — it shows cover, series, language, and quick actions (open, edit, export).
+
+![Book detail popup](../screenshots/15-book-detail.png)
 
 Hover over a book card to reveal action buttons:
 
-- **Edit:** Opens a dialog to change the title, author, cover image, and tags. See [Book Metadata and OpenLibrary](#6-book-metadata-and-openlibrary).
+- **Edit:** Opens a dialog to change the title, author, cover image, and tags. See [Book Metadata and Enrichment](#6-book-metadata-and-enrichment).
 - **Delete:** Removes the book from your library (with a confirmation prompt).
 
 ### Bulk actions
@@ -135,6 +141,8 @@ Selection mode disables drag-and-drop to prevent accidental actions.
 ## 3. Collections
 
 Collections let you organize books into groups. Open the collections sidebar by clicking the collections icon or pressing `C`.
+
+![Collections sidebar](../screenshots/09-collections.png)
 
 ### Manual collections
 
@@ -183,6 +191,8 @@ Series data comes from book file metadata (EPUB/CBZ). You can also set or edit s
 
 Click any book card to open it. If you've read it before, Folio picks up where you left off — same chapter (or page), same scroll position.
 
+![Reader view](../screenshots/10-reader-epub.png)
+
 ### EPUB reading
 
 Folio offers two reading modes for EPUBs, selectable in **Settings > Page Layout**:
@@ -202,6 +212,9 @@ Folio offers two reading modes for EPUBs, selectable in **Settings > Page Layout
 **Common to both modes:**
 
 - **Table of Contents:** Click the list icon in the header or press `T`. The sidebar shows a searchable, hierarchical chapter list. The current chapter is highlighted.
+
+  ![Reader with Table of Contents open](../screenshots/11-reader-toc.png)
+
 - **Focus mode:** Press `D` to hide all UI and read distraction-free. Move the mouse to the top or bottom edge to temporarily reveal controls.
 - **Progress tracking:** Your reading position is saved automatically and restored when you reopen the book, regardless of which mode you use.
 
@@ -243,15 +256,21 @@ Open the highlights panel (pen icon in the reader header) to:
 - Delete individual highlights
 - Export all highlights as Markdown (copied to clipboard)
 
+![Highlights panel](../screenshots/12-reader-highlights.png)
+
 ### Bookmarks
 
 Press `B` in the reader to bookmark the current position. Bookmarks are listed alongside your reading progress.
+
+![Bookmarks panel](../screenshots/13-reader-bookmarks.png)
 
 ---
 
 ## 6. Book Metadata and Enrichment
 
 Click the edit button on any book card to open the metadata editor.
+
+![Edit book dialog](../screenshots/16-edit-book.png)
 
 ### Editable fields
 
@@ -298,6 +317,8 @@ Folio can automatically look up metadata for your books. The scan uses multiple 
 - **Auto-scan on import** (default: on) — newly imported books are automatically queued for metadata lookup
 - **Auto-scan on startup** (default: off) — scan unenriched books when the app launches
 
+![Metadata scan settings](../screenshots/19-settings-metadata-scan.png)
+
 ### Comics metadata
 
 Comics (CBZ and CBR) get metadata from two sources:
@@ -314,6 +335,8 @@ Folio can browse online book catalogs that use the OPDS protocol (Open Publicati
 ### Browsing
 
 Open the catalog browser from the library. Pick a catalog to browse its categories and entries. Each entry shows the title, author, summary, and cover when available.
+
+![Book Catalogs browser](../screenshots/08-catalogs.png)
 
 ### Searching
 
@@ -343,6 +366,8 @@ Create and switch profiles from the profile dropdown in the library header. The 
 
 Click the gear icon in the reader header (or library toolbar) to open Settings.
 
+![Settings panel](../screenshots/02-settings-panel.png)
+
 ### Theme
 
 Choose from four presets or create your own:
@@ -351,6 +376,10 @@ Choose from four presets or create your own:
 - **Sepia** — deeper amber/parchment background with rich brown text, designed for comfortable extended reading
 - **Dark** — dark background with light text for low-light environments
 - **Auto** — follows your operating system's light/dark setting
+
+| Light | Sepia | Dark |
+|:-:|:-:|:-:|
+| ![Light theme](../screenshots/01-library-light.png) | ![Sepia theme](../screenshots/04-library-sepia.png) | ![Dark theme](../screenshots/03-library-dark.png) |
 
 **Custom colors:** Click the "Custom colors" button to open the color editor. Pick a background and text color — the remaining UI colors (borders, accents, muted text, etc.) are automatically derived. Expand "Advanced" to fine-tune individual color tokens. Preset buttons let you reset to the sepia or light palette.
 
@@ -401,6 +430,8 @@ Toggle between two modes for how EPUB content is displayed:
 
 This is a global preference that applies to all EPUB books.
 
+![Page Layout settings](../screenshots/17-settings-page-layout.png)
+
 ### Dual-page spread
 
 Show two pages side by side, like an open book. Works for all formats: comics (CBZ/CBR), PDFs, and EPUBs in paginated mode.
@@ -450,6 +481,8 @@ Fine-tune your reading experience under **Settings > Appearance > Typography**:
 
 All typography settings apply to EPUB content only and are saved globally.
 
+![Typography settings](../screenshots/05-settings-typography.png)
+
 ### Custom CSS
 
 For advanced customization, you can inject your own CSS that applies to EPUB reading content:
@@ -478,9 +511,13 @@ Folio keeps a log of data-changing actions (imports, edits, deletes, collection 
 - Filter by action type (e.g., only imports, only edits)
 - Each entry shows the action, affected item, and timestamp
 
+![Activity settings](../screenshots/20-settings-activity.png)
+
 ### Library folder and import mode
 
 In Settings > Library, you can view your current library folder path, file count, and total storage used. You can change the library folder — Folio will offer to move existing files to the new location or keep them in place.
+
+![Library settings](../screenshots/06-settings-library.png)
 
 **Import mode:** Choose between two modes for how books are added:
 
@@ -496,6 +533,8 @@ In Settings > Library, you can view your current library folder path, file count
 ### Local backup
 
 From **Settings > Backup & Restore** you can export and restore library backups.
+
+![Backup & Restore settings](../screenshots/18-settings-backup-restore.png)
 
 **Export options:**
 
@@ -518,6 +557,8 @@ If you try to open a book whose file is missing, Folio shows a dialog offering t
 ### Remote backup
 
 Folio can sync your library to a remote storage provider for off-site backup. Configure in **Settings > Remote Backup**.
+
+![Remote Backup settings](../screenshots/21-settings-remote-backup.png)
 
 **Supported providers:**
 
@@ -583,6 +624,8 @@ Folio can sync your reading progress, bookmarks, and highlights across multiple 
 ## 11. Reading Stats
 
 Open the reading stats dashboard from the library toolbar (bar chart icon).
+
+![Reading Stats dashboard](../screenshots/07-reading-stats.png)
 
 **Tracked metrics:**
 
@@ -667,6 +710,8 @@ Folio supports multiple interface languages. Currently available: **English** an
 ## 14. Keyboard Shortcuts
 
 Press `?` at any time to see the shortcut reference.
+
+![Keyboard Shortcuts help](../screenshots/14-keyboard-shortcuts.png)
 
 ### Library
 
