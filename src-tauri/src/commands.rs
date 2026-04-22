@@ -3196,6 +3196,44 @@ pub async fn get_backup_config(
 static BACKUP_RUNNING: std::sync::LazyLock<std::sync::Mutex<std::collections::HashSet<String>>> =
     std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashSet::new()));
 
+/// RAII guard for the `BACKUP_RUNNING` set. Acquires the profile entry on
+/// construction and releases it on drop — so any `?` in `run_backup` frees
+/// the lock automatically without an explicit cleanup block. Without this
+/// guard, a fallible setup step (keychain, operator build, storage init)
+/// would leave the profile wedged until the app restarted.
+#[derive(Debug)]
+struct BackupLockGuard {
+    profile_name: String,
+}
+
+impl BackupLockGuard {
+    fn acquire(profile_name: String) -> FolioResult<Self> {
+        let mut running = BACKUP_RUNNING.lock()?;
+        if !running.insert(profile_name.clone()) {
+            return Err(FolioError::invalid(
+                "A backup is already in progress for this profile",
+            ));
+        }
+        Ok(Self { profile_name })
+    }
+}
+
+impl Drop for BackupLockGuard {
+    fn drop(&mut self) {
+        match BACKUP_RUNNING.lock() {
+            Ok(mut running) => {
+                running.remove(&self.profile_name);
+            }
+            Err(_) => {
+                log::error!(
+                    "BACKUP_RUNNING mutex poisoned; could not release lock for profile '{}'",
+                    self.profile_name
+                );
+            }
+        }
+    }
+}
+
 #[tauri::command]
 pub async fn run_backup(
     app: tauri::AppHandle,
@@ -3205,14 +3243,7 @@ pub async fn run_backup(
         let ps = state.profile_state.lock()?;
         ps.active.clone()
     };
-    {
-        let mut running = BACKUP_RUNNING.lock()?;
-        if !running.insert(profile_name.clone()) {
-            return Err(FolioError::invalid(
-                "A backup is already in progress for this profile",
-            ));
-        }
-    }
+    let _guard = BackupLockGuard::acquire(profile_name.clone())?;
     let conn = state.active_db()?.get()?;
     let json = db::get_setting(&conn, "backup_config")?
         .ok_or_else(|| FolioError::not_found("No backup provider configured"))?;
@@ -3273,9 +3304,8 @@ pub async fn run_backup(
             );
         }
     }
-    if let Ok(mut running) = BACKUP_RUNNING.lock() {
-        running.remove(&profile_name);
-    }
+    // `_guard` drops here → profile is removed from BACKUP_RUNNING on every
+    // return path, including the `?` propagations above.
     result
 }
 
@@ -4667,6 +4697,78 @@ mod tests {
         // strip_prefix normalizes — `/library/` and `/library` both work.
         let key = book_key_from_path("/library/abc.epub", "/library/").unwrap();
         assert_eq!(key, "abc.epub");
+    }
+
+    // --- BACKUP_RUNNING RAII guard ---
+    //
+    // These tests mutate the shared `BACKUP_RUNNING` static. Each test uses
+    // a unique profile name so parallel test runs don't interfere.
+
+    #[test]
+    fn backup_lock_guard_releases_on_drop() {
+        let name = "test-raii-drop".to_string();
+        {
+            let _guard = BackupLockGuard::acquire(name.clone()).unwrap();
+            assert!(
+                BACKUP_RUNNING.lock().unwrap().contains(&name),
+                "profile should be in the running set while guard is held"
+            );
+        }
+        assert!(
+            !BACKUP_RUNNING.lock().unwrap().contains(&name),
+            "profile should be removed after guard drops"
+        );
+    }
+
+    #[test]
+    fn backup_lock_guard_blocks_concurrent_acquire_same_profile() {
+        let name = "test-raii-concurrent".to_string();
+        let _guard = BackupLockGuard::acquire(name.clone()).unwrap();
+        let second = BackupLockGuard::acquire(name.clone());
+        assert!(
+            second.is_err(),
+            "second acquire on same profile should fail while first guard is alive"
+        );
+        let err = second.unwrap_err();
+        assert!(
+            err.to_string().contains("already in progress"),
+            "expected 'already in progress' message, got: {err}"
+        );
+    }
+
+    #[test]
+    fn backup_lock_guard_allows_different_profiles() {
+        let a = "test-raii-multi-a".to_string();
+        let b = "test-raii-multi-b".to_string();
+        let ga = BackupLockGuard::acquire(a.clone()).unwrap();
+        let gb = BackupLockGuard::acquire(b.clone()).unwrap();
+        {
+            let running = BACKUP_RUNNING.lock().unwrap();
+            assert!(running.contains(&a));
+            assert!(running.contains(&b));
+        }
+        drop(ga);
+        drop(gb);
+        let running = BACKUP_RUNNING.lock().unwrap();
+        assert!(!running.contains(&a));
+        assert!(!running.contains(&b));
+    }
+
+    #[test]
+    fn backup_lock_guard_releases_when_caller_returns_err_early() {
+        // Simulates the real regression: a fallible `?` after `acquire` must
+        // NOT leak the profile into BACKUP_RUNNING.
+        fn fallible(name: String) -> FolioResult<()> {
+            let _guard = BackupLockGuard::acquire(name)?;
+            Err(FolioError::internal("simulated setup failure"))
+        }
+        let name = "test-raii-early-err".to_string();
+        let result = fallible(name.clone());
+        assert!(result.is_err(), "function must return the simulated error");
+        assert!(
+            !BACKUP_RUNNING.lock().unwrap().contains(&name),
+            "profile must be released even though the function returned Err"
+        );
     }
 }
 
