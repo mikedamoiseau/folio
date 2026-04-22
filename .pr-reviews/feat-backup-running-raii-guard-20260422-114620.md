@@ -224,3 +224,20 @@ No code changes this round.
 
 ---
 
+
+## [Codex — Reviewer] Round 4
+
+LGTM: The RAII guard refactor fixes the lock-leak path, and I’m accepting the out-of-scope reasoning on the pre-existing profile-switch race.
+
+No remaining findings in the current diff.
+
+The prior mutex-poisoning concern is addressed enough for this patch by logging the failed cleanup path. The profile/resource race is real, but based on the provided history it is not introduced or widened by this RAII refactor, and fixing it requires a broader profile-scoped resource lookup change. That should be tracked separately rather than blocking this surgical lock-release change.
+
+---
+
+## [Gemini — Reviewer] Round 4
+
+LGTM: The mutex poisoning fix is in place, and the profile-switching race is a pre-existing architectural concern that has been appropriately deferred as per project guidelines (`Fixable: NO` and "surgical changes only").
+
+---
+
