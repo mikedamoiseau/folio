@@ -970,16 +970,37 @@ fn replace_attr_value(tag: &str, attr: &str, old_val: &str, new_val: &str) -> St
     tag.replacen(&sq_old, &sq_new, 1)
 }
 
+/// 16 hex chars (64 bits) of SHA-256 over a resolved zip path — enough to
+/// disambiguate every distinct image within a single EPUB chapter and
+/// deterministic so repeated reads resolve to the same storage key.
+fn short_zip_path_hash(resolved_zip_path: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let digest = Sha256::digest(resolved_zip_path.as_bytes());
+    let mut out = String::with_capacity(16);
+    for b in &digest[..8] {
+        use std::fmt::Write;
+        let _ = write!(&mut out, "{b:02x}");
+    }
+    out
+}
+
 /// Walk the sanitized chapter HTML and replace relative `<img src>` values
 /// with `asset://localhost/` URLs pointing to images extracted from the EPUB
 /// zip through `storage`. This avoids base64-encoding large images into the
 /// HTML string, which can cause memory issues with illustrated books.
 ///
-/// Images are keyed as `{key_prefix}/{basename}` — if `storage.exists(key)`
-/// is already true the zip entry is not re-extracted. External URLs and SVG
-/// images are left untouched. Missing images and storage failures fall back
-/// to leaving the `<img>` tag unchanged so a single broken asset doesn't
-/// abort the whole chapter.
+/// Images are keyed as `{key_prefix}/{hash}-{basename}` where `hash` is a
+/// short SHA-256 of the resolved zip path (see [`short_zip_path_hash`]).
+/// The hash prefix disambiguates entries that share a basename across zip
+/// subdirectories, so two images like `dir_a/cover.png` and `dir_b/cover.png`
+/// produce distinct keys and never overwrite each other. Identical resolved
+/// paths still hash to the same key, so repeated extraction of the same
+/// image within a chapter stays idempotent.
+///
+/// If `storage.exists(key)` is already true the zip entry is not
+/// re-extracted. External URLs and SVG images are left untouched. Missing
+/// images and storage failures fall back to leaving the `<img>` tag
+/// unchanged so a single broken asset doesn't abort the whole chapter.
 ///
 /// The `asset://` URL is derived from `storage.local_path(key)` — remote
 /// backends that need a command-fetch fallback should implement a
@@ -1049,7 +1070,14 @@ fn rewrite_img_srcs_to_asset_urls(
                         let resolved = resolve_zip_path(chapter_dir, clean_src);
                         // Derive a safe filename from the image path basename.
                         let basename = clean_src.rsplit('/').next().unwrap_or(clean_src);
-                        let key = format!("{key_prefix}/{basename}");
+                        // Prefix the basename with a short hash of the
+                        // resolved zip path so two distinct entries that
+                        // share a basename (e.g. `dir_a/cover.png` and
+                        // `dir_b/cover.png`) cannot collide on the same
+                        // storage key. Keeping the basename in the key
+                        // preserves debuggability.
+                        let key =
+                            format!("{key_prefix}/{}-{basename}", short_zip_path_hash(&resolved));
 
                         // Extract through storage if not already cached.
                         let written = if storage.exists(&key).unwrap_or(false) {
@@ -1675,12 +1703,23 @@ mod tests {
         image_path: &str,
         image_bytes: &[u8],
     ) -> String {
+        create_test_zip_with_images(dir, zip_name, &[(image_path, image_bytes)])
+    }
+
+    /// Helper to create a zip archive with multiple image entries.
+    fn create_test_zip_with_images(
+        dir: &std::path::Path,
+        zip_name: &str,
+        entries: &[(&str, &[u8])],
+    ) -> String {
         let zip_path = dir.join(zip_name);
         let file = std::fs::File::create(&zip_path).unwrap();
         let mut writer = zip::ZipWriter::new(file);
         let options = zip::write::SimpleFileOptions::default();
-        writer.start_file(image_path, options).unwrap();
-        std::io::Write::write_all(&mut writer, image_bytes).unwrap();
+        for (path, bytes) in entries {
+            writer.start_file(*path, options).unwrap();
+            std::io::Write::write_all(&mut writer, bytes).unwrap();
+        }
         writer.finish().unwrap();
         zip_path.to_string_lossy().to_string()
     }
@@ -1700,13 +1739,8 @@ mod tests {
         let storage = crate::storage::LocalStorage::new(tmp.path().join("images")).unwrap();
 
         let html = r#"<p>Text</p><img src="../images/photo.jpg"/><p>More</p>"#;
-        let result = rewrite_img_srcs_to_asset_urls(
-            html,
-            &mut archive,
-            "OEBPS/Text/",
-            &storage,
-            "book1/0",
-        );
+        let result =
+            rewrite_img_srcs_to_asset_urls(html, &mut archive, "OEBPS/Text/", &storage, "book1/0");
 
         assert!(
             result.contains("asset://localhost/"),
@@ -1720,9 +1754,18 @@ mod tests {
             result.contains("photo.jpg"),
             "should reference the image filename"
         );
-        // Verify image was written through storage
+        // Verify image was written through storage — list by prefix instead
+        // of asserting an exact key shape, so future changes to the key
+        // derivation (e.g. adding a hash to disambiguate basenames) don't
+        // churn this test.
         use crate::storage::Storage;
-        assert!(storage.exists("book1/0/photo.jpg").unwrap());
+        let keys = storage.list("book1/0/").unwrap();
+        assert_eq!(keys.len(), 1, "expected one cached image, got: {keys:?}");
+        assert!(
+            keys[0].ends_with("photo.jpg"),
+            "cached key should end with source basename, got: {}",
+            keys[0]
+        );
     }
 
     #[test]
@@ -1744,8 +1787,14 @@ mod tests {
             let mut archive = ZipArchive::new(file).unwrap();
             rewrite_img_srcs_to_asset_urls(html, &mut archive, "", &storage, "book1/0");
         }
+        // Look up the cached key via list() instead of hard-coding the
+        // shape — the exact key now includes a content-independent hash of
+        // the resolved zip path, and hard-coded keys would fight the fix.
         use crate::storage::Storage;
-        let dest = storage.local_path("book1/0/icon.png").unwrap();
+        let keys_after_first = storage.list("book1/0/").unwrap();
+        assert_eq!(keys_after_first.len(), 1);
+        let cached_key = keys_after_first[0].clone();
+        let dest = storage.local_path(&cached_key).unwrap();
         assert!(dest.exists());
         let mtime_first = std::fs::metadata(&dest).unwrap().modified().unwrap();
 
@@ -1866,6 +1915,69 @@ mod tests {
         let result = rewrite_img_srcs_to_asset_urls(html, &mut archive, "", &storage, "b/0");
 
         assert_eq!(result, html, "missing images should leave tag unchanged");
+    }
+
+    #[test]
+    fn test_rewrite_img_srcs_same_basename_different_dirs_coexist() {
+        // Two distinct zip entries that share a basename (`cover.png`) but
+        // live in different directories must each get a unique storage key
+        // and resolve to a different `asset://` URL — otherwise the second
+        // write overwrites the first and both `<img>` tags render the wrong
+        // image. Regression for the collision flagged during #64 M6 review.
+        use crate::storage::Storage;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let zip_path = create_test_zip_with_images(
+            tmp.path(),
+            "test.zip",
+            &[
+                ("dir_a/cover.png", b"AAAA-distinct-bytes-a"),
+                ("dir_b/cover.png", b"BBBB-distinct-bytes-b"),
+            ],
+        );
+        let file = std::fs::File::open(&zip_path).unwrap();
+        let mut archive = ZipArchive::new(file).unwrap();
+        let storage = crate::storage::LocalStorage::new(tmp.path().join("images")).unwrap();
+
+        let html = r#"<img src="dir_a/cover.png"/><img src="dir_b/cover.png"/>"#;
+        let result = rewrite_img_srcs_to_asset_urls(html, &mut archive, "", &storage, "book1/0");
+
+        // Two distinct keys land in storage under this chapter's prefix.
+        let mut keys = storage.list("book1/0/").unwrap();
+        keys.sort();
+        assert_eq!(
+            keys.len(),
+            2,
+            "both images must coexist under distinct keys, got: {keys:?}"
+        );
+
+        // The bytes at each key match the source — first write wasn't overwritten.
+        let bytes_a = storage.get(&keys[0]).unwrap();
+        let bytes_b = storage.get(&keys[1]).unwrap();
+        assert_ne!(
+            bytes_a, bytes_b,
+            "distinct source images must produce distinct stored bytes"
+        );
+
+        // Both <img> tags get rewritten to asset:// URLs, and the two URLs
+        // are distinct (otherwise both would still resolve to the same file).
+        let asset_urls: Vec<&str> = result
+            .match_indices("asset://localhost/")
+            .map(|(i, _)| {
+                let rest = &result[i..];
+                let end = rest.find('"').unwrap_or(rest.len());
+                &rest[..end]
+            })
+            .collect();
+        assert_eq!(
+            asset_urls.len(),
+            2,
+            "both <img> tags should be rewritten, got: {result}"
+        );
+        assert_ne!(
+            asset_urls[0], asset_urls[1],
+            "the two <img> tags must resolve to different asset URLs"
+        );
     }
 
     // ---- Word counting tests ----
