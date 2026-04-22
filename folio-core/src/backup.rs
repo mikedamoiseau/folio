@@ -490,21 +490,24 @@ pub fn push_file_if_missing(
     Ok(true)
 }
 
-/// Upload `bytes` to `remote_path` unless the remote already has a file of
-/// the same size. Backend-agnostic counterpart to [`push_file_if_missing`]:
-/// the caller owns the read path (e.g. through a [`crate::storage::Storage`]),
-/// so the backup layer doesn't have to assume the source is a local file.
-pub fn push_bytes_if_missing(
+/// Upload the file at `key` in `storage` to `remote_path` unless the remote
+/// already has a file of the same size. Backend-agnostic counterpart to
+/// [`push_file_if_missing`]: checks `storage.size(key)` against the remote
+/// `stat` *before* materializing bytes, so unchanged books never get fully
+/// read — essential for large files and remote `Storage` backends.
+pub fn push_storage_file_if_missing(
     op: &Operator,
     remote_path: &str,
-    bytes: Vec<u8>,
+    storage: &dyn crate::storage::Storage,
+    key: &str,
 ) -> FolioResult<bool> {
-    let local_size = bytes.len() as u64;
+    let local_size = storage.size(key)?;
     if let Ok(meta) = op.stat(remote_path) {
         if meta.content_length() == local_size {
             return Ok(false);
         }
     }
+    let bytes = storage.get(key)?;
     op.write(remote_path, bytes)
         .map_err(|e| FolioError::network(format!("Failed to upload {remote_path}: {e}")))?;
     Ok(true)
@@ -633,8 +636,7 @@ pub fn run_incremental_backup_with_progress(
                         result.files_pushed += 1;
                     }
                 } else if let Some(storage) = library_storage {
-                    let bytes = storage.get(&book.file_path)?;
-                    if push_bytes_if_missing(op, &remote_path, bytes)? {
+                    if push_storage_file_if_missing(op, &remote_path, storage, &book.file_path)? {
                         result.files_pushed += 1;
                     }
                 } else {
@@ -1142,6 +1144,59 @@ mod tests {
                 .any(|w| w.contains("no library storage")),
             "expected a 'no library storage' warning, got: {:?}",
             result.warnings
+        );
+    }
+
+    /// Regression: when the remote backup already has a matching-size file
+    /// for a key-form book, the backup must skip it *without* reading the
+    /// bytes through `Storage::get`. Editing only book metadata (title,
+    /// rating) bumps `updated_at` and enters the changed set, so this path
+    /// runs often — pulling the full file each time would make backups
+    /// slow, memory-heavy, or network-heavy against remote storage.
+    #[test]
+    fn incremental_backup_skips_storage_get_when_remote_file_matches() {
+        let remote_dir = tempfile::tempdir().unwrap();
+        let config = BackupConfig {
+            provider_type: ProviderType::Fs,
+            values: [(
+                "root".to_string(),
+                remote_dir.path().to_string_lossy().to_string(),
+            )]
+            .into(),
+        };
+        let op = build_operator(&config).unwrap();
+
+        // Pre-populate the remote with a same-size file at the expected path.
+        let book_bytes = b"remote-already-has-these".to_vec();
+        std::fs::create_dir_all(remote_dir.path().join("files")).unwrap();
+        std::fs::write(
+            remote_dir.path().join("files").join("skiphash.epub"),
+            &book_bytes,
+        )
+        .unwrap();
+
+        let mock = MockStorage::new();
+        mock.insert("b1.epub", book_bytes.clone());
+
+        let db_dir = tempfile::tempdir().unwrap();
+        let conn = crate::db::init_db(db_dir.path().join("test.db").as_path()).unwrap();
+        conn.execute(
+            "INSERT INTO books (id, title, author, file_path, total_chapters, added_at, format, file_hash, is_imported, updated_at) VALUES ('b1', 'Unchanged', 'Author', 'b1.epub', 5, 100, 'epub', 'skiphash', 1, 100)",
+            [],
+        )
+        .unwrap();
+
+        let result =
+            run_incremental_backup(&op, &conn, Some(&mock as &dyn crate::storage::Storage))
+                .unwrap();
+        assert_eq!(
+            result.files_pushed, 0,
+            "remote already has matching-size file, upload should be skipped"
+        );
+        assert!(
+            mock.get_calls().is_empty(),
+            "storage.get must NOT be called when remote size matches, got: {:?}",
+            mock.get_calls()
         );
     }
 }
