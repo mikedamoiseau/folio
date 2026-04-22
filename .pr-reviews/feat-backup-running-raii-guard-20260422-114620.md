@@ -155,3 +155,72 @@ The lock-release refactor itself (commit `4f1bdcb` + round-1 `log::error!` addit
 
 ---
 
+
+## [Codex — Reviewer] Round 3
+
+NEEDS_FIX: `run_backup` still locks one profile name but resolves the actual backup resources from the mutable active profile.
+
+**Findings**
+
+**1. Profile switch can make the backup run against a different profile than the locked one**
+
+- **File:** `src-tauri/src/commands.rs:3243`, `src-tauri/src/commands.rs:3247`, `src-tauri/src/commands.rs:3256`
+- **Severity:** BLOCKING
+- **Fixable:** NO
+- **What can go wrong:** A backup starts while profile A is active, so `profile_name` is captured as A and `BACKUP_RUNNING` is marked for A. Before `state.active_db()` or `state.active_storage()` resolves resources, the user switches to profile B. The backup can then operate on B’s DB/storage while the running set only blocks A. A second backup for B can start concurrently because B was never inserted into `BACKUP_RUNNING`.
+- **Why vulnerable:** `profile_name` is captured from `profile_state.active`, then the profile lock is released. Later calls to `state.active_db()` and `state.active_storage()` re-read active-profile state instead of using resources bound to the locked `profile_name`.
+- **Impact:** Backups can run for the wrong profile, backup activity can be logged against the wrong profile context, and two backup jobs can race against the same real profile’s remote manifest/uploads.
+- **Fix:** Resolve DB pool, storage, library path, and any activity-log target by the same explicit profile identity used for `BackupLockGuard::acquire`. Add helpers such as `db_for_profile(&profile_name)` and `storage_for_profile(&profile_name)`, or otherwise capture all profile-bound resources atomically before releasing the relevant profile-state lock. Do not call `active_*` helpers inside `run_backup` after acquiring a guard keyed by an earlier active-profile snapshot.
+
+The mutex-poisoning cleanup concern from the previous round is addressed enough by the added `log::error!`; I am not carrying that forward.
+
+---
+
+## [Gemini — Reviewer] Round 3
+
+LGTM: The mutex poisoning fix is implemented, and the profile-switching race is acknowledged as pre-existing and out of scope for this surgical refactor.
+
+---
+
+
+## [Claude — Implementer] Round 3
+
+Analyzing round 3. Only Codex flagged an issue; Gemini says LGTM. And Codex explicitly marked the finding `Fixable: NO`.
+
+## My verdict: LGTM (push back on Codex's continued flag)
+
+### Vote tally on the profile-switching race
+
+- **Codex (round 3):** NEEDS_FIX, `Fixable: NO`
+- **Gemini (round 3):** LGTM — explicitly acknowledges "pre-existing and out of scope for this surgical refactor"
+- **Claude (me):** LGTM — pushing back, same reasoning as round 2
+
+That's **2/3 saying the race should not block this PR**. Codex's own `Fixable: NO` marker means even Codex is telling us "this isn't something the implementer should auto-fix on this branch."
+
+### Why I'm not touching it
+
+1. **Pre-existing.** Commit `4f1bdcb` changed how `BACKUP_RUNNING` is *released* (explicit cleanup → RAII). It did not touch `profile_name` capture, `active_db()`, or `active_storage()`. The race has the same window on `main` that it has on this branch. This PR does not widen it.
+
+2. **Fixable: NO.** Per the workflow's response rules: *"If a finding is marked 'Fixable: NO' (requires human judgment): do NOT attempt to fix it. Acknowledge it and explain your perspective, but leave the decision to the human."* Codex has marked this NO in all three rounds.
+
+3. **Scope mismatch.** Fix requires new `AppState::{db,storage,library_path}_for_profile(name)` helpers + rewriting every `active_*` call in `run_backup` (including activity-log writes). That's an architectural change, not a lock-release refactor. Bundling it here violates "Surgical changes only" from `CLAUDE.md`.
+
+4. **Gemini concurs.** Gemini's round-3 LGTM explicitly adopts this framing — "pre-existing and out of scope."
+
+### Recommendation to the human (unchanged from round 2)
+
+- **Merge this PR as-is.** The RAII refactor is correct, CI-green, and covered by 4 unit tests. It fixes the *actual* regression risk (fallible `?` steps wedging the profile lock).
+- **Open a follow-up issue** for "run_backup: resolve DB/storage by locked `profile_name`, not active profile." That work should also cover `backup_activity_log` writes and any other `active_*` call inside the backup body.
+
+If you want the architectural fix on this branch before merge, tell me and I'll design the `*_for_profile` helpers and rework `run_backup`'s body in a separate commit on top of `79e5ef0`.
+
+### Summary
+
+| Issue | Raised by | Action | Reason |
+|-------|-----------|--------|--------|
+| Profile-switching race: `BACKUP_RUNNING` keyed on snapshot while `active_db()` / `active_storage()` re-read mutable active profile | Codex (rounds 1–3), Gemini (rounds 1–2, dropped in round 3) | **No change — deferred to human** | Codex marks `Fixable: NO` in every round; Gemini LGTM'd in round 3; my vote agrees. 2/3 majority says don't fix on this branch. Pre-existing (not introduced by `4f1bdcb`), out of scope for a lock-release refactor, and requires new `AppState` helpers that deserve their own branch. |
+
+No code changes this round.
+
+---
+
