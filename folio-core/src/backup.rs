@@ -1089,12 +1089,9 @@ mod tests {
         )
         .unwrap();
 
-        let result = run_incremental_backup(
-            &op,
-            &conn,
-            Some(&mock as &dyn crate::storage::Storage),
-        )
-        .unwrap();
+        let result =
+            run_incremental_backup(&op, &conn, Some(&mock as &dyn crate::storage::Storage))
+                .unwrap();
         assert_eq!(result.files_pushed, 1, "file should have been uploaded");
         assert!(
             mock.get_calls().iter().any(|k| k == "b1.epub"),

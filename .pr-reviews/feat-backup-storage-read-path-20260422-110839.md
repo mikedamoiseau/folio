@@ -67,3 +67,22 @@ All tests pass, formatting is clean, and CI clippy passes. Here's the summary:
 
 ---
 
+
+## [Codex — Reviewer] Round 2
+
+LGTM: the storage-backed backup path now checks size before reading bytes, and I found no remaining merge-blocking issues in the current diff.
+
+No findings.
+
+The prior blocking concern is addressed by `push_storage_file_if_missing`, which calls `storage.size()` and compares remote `stat()` before calling `storage.get()`. The new regression test covers the key case where a changed metadata row should skip reading the book when the remote file already has the matching size.
+
+I’m accepting the pushback on the `BACKUP_RUNNING` cleanup issue for this round because the fallible setup-before-cleanup pattern was already present, and the new storage call is another instance of that broader existing design rather than a new regression introduced by the fix.
+
+---
+
+## [Gemini — Reviewer] Round 2
+
+LGTM: All critical findings addressed, and the push-back on the suggestion is justified by project conventions.
+
+---
+
