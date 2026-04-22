@@ -48,7 +48,7 @@ sha2 = { workspace = true }
 tokio = { workspace = true }
 
 [features]
-default = ["mobi"]
+default = []
 # Exposes test-only helpers like `db::init_db` so cross-crate integration
 # tests (e.g. in `src-tauri/`) can reach them. Never enable in release builds.
 test-utils = []

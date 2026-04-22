@@ -22,11 +22,6 @@ pub struct MobiBook {
     handle: *mut ffi::MOBIData,
 }
 
-// `MOBIData` is owned exclusively by this struct and libmobi functions that
-// only read it take `const MOBIData *`. We never share the pointer across
-// threads concurrently, but marking `Send` lets callers move the value.
-unsafe impl Send for MobiBook {}
-
 impl MobiBook {
     /// Parse a MOBI/AZW/AZW3 file from disk.
     pub fn open(path: &Path) -> FolioResult<Self> {
