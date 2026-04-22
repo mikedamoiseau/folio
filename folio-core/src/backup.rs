@@ -490,16 +490,41 @@ pub fn push_file_if_missing(
     Ok(true)
 }
 
+/// Upload the file at `key` in `storage` to `remote_path` unless the remote
+/// already has a file of the same size. Backend-agnostic counterpart to
+/// [`push_file_if_missing`]: checks `storage.size(key)` against the remote
+/// `stat` *before* materializing bytes, so unchanged books never get fully
+/// read — essential for large files and remote `Storage` backends.
+pub fn push_storage_file_if_missing(
+    op: &Operator,
+    remote_path: &str,
+    storage: &dyn crate::storage::Storage,
+    key: &str,
+) -> FolioResult<bool> {
+    let local_size = storage.size(key)?;
+    if let Ok(meta) = op.stat(remote_path) {
+        if meta.content_length() == local_size {
+            return Ok(false);
+        }
+    }
+    let bytes = storage.get(key)?;
+    op.write(remote_path, bytes)
+        .map_err(|e| FolioError::network(format!("Failed to upload {remote_path}: {e}")))?;
+    Ok(true)
+}
+
 pub fn run_incremental_backup(
     op: &Operator,
     conn: &rusqlite::Connection,
+    library_storage: Option<&dyn crate::storage::Storage>,
 ) -> FolioResult<SyncResult> {
-    run_incremental_backup_with_progress(op, conn, &|_, _, _| {})
+    run_incremental_backup_with_progress(op, conn, library_storage, &|_, _, _| {})
 }
 
 pub fn run_incremental_backup_with_progress(
     op: &Operator,
     conn: &rusqlite::Connection,
+    library_storage: Option<&dyn crate::storage::Storage>,
     on_progress: &dyn Fn(&str, u32, u32),
 ) -> FolioResult<SyncResult> {
     let mut manifest = read_manifest(op);
@@ -588,24 +613,6 @@ pub fn run_incremental_backup_with_progress(
         result.books_pushed = changed_books.len() as u32;
         let total_files = changed_books.len() as u32;
 
-        // #64 M4: imported books store a storage key in `file_path`, not an
-        // absolute filesystem path. Resolve it through a `LocalStorage`
-        // rooted at the current library folder before handing a real path
-        // to `push_file_if_missing`. Legacy rows whose `file_path` is still
-        // absolute (e.g. migration skipped them because the folder
-        // changed) are detected via `Path::is_absolute` and passed through
-        // unchanged.
-        let library_storage: Option<crate::storage::LocalStorage> = {
-            let folder: Option<String> = conn
-                .query_row(
-                    "SELECT value FROM settings WHERE key = 'library_folder'",
-                    [],
-                    |row| row.get(0),
-                )
-                .ok();
-            folder.and_then(|f| crate::storage::LocalStorage::new(f).ok())
-        };
-
         for (i, book) in changed_books.iter().enumerate() {
             on_progress("Uploading books", (i + 1) as u32, total_files);
             // Skip file upload for linked books — they're not in the library folder
@@ -619,26 +626,28 @@ pub fn run_incremental_backup_with_progress(
                     .unwrap_or("epub");
                 let remote_path = format!("files/{}.{}", hash, ext);
 
-                let local_path: String = if std::path::Path::new(&book.file_path).is_absolute() {
-                    book.file_path.clone()
-                } else if let Some(ref storage) = library_storage {
-                    use crate::storage::Storage;
-                    storage
-                        .local_path(&book.file_path)?
-                        .to_string_lossy()
-                        .into_owned()
+                // Imported books may carry either a storage key (post-M4)
+                // or a legacy absolute path. Storage keys read through the
+                // caller-owned `library_storage` so backups work against
+                // any `Storage` backend; absolute paths still read through
+                // `std::fs` since they point outside library storage.
+                if std::path::Path::new(&book.file_path).is_absolute() {
+                    if push_file_if_missing(op, &remote_path, &book.file_path)? {
+                        result.files_pushed += 1;
+                    }
+                } else if let Some(storage) = library_storage {
+                    if push_storage_file_if_missing(op, &remote_path, storage, &book.file_path)? {
+                        result.files_pushed += 1;
+                    }
                 } else {
-                    // No library folder setting and a key-form `file_path` —
-                    // we'd resolve against CWD, which is worse than skipping
-                    // with a clear warning.
+                    // No library storage passed and a key-form `file_path` —
+                    // we have no way to resolve the key to bytes. Skip with
+                    // a clear warning so the caller knows to wire up storage.
                     result.warnings.push(format!(
-                        "Book '{}' has a storage-key file_path but no library_folder setting — skipped",
+                        "Book '{}' has a storage-key file_path but no library storage was provided — skipped",
                         book.title
                     ));
                     continue;
-                };
-                if push_file_if_missing(op, &remote_path, &local_path)? {
-                    result.files_pushed += 1;
                 }
             } else {
                 result.warnings.push(format!(
@@ -885,23 +894,21 @@ mod tests {
             [],
         )
         .unwrap();
-        let result = run_incremental_backup(&op, &conn).unwrap();
+        let result = run_incremental_backup(&op, &conn, None).unwrap();
         assert_eq!(result.books_pushed, 1);
         let remote_books: Vec<crate::models::Book> = pull_json(&op, "metadata/books.json").unwrap();
         assert_eq!(remote_books.len(), 1);
         assert_eq!(remote_books[0].title, "Test Book");
         let manifest = read_manifest(&op);
         assert!(manifest.last_sync_at > 0);
-        let result2 = run_incremental_backup(&op, &conn).unwrap();
+        let result2 = run_incremental_backup(&op, &conn, None).unwrap();
         assert_eq!(result2.books_pushed, 0);
     }
 
     /// Regression test for #64 M4: imported books store a storage key in
     /// `file_path` rather than an absolute filesystem path. Incremental
-    /// backup must resolve the key through the configured library folder
-    /// before reading the file — otherwise `push_file_if_missing` hits
-    /// `std::fs::metadata("id.epub")` which resolves against the process
-    /// cwd and fails.
+    /// backup must resolve the key through the caller-provided
+    /// `library_storage` before reading the file.
     #[test]
     fn incremental_backup_resolves_m4_storage_keys() {
         // Remote backup destination.
@@ -920,18 +927,22 @@ mod tests {
         let library_dir = tempfile::tempdir().unwrap();
         let library_folder = library_dir.path().to_string_lossy().to_string();
         std::fs::write(library_dir.path().join("b1.epub"), b"epub-bytes").unwrap();
+        let library_storage = crate::storage::LocalStorage::new(&library_folder).unwrap();
 
-        // DB with the matching key-form row and the library_folder setting.
         let db_dir = tempfile::tempdir().unwrap();
         let conn = crate::db::init_db(db_dir.path().join("test.db").as_path()).unwrap();
-        crate::db::set_setting(&conn, "library_folder", &library_folder).unwrap();
         conn.execute(
             "INSERT INTO books (id, title, author, file_path, total_chapters, added_at, format, file_hash, is_imported, updated_at) VALUES ('b1', 'Test Book', 'Author', 'b1.epub', 5, 100, 'epub', 'deadbeef', 1, 100)",
             [],
         )
         .unwrap();
 
-        let result = run_incremental_backup(&op, &conn).unwrap();
+        let result = run_incremental_backup(
+            &op,
+            &conn,
+            Some(&library_storage as &dyn crate::storage::Storage),
+        )
+        .unwrap();
         assert_eq!(result.books_pushed, 1);
         assert_eq!(
             result.files_pushed, 1,
@@ -952,8 +963,8 @@ mod tests {
     fn incremental_backup_passes_legacy_absolute_paths_unchanged() {
         // A pre-M4 imported row still holds an absolute path (its library
         // folder changed so the migration left it alone). Backup must not
-        // rewrite it through LocalStorage — passing `Path::is_absolute`
-        // short-circuits the resolver.
+        // rewrite it through the library storage — `Path::is_absolute`
+        // short-circuits to the local-fs read path.
         let remote_dir = tempfile::tempdir().unwrap();
         let config = BackupConfig {
             provider_type: ProviderType::Fs,
@@ -969,23 +980,220 @@ mod tests {
         let book_path = book_dir.path().join("legacy.epub");
         std::fs::write(&book_path, b"legacy-bytes").unwrap();
 
-        // `library_folder` setting points somewhere else — the legacy row
-        // sits outside it and must be handled by the absolute-path branch.
-        let library_dir = tempfile::tempdir().unwrap();
-        let library_folder = library_dir.path().to_string_lossy().to_string();
-
         let db_dir = tempfile::tempdir().unwrap();
         let conn = crate::db::init_db(db_dir.path().join("test.db").as_path()).unwrap();
-        crate::db::set_setting(&conn, "library_folder", &library_folder).unwrap();
         conn.execute(
             "INSERT INTO books (id, title, author, file_path, total_chapters, added_at, format, file_hash, is_imported, updated_at) VALUES ('b1', 'Legacy', 'Author', ?1, 5, 100, 'epub', 'legacyhash', 1, 100)",
             [book_path.to_string_lossy().to_string()],
         )
         .unwrap();
 
-        let result = run_incremental_backup(&op, &conn).unwrap();
+        // No library storage required: absolute `file_path` uses the local-fs branch.
+        let result = run_incremental_backup(&op, &conn, None).unwrap();
         assert_eq!(result.files_pushed, 1);
         let remote_file = remote_dir.path().join("files").join("legacyhash.epub");
         assert_eq!(std::fs::read(&remote_file).unwrap(), b"legacy-bytes");
+    }
+
+    /// Minimal in-memory `Storage` that records every `get`/`size` call. Used
+    /// to prove the backup loop routes key-form reads through the trait
+    /// rather than `std::fs`.
+    struct MockStorage {
+        data: std::sync::Mutex<std::collections::HashMap<String, Vec<u8>>>,
+        get_calls: std::sync::Mutex<Vec<String>>,
+        size_calls: std::sync::Mutex<Vec<String>>,
+    }
+
+    impl MockStorage {
+        fn new() -> Self {
+            Self {
+                data: std::sync::Mutex::new(std::collections::HashMap::new()),
+                get_calls: std::sync::Mutex::new(Vec::new()),
+                size_calls: std::sync::Mutex::new(Vec::new()),
+            }
+        }
+
+        fn insert(&self, key: &str, bytes: Vec<u8>) {
+            self.data.lock().unwrap().insert(key.to_string(), bytes);
+        }
+
+        fn get_calls(&self) -> Vec<String> {
+            self.get_calls.lock().unwrap().clone()
+        }
+    }
+
+    impl crate::storage::Storage for MockStorage {
+        fn put(&self, _key: &str, _bytes: &[u8]) -> FolioResult<()> {
+            unimplemented!("MockStorage does not support put")
+        }
+        fn get(&self, key: &str) -> FolioResult<Vec<u8>> {
+            self.get_calls.lock().unwrap().push(key.to_string());
+            self.data
+                .lock()
+                .unwrap()
+                .get(key)
+                .cloned()
+                .ok_or_else(|| FolioError::not_found(format!("mock missing {key}")))
+        }
+        fn exists(&self, key: &str) -> FolioResult<bool> {
+            Ok(self.data.lock().unwrap().contains_key(key))
+        }
+        fn delete(&self, _key: &str) -> FolioResult<()> {
+            unimplemented!("MockStorage does not support delete")
+        }
+        fn list(&self, _prefix: &str) -> FolioResult<Vec<String>> {
+            unimplemented!("MockStorage does not support list")
+        }
+        fn size(&self, key: &str) -> FolioResult<u64> {
+            self.size_calls.lock().unwrap().push(key.to_string());
+            self.data
+                .lock()
+                .unwrap()
+                .get(key)
+                .map(|v| v.len() as u64)
+                .ok_or_else(|| FolioError::not_found(format!("mock missing {key}")))
+        }
+        fn local_path(&self, _key: &str) -> FolioResult<std::path::PathBuf> {
+            Err(FolioError::invalid(
+                "MockStorage is in-memory — no local path",
+            ))
+        }
+    }
+
+    /// Regression: key-form `file_path` reads must go through
+    /// `library_storage.get` — never through `std::fs::read` on a resolved
+    /// local path. A `MockStorage` with nothing on disk proves it: if the
+    /// read were still going through the filesystem, there would be no file
+    /// to read and the upload would fail.
+    #[test]
+    fn incremental_backup_reads_book_bytes_through_storage_trait() {
+        let remote_dir = tempfile::tempdir().unwrap();
+        let config = BackupConfig {
+            provider_type: ProviderType::Fs,
+            values: [(
+                "root".to_string(),
+                remote_dir.path().to_string_lossy().to_string(),
+            )]
+            .into(),
+        };
+        let op = build_operator(&config).unwrap();
+
+        let mock = MockStorage::new();
+        mock.insert("b1.epub", b"mock-bytes".to_vec());
+
+        let db_dir = tempfile::tempdir().unwrap();
+        let conn = crate::db::init_db(db_dir.path().join("test.db").as_path()).unwrap();
+        conn.execute(
+            "INSERT INTO books (id, title, author, file_path, total_chapters, added_at, format, file_hash, is_imported, updated_at) VALUES ('b1', 'Mock Book', 'Author', 'b1.epub', 5, 100, 'epub', 'mockhash', 1, 100)",
+            [],
+        )
+        .unwrap();
+
+        let result =
+            run_incremental_backup(&op, &conn, Some(&mock as &dyn crate::storage::Storage))
+                .unwrap();
+        assert_eq!(result.files_pushed, 1, "file should have been uploaded");
+        assert!(
+            mock.get_calls().iter().any(|k| k == "b1.epub"),
+            "storage.get must have been called for the book key, got: {:?}",
+            mock.get_calls()
+        );
+
+        // The remote file must contain the mock's bytes, not anything else.
+        let remote_file = remote_dir.path().join("files").join("mockhash.epub");
+        assert_eq!(std::fs::read(&remote_file).unwrap(), b"mock-bytes");
+    }
+
+    /// When a key-form `file_path` is encountered but no library storage
+    /// was provided, the backup must skip the file with a warning instead
+    /// of erroring out. Metadata sync should still succeed.
+    #[test]
+    fn incremental_backup_warns_and_skips_when_library_storage_missing() {
+        let remote_dir = tempfile::tempdir().unwrap();
+        let config = BackupConfig {
+            provider_type: ProviderType::Fs,
+            values: [(
+                "root".to_string(),
+                remote_dir.path().to_string_lossy().to_string(),
+            )]
+            .into(),
+        };
+        let op = build_operator(&config).unwrap();
+
+        let db_dir = tempfile::tempdir().unwrap();
+        let conn = crate::db::init_db(db_dir.path().join("test.db").as_path()).unwrap();
+        conn.execute(
+            "INSERT INTO books (id, title, author, file_path, total_chapters, added_at, format, file_hash, is_imported, updated_at) VALUES ('b1', 'Orphan', 'Author', 'b1.epub', 5, 100, 'epub', 'orphanhash', 1, 100)",
+            [],
+        )
+        .unwrap();
+
+        let result = run_incremental_backup(&op, &conn, None).unwrap();
+        assert_eq!(result.books_pushed, 1, "metadata still pushes");
+        assert_eq!(
+            result.files_pushed, 0,
+            "no file should have been uploaded without library storage"
+        );
+        assert!(
+            result
+                .warnings
+                .iter()
+                .any(|w| w.contains("no library storage")),
+            "expected a 'no library storage' warning, got: {:?}",
+            result.warnings
+        );
+    }
+
+    /// Regression: when the remote backup already has a matching-size file
+    /// for a key-form book, the backup must skip it *without* reading the
+    /// bytes through `Storage::get`. Editing only book metadata (title,
+    /// rating) bumps `updated_at` and enters the changed set, so this path
+    /// runs often — pulling the full file each time would make backups
+    /// slow, memory-heavy, or network-heavy against remote storage.
+    #[test]
+    fn incremental_backup_skips_storage_get_when_remote_file_matches() {
+        let remote_dir = tempfile::tempdir().unwrap();
+        let config = BackupConfig {
+            provider_type: ProviderType::Fs,
+            values: [(
+                "root".to_string(),
+                remote_dir.path().to_string_lossy().to_string(),
+            )]
+            .into(),
+        };
+        let op = build_operator(&config).unwrap();
+
+        // Pre-populate the remote with a same-size file at the expected path.
+        let book_bytes = b"remote-already-has-these".to_vec();
+        std::fs::create_dir_all(remote_dir.path().join("files")).unwrap();
+        std::fs::write(
+            remote_dir.path().join("files").join("skiphash.epub"),
+            &book_bytes,
+        )
+        .unwrap();
+
+        let mock = MockStorage::new();
+        mock.insert("b1.epub", book_bytes.clone());
+
+        let db_dir = tempfile::tempdir().unwrap();
+        let conn = crate::db::init_db(db_dir.path().join("test.db").as_path()).unwrap();
+        conn.execute(
+            "INSERT INTO books (id, title, author, file_path, total_chapters, added_at, format, file_hash, is_imported, updated_at) VALUES ('b1', 'Unchanged', 'Author', 'b1.epub', 5, 100, 'epub', 'skiphash', 1, 100)",
+            [],
+        )
+        .unwrap();
+
+        let result =
+            run_incremental_backup(&op, &conn, Some(&mock as &dyn crate::storage::Storage))
+                .unwrap();
+        assert_eq!(
+            result.files_pushed, 0,
+            "remote already has matching-size file, upload should be skipped"
+        );
+        assert!(
+            mock.get_calls().is_empty(),
+            "storage.get must NOT be called when remote size matches, got: {:?}",
+            mock.get_calls()
+        );
     }
 }
