@@ -15,6 +15,8 @@ pub mod enrichment;
 pub mod epub;
 pub mod error;
 pub mod isbn;
+#[cfg(feature = "mobi")]
+pub mod mobi;
 pub mod models;
 pub mod opds;
 pub mod openlibrary;

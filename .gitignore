@@ -34,6 +34,9 @@ src-tauri/resources/*.dylib
 src-tauri/resources/*.so
 src-tauri/resources/*.dll
 
+# Test fixtures (not part of the repo; downloaded by developers as needed)
+src-tauri/test-fixtures/
+
 # Logs
 *.log
 npm-debug.log*
