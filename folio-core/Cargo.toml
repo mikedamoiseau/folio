@@ -41,6 +41,9 @@ urlencoding = { workspace = true }
 # page_cache.rs
 log = { workspace = true }
 
+# epub.rs — collision-safe key derivation for inline image storage
+sha2 = { workspace = true }
+
 # backup.rs (tokio runtime guarding for blocking opendal calls)
 tokio = { workspace = true }
 
