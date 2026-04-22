@@ -3220,8 +3220,16 @@ impl BackupLockGuard {
 
 impl Drop for BackupLockGuard {
     fn drop(&mut self) {
-        if let Ok(mut running) = BACKUP_RUNNING.lock() {
-            running.remove(&self.profile_name);
+        match BACKUP_RUNNING.lock() {
+            Ok(mut running) => {
+                running.remove(&self.profile_name);
+            }
+            Err(_) => {
+                log::error!(
+                    "BACKUP_RUNNING mutex poisoned; could not release lock for profile '{}'",
+                    self.profile_name
+                );
+            }
         }
     }
 }
