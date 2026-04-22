@@ -3220,12 +3220,16 @@ pub async fn run_backup(
     crate::backup::load_secrets(&mut config)?;
     let provider_name = config.provider_type.clone();
     let op = crate::backup::build_operator(&config)?;
+    // Pass the active library `Storage` into backup so book-file reads
+    // go through the trait (backend-agnostic) instead of `std::fs::read`.
+    let library_storage = state.active_storage()?;
     let (tx, rx) = std::sync::mpsc::channel();
     let app_handle = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let result = crate::backup::run_incremental_backup_with_progress(
             &op,
             &conn,
+            Some(library_storage.as_ref()),
             &|step, current, total| {
                 let _ = app_handle.emit(
                     "backup-progress",
