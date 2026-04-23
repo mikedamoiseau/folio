@@ -139,9 +139,16 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
         setBookFormat(bookInfo.format);
         setTotalChapters(bookInfo.total_chapters);
 
-        if (isHtmlBook) { // Covers both EPUB and MOBI
+        // `isHtmlBook` is derived from React state (`bookFormat`), which still
+        // holds the previous render's value here — `setBookFormat` above is
+        // asynchronous. Gate on the freshly-fetched format so we don't ask
+        // the backend for a TOC on PDF/CBZ/CBR (which returns an error and
+        // prevents the book from loading).
+        if (bookInfo.format === "epub" || bookInfo.format === "mobi") {
           const tocEntries = await invoke<TocEntry[]>("get_toc", { bookId });
           if (!cancelled) setToc(tocEntries);
+        } else if (!cancelled) {
+          setToc([]);
         }
 
         if (bookInfo.format === "cbz" || bookInfo.format === "cbr") {

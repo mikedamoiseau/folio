@@ -29,8 +29,10 @@ to or ships in its release artifacts.
   support — libmobi has no first-class MSVC build path, so shipping it
   would require an MSYS2 / vcpkg pipeline that is out of scope for v1.
 - **Distribution:** Folio does not currently bundle libmobi into its
-  release artifacts. End users on macOS and Linux must install libmobi
-  from their system package manager before first MOBI open:
+  release artifacts. The macOS / Linux release builds link libmobi at
+  process load time, so end users **must install libmobi before first
+  launch** — without it, the app fails to start (not just MOBI open).
+  Install from the system package manager:
   - macOS: `brew install libmobi`
   - Debian / Ubuntu: `sudo apt install libmobi0`
   - Fedora / RHEL: `sudo dnf install libmobi`

@@ -2719,23 +2719,26 @@ pub async fn get_discover_books(state: State<'_, AppState>) -> FolioResult<Vec<o
     Ok(all_entries)
 }
 
-/// Pick the file extension from an OPDS acquisition URL by scanning the URL
-/// path for one of our importable extensions. Query strings and fragments
-/// are ignored so feeds that append `?token=…` don't hide the extension.
-/// Returns `None` when no supported extension is found; the caller decides
-/// the fallback.
+/// Pick the file extension from an OPDS acquisition URL. Parses the URL with
+/// the `url` crate and inspects the final non-empty path segment — query
+/// strings, fragments, and trailing slashes are handled by the parser, so
+/// feeds that append `?token=…` or `/` don't hide the extension.
+/// Returns `None` when the URL is unparseable or the extension isn't in our
+/// supported set; the caller decides the fallback.
 fn opds_extension_from_url(url: &str) -> Option<&'static str> {
-    // Strip query/fragment before looking at the path.
-    let path = url.split(&['?', '#'][..]).next().unwrap_or(url);
-    let lower = path.to_ascii_lowercase();
-    // Check longest extensions first so `.azw3` isn't shadowed by `.azw`.
-    for &ext in &["azw3", "epub", "mobi", "azw", "pdf", "cbz", "cbr"] {
-        let needle = format!(".{ext}");
-        if lower.ends_with(&needle) || lower.contains(&format!("{needle}?")) {
-            return Some(ext);
-        }
+    let parsed = url::Url::parse(url).ok()?;
+    let last = parsed.path_segments()?.rfind(|s| !s.is_empty())?;
+    let ext = last.rsplit_once('.')?.1.to_ascii_lowercase();
+    match ext.as_str() {
+        "epub" => Some("epub"),
+        "pdf" => Some("pdf"),
+        "cbz" => Some("cbz"),
+        "cbr" => Some("cbr"),
+        "mobi" => Some("mobi"),
+        "azw" => Some("azw"),
+        "azw3" => Some("azw3"),
+        _ => None,
     }
-    None
 }
 
 /// Map an OPDS acquisition link's MIME type to the file extension the import
@@ -5107,6 +5110,72 @@ mod tests {
     fn opds_mime_rejects_unknown_types() {
         assert_eq!(opds_extension_from_mime("application/octet-stream"), None);
         assert_eq!(opds_extension_from_mime(""), None);
+    }
+
+    #[test]
+    fn opds_url_detects_plain_extensions() {
+        assert_eq!(
+            opds_extension_from_url("https://example.com/book.epub"),
+            Some("epub")
+        );
+        assert_eq!(
+            opds_extension_from_url("https://example.com/foo/bar.pdf"),
+            Some("pdf")
+        );
+        assert_eq!(
+            opds_extension_from_url("https://example.com/book.AZW3"),
+            Some("azw3")
+        );
+    }
+
+    #[test]
+    fn opds_url_ignores_query_and_fragment() {
+        assert_eq!(
+            opds_extension_from_url("https://example.com/book.epub?token=abc"),
+            Some("epub")
+        );
+        assert_eq!(
+            opds_extension_from_url("https://example.com/book.epub#anchor"),
+            Some("epub")
+        );
+    }
+
+    #[test]
+    fn opds_url_disambiguates_azw_and_azw3() {
+        // Plain `.azw` and `.azw3` must not shadow each other.
+        assert_eq!(
+            opds_extension_from_url("https://example.com/book.azw"),
+            Some("azw")
+        );
+        assert_eq!(
+            opds_extension_from_url("https://example.com/book.azw3"),
+            Some("azw3")
+        );
+    }
+
+    #[test]
+    fn opds_url_returns_none_for_opaque_or_missing() {
+        // Opaque acquisition URLs (common in OPDS) — MIME path handles these.
+        assert_eq!(
+            opds_extension_from_url("https://example.com/download/123"),
+            None
+        );
+        // Unparseable / extensionless / non-matching.
+        assert_eq!(opds_extension_from_url("not a url"), None);
+        assert_eq!(opds_extension_from_url(""), None);
+        assert_eq!(
+            opds_extension_from_url("https://example.com/book.xyz"),
+            None
+        );
+    }
+
+    #[test]
+    fn opds_url_handles_trailing_slash() {
+        // Trailing slash: last non-empty segment still has the extension.
+        assert_eq!(
+            opds_extension_from_url("https://example.com/book.epub/"),
+            Some("epub")
+        );
     }
 
     #[test]

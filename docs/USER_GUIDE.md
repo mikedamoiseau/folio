@@ -747,13 +747,13 @@ The file is probably corrupted or uses a format variant the parser can't handle.
 
 Folio supports **EPUB** (versions 2 and 3), **PDF**, **CBZ**, and **CBR** on every platform. **MOBI**, **AZW**, and **AZW3** are supported on macOS and Linux release builds; Windows builds do not include MOBI support. DjVu is not supported.
 
-MOBI support links dynamically against [libmobi](https://github.com/bfabiszewski/libmobi) (LGPL v3+). Because Folio does not yet bundle the shared library, reading a MOBI book requires libmobi to be installed on your system:
+MOBI support links dynamically against [libmobi](https://github.com/bfabiszewski/libmobi) (LGPL v3+). The macOS and Linux release builds link libmobi at process load time, so the shared library **must be installed before first launch** — without it, the app fails to start regardless of which format you open. Install libmobi via your system package manager:
 
 - **macOS:** `brew install libmobi`
-- **Linux (Debian / Ubuntu):** `sudo apt install libmobi0`
+- **Linux (Debian / Ubuntu):** `sudo apt install libmobi0` (the `.deb` declares this as a dependency, so an `apt install` of Folio will pull it in automatically)
 - **Linux (Fedora / RHEL):** `sudo dnf install libmobi`
 
-The reader works without libmobi for EPUB / PDF / CBZ / CBR — only MOBI-family imports will fail.
+If you do not need MOBI support, use the Windows release build, which is compiled without the `mobi` feature and has no libmobi dependency.
 
 ### Where is my data stored?
 
