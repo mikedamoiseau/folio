@@ -862,8 +862,8 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
 
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
-      // Cmd/Ctrl+F — open book search (EPUB and PDF)
-      if ((e.metaKey || e.ctrlKey) && e.key === "f" && (bookFormat === "epub" || bookFormat === "pdf")) {
+      // Cmd/Ctrl+F — open book search (HTML-reflowable books + PDF)
+      if ((e.metaKey || e.ctrlKey) && e.key === "f" && (isHtmlBook || bookFormat === "pdf")) {
         e.preventDefault();
         setSearchOpen(true);
         setSearchQuery("");
@@ -1275,8 +1275,8 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
             {currentChapterTitle}
           </h1>
 
-          {/* Search button (EPUB and PDF) */}
-          {(bookFormat === "epub" || bookFormat === "pdf") && (
+          {/* Search button (HTML-reflowable books + PDF) */}
+          {(isHtmlBook || bookFormat === "pdf") && (
             <button
               onClick={() => { setSearchOpen(true); setSearchQuery(""); setSearchResults([]); }}
               className={`p-1.5 transition-colors rounded-lg focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 ${searchOpen ? "text-accent bg-accent-light" : "text-ink-muted hover:text-ink hover:bg-warm-subtle"}`}
@@ -1414,7 +1414,7 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
         </header>
 
         {/* Book search panel */}
-        {searchOpen && (bookFormat === "epub" || bookFormat === "pdf") && (
+        {searchOpen && (isHtmlBook || bookFormat === "pdf") && (
           <div className="shrink-0 border-b border-warm-border bg-surface px-4 py-2 flex items-center gap-2">
             <svg width="14" height="14" viewBox="0 0 20 20" fill="none" className="text-ink-muted shrink-0">
               <circle cx="9" cy="9" r="6" stroke="currentColor" strokeWidth="2" />
