@@ -10,6 +10,7 @@ import {
   getSpreadPages,
   sanitizeCss,
   pickSupportedOpdsLink,
+  resolveBookmarkScrollTop,
   type BookLike,
 } from "./utils";
 
@@ -472,5 +473,89 @@ describe("pickSupportedOpdsLink", () => {
       { href: "http://host/book.epub", mimeType: "application/epub+zip" },
     ]);
     expect(picked?.label).toBe("EPUB");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// resolveBookmarkScrollTop
+// ---------------------------------------------------------------------------
+describe("resolveBookmarkScrollTop", () => {
+  // HTML-reflowable books store bookmark positions as chapter-local fractions
+  // (0–1 of the current chapter's height). `resolveBookmarkScrollTop` turns
+  // that back into an absolute container.scrollTop value the reader assigns
+  // when the bookmark is reopened.
+
+  it("continuous mode: midpoint of 2000 px chapter at offset 5000", () => {
+    const top = resolveBookmarkScrollTop(true, 0.5, {
+      chapterOffsetTop: 5000,
+      chapterHeight: 2000,
+      containerScrollHeight: 12000,
+    });
+    expect(top).toBe(6000);
+  });
+
+  it("continuous mode: top of chapter lands exactly at chapter offset", () => {
+    const top = resolveBookmarkScrollTop(true, 0, {
+      chapterOffsetTop: 3500,
+      chapterHeight: 1000,
+      containerScrollHeight: 8000,
+    });
+    expect(top).toBe(3500);
+  });
+
+  it("continuous mode: end of chapter lands at chapter bottom", () => {
+    const top = resolveBookmarkScrollTop(true, 1, {
+      chapterOffsetTop: 3500,
+      chapterHeight: 1000,
+      containerScrollHeight: 8000,
+    });
+    expect(top).toBe(4500);
+  });
+
+  it("paginated mode: fraction of container.scrollHeight (not chapter-relative)", () => {
+    const top = resolveBookmarkScrollTop(false, 0.25, {
+      chapterOffsetTop: 5000,
+      chapterHeight: 2000,
+      containerScrollHeight: 8000,
+    });
+    expect(top).toBe(2000);
+  });
+
+  it("paginated mode: ignores chapter geometry entirely", () => {
+    const a = resolveBookmarkScrollTop(false, 0.5, {
+      chapterOffsetTop: 5000,
+      chapterHeight: 2000,
+      containerScrollHeight: 10000,
+    });
+    const b = resolveBookmarkScrollTop(false, 0.5, {
+      chapterOffsetTop: 99,
+      chapterHeight: 123,
+      containerScrollHeight: 10000,
+    });
+    expect(a).toBe(b);
+  });
+
+  it("continuous mode: out-of-range fraction is clamped by caller's geometry", () => {
+    // The helper doesn't clamp — it's a pure arithmetic function. Callers
+    // that already clamp on save (getChapterScrollPosition does) won't emit
+    // out-of-range values, but document the contract here so a future
+    // change doesn't silently clamp and mask save-side bugs.
+    const top = resolveBookmarkScrollTop(true, 1.25, {
+      chapterOffsetTop: 1000,
+      chapterHeight: 800,
+      containerScrollHeight: 5000,
+    });
+    expect(top).toBe(2000); // 1000 + 1.25 * 800 = 2000
+  });
+
+  it("continuous mode: zero-height chapter returns the chapter offset", () => {
+    // Guard against divide-by-zero in the reader: an empty chapter shouldn't
+    // scroll to NaN. Any fraction × 0 = 0, so scrollTop == chapterOffsetTop.
+    const top = resolveBookmarkScrollTop(true, 0.5, {
+      chapterOffsetTop: 4200,
+      chapterHeight: 0,
+      containerScrollHeight: 8000,
+    });
+    expect(top).toBe(4200);
   });
 });

@@ -103,6 +103,44 @@ export function clamp(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max);
 }
 
+/** Geometry inputs for {@link resolveBookmarkScrollTop}. All values are in
+ *  CSS pixels and come from `HTMLElement.offsetTop`, `offsetHeight`, and
+ *  the container's `scrollHeight`. */
+export interface ChapterGeometry {
+  chapterOffsetTop: number;
+  chapterHeight: number;
+  containerScrollHeight: number;
+}
+
+/**
+ * Convert a stored bookmark `scroll_position` (fraction 0–1) back into an
+ * absolute `container.scrollTop` value.
+ *
+ * HTML-reflowable books (EPUB, MOBI) store a **chapter-local** fraction
+ * when they're in continuous-scroll mode — the same coordinate system
+ * `getChapterScrollPosition()` produces on save. Resolving it requires
+ * the chapter's geometry because the container holds every chapter end
+ * to end.
+ *
+ * Paginated / single-chapter rendering modes treat the fraction as
+ * container-global, so we just scale against the container's
+ * `scrollHeight` and ignore chapter geometry.
+ *
+ * The function is pure: it does not clamp out-of-range fractions (a
+ * saved value should already be in [0, 1]) and returns `chapterOffsetTop`
+ * when the chapter has zero height instead of producing NaN.
+ */
+export function resolveBookmarkScrollTop(
+  isContinuous: boolean,
+  storedPosition: number,
+  geometry: ChapterGeometry,
+): number {
+  if (isContinuous) {
+    return geometry.chapterOffsetTop + storedPosition * geometry.chapterHeight;
+  }
+  return storedPosition * geometry.containerScrollHeight;
+}
+
 const SUPPORTED_EXTENSIONS = [".epub", ".cbz", ".cbr", ".pdf"];
 
 /** Check if a filename has a supported ebook extension. */
