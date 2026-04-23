@@ -108,6 +108,50 @@ jobs:
         working-directory: src-tauri
         run: cargo fmt --check
 
+  test-mobi-macos:
+    # Second-class smoke test for the mobi feature on macOS (Linux is the
+    # primary test runner). libmobi on macOS uses a different iconv (Apple's
+    # libiconv vs GNU libiconv on Linux), so keeping a macOS runner catches
+    # platform-specific regressions in the FFI layer before release.
+    name: Rust Tests (macOS, --features mobi)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install libmobi
+        run: brew install libmobi
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          # Separate cache bucket from the Linux job; macOS builds produce
+          # incompatible artifacts.
+          key: macos-mobi
+
+      - name: Cache pdfium
+        id: cache-pdfium
+        uses: actions/cache@v4
+        with:
+          path: src-tauri/resources
+          key: pdfium-${{ env.PDFIUM_VERSION }}-macos-univ
+
+      - name: Download pdfium
+        if: steps.cache-pdfium.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p src-tauri/resources /tmp/pdfium-extracted
+          curl -L -o /tmp/pdfium.tgz \
+            "https://github.com/bblanchon/pdfium-binaries/releases/download/chromium%2F${{ env.PDFIUM_VERSION }}/pdfium-mac-univ.tgz"
+          tar xzf /tmp/pdfium.tgz -C /tmp/pdfium-extracted
+          cp /tmp/pdfium-extracted/lib/libpdfium.dylib src-tauri/resources/
+
+      - name: Run cargo test (--features mobi)
+        working-directory: src-tauri
+        run: cargo test --features mobi
+
   frontend-check:
     name: Frontend TypeScript Check
     runs-on: ubuntu-latest
