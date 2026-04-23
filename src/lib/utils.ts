@@ -178,17 +178,14 @@ const OPDS_FORMATS: Array<{
   { label: "AZW", ext: "azw", mimeNeedles: ["azw"], extNeedles: ["azw"] },
 ];
 
-function matchesFormat(
-  link: OpdsLinkLike,
-  mimeNeedles: string[],
-  extNeedles: string[],
-): boolean {
+function matchesMime(link: OpdsLinkLike, mimeNeedles: string[]): boolean {
   const mime = link.mimeType.toLowerCase();
+  return mimeNeedles.some((n) => mime.includes(n));
+}
+
+function matchesExt(link: OpdsLinkLike, extNeedles: string[]): boolean {
   const href = link.href.toLowerCase();
-  return (
-    mimeNeedles.some((n) => mime.includes(n)) ||
-    extNeedles.some((n) => href.includes(`.${n}`))
-  );
+  return extNeedles.some((n) => href.includes(`.${n}`));
 }
 
 /**
@@ -199,6 +196,11 @@ function matchesFormat(
  * skipped — this prevents the UI from offering e.g. `+ MOBI` on builds that
  * weren't compiled with the `mobi` feature.
  *
+ * For each candidate format we look at URL extension matches before MIME
+ * matches. This matters for the MOBI family: `application/vnd.amazon.ebook`
+ * is shared by `.azw` and `.azw3`, so a MIME-first rule silently renames
+ * AZW downloads to AZW3. The URL path is the only signal that disambiguates.
+ *
  * Returns null when no supported + allowed link is found; callers should
  * hide the download action rather than pulling an arbitrary link.
  */
@@ -206,9 +208,19 @@ export function pickSupportedOpdsLink<T extends OpdsLinkLike>(
   links: T[],
   allowedExtensions?: Set<string>,
 ): { link: T; label: string } | null {
-  for (const { label, ext, mimeNeedles, extNeedles } of OPDS_FORMATS) {
+  // URL-extension pass: if any link has a definite URL extension matching a
+  // preferred format, use it. This runs through formats in preference order
+  // and checks URL suffixes only.
+  for (const { label, ext, extNeedles } of OPDS_FORMATS) {
     if (allowedExtensions && !allowedExtensions.has(ext)) continue;
-    const match = links.find((l) => matchesFormat(l, mimeNeedles, extNeedles));
+    const match = links.find((l) => matchesExt(l, extNeedles));
+    if (match) return { link: match, label };
+  }
+  // MIME-type fallback pass: when nothing in the URL path matched, trust
+  // the advertised MIME.
+  for (const { label, ext, mimeNeedles } of OPDS_FORMATS) {
+    if (allowedExtensions && !allowedExtensions.has(ext)) continue;
+    const match = links.find((l) => matchesMime(l, mimeNeedles));
     if (match) return { link: match, label };
   }
   return null;

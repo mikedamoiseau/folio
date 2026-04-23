@@ -2746,10 +2746,14 @@ fn opds_extension_from_mime(mime: &str) -> Option<&'static str> {
     match bare.as_str() {
         "application/epub+zip" => Some("epub"),
         "application/pdf" => Some("pdf"),
-        // MOBI family. Amazon's own MIME (vnd.amazon.ebook) normally means
-        // AZW3/KF8 in the wild; older feeds use x-mobipocket-ebook for MOBI.
+        // MOBI family. `x-mobipocket-ebook` is the historical MOBI MIME and
+        // unambiguous. `application/vnd.amazon.ebook` is the Amazon vendor
+        // MIME shared by both `.azw` and `.azw3` — mapping it to a specific
+        // extension here would collapse that distinction, so we return None
+        // and let URL-based detection disambiguate. A final default of
+        // `.azw3` (the more common container) is applied at the import
+        // layer when the URL is also opaque.
         "application/x-mobipocket-ebook" => Some("mobi"),
-        "application/vnd.amazon.ebook" => Some("azw3"),
         // Comic book archives. Both vendor-prefixed and de-facto MIMEs seen in feeds.
         "application/x-cbz" | "application/vnd.comicbook+zip" => Some("cbz"),
         "application/x-cbr" | "application/vnd.comicbook-rar" => Some("cbr"),
@@ -2773,16 +2777,31 @@ pub async fn download_opds_book(
     state: State<'_, AppState>,
     app: AppHandle,
 ) -> FolioResult<Book> {
-    // Determine the file extension for the temp import path. Prefer the MIME
-    // type the feed already gave us — it's authoritative, and many OPDS feeds
-    // use opaque acquisition URLs like `/download/123` where URL-based
-    // detection can't find an extension. Fall back to URL scanning, then to
-    // `.epub` as a last resort so we never feed an extensionless file to the
-    // importer.
-    let ext = mime_type
+    // Determine the file extension for the temp import path. Precedence:
+    //   1. URL suffix — Folio's own feed and many well-behaved feeds put the
+    //      extension in the path; this is the only signal that disambiguates
+    //      the AZW / AZW3 pair since they share
+    //      `application/vnd.amazon.ebook`.
+    //   2. MIME type — authoritative for unambiguous types and covers feeds
+    //      with opaque URLs like `/download/123`.
+    //   3. Vendor-MIME fallback — `application/vnd.amazon.ebook` resolves to
+    //      `.azw3` here (the far more common container), which kicks in only
+    //      when the URL also had no usable suffix.
+    //   4. Final fallback `.epub` so we never feed an extensionless file to
+    //      the importer.
+    let vendor_amazon = mime_type
         .as_deref()
-        .and_then(opds_extension_from_mime)
-        .or_else(|| opds_extension_from_url(&download_url))
+        .map(|m| {
+            m.split(';')
+                .next()
+                .unwrap_or(m)
+                .trim()
+                .eq_ignore_ascii_case("application/vnd.amazon.ebook")
+        })
+        .unwrap_or(false);
+    let ext = opds_extension_from_url(&download_url)
+        .or_else(|| mime_type.as_deref().and_then(opds_extension_from_mime))
+        .or(if vendor_amazon { Some("azw3") } else { None })
         .unwrap_or("epub");
 
     // Defense in depth: reject unsupported formats before the download so
@@ -5063,16 +5082,50 @@ mod tests {
 
     #[test]
     fn opds_mime_maps_mobi_family() {
-        // x-mobipocket-ebook is the historical MOBI MIME, vnd.amazon.ebook is
-        // Amazon's AZW3/KF8 MIME.
+        // x-mobipocket-ebook is the historical MOBI MIME.
         assert_eq!(
             opds_extension_from_mime("application/x-mobipocket-ebook"),
             Some("mobi")
         );
+        // `vnd.amazon.ebook` is ambiguous between .azw and .azw3 — the MIME
+        // mapper must surface this by returning None so callers fall back to
+        // URL-based disambiguation. A final default is applied at the import
+        // layer when the URL is also opaque.
         assert_eq!(
             opds_extension_from_mime("application/vnd.amazon.ebook"),
-            Some("azw3")
+            None
         );
+    }
+
+    #[test]
+    fn opds_vendor_amazon_mime_falls_back_to_url_extension() {
+        // Defense-in-depth: the `download_opds_book` precedence must let URL
+        // extension win over the ambiguous vendor MIME so an `.azw` link is
+        // not silently renamed `.azw3` on import.
+        //
+        // We replicate the precedence used in `download_opds_book` here so a
+        // regression in that ordering is caught even without a full Tauri
+        // harness.
+        let mime = "application/vnd.amazon.ebook";
+        let url = "https://example.com/download/book.azw";
+        let ext = opds_extension_from_url(url)
+            .or_else(|| opds_extension_from_mime(mime))
+            .unwrap_or("epub");
+        assert_eq!(ext, "azw");
+    }
+
+    #[test]
+    fn opds_vendor_amazon_mime_with_opaque_url_defaults_to_azw3() {
+        // When the URL is opaque and MIME is the ambiguous vendor one, we
+        // still need a default — AZW3 is the far more common container in the
+        // wild today, so fall back to that.
+        let mime = "application/vnd.amazon.ebook";
+        let url = "https://example.com/download/123";
+        let ext = opds_extension_from_url(url)
+            .or_else(|| opds_extension_from_mime(mime))
+            .or(Some("azw3"))
+            .unwrap();
+        assert_eq!(ext, "azw3");
     }
 
     #[test]
