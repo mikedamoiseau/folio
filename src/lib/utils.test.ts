@@ -412,4 +412,35 @@ describe("pickSupportedOpdsLink", () => {
     ]);
     expect(picked?.label).toBe("CBR");
   });
+
+  it("skips formats outside the allowlist (feature-gating)", () => {
+    // A MOBI-only entry on a build that didn't compile with --features mobi.
+    const picked = pickSupportedOpdsLink(
+      [{ href: "http://host/book.mobi", mimeType: "application/x-mobipocket-ebook" }],
+      new Set(["epub", "pdf", "cbz", "cbr"]),
+    );
+    expect(picked).toBeNull();
+  });
+
+  it("falls back to EPUB when the allowlist forbids higher-priority matches", () => {
+    // A feed offering both AZW3 and EPUB, on a build without the mobi
+    // feature. Without the allowlist, AZW3 would win the lookup order;
+    // with it, we should fall through to EPUB.
+    const picked = pickSupportedOpdsLink(
+      [
+        { href: "http://host/book.azw3", mimeType: "application/vnd.amazon.ebook" },
+        { href: "http://host/book.epub", mimeType: "application/epub+zip" },
+      ],
+      new Set(["epub", "pdf", "cbz", "cbr"]),
+    );
+    expect(picked?.label).toBe("EPUB");
+  });
+
+  it("treats an undefined allowlist as 'allow everything'", () => {
+    // Existing behavior — allowlist is optional.
+    const picked = pickSupportedOpdsLink([
+      { href: "http://host/book.mobi", mimeType: "application/x-mobipocket-ebook" },
+    ]);
+    expect(picked?.label).toBe("MOBI");
+  });
 });

@@ -160,15 +160,22 @@ export interface OpdsLinkLike {
 
 // Format preference for OPDS acquisition: EPUB first (best reflowable
 // rendering), then PDF/CBZ/CBR for page-based books, then MOBI/AZW3/AZW.
-// Each tuple is (preferred button label, MIME needles, URL extension needles).
-const OPDS_FORMATS: Array<{ label: string; mimeNeedles: string[]; extNeedles: string[] }> = [
-  { label: "EPUB", mimeNeedles: ["epub"], extNeedles: ["epub"] },
-  { label: "PDF", mimeNeedles: ["pdf"], extNeedles: ["pdf"] },
-  { label: "CBZ", mimeNeedles: ["cbz", "comicbook+zip"], extNeedles: ["cbz"] },
-  { label: "CBR", mimeNeedles: ["cbr", "comicbook-rar"], extNeedles: ["cbr"] },
-  { label: "AZW3", mimeNeedles: ["vnd.amazon.ebook", "azw3"], extNeedles: ["azw3"] },
-  { label: "MOBI", mimeNeedles: ["mobipocket", "mobi"], extNeedles: ["mobi"] },
-  { label: "AZW", mimeNeedles: ["azw"], extNeedles: ["azw"] },
+// `ext` is the canonical extension used to filter against the backend's
+// get_supported_formats() list; `mimeNeedles` / `extNeedles` are loose
+// substring matches tolerating the MIME + URL variations seen in the wild.
+const OPDS_FORMATS: Array<{
+  label: string;
+  ext: string;
+  mimeNeedles: string[];
+  extNeedles: string[];
+}> = [
+  { label: "EPUB", ext: "epub", mimeNeedles: ["epub"], extNeedles: ["epub"] },
+  { label: "PDF", ext: "pdf", mimeNeedles: ["pdf"], extNeedles: ["pdf"] },
+  { label: "CBZ", ext: "cbz", mimeNeedles: ["cbz", "comicbook+zip"], extNeedles: ["cbz"] },
+  { label: "CBR", ext: "cbr", mimeNeedles: ["cbr", "comicbook-rar"], extNeedles: ["cbr"] },
+  { label: "AZW3", ext: "azw3", mimeNeedles: ["vnd.amazon.ebook", "azw3"], extNeedles: ["azw3"] },
+  { label: "MOBI", ext: "mobi", mimeNeedles: ["mobipocket", "mobi"], extNeedles: ["mobi"] },
+  { label: "AZW", ext: "azw", mimeNeedles: ["azw"], extNeedles: ["azw"] },
 ];
 
 function matchesFormat(
@@ -186,15 +193,21 @@ function matchesFormat(
 
 /**
  * Pick the best OPDS acquisition link for import. Walks the Folio preference
- * order and returns the first matching link along with a human-readable label
- * (used for the download button). Returns null when no supported link is
- * found — callers should hide the download action rather than blindly pulling
- * an arbitrary link, since unsupported formats will fail to import.
+ * order and returns the first matching link along with a human-readable
+ * label. When `allowedExtensions` is supplied (e.g. the set returned by the
+ * backend's get_supported_formats command), formats not in the allowlist are
+ * skipped — this prevents the UI from offering e.g. `+ MOBI` on builds that
+ * weren't compiled with the `mobi` feature.
+ *
+ * Returns null when no supported + allowed link is found; callers should
+ * hide the download action rather than pulling an arbitrary link.
  */
 export function pickSupportedOpdsLink<T extends OpdsLinkLike>(
   links: T[],
+  allowedExtensions?: Set<string>,
 ): { link: T; label: string } | null {
-  for (const { label, mimeNeedles, extNeedles } of OPDS_FORMATS) {
+  for (const { label, ext, mimeNeedles, extNeedles } of OPDS_FORMATS) {
+    if (allowedExtensions && !allowedExtensions.has(ext)) continue;
     const match = links.find((l) => matchesFormat(l, mimeNeedles, extNeedles));
     if (match) return { link: match, label };
   }

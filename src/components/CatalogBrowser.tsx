@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { useTranslation } from "react-i18next";
 import { friendlyError } from "../lib/errors";
 import { pickSupportedOpdsLink } from "../lib/utils";
+import { useSupportedFormats } from "../lib/supportedFormats";
 
 interface OpdsCatalog {
   name: string;
@@ -47,6 +48,11 @@ export default function CatalogBrowser({ onClose, onBookImported }: CatalogBrows
   const [history, setHistory] = useState<{ url: string; title: string }[]>([]);
   const [downloading, setDownloading] = useState<string | null>(null);
   const [downloadedIds, setDownloadedIds] = useState<Set<string>>(new Set());
+  // Backend-supported formats for this build. `null` until the first fetch
+  // resolves — pickSupportedOpdsLink treats `undefined` as "allow all", so
+  // we pass `supportedFormats ?? undefined` to keep render-before-load
+  // behavior identical to before.
+  const supportedFormats = useSupportedFormats();
 
   // Add catalog form
   const [showAddCatalog, setShowAddCatalog] = useState(false);
@@ -121,7 +127,7 @@ export default function CatalogBrowser({ onClose, onBookImported }: CatalogBrows
     // → AZW) and pick the first matching link. If nothing matches, the UI
     // should already have hidden the button; bail out rather than pulling an
     // arbitrary non-importable link.
-    const picked = pickSupportedOpdsLink(entry.links);
+    const picked = pickSupportedOpdsLink(entry.links, supportedFormats ?? undefined);
     if (!picked) return;
 
     setDownloading(entry.id);
@@ -139,7 +145,7 @@ export default function CatalogBrowser({ onClose, onBookImported }: CatalogBrows
     } finally {
       setDownloading(null);
     }
-  }, [onBookImported, t]);
+  }, [onBookImported, t, supportedFormats]);
 
   const handleAddCatalog = async () => {
     if (!newCatalogName.trim() || !newCatalogUrl.trim()) return;
@@ -241,7 +247,7 @@ export default function CatalogBrowser({ onClose, onBookImported }: CatalogBrows
                   </div>
                 ) : (
                   unifiedResults.map((entry) => {
-                    const picked = pickSupportedOpdsLink(entry.links);
+                    const picked = pickSupportedOpdsLink(entry.links, supportedFormats ?? undefined);
                     const hasDownloads = picked !== null;
                     const isDownloaded = downloadedIds.has(entry.id);
                     const isDownloading = downloading === entry.id;
@@ -429,7 +435,7 @@ export default function CatalogBrowser({ onClose, onBookImported }: CatalogBrows
               </div>
             ) : (
               feed.entries.map((entry) => {
-                const picked = pickSupportedOpdsLink(entry.links);
+                const picked = pickSupportedOpdsLink(entry.links, supportedFormats ?? undefined);
                 const hasDownloads = picked !== null;
                 const isNav = !!entry.navUrl && !hasDownloads;
                 const isDownloaded = downloadedIds.has(entry.id);
