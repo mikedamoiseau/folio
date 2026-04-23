@@ -745,7 +745,15 @@ The file is probably corrupted or uses a format variant the parser can't handle.
 
 ### Supported formats
 
-Folio supports **EPUB** (versions 2 and 3), **PDF**, **CBZ**, and **CBR**. Other formats such as MOBI, AZW, and DjVu are not supported.
+Folio supports **EPUB** (versions 2 and 3), **PDF**, **CBZ**, and **CBR** on every platform. **MOBI**, **AZW**, and **AZW3** are supported on macOS and Linux release builds; Windows builds do not include MOBI support. DjVu is not supported.
+
+MOBI support links dynamically against [libmobi](https://github.com/bfabiszewski/libmobi) (LGPL v3+). Because Folio does not yet bundle the shared library, reading a MOBI book requires libmobi to be installed on your system:
+
+- **macOS:** `brew install libmobi`
+- **Linux (Debian / Ubuntu):** `sudo apt install libmobi0`
+- **Linux (Fedora / RHEL):** `sudo dnf install libmobi`
+
+The reader works without libmobi for EPUB / PDF / CBZ / CBR — only MOBI-family imports will fail.
 
 ### Where is my data stored?
 
