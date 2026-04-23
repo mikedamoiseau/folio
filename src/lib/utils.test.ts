@@ -443,4 +443,34 @@ describe("pickSupportedOpdsLink", () => {
     ]);
     expect(picked?.label).toBe("MOBI");
   });
+
+  it("labels a .azw URL as AZW even when MIME is the ambiguous vendor one", () => {
+    // The vendor MIME `application/vnd.amazon.ebook` is shared by .azw and
+    // .azw3 in the wild. The previous iteration order made AZW3 always win,
+    // silently renaming AZW downloads. URL extension must take precedence
+    // over the ambiguous MIME so round-tripping preserves the container.
+    const picked = pickSupportedOpdsLink([
+      { href: "http://host/book.azw", mimeType: "application/vnd.amazon.ebook" },
+    ]);
+    expect(picked?.label).toBe("AZW");
+    expect(picked?.link.href).toContain(".azw");
+    expect(picked?.link.href).not.toContain(".azw3");
+  });
+
+  it("labels a .azw3 URL as AZW3 with the vendor MIME", () => {
+    const picked = pickSupportedOpdsLink([
+      { href: "http://host/book.azw3", mimeType: "application/vnd.amazon.ebook" },
+    ]);
+    expect(picked?.label).toBe("AZW3");
+  });
+
+  it("prefers EPUB link over AZW link when both are offered", () => {
+    // Confirms the AZW URL-first fix doesn't override the global format
+    // preference order (EPUB is still the best reflowable option).
+    const picked = pickSupportedOpdsLink([
+      { href: "http://host/book.azw", mimeType: "application/vnd.amazon.ebook" },
+      { href: "http://host/book.epub", mimeType: "application/epub+zip" },
+    ]);
+    expect(picked?.label).toBe("EPUB");
+  });
 });

@@ -27,6 +27,14 @@ pub fn routes(state: WebState) -> Router<WebState> {
         .route("/books/{id}/pages/{index}", get(get_page_image))
         .route("/books/{id}/page-count", get(get_page_count))
         .route("/books/{id}/download", get(download_book))
+        // OPDS feeds emit `/download/{book_id}.{ext}` so clients using URL-
+        // based extension detection can disambiguate AZW vs AZW3 (both share
+        // the `application/vnd.amazon.ebook` MIME). The filename segment is
+        // ignored server-side — the same handler serves the stored file.
+        .route(
+            "/books/{id}/download/{filename}",
+            get(download_book_with_filename),
+        )
         .route("/series", get(list_series))
         .route("/collections", get(list_collections))
         .route("/collections/{id}/books", get(get_collection_books))
@@ -549,6 +557,17 @@ async fn download_book(
         body,
     )
         .into_response())
+}
+
+/// Same as [`download_book`] but with a trailing filename segment that is
+/// discarded. The OPDS feed emits URLs of the form `/download/{id}.{ext}`
+/// so OPDS clients can key off the URL extension when the MIME is ambiguous
+/// (e.g. AZW vs AZW3 both use `application/vnd.amazon.ebook`).
+async fn download_book_with_filename(
+    state: State<WebState>,
+    Path((id, _filename)): Path<(String, String)>,
+) -> Result<Response, (StatusCode, String)> {
+    download_book(state, Path(id)).await
 }
 
 // ── Collections ──────────────────────────────────────────────────────────────
