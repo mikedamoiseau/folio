@@ -8,19 +8,34 @@ let cache: Promise<Set<string>> | null = null;
 /**
  * Ask the backend which book formats this build can actually import. The
  * result is compile-time constant for the session (it switches on cargo
- * features, not runtime state), so we cache the first invoke and hand out
- * the same Promise to every caller.
+ * features, not runtime state), so we cache the first successful invoke
+ * and hand out the same Promise to every later caller.
  *
- * Falls back to the pre-MOBI core-format set if the IPC call fails — that
- * keeps the UI functional on older backends and during early startup.
+ * A transient IPC failure during cold start is served the pre-MOBI core
+ * set so the UI stays functional, but the rejection is NOT cached — the
+ * next call retries. Caching the rejection would permanently degrade the
+ * session (import dialog, drag-drop, OPDS gating all stuck without MOBI
+ * until restart).
  */
 export function getSupportedFormats(): Promise<Set<string>> {
   if (!cache) {
-    cache = invoke<string[]>("get_supported_formats")
-      .then((exts) => new Set(exts))
-      .catch(() => FALLBACK);
+    const pending = invoke<string[]>("get_supported_formats").then(
+      (exts) => new Set(exts),
+    );
+    cache = pending;
+    pending.catch(() => {
+      // Drop the rejected promise so the next caller re-tries the IPC.
+      cache = null;
+    });
   }
-  return cache;
+  // Current callers still get FALLBACK on this invocation; only later
+  // calls get a fresh attempt.
+  return cache.catch(() => FALLBACK);
+}
+
+/** Test-only: drop the memoized promise. Do not call from production code. */
+export function __resetCacheForTests(): void {
+  cache = null;
 }
 
 /** React hook variant of {@link getSupportedFormats} — returns `null` until
