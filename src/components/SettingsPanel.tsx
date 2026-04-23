@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, useCallback, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { getVersion } from "@tauri-apps/api/app";
 import { listen } from "@tauri-apps/api/event";
 import { open as openFilePicker } from "@tauri-apps/plugin-dialog";
 import { useTranslation } from "react-i18next";
@@ -298,6 +299,13 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
   const [autoStartEnabled, setAutoStartEnabled] = useState(false);
   const [autoStartLoading, setAutoStartLoading] = useState(false);
   const [autoStartError, setAutoStartError] = useState<string | null>(null);
+
+  // App version for the About section — reads tauri.conf.json at runtime
+  // so we don't have to sync a frontend constant with the package.
+  const [appVersion, setAppVersion] = useState<string>("");
+  useEffect(() => {
+    getVersion().then(setAppVersion).catch(() => setAppVersion(""));
+  }, []);
 
   // Continue Reading section visibility (default true)
   const [showContinueReading, setShowContinueReading] = useState(() => {
@@ -1910,6 +1918,71 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
               </div>
             </Accordion>
           )}
+
+          <Accordion title={t("settings.aboutSection")} open={openSection === "about"} onToggle={() => toggleSection("about")}>
+            <div className="space-y-3 text-sm">
+              <p className="text-ink">
+                {appVersion
+                  ? t("settings.aboutVersion", { version: appVersion })
+                  : t("settings.aboutTagline")}
+              </p>
+              <p className="text-ink-muted">{t("settings.aboutLicense")}</p>
+              <div className="space-y-2">
+                <h4 className="text-xs font-semibold uppercase tracking-wider text-ink-muted">
+                  {t("settings.thirdPartyHeading")}
+                </h4>
+                <ul className="space-y-1.5 text-ink-muted">
+                  <li>
+                    <span className="text-ink">libmobi</span> — LGPL-3.0-or-later,{" "}
+                    {t("settings.dynamicallyLinked")}.{" "}
+                    <a
+                      href="https://github.com/bfabiszewski/libmobi"
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-accent hover:underline"
+                    >
+                      {t("settings.source")}
+                    </a>
+                  </li>
+                  <li>
+                    <span className="text-ink">pdfium</span> — BSD-3-Clause,{" "}
+                    {t("settings.bundled")}.{" "}
+                    <a
+                      href="https://pdfium.googlesource.com/pdfium/"
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-accent hover:underline"
+                    >
+                      {t("settings.source")}
+                    </a>
+                  </li>
+                  <li>
+                    <span className="text-ink">unrar</span> — UnRAR license (decompression only).{" "}
+                    <a
+                      href="https://www.rarlab.com/rar_add.htm"
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-accent hover:underline"
+                    >
+                      {t("settings.source")}
+                    </a>
+                  </li>
+                </ul>
+              </div>
+              <p className="text-xs text-ink-muted pt-1">
+                {t("settings.aboutFullNotice")}{" "}
+                <a
+                  href="https://github.com/buzzwoo/folio/blob/main/THIRD_PARTY_LICENSES.md"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-accent hover:underline"
+                >
+                  THIRD_PARTY_LICENSES.md
+                </a>
+                .
+              </p>
+            </div>
+          </Accordion>
         </div>
       </div>
 
