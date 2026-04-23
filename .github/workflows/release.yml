@@ -34,6 +34,11 @@ jobs:
             args: '--target x86_64-apple-darwin --features mobi'
             pdfium_archive: pdfium-mac-univ.tgz
             pdfium_lib: libpdfium.dylib
+          # Windows: --no-default-features disables sftp (incompatible with
+          # the Windows build path) AND omits mobi. libmobi does not have
+          # first-class MSVC support; enabling it would require an MSYS2/
+          # vcpkg build pipeline. Tracked as future work — MOBI on Windows
+          # is intentionally out of scope for v1 release.
           - platform: windows-latest
             args: '-- --no-default-features'
             pdfium_archive: pdfium-win-x64.tgz

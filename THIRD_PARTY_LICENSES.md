@@ -24,9 +24,21 @@ to or ships in its release artifacts.
 - **How Folio uses it:** Dynamically linked at runtime to parse MOBI / AZW /
   AZW3 (KF8) ebook files. Enabled when Folio is built with the `mobi` cargo
   feature.
-- **Distribution:** Release builds ship the libmobi shared library (`.dylib`
-  on macOS, `.so` on Linux, `.dll` on Windows) as a separate file alongside
-  the Folio binary. It is **not** statically linked into the application.
+- **Platform availability:** MOBI support is compiled into **macOS and
+  Linux** release builds only. **Windows** builds do not include MOBI
+  support — libmobi has no first-class MSVC build path, so shipping it
+  would require an MSYS2 / vcpkg pipeline that is out of scope for v1.
+- **Distribution:** Folio does not currently bundle libmobi into its
+  release artifacts. End users on macOS and Linux must install libmobi
+  from their system package manager before first MOBI open:
+  - macOS: `brew install libmobi`
+  - Debian / Ubuntu: `sudo apt install libmobi0`
+  - Fedora / RHEL: `sudo dnf install libmobi`
+
+  This keeps the relinking clause of the LGPL trivially satisfied — users
+  can swap in their own compatible build of libmobi without touching
+  Folio. Bundling libmobi inside the `.app` / `.AppImage` / `.deb` (with
+  `install_name_tool` rewriting for macOS) is tracked as future work.
 
 ### LGPL compliance notes
 
