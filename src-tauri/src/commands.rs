@@ -5170,6 +5170,25 @@ mod tests {
     }
 
     #[test]
+    fn opds_url_disambiguates_folio_acquisition_urls() {
+        // Folio's own OPDS feed emits `/api/books/{id}/download/{id}.{ext}`
+        // specifically so URL-based detection can disambiguate AZW from AZW3
+        // when the MIME is the ambiguous `application/vnd.amazon.ebook`.
+        assert_eq!(
+            opds_extension_from_url("https://folio.local/api/books/abc123/download/abc123.azw"),
+            Some("azw")
+        );
+        assert_eq!(
+            opds_extension_from_url("https://folio.local/api/books/abc123/download/abc123.azw3"),
+            Some("azw3")
+        );
+        assert_eq!(
+            opds_extension_from_url("https://folio.local/api/books/abc123/download/abc123.mobi"),
+            Some("mobi")
+        );
+    }
+
+    #[test]
     fn supported_import_extensions_always_includes_core_formats() {
         let exts = supported_import_extensions();
         for core in &["epub", "pdf", "cbz", "cbr"] {
