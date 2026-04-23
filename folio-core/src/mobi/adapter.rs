@@ -74,13 +74,19 @@ pub fn get_chapter_list(file_path: &str) -> FolioResult<Vec<ChapterInfo>> {
 
 /// Extract sanitized HTML for a single chapter and rewrite inline image
 /// references (`src="resource{NNNNN}.{ext}"`) to `asset://` URLs pointing
-/// at images extracted into `storage` under `{book_id}/mobi/`.
+/// at images extracted into `storage` under `{book_id}/{chapter_index}/`.
+///
+/// The `{book_id}/{chapter_index}/` layout matches the EPUB adapter and
+/// the web reader's asset-serving contract (`api.rs` resolves inline
+/// images via `/api/books/{id}/images/{chapter}/{filename}`), so the
+/// rewriter output is valid for both the desktop and HTTP reader paths.
 ///
 /// Only raster formats (jpeg/png/gif/bmp) are rewritten; SVG and CSS
 /// references are left alone because they aren't meaningful for the
-/// Reader's current render path. Images that fail to write keep their
-/// original `resource…` reference so a single broken asset doesn't abort
-/// the whole chapter.
+/// Reader's current render path. Images whose write to `storage` fails
+/// (disk full, permission denied) keep their original `resource…`
+/// reference so a single broken asset doesn't poison the whole chapter
+/// with URLs that point at files that never landed on disk.
 pub fn get_chapter_content(
     file_path: &str,
     chapter_index: usize,
@@ -110,10 +116,11 @@ pub fn get_chapter_content(
         .map_err(|e| FolioError::invalid(format!("MOBI chapter is not valid UTF-8: {e}")))?;
     let cleaned = clean(raw_html);
 
-    // Persist every image resource once. The key layout mirrors the
-    // `resource{NNNNN}.{ext}` filenames that libmobi's reconstructed HTML
-    // references, so the rewriter below can map them 1:1.
-    let key_prefix = format!("{book_id}/mobi");
+    // Persist every image resource once under the per-chapter prefix.
+    // Failures are silent by design — the rewriter below checks
+    // `storage.exists(&key)` before emitting an asset URL, so a failed
+    // `put` leaves the original `resource…` reference in place.
+    let key_prefix = format!("{book_id}/{chapter_index}");
     for res in rawml.resources() {
         if !res.kind.is_image() {
             continue;
@@ -123,9 +130,6 @@ pub fn get_chapter_content(
         };
         let asset_name = format!("resource{:05}.{ext}", res.uid);
         let key = format!("{key_prefix}/{asset_name}");
-        // `exists` / `put` failures degrade gracefully: the rewriter will
-        // leave the original reference in place and the Reader simply
-        // shows a broken-image icon for that one asset.
         if !storage.exists(&key).unwrap_or(false) {
             let _ = storage.put(&key, res.data);
         }
@@ -189,7 +193,10 @@ fn rewrite_mobi_image_refs(html: &str, storage: &dyn Storage, key_prefix: &str) 
 
 /// Try to resolve a libmobi resource filename (`resource00001.jpg`) to an
 /// `asset://` URL. Returns `None` for anything that doesn't look like a
-/// raster image reference, so non-image attributes pass through unchanged.
+/// raster image reference or whose key is not actually present in
+/// `storage`, so non-image attributes and failed-write references both
+/// pass through unchanged. The existence check is what prevents a
+/// silently-dropped `put` from producing a broken asset URL.
 fn mobi_resource_to_asset_url(
     value: &str,
     storage: &dyn Storage,
@@ -206,6 +213,9 @@ fn mobi_resource_to_asset_url(
         _ => return None,
     }
     let key = format!("{key_prefix}/{value}");
+    if !storage.exists(&key).unwrap_or(false) {
+        return None;
+    }
     let path = storage.local_path(&key).ok()?;
     let encoded = urlencoding::encode(&path.to_string_lossy()).into_owned();
     Some(format!("asset://localhost/{}", encoded))
@@ -332,11 +342,12 @@ mod tests {
     fn rewrite_mobi_image_refs_replaces_resource_urls() {
         let dir = tempdir().unwrap();
         let storage = LocalStorage::new(dir.path().to_path_buf()).unwrap();
-        // Pre-seed a known image so the rewriter finds it.
-        storage.put("bk/mobi/resource00000.jpg", b"\xFF\xD8\xFFdata").unwrap();
+        // Pre-seed a known image under the per-chapter key layout so the
+        // rewriter finds it.
+        storage.put("bk/0/resource00000.jpg", b"\xFF\xD8\xFFdata").unwrap();
 
         let html = r#"<p><img src="resource00000.jpg" alt="x"/></p>"#;
-        let out = rewrite_mobi_image_refs(html, &storage, "bk/mobi");
+        let out = rewrite_mobi_image_refs(html, &storage, "bk/0");
         assert!(
             out.contains("asset://localhost/"),
             "expected asset:// URL, got {out}"
@@ -348,12 +359,27 @@ mod tests {
     }
 
     #[test]
+    fn rewrite_mobi_image_refs_skips_rewrite_when_asset_missing_from_storage() {
+        let dir = tempdir().unwrap();
+        let storage = LocalStorage::new(dir.path().to_path_buf()).unwrap();
+        // Do not seed the image — simulates `storage.put` failing silently
+        // earlier in `get_chapter_content`.
+        let html = r#"<p><img src="resource00000.jpg" alt="x"/></p>"#;
+        let out = rewrite_mobi_image_refs(html, &storage, "bk/0");
+        // Reference is left as-is so the Reader shows a broken-image
+        // icon for the single failed asset instead of a bogus asset:// URL
+        // pointing at a file that never landed on disk.
+        assert!(out.contains("\"resource00000.jpg\""), "got {out}");
+        assert!(!out.contains("asset://localhost"), "got {out}");
+    }
+
+    #[test]
     fn rewrite_mobi_image_refs_leaves_non_image_refs_alone() {
         let dir = tempdir().unwrap();
         let storage = LocalStorage::new(dir.path().to_path_buf()).unwrap();
         let html =
             r#"<link href="flow00001.css"/><img src="resource00001.svg"/><img src="flow00004.svg"/>"#;
-        let out = rewrite_mobi_image_refs(html, &storage, "bk/mobi");
+        let out = rewrite_mobi_image_refs(html, &storage, "bk/0");
         // CSS and SVG references pass through untouched.
         assert!(out.contains("flow00001.css"));
         assert!(out.contains("flow00004.svg"));
@@ -379,9 +405,9 @@ mod tests {
     fn mobi_resource_to_asset_url_rejects_non_image_extensions() {
         let dir = tempdir().unwrap();
         let storage = LocalStorage::new(dir.path().to_path_buf()).unwrap();
-        assert!(mobi_resource_to_asset_url("resource00000.css", &storage, "bk/mobi").is_none());
-        assert!(mobi_resource_to_asset_url("resource00000.svg", &storage, "bk/mobi").is_none());
-        assert!(mobi_resource_to_asset_url("resource00.jpg", &storage, "bk/mobi").is_none());
-        assert!(mobi_resource_to_asset_url("flow00000.jpg", &storage, "bk/mobi").is_none());
+        assert!(mobi_resource_to_asset_url("resource00000.css", &storage, "bk/0").is_none());
+        assert!(mobi_resource_to_asset_url("resource00000.svg", &storage, "bk/0").is_none());
+        assert!(mobi_resource_to_asset_url("resource00.jpg", &storage, "bk/0").is_none());
+        assert!(mobi_resource_to_asset_url("flow00000.jpg", &storage, "bk/0").is_none());
     }
 }
