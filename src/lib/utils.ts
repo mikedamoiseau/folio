@@ -206,7 +206,7 @@ function matchesExt(link: OpdsLinkLike, extNeedles: string[]): boolean {
  */
 export function pickSupportedOpdsLink<T extends OpdsLinkLike>(
   links: T[],
-  allowedExtensions?: Set<string>,
+  allowedExtensions?: ReadonlySet<string>,
 ): { link: T; label: string } | null {
   // URL-extension pass: if any link has a definite URL extension matching a
   // preferred format, use it. This runs through formats in preference order

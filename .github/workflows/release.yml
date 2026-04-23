@@ -22,8 +22,14 @@ jobs:
           # Linux + macOS: enable the mobi feature so MOBI/AZW/AZW3 import
           # is compiled in. Windows stays on --no-default-features; see
           # docs/USER_GUIDE.md for the platform support matrix.
+          #
+          # Linux carries an extra `--config tauri.linux.mobi.conf.json`
+          # which overlays the `libmobi0` / `libmobi` depends into the
+          # `.deb` / `.rpm` packages. The overlay is only applied when
+          # `--features mobi` is on, so a hypothetical non-mobi Linux
+          # build would ship honest metadata (no unneeded depends).
           - platform: ubuntu-latest
-            args: '--features mobi'
+            args: '--config tauri.linux.mobi.conf.json --features mobi'
             pdfium_archive: pdfium-linux-x64.tgz
             pdfium_lib: libpdfium.so
           - platform: macos-latest

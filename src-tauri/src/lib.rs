@@ -1,4 +1,6 @@
 pub mod commands;
+#[cfg(test)]
+mod tauri_config_test;
 pub mod tray;
 pub mod web_server;
 

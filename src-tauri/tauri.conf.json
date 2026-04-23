@@ -37,18 +37,6 @@
     ],
     "resources": [
       "resources/*"
-    ],
-    "linux": {
-      "deb": {
-        "depends": [
-          "libmobi0"
-        ]
-      },
-      "rpm": {
-        "depends": [
-          "libmobi"
-        ]
-      }
-    }
+    ]
   }
 }
