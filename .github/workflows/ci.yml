@@ -26,7 +26,8 @@ jobs:
             libgtk-3-dev \
             libayatana-appindicator3-dev \
             librsvg2-dev \
-            patchelf
+            patchelf \
+            libmobi-dev
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -52,9 +53,16 @@ jobs:
           tar xzf /tmp/pdfium.tgz -C /tmp/pdfium-extracted
           cp /tmp/pdfium-extracted/lib/libpdfium.so src-tauri/resources/
 
-      - name: Run cargo test
+      - name: Run cargo test (default features)
         working-directory: src-tauri
         run: cargo test
+
+      # Exercise the mobi feature path so the libmobi-linked code compiles
+      # and its unit tests run under CI. Kept as a separate step (not a
+      # matrix) so default-feature breakage is still visible independently.
+      - name: Run cargo test (--features mobi)
+        working-directory: src-tauri
+        run: cargo test --features mobi
 
   lint:
     name: Rust Lint
@@ -70,7 +78,8 @@ jobs:
             libgtk-3-dev \
             libayatana-appindicator3-dev \
             librsvg2-dev \
-            patchelf
+            patchelf \
+            libmobi-dev
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -85,9 +94,15 @@ jobs:
       - name: Ensure resources dir exists with placeholder
         run: mkdir -p src-tauri/resources && touch src-tauri/resources/.gitkeep
 
-      - name: cargo clippy
+      - name: cargo clippy (default features)
         working-directory: src-tauri
         run: cargo clippy -- -D warnings
+
+      # Lint the mobi feature too so clippy catches regressions in the
+      # libmobi-gated code paths.
+      - name: cargo clippy (--features mobi)
+        working-directory: src-tauri
+        run: cargo clippy --features mobi -- -D warnings
 
       - name: cargo fmt check
         working-directory: src-tauri

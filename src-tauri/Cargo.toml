@@ -71,7 +71,8 @@ default = ["sftp"]
 # crate (#63 M5). Keeping the desktop flag as a convenience pass-through.
 sftp = ["folio-core/sftp"]
 # MOBI/AZW/AZW3 support (#34). Opt-in because libmobi (LGPL v3+) must be
-# available at build time via pkg-config or LIBMOBI_*_DIR env vars. CI
-# does not install libmobi yet; enable locally with `cargo … --features mobi`.
+# available at build time via pkg-config or LIBMOBI_*_DIR env vars. CI on
+# Linux installs libmobi-dev via apt (see .github/workflows/ci.yml);
+# locally, enable with `cargo … --features mobi`.
 mobi = ["folio-core/mobi"]
 
