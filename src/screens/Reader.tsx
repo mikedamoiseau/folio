@@ -17,6 +17,7 @@ import { friendlyError, toFolioError } from "../lib/errors";
 interface TocEntry {
   label: string;
   chapter_index: number;
+  play_order: string;
   children: TocEntry[];
 }
 
@@ -138,7 +139,7 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
         setBookFormat(bookInfo.format);
         setTotalChapters(bookInfo.total_chapters);
 
-        if (bookInfo.format === "epub") {
+        if (isHtmlBook) { // Covers both EPUB and MOBI
           const tocEntries = await invoke<TocEntry[]>("get_toc", { bookId });
           if (!cancelled) setToc(tocEntries);
         }
@@ -796,7 +797,7 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
     const result = searchResults[index];
     setActiveMatchIndex(index);
 
-    if (bookFormat !== "epub") {
+    if (!isHtmlBook) {
       // PDF/CBZ/CBR: page-level navigation only
       goToChapter(result.chapterIndex);
       return;

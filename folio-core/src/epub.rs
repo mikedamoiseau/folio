@@ -5,6 +5,8 @@ use std::collections::HashMap;
 use std::io::Read;
 use zip::ZipArchive;
 
+use crate::models::{SearchResult, TocEntry};
+
 // ---- Error type ----
 
 #[derive(Debug)]
@@ -71,13 +73,6 @@ pub struct ChapterInfo {
     pub index: usize,
     pub title: String,
     pub href: String,
-}
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct TocEntry {
-    pub label: String,
-    pub chapter_index: usize,
-    pub children: Vec<TocEntry>,
 }
 
 // ---- Cached archive ----
@@ -750,14 +745,6 @@ pub fn get_chapter_content_from_cache(
 
 // ---- Full-text search ----
 
-#[derive(Debug, Clone, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SearchResult {
-    pub chapter_index: usize,
-    pub snippet: String,
-    pub match_offset: usize,
-}
-
 /// Clamp a byte index to the nearest valid UTF-8 char boundary (floor).
 fn floor_char_boundary(s: &str, idx: usize) -> usize {
     let mut i = idx.min(s.len());
@@ -850,7 +837,7 @@ pub fn search_book(
         while let Some(pos) = text_lower[search_from..].find(&query_lower) {
             let match_start = search_from + pos;
             results.push(SearchResult {
-                chapter_index: i,
+                chapter_index: i as u32,
                 snippet: extract_snippet(&text, match_start, query_lower.len(), 40),
                 match_offset: match_start,
             });
@@ -1177,7 +1164,8 @@ pub fn get_toc(file_path: &str) -> Result<Vec<TocEntry>, EpubError> {
         .filter_map(|(i, idref)| {
             manifest.get(idref).map(|_| TocEntry {
                 label: format!("Chapter {}", i + 1),
-                chapter_index: i,
+                chapter_index: i as u32,
+                play_order: format!("{}", i + 1),
                 children: vec![],
             })
         })
@@ -1245,7 +1233,8 @@ pub fn get_toc_from_cache(cached: &mut CachedEpubArchive) -> Result<Vec<TocEntry
         .filter_map(|(i, idref)| {
             cached.manifest.get(idref).map(|_| TocEntry {
                 label: format!("Chapter {}", i + 1),
-                chapter_index: i,
+                chapter_index: i as u32,
+                play_order: format!("{}", i + 1),
                 children: vec![],
             })
         })
@@ -1325,7 +1314,8 @@ fn parse_nav_toc(nav: &str, href_to_index: &HashMap<String, usize>) -> Vec<TocEn
                             };
                             entries.push(TocEntry {
                                 label,
-                                chapter_index,
+                                chapter_index: chapter_index as u32,
+                                play_order: format!("{}", chapter_index + 1), // Default simple play order
                                 children: vec![],
                             });
                         }
@@ -1428,7 +1418,8 @@ fn parse_ncx_toc(ncx: &str, href_to_index: &HashMap<String, usize>) -> Vec<TocEn
                             let chapter_index = href_to_index.get(&clean_src).copied().unwrap_or(0);
                             entries.push(TocEntry {
                                 label: state.label,
-                                chapter_index,
+                                chapter_index: chapter_index as u32,
+                                play_order: format!("{}", chapter_index + 1), // Default simple play order
                                 children: vec![],
                             });
                         }
