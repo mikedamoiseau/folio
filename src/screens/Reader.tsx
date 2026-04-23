@@ -1330,7 +1330,7 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
           </div>
 
           {/* Dual-page toggle — hidden in continuous scroll mode */}
-          {!(isContinuous && isHtmlBook) && (
+          {!isContinuous && (
             <div className="flex items-center">
               <button
                 onClick={() => setDualPage(!dualPage)}
