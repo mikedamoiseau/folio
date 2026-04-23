@@ -440,18 +440,27 @@ fn page_cache_storage(app: &AppHandle) -> FolioResult<folio_core::storage::Local
 
 // --- Library management ---
 
+/// Extensions the backend can import in this build. Core formats are
+/// always present; MOBI family is conditional on the `mobi` feature. Used
+/// both by the Tauri command exposed to the frontend and by internal
+/// validators like download_opds_book.
+pub fn supported_import_extensions() -> &'static [&'static str] {
+    #[cfg(feature = "mobi")]
+    {
+        &["epub", "pdf", "cbz", "cbr", "mobi", "azw", "azw3"]
+    }
+    #[cfg(not(feature = "mobi"))]
+    {
+        &["epub", "pdf", "cbz", "cbr"]
+    }
+}
+
 /// Return the list of file extensions the backend can import in this build.
 /// The frontend uses this to populate the file-picker and folder-scan
 /// filters so MOBI/AZW/AZW3 only appear when libmobi is compiled in.
 #[tauri::command]
 pub async fn get_supported_formats() -> FolioResult<Vec<&'static str>> {
-    #[allow(unused_mut)]
-    let mut exts = vec!["epub", "pdf", "cbz", "cbr"];
-    #[cfg(feature = "mobi")]
-    {
-        exts.extend_from_slice(&["mobi", "azw", "azw3"]);
-    }
-    Ok(exts)
+    Ok(supported_import_extensions().to_vec())
 }
 
 #[tauri::command]
@@ -2727,6 +2736,17 @@ pub async fn download_opds_book(
         .and_then(opds_extension_from_mime)
         .or_else(|| opds_extension_from_url(&download_url))
         .unwrap_or("epub");
+
+    // Defense in depth: reject unsupported formats before the download so
+    // non-`mobi` builds don't waste bandwidth/disk on a file they'll throw
+    // away in import_book. The frontend already hides these buttons via
+    // get_supported_formats, but feature flags could diverge (e.g. direct
+    // IPC calls from tests), and the import error is clearer here.
+    if !supported_import_extensions().contains(&ext) {
+        return Err(FolioError::invalid(format!(
+            "Format '.{ext}' is not supported in this build."
+        )));
+    }
 
     // Download to a temp file
     let temp_dir = std::env::temp_dir();
@@ -5033,6 +5053,38 @@ mod tests {
     fn opds_mime_rejects_unknown_types() {
         assert_eq!(opds_extension_from_mime("application/octet-stream"), None);
         assert_eq!(opds_extension_from_mime(""), None);
+    }
+
+    #[test]
+    fn supported_import_extensions_always_includes_core_formats() {
+        let exts = supported_import_extensions();
+        for core in &["epub", "pdf", "cbz", "cbr"] {
+            assert!(
+                exts.contains(core),
+                "core format {core} missing from supported_import_extensions"
+            );
+        }
+    }
+
+    #[cfg(feature = "mobi")]
+    #[test]
+    fn supported_import_extensions_includes_mobi_family_when_feature_on() {
+        let exts = supported_import_extensions();
+        for mobi in &["mobi", "azw", "azw3"] {
+            assert!(exts.contains(mobi), "mobi feature on but {mobi} missing");
+        }
+    }
+
+    #[cfg(not(feature = "mobi"))]
+    #[test]
+    fn supported_import_extensions_excludes_mobi_family_when_feature_off() {
+        let exts = supported_import_extensions();
+        for mobi in &["mobi", "azw", "azw3"] {
+            assert!(
+                !exts.contains(mobi),
+                "mobi feature off but {mobi} still listed"
+            );
+        }
     }
 
     #[test]
