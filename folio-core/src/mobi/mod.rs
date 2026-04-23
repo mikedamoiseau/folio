@@ -8,7 +8,13 @@
 //! (see ROADMAP #34): open a file, read metadata, reconstruct the rawml, walk
 //! markup/flow/resource parts, and extract the cover.
 
+mod adapter;
 mod ffi;
+
+pub use adapter::{
+    extract_cover, get_chapter_content, get_chapter_list, get_chapter_word_counts,
+    parse_mobi_metadata, MobiMetadata,
+};
 
 use std::ffi::{CStr, CString};
 use std::marker::PhantomData;
@@ -83,6 +89,31 @@ impl MobiBook {
     pub fn author(&self) -> Option<String> {
         // SAFETY: as above, paired with the matching `free()`.
         unsafe { take_c_string(ffi::mobi_meta_get_author(self.handle)) }
+    }
+
+    /// Language tag from EXTH (BCP-47 style, e.g. "en", "de-DE"). None if
+    /// the field is missing.
+    pub fn language(&self) -> Option<String> {
+        // SAFETY: libmobi returns a heap-allocated NUL-terminated UTF-8
+        // string that the caller must `free()`.
+        unsafe { take_c_string(ffi::mobi_meta_get_language(self.handle)) }
+    }
+
+    /// Long-form description / synopsis from EXTH. Often contains HTML.
+    pub fn description(&self) -> Option<String> {
+        unsafe { take_c_string(ffi::mobi_meta_get_description(self.handle)) }
+    }
+
+    /// ISBN from EXTH. Not normalized — the caller should run it through
+    /// [`crate::isbn`] if a canonical form is needed.
+    pub fn isbn(&self) -> Option<String> {
+        unsafe { take_c_string(ffi::mobi_meta_get_isbn(self.handle)) }
+    }
+
+    /// Subject / genre string from EXTH. Returns a single combined string;
+    /// callers that want a list should split on `;` or `,`.
+    pub fn subject(&self) -> Option<String> {
+        unsafe { take_c_string(ffi::mobi_meta_get_subject(self.handle)) }
     }
 
     /// Whether the active content is KF8 (AZW3) rather than legacy
