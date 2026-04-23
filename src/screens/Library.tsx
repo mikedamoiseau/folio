@@ -20,7 +20,7 @@ import TagFilter from "../components/TagFilter";
 import { startDrag, endDrag, isDragging, getDraggedCoverSrc, subscribe } from "../lib/dragState";
 import { friendlyError } from "../lib/errors";
 import { pickSupportedOpdsLink } from "../lib/utils";
-import { getSupportedFormats, useSupportedFormats } from "../lib/supportedFormats";
+import { FALLBACK_FORMATS, getSupportedFormats, useSupportedFormats } from "../lib/supportedFormats";
 import { LiveRegion } from "../components/LiveRegion";
 import { useToast } from "../components/Toast";
 import { useDebounce } from "../hooks/useDebounce";
@@ -992,7 +992,7 @@ export default function Library() {
                   // Pick across every importable format (EPUB → PDF → CBZ →
                   // CBR → AZW3 → MOBI → AZW), but only if the backend can
                   // actually handle the format in this build.
-                  const picked = pickSupportedOpdsLink(entry.links, supportedFormats ?? undefined);
+                  const picked = pickSupportedOpdsLink(entry.links, supportedFormats ?? FALLBACK_FORMATS);
                   const plainSummary = entry.summary?.replace(/<[^>]*>/g, "").trim();
                   return (
                     <div
