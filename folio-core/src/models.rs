@@ -219,6 +219,25 @@ pub struct AutoBackup {
     pub size_bytes: u64,
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct TocEntry {
+    pub label: String,
+    pub chapter_index: u32,
+    /// Stable ordering key from the source TOC (e.g. EPUB NCX playOrder).
+    /// For formats without an explicit key — MOBI, fallback EPUB spine —
+    /// callers pass a 1-based index as a string.
+    pub play_order: String,
+    pub children: Vec<TocEntry>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchResult {
+    pub chapter_index: u32,
+    pub snippet: String,
+    pub match_offset: usize,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

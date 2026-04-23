@@ -1367,7 +1367,7 @@ pub async fn search_book_content(
     book_id: String,
     query: String,
     state: State<'_, AppState>,
-) -> FolioResult<Vec<epub::SearchResult>> {
+) -> FolioResult<Vec<crate::models::SearchResult>> {
     if query.trim().is_empty() {
         return Ok(Vec::new());
     }
@@ -1386,8 +1386,8 @@ pub async fn search_book_content(
             let results = pdf::search_pdf(&file_path, &query)?;
             Ok(results
                 .into_iter()
-                .map(|r| epub::SearchResult {
-                    chapter_index: r.chapter_index,
+                .map(|r| crate::models::SearchResult {
+                    chapter_index: r.chapter_index as u32,
                     snippet: r.snippet,
                     match_offset: r.match_offset,
                 })
@@ -1401,6 +1401,33 @@ pub async fn search_book_content(
                 .ok_or_else(|| FolioError::internal("Failed to open EPUB archive"))?;
             Ok(epub::search_book(cached, &query)?)
         }
+        #[cfg(feature = "mobi")]
+        BookFormat::Mobi => {
+            let images_storage = state.images_storage()?;
+            let chapters = folio_core::mobi::get_chapter_list(&file_path)?;
+            let mut results = Vec::new();
+
+            for chapter_info in chapters {
+                let html = folio_core::mobi::get_chapter_content(
+                    &file_path,
+                    chapter_info.index,
+                    images_storage.as_ref(),
+                    &book_id,
+                )?;
+                // Re-use common HTML search logic
+                results.extend(folio_core::search::find_matches_in_html(
+                    &html,
+                    &query,
+                    chapter_info.index as u32,
+                    &book_id,
+                ));
+            }
+            Ok(results)
+        }
+        #[cfg(not(feature = "mobi"))]
+        BookFormat::Mobi => Err(FolioError::invalid(
+            "MOBI support is not enabled in this build",
+        )),
         _ => Ok(Vec::new()), // CBZ/CBR are image-only, no text to search
     }
 }
@@ -1504,22 +1531,49 @@ pub async fn get_all_chapters(
 pub async fn get_toc(
     book_id: String,
     state: State<'_, AppState>,
-) -> FolioResult<Vec<epub::TocEntry>> {
-    let file_path = {
+) -> FolioResult<Vec<crate::models::TocEntry>> {
+    let (file_path, format) = {
         let conn = state.active_db()?.get()?;
         let book = db::get_book(&conn, &book_id)?
             .ok_or_else(|| FolioError::not_found(format!("Book '{book_id}' not found")))?;
-        state.resolve_book_path(&book)?
+        (state.resolve_book_path(&book)?, book.format)
     };
 
     validate_file_exists(&file_path)?;
 
-    let mut cache = state.epub_cache.lock()?;
-    ensure_epub_cached(&mut cache, &file_path);
-    let cached = cache
-        .get_mut(&file_path)
-        .ok_or("Failed to open EPUB archive")?;
-    Ok(epub::get_toc_from_cache(cached)?)
+    match format {
+        BookFormat::Epub => {
+            let mut cache = state.epub_cache.lock()?;
+            ensure_epub_cached(&mut cache, &file_path);
+            let cached = cache
+                .get_mut(&file_path)
+                .ok_or("Failed to open EPUB archive")?;
+            Ok(epub::get_toc_from_cache(cached)?)
+        }
+        #[cfg(feature = "mobi")]
+        BookFormat::Mobi => {
+            // MOBI has no real TOC — synthesize a flat list from the
+            // adapter's chapter list so the Contents sidebar works. Each
+            // entry is a depth-0 leaf (no children).
+            let chapters = folio_core::mobi::get_chapter_list(&file_path)?;
+            Ok(chapters
+                .into_iter()
+                .map(|c| crate::models::TocEntry {
+                    chapter_index: c.index as u32,
+                    label: c.title,
+                    play_order: format!("{}", c.index + 1),
+                    children: Vec::new(),
+                })
+                .collect())
+        }
+        #[cfg(not(feature = "mobi"))]
+        BookFormat::Mobi => Err(FolioError::invalid(
+            "MOBI support is not enabled in this build",
+        )),
+        other => Err(FolioError::invalid(format!(
+            "get_toc is not supported for format {other}"
+        ))),
+    }
 }
 
 // --- Progress ---
