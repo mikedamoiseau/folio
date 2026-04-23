@@ -9,6 +9,7 @@ import {
   formatMetadataPills,
   getSpreadPages,
   sanitizeCss,
+  pickSupportedOpdsLink,
   type BookLike,
 } from "./utils";
 
@@ -358,5 +359,57 @@ describe("sanitizeCss", () => {
   it("allows normal selectors and properties", () => {
     const css = ".reader-content p { line-height: 1.8; margin-bottom: 1em; text-align: justify; }";
     expect(sanitizeCss(css)).toBe(css);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// pickSupportedOpdsLink
+// ---------------------------------------------------------------------------
+describe("pickSupportedOpdsLink", () => {
+  it("prefers EPUB over PDF when both are available", () => {
+    const picked = pickSupportedOpdsLink([
+      { href: "http://host/book.pdf", mimeType: "application/pdf" },
+      { href: "http://host/book.epub", mimeType: "application/epub+zip" },
+    ]);
+    expect(picked?.label).toBe("EPUB");
+    expect(picked?.link.href).toContain(".epub");
+  });
+
+  it("picks MOBI when only MOBI is offered", () => {
+    const picked = pickSupportedOpdsLink([
+      { href: "http://host/book.mobi", mimeType: "application/x-mobipocket-ebook" },
+    ]);
+    expect(picked?.label).toBe("MOBI");
+  });
+
+  it("picks AZW3 via amazon vendor MIME even with opaque URL", () => {
+    const picked = pickSupportedOpdsLink([
+      { href: "http://host/download/123", mimeType: "application/vnd.amazon.ebook" },
+    ]);
+    expect(picked?.label).toBe("AZW3");
+  });
+
+  it("falls back to URL extension when MIME is generic", () => {
+    // Feeds that serve everything as octet-stream still put the extension in
+    // the URL. We can't learn the format from the MIME, but the URL does.
+    const picked = pickSupportedOpdsLink([
+      { href: "http://host/book.cbz?token=abc", mimeType: "application/octet-stream" },
+    ]);
+    expect(picked?.label).toBe("CBZ");
+  });
+
+  it("returns null when nothing is importable", () => {
+    const picked = pickSupportedOpdsLink([
+      { href: "http://host/cover.jpg", mimeType: "image/jpeg" },
+      { href: "http://host/info.html", mimeType: "text/html" },
+    ]);
+    expect(picked).toBeNull();
+  });
+
+  it("picks CBR correctly (not shadowed by CBZ)", () => {
+    const picked = pickSupportedOpdsLink([
+      { href: "http://host/book.cbr", mimeType: "application/x-cbr" },
+    ]);
+    expect(picked?.label).toBe("CBR");
   });
 });

@@ -153,6 +153,54 @@ export function formatMetadataPills(meta: {
   return pills;
 }
 
+export interface OpdsLinkLike {
+  href: string;
+  mimeType: string;
+}
+
+// Format preference for OPDS acquisition: EPUB first (best reflowable
+// rendering), then PDF/CBZ/CBR for page-based books, then MOBI/AZW3/AZW.
+// Each tuple is (preferred button label, MIME needles, URL extension needles).
+const OPDS_FORMATS: Array<{ label: string; mimeNeedles: string[]; extNeedles: string[] }> = [
+  { label: "EPUB", mimeNeedles: ["epub"], extNeedles: ["epub"] },
+  { label: "PDF", mimeNeedles: ["pdf"], extNeedles: ["pdf"] },
+  { label: "CBZ", mimeNeedles: ["cbz", "comicbook+zip"], extNeedles: ["cbz"] },
+  { label: "CBR", mimeNeedles: ["cbr", "comicbook-rar"], extNeedles: ["cbr"] },
+  { label: "AZW3", mimeNeedles: ["vnd.amazon.ebook", "azw3"], extNeedles: ["azw3"] },
+  { label: "MOBI", mimeNeedles: ["mobipocket", "mobi"], extNeedles: ["mobi"] },
+  { label: "AZW", mimeNeedles: ["azw"], extNeedles: ["azw"] },
+];
+
+function matchesFormat(
+  link: OpdsLinkLike,
+  mimeNeedles: string[],
+  extNeedles: string[],
+): boolean {
+  const mime = link.mimeType.toLowerCase();
+  const href = link.href.toLowerCase();
+  return (
+    mimeNeedles.some((n) => mime.includes(n)) ||
+    extNeedles.some((n) => href.includes(`.${n}`))
+  );
+}
+
+/**
+ * Pick the best OPDS acquisition link for import. Walks the Folio preference
+ * order and returns the first matching link along with a human-readable label
+ * (used for the download button). Returns null when no supported link is
+ * found — callers should hide the download action rather than blindly pulling
+ * an arbitrary link, since unsupported formats will fail to import.
+ */
+export function pickSupportedOpdsLink<T extends OpdsLinkLike>(
+  links: T[],
+): { link: T; label: string } | null {
+  for (const { label, mimeNeedles, extNeedles } of OPDS_FORMATS) {
+    const match = links.find((l) => matchesFormat(l, mimeNeedles, extNeedles));
+    if (match) return { link: match, label };
+  }
+  return null;
+}
+
 /**
  * Patterns that are dangerous in user-supplied CSS.
  * Blocks data exfiltration (url, @import), script execution (expression,

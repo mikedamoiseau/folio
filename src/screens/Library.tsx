@@ -19,6 +19,7 @@ import KeyboardShortcutsHelp from "../components/KeyboardShortcutsHelp";
 import TagFilter from "../components/TagFilter";
 import { startDrag, endDrag, isDragging, getDraggedCoverSrc, subscribe } from "../lib/dragState";
 import { friendlyError } from "../lib/errors";
+import { pickSupportedOpdsLink } from "../lib/utils";
 import { LiveRegion } from "../components/LiveRegion";
 import { useToast } from "../components/Toast";
 import { useDebounce } from "../hooks/useDebounce";
@@ -977,9 +978,10 @@ export default function Library() {
                   </>
                 )}
                 {discoverBooks.map((entry) => {
-                  const epubLink = entry.links.find((l) => l.mimeType.includes("epub"));
-                  const pdfLink = entry.links.find((l) => l.mimeType.includes("pdf"));
-                  const downloadLink = epubLink ?? pdfLink;
+                  // Pick across every importable format (EPUB → PDF → CBZ →
+                  // CBR → AZW3 → MOBI → AZW) so discover shelf entries that
+                  // only offer MOBI/CBR still surface a download button.
+                  const picked = pickSupportedOpdsLink(entry.links);
                   const plainSummary = entry.summary?.replace(/<[^>]*>/g, "").trim();
                   return (
                     <div
@@ -1018,11 +1020,14 @@ export default function Library() {
                       <div className="px-2 py-1.5">
                         <p className="text-xs font-medium text-ink truncate">{entry.title}</p>
                         {entry.author && <p className="text-[10px] text-ink-muted truncate">{entry.author}</p>}
-                        {downloadLink && (
+                        {picked && (
                           <button
                             onClick={async () => {
                               try {
-                                await invoke("download_opds_book", { downloadUrl: downloadLink.href });
+                                await invoke("download_opds_book", {
+                                  downloadUrl: picked.link.href,
+                                  mimeType: picked.link.mimeType,
+                                });
                                 await loadBooks(activeCollectionIdRef.current);
                                 setDiscoverBooks((prev) => prev.filter((e) => e.id !== entry.id));
                               } catch (err) {

@@ -2675,6 +2675,31 @@ fn opds_extension_from_url(url: &str) -> Option<&'static str> {
     None
 }
 
+/// Map an OPDS acquisition link's MIME type to the file extension the import
+/// pipeline expects. Preferred over URL-based detection because many feeds
+/// serve opaque download URLs (e.g. `/download/123`) while still returning
+/// the correct MIME. Parameters (`; profile="…"`) are ignored.
+fn opds_extension_from_mime(mime: &str) -> Option<&'static str> {
+    let bare = mime
+        .split(';')
+        .next()
+        .unwrap_or(mime)
+        .trim()
+        .to_ascii_lowercase();
+    match bare.as_str() {
+        "application/epub+zip" => Some("epub"),
+        "application/pdf" => Some("pdf"),
+        // MOBI family. Amazon's own MIME (vnd.amazon.ebook) normally means
+        // AZW3/KF8 in the wild; older feeds use x-mobipocket-ebook for MOBI.
+        "application/x-mobipocket-ebook" => Some("mobi"),
+        "application/vnd.amazon.ebook" => Some("azw3"),
+        // Comic book archives. Both vendor-prefixed and de-facto MIMEs seen in feeds.
+        "application/x-cbz" | "application/vnd.comicbook+zip" => Some("cbz"),
+        "application/x-cbr" | "application/vnd.comicbook-rar" => Some("cbr"),
+        _ => None,
+    }
+}
+
 #[tauri::command]
 pub async fn browse_opds(url: String) -> FolioResult<opds::OpdsFeed> {
     let (tx, rx) = std::sync::mpsc::channel();
@@ -2687,16 +2712,21 @@ pub async fn browse_opds(url: String) -> FolioResult<opds::OpdsFeed> {
 #[tauri::command]
 pub async fn download_opds_book(
     download_url: String,
+    mime_type: Option<String>,
     state: State<'_, AppState>,
     app: AppHandle,
 ) -> FolioResult<Book> {
-    // Determine file extension from the URL path so the import pipeline can
-    // dispatch to the correct parser. This has to cover every format Folio
-    // can actually import — not just EPUB/PDF/CBZ — otherwise MOBI / AZW /
-    // AZW3 / CBR acquisition links land on disk as `.epub` and the import
-    // path feeds them to the wrong parser. Case-insensitive so feeds that
-    // capitalize the extension (`.EPUB`) still resolve.
-    let ext = opds_extension_from_url(&download_url).unwrap_or("epub");
+    // Determine the file extension for the temp import path. Prefer the MIME
+    // type the feed already gave us — it's authoritative, and many OPDS feeds
+    // use opaque acquisition URLs like `/download/123` where URL-based
+    // detection can't find an extension. Fall back to URL scanning, then to
+    // `.epub` as a last resort so we never feed an extensionless file to the
+    // importer.
+    let ext = mime_type
+        .as_deref()
+        .and_then(opds_extension_from_mime)
+        .or_else(|| opds_extension_from_url(&download_url))
+        .unwrap_or("epub");
 
     // Download to a temp file
     let temp_dir = std::env::temp_dir();
@@ -4952,6 +4982,57 @@ mod tests {
         let running = BACKUP_RUNNING.lock().unwrap();
         assert!(!running.contains(&a));
         assert!(!running.contains(&b));
+    }
+
+    #[test]
+    fn opds_mime_maps_epub_pdf() {
+        assert_eq!(
+            opds_extension_from_mime("application/epub+zip"),
+            Some("epub")
+        );
+        assert_eq!(opds_extension_from_mime("application/pdf"), Some("pdf"));
+    }
+
+    #[test]
+    fn opds_mime_maps_mobi_family() {
+        // x-mobipocket-ebook is the historical MOBI MIME, vnd.amazon.ebook is
+        // Amazon's AZW3/KF8 MIME.
+        assert_eq!(
+            opds_extension_from_mime("application/x-mobipocket-ebook"),
+            Some("mobi")
+        );
+        assert_eq!(
+            opds_extension_from_mime("application/vnd.amazon.ebook"),
+            Some("azw3")
+        );
+    }
+
+    #[test]
+    fn opds_mime_maps_comic_archives() {
+        assert_eq!(
+            opds_extension_from_mime("application/vnd.comicbook+zip"),
+            Some("cbz")
+        );
+        assert_eq!(opds_extension_from_mime("application/x-cbz"), Some("cbz"));
+        assert_eq!(
+            opds_extension_from_mime("application/vnd.comicbook-rar"),
+            Some("cbr")
+        );
+        assert_eq!(opds_extension_from_mime("application/x-cbr"), Some("cbr"));
+    }
+
+    #[test]
+    fn opds_mime_strips_parameters_and_is_case_insensitive() {
+        assert_eq!(
+            opds_extension_from_mime("APPLICATION/EPUB+ZIP; profile=\"foo\""),
+            Some("epub")
+        );
+    }
+
+    #[test]
+    fn opds_mime_rejects_unknown_types() {
+        assert_eq!(opds_extension_from_mime("application/octet-stream"), None);
+        assert_eq!(opds_extension_from_mime(""), None);
     }
 
     #[test]

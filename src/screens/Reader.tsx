@@ -151,7 +151,10 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
           }
         }
 
-        if (bookInfo.format !== "epub") {
+        // Page count is only meaningful for fixed-layout (PDF) and image
+        // (CBZ/CBR) formats. HTML-reflowable books (EPUB + MOBI) use scroll
+        // progress instead, so skip the fetch and leave pageCount at 0.
+        if (bookInfo.format === "pdf" || bookInfo.format === "cbz" || bookInfo.format === "cbr") {
           try {
             const command =
               bookInfo.format === "pdf"
@@ -833,19 +836,21 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
   const addBookmarkAtCurrentPosition = useCallback(async () => {
     if (!bookId) return;
     try {
-      const isPageBased = bookFormat !== "epub";
+      // HTML-reflowable books (EPUB + MOBI) store scroll progress; page-based
+      // books (PDF + CBZ + CBR) store page-fraction. Classifying MOBI as
+      // page-based drops its intra-chapter position to 0.
       const bookmark = await invoke<{ id: string }>("add_bookmark", {
         bookId,
         chapterIndex,
-        scrollPosition: isPageBased
-          ? pageCount > 0 ? chapterIndex / pageCount : 0
-          : scrollProgress,
+        scrollPosition: isHtmlBook
+          ? scrollProgress
+          : pageCount > 0 ? chapterIndex / pageCount : 0,
       });
       setToastBookmarkId(bookmark.id);
     } catch {
       // silently fail
     }
-  }, [bookId, chapterIndex, scrollProgress, bookFormat, pageCount]);
+  }, [bookId, chapterIndex, scrollProgress, isHtmlBook, pageCount]);
 
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
@@ -873,8 +878,9 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
       // Don't navigate chapters when any panel is open
       if ((settingsOpen || tocOpen || bookmarksOpen) && (e.key === "ArrowLeft" || e.key === "ArrowRight")) return;
 
-      // For image-based formats (CBZ/CBR/PDF), PageViewer handles arrow keys
-      if (bookFormat !== "epub" && (e.key === "ArrowLeft" || e.key === "ArrowRight")) return;
+      // For image-based formats (CBZ/CBR/PDF), PageViewer handles arrow keys.
+      // HTML books (EPUB + MOBI) use chapter navigation here.
+      if (!isHtmlBook && (e.key === "ArrowLeft" || e.key === "ArrowRight")) return;
 
       if (e.key === "ArrowLeft") {
         prevChapter();
@@ -899,7 +905,7 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [prevChapter, nextChapter, addBookmarkAtCurrentPosition, showShortcuts, tocOpen, bookmarksOpen, dndMode, settingsOpen, navigate, bookFormat, searchOpen]);
+  }, [prevChapter, nextChapter, addBookmarkAtCurrentPosition, showShortcuts, tocOpen, bookmarksOpen, dndMode, settingsOpen, navigate, bookFormat, isHtmlBook, searchOpen]);
 
   // ---- TOC focus trap ----
 
@@ -1012,7 +1018,7 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
   // ---- Time-to-finish estimates ----
 
   const timeEstimate = useMemo(() => {
-    if (chapterWordCounts.length === 0 || bookFormat !== "epub") return null;
+    if (chapterWordCounts.length === 0 || !isHtmlBook) return null;
     const currentChapterWords = chapterWordCounts[chapterIndex] ?? 0;
     // In continuous mode, scrollProgress is book-global; use chapter-local fraction instead
     const chapterProgress = isContinuous ? getChapterScrollPosition() : scrollProgress;
@@ -1037,7 +1043,7 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
       chapter: formatTime(minsLeftChapter),
       book: formatTime(minsLeftBook),
     };
-  }, [chapterWordCounts, chapterIndex, scrollProgress, bookFormat, isContinuous, getChapterScrollPosition]);
+  }, [chapterWordCounts, chapterIndex, scrollProgress, isHtmlBook, isContinuous, getChapterScrollPosition]);
 
   // ---- Render ----
 
