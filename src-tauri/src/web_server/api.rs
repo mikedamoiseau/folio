@@ -224,12 +224,38 @@ async fn get_chapters(
         .map_err(folio_status)?
         .ok_or_else(|| (StatusCode::NOT_FOUND, "Book not found".to_string()))?;
 
-    if book.format != BookFormat::Epub {
-        return Err((StatusCode::BAD_REQUEST, "Not an EPUB book".to_string()));
-    }
-
     let file_path = state.resolve_book_path(&book).map_err(folio_status)?;
-    let toc = crate::epub::get_toc(&file_path).map_err(folio_status)?;
+    let toc = match book.format {
+        BookFormat::Epub => crate::epub::get_toc(&file_path).map_err(folio_status)?,
+        #[cfg(feature = "mobi")]
+        BookFormat::Mobi => {
+            // MOBI has no real TOC — mirror the desktop `get_toc` behaviour by
+            // synthesising a flat list from the chapter list.
+            let chapters = folio_core::mobi::get_chapter_list(&file_path).map_err(folio_status)?;
+            chapters
+                .into_iter()
+                .map(|c| crate::models::TocEntry {
+                    chapter_index: c.index as u32,
+                    label: c.title,
+                    play_order: format!("{}", c.index + 1),
+                    children: Vec::new(),
+                })
+                .collect()
+        }
+        #[cfg(not(feature = "mobi"))]
+        BookFormat::Mobi => {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                "MOBI support is not enabled in this build".to_string(),
+            ));
+        }
+        _ => {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                "TOC is only available for EPUB and MOBI books".to_string(),
+            ));
+        }
+    };
 
     Ok(Json(serde_json::to_value(toc).unwrap_or_default()))
 }

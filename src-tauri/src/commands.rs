@@ -1405,24 +1405,15 @@ pub async fn search_book_content(
         BookFormat::Mobi => {
             let images_storage = state.images_storage()?;
             let chapters = folio_core::mobi::get_chapter_list(&file_path)?;
-            let mut results = Vec::new();
-
-            for chapter_info in chapters {
-                let html = folio_core::mobi::get_chapter_content(
+            let chapter_indices: Vec<u32> = chapters.iter().map(|c| c.index as u32).collect();
+            folio_core::search::search_chapters(chapter_indices, &query, &book_id, |idx| {
+                folio_core::mobi::get_chapter_content(
                     &file_path,
-                    chapter_info.index,
+                    idx as usize,
                     images_storage.as_ref(),
                     &book_id,
-                )?;
-                // Re-use common HTML search logic
-                results.extend(folio_core::search::find_matches_in_html(
-                    &html,
-                    &query,
-                    chapter_info.index as u32,
-                    &book_id,
-                ));
-            }
-            Ok(results)
+                )
+            })
         }
         #[cfg(not(feature = "mobi"))]
         BookFormat::Mobi => Err(FolioError::invalid(
