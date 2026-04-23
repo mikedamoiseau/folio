@@ -11,6 +11,7 @@ import BookmarksPanel from "../components/BookmarksPanel";
 import BookmarkToast from "../components/BookmarkToast";
 import LanguageSwitcher from "../components/LanguageSwitcher";
 import { friendlyError, toFolioError } from "../lib/errors";
+import { resolveBookmarkScrollTop } from "../lib/utils";
 
 // ---- Types matching Rust backend ----
 
@@ -747,16 +748,44 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
   const navigateToBookmark = useCallback(
     (targetChapter: number, targetScrollPosition: number) => {
       setBookmarksOpen(false);
+      const container = scrollContainerRef.current;
+
+      if (isContinuous && container) {
+        // Continuous mode: every chapter div is already mounted in the
+        // single scroll container, so we can jump directly regardless of
+        // whether this is a same-chapter or cross-chapter bookmark. The
+        // ref-based restore effect only re-fires on
+        // `[allChaptersLoaded, isContinuous]` changes, so it cannot be
+        // relied on for subsequent bookmark clicks.
+        if (targetChapter !== chapterIndex) setChapterIndex(targetChapter);
+        const chapterDiv = chapterDivRefs.current[targetChapter];
+        container.scrollTop = resolveBookmarkScrollTop(true, targetScrollPosition, {
+          chapterOffsetTop: chapterDiv?.offsetTop ?? 0,
+          chapterHeight: chapterDiv?.offsetHeight ?? 0,
+          containerScrollHeight: container.scrollHeight,
+        });
+        return;
+      }
+
       if (targetChapter !== chapterIndex) {
+        // Paginated / single-chapter mode cross-chapter: switching chapters
+        // reloads the HTML, so defer the scroll restore until after the
+        // render via the ref-based handshake the load effect already
+        // consumes.
         setChapterIndex(targetChapter);
         savedScrollPosition.current = targetScrollPosition;
         restoringScroll.current = targetChapter;
-      } else if (scrollContainerRef.current) {
-        const container = scrollContainerRef.current;
-        container.scrollTop = targetScrollPosition * container.scrollHeight;
+      } else if (container) {
+        // Paginated same-chapter: positions are container-global.
+        const chapterDiv = chapterDivRefs.current[targetChapter];
+        container.scrollTop = resolveBookmarkScrollTop(false, targetScrollPosition, {
+          chapterOffsetTop: chapterDiv?.offsetTop ?? 0,
+          chapterHeight: chapterDiv?.offsetHeight ?? 0,
+          containerScrollHeight: container.scrollHeight,
+        });
       }
     },
-    [chapterIndex]
+    [chapterIndex, isContinuous]
   );
 
   const prevChapter = useCallback(() => {
@@ -844,21 +873,25 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
   const addBookmarkAtCurrentPosition = useCallback(async () => {
     if (!bookId) return;
     try {
-      // HTML-reflowable books (EPUB + MOBI) store scroll progress; page-based
-      // books (PDF + CBZ + CBR) store page-fraction. Classifying MOBI as
-      // page-based drops its intra-chapter position to 0.
+      // HTML-reflowable books (EPUB + MOBI) store a chapter-local scroll
+      // fraction — `getChapterScrollPosition()` produces the same coordinate
+      // system that `saveProgress` uses, so bookmarks and reading progress
+      // round-trip consistently. In continuous mode `scrollProgress` would
+      // be book-global, which mismatched the restore path and landed the
+      // user far from the saved passage. Page-based books (PDF + CBZ + CBR)
+      // store page-fraction.
       const bookmark = await invoke<{ id: string }>("add_bookmark", {
         bookId,
         chapterIndex,
         scrollPosition: isHtmlBook
-          ? scrollProgress
+          ? getChapterScrollPosition()
           : pageCount > 0 ? chapterIndex / pageCount : 0,
       });
       setToastBookmarkId(bookmark.id);
     } catch {
       // silently fail
     }
-  }, [bookId, chapterIndex, scrollProgress, isHtmlBook, pageCount]);
+  }, [bookId, chapterIndex, getChapterScrollPosition, isHtmlBook, pageCount]);
 
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
