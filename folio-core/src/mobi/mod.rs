@@ -217,9 +217,12 @@ impl Drop for MobiBook {
 pub struct MobiCover<'a> {
     /// Raw image bytes as stored in the MOBI record (no re-encoding).
     pub data: &'a [u8],
-    /// File extension (`"jpg"`, `"png"`, `"gif"`, `"bmp"`), detected by magic
-    /// bytes. Defaults to `"jpg"` for unrecognized signatures, which matches
-    /// the overwhelmingly common case for Kindle covers.
+    /// File extension detected from magic bytes: one of `"jpg"`, `"png"`,
+    /// `"gif"`, or `"bmp"`. When no signature matches, [`MobiBook::cover`]
+    /// returns `None` rather than guessing — a malformed EXTH coveroffset
+    /// can point at audio/HTML/garbage records, and labeling arbitrary
+    /// bytes as `.jpg` would poison the cover cache and confuse downstream
+    /// MIME handling.
     pub extension: &'static str,
 }
 

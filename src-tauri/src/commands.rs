@@ -440,6 +440,20 @@ fn page_cache_storage(app: &AppHandle) -> FolioResult<folio_core::storage::Local
 
 // --- Library management ---
 
+/// Return the list of file extensions the backend can import in this build.
+/// The frontend uses this to populate the file-picker and folder-scan
+/// filters so MOBI/AZW/AZW3 only appear when libmobi is compiled in.
+#[tauri::command]
+pub async fn get_supported_formats() -> FolioResult<Vec<&'static str>> {
+    #[allow(unused_mut)]
+    let mut exts = vec!["epub", "pdf", "cbz", "cbr"];
+    #[cfg(feature = "mobi")]
+    {
+        exts.extend_from_slice(&["mobi", "azw", "azw3"]);
+    }
+    Ok(exts)
+}
+
 #[tauri::command]
 pub async fn import_book(
     file_path: String,
@@ -2642,6 +2656,25 @@ pub async fn get_discover_books(state: State<'_, AppState>) -> FolioResult<Vec<o
     Ok(all_entries)
 }
 
+/// Pick the file extension from an OPDS acquisition URL by scanning the URL
+/// path for one of our importable extensions. Query strings and fragments
+/// are ignored so feeds that append `?token=…` don't hide the extension.
+/// Returns `None` when no supported extension is found; the caller decides
+/// the fallback.
+fn opds_extension_from_url(url: &str) -> Option<&'static str> {
+    // Strip query/fragment before looking at the path.
+    let path = url.split(&['?', '#'][..]).next().unwrap_or(url);
+    let lower = path.to_ascii_lowercase();
+    // Check longest extensions first so `.azw3` isn't shadowed by `.azw`.
+    for &ext in &["azw3", "epub", "mobi", "azw", "pdf", "cbz", "cbr"] {
+        let needle = format!(".{ext}");
+        if lower.ends_with(&needle) || lower.contains(&format!("{needle}?")) {
+            return Some(ext);
+        }
+    }
+    None
+}
+
 #[tauri::command]
 pub async fn browse_opds(url: String) -> FolioResult<opds::OpdsFeed> {
     let (tx, rx) = std::sync::mpsc::channel();
@@ -2657,14 +2690,13 @@ pub async fn download_opds_book(
     state: State<'_, AppState>,
     app: AppHandle,
 ) -> FolioResult<Book> {
-    // Determine file extension from URL
-    let ext = if download_url.contains(".pdf") {
-        "pdf"
-    } else if download_url.contains(".cbz") {
-        "cbz"
-    } else {
-        "epub" // default for OPDS
-    };
+    // Determine file extension from the URL path so the import pipeline can
+    // dispatch to the correct parser. This has to cover every format Folio
+    // can actually import — not just EPUB/PDF/CBZ — otherwise MOBI / AZW /
+    // AZW3 / CBR acquisition links land on disk as `.epub` and the import
+    // path feeds them to the wrong parser. Case-insensitive so feeds that
+    // capitalize the extension (`.EPUB`) still resolve.
+    let ext = opds_extension_from_url(&download_url).unwrap_or("epub");
 
     // Download to a temp file
     let temp_dir = std::env::temp_dir();

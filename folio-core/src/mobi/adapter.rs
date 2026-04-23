@@ -116,10 +116,12 @@ pub fn get_chapter_content(
         .map_err(|e| FolioError::invalid(format!("MOBI chapter is not valid UTF-8: {e}")))?;
     let cleaned = clean(raw_html);
 
-    // Persist every image resource once under the per-chapter prefix.
-    // Failures are silent by design — the rewriter below checks
-    // `storage.exists(&key)` before emitting an asset URL, so a failed
-    // `put` leaves the original `resource…` reference in place.
+    // Persist every image resource once under the per-chapter prefix. The
+    // rewriter below checks `storage.exists(&key)` before emitting an
+    // asset URL, so a failed `put` leaves the original `resource…`
+    // reference in place (a single broken-image icon in the Reader rather
+    // than a bogus asset:// URL pointing at nothing). We still log the
+    // failure at warn level so recurring storage errors don't go silent.
     let key_prefix = format!("{book_id}/{chapter_index}");
     for res in rawml.resources() {
         if !res.kind.is_image() {
@@ -131,7 +133,9 @@ pub fn get_chapter_content(
         let asset_name = format!("resource{:05}.{ext}", res.uid);
         let key = format!("{key_prefix}/{asset_name}");
         if !storage.exists(&key).unwrap_or(false) {
-            let _ = storage.put(&key, res.data);
+            if let Err(e) = storage.put(&key, res.data) {
+                log::warn!("failed to persist MOBI image resource {key}: {e}");
+            }
         }
     }
 

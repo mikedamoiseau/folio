@@ -393,20 +393,26 @@ export default function Library() {
 
   const handleImport = useCallback(async () => {
     try {
-      const selected = await open({
-        multiple: true,
-        filters: [
-          {
-            name: "All Books",
-            extensions: ["epub", "cbz", "cbr", "pdf", "mobi", "azw", "azw3"],
-          },
-          { name: "EPUB", extensions: ["epub"] },
-          { name: "PDF", extensions: ["pdf"] },
-          { name: "CBZ", extensions: ["cbz"] },
-          { name: "CBR", extensions: ["cbr"] },
-          { name: "MOBI / AZW / AZW3", extensions: ["mobi", "azw", "azw3"] },
-        ],
-      });
+      // Query the backend for the list of formats it can actually import in
+      // this build. MOBI/AZW/AZW3 only appear here when the `mobi` feature
+      // was compiled in — otherwise the user would see them in the picker
+      // and get a "not enabled in this build" error after selecting one.
+      const supported = await invoke<string[]>("get_supported_formats").catch(
+        () => ["epub", "pdf", "cbz", "cbr"],
+      );
+      const has = (ext: string) => supported.includes(ext);
+      const filters: { name: string; extensions: string[] }[] = [
+        { name: "All Books", extensions: supported },
+        { name: "EPUB", extensions: ["epub"] },
+        { name: "PDF", extensions: ["pdf"] },
+        { name: "CBZ", extensions: ["cbz"] },
+        { name: "CBR", extensions: ["cbr"] },
+      ];
+      const mobiExts = ["mobi", "azw", "azw3"].filter(has);
+      if (mobiExts.length > 0) {
+        filters.push({ name: "MOBI / AZW / AZW3", extensions: mobiExts });
+      }
+      const selected = await open({ multiple: true, filters });
 
       if (!selected) return;
 
@@ -415,7 +421,7 @@ export default function Library() {
     } catch (err) {
       setError(friendlyError(err, t));
     }
-  }, [importFiles]);
+  }, [importFiles, t]);
 
   const handleImportUrl = useCallback(async (url: string) => {
     try {

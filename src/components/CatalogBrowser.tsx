@@ -116,10 +116,26 @@ export default function CatalogBrowser({ onClose, onBookImported }: CatalogBrows
   }, [feed, searchQuery]);
 
   const handleDownload = useCallback(async (entry: OpdsEntry) => {
-    // Find the best download link (prefer epub)
-    const epubLink = entry.links.find((l) => l.mimeType.includes("epub"));
-    const pdfLink = entry.links.find((l) => l.mimeType.includes("pdf"));
-    const link = epubLink ?? pdfLink ?? entry.links[0];
+    // Pick the best acquisition link across every format Folio can import.
+    // Preference order mirrors the desktop reader's richness: EPUB first
+    // (best reflowable rendering), then PDF/CBZ/CBR for page-based books,
+    // then MOBI/AZW/AZW3. Falling back to `entry.links[0]` as a last resort
+    // produces the pre-#34 behavior of downloading whatever link the feed
+    // put first — but that risks pulling a non-importable link when a
+    // supported format is available further down the list.
+    const match = (needles: string[]) =>
+      entry.links.find((l) => {
+        const mime = l.mimeType.toLowerCase();
+        const href = l.href.toLowerCase();
+        return needles.some((n) => mime.includes(n) || href.includes(`.${n}`));
+      });
+    const link =
+      match(["epub"]) ??
+      match(["pdf"]) ??
+      match(["cbz"]) ??
+      match(["cbr"]) ??
+      match(["mobipocket", "mobi", "azw3", "azw"]) ??
+      entry.links[0];
     if (!link) return;
 
     setDownloading(entry.id);

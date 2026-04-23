@@ -257,9 +257,9 @@
     if (!resp) return;
     const book = await resp.json();
 
-    const isEpub = book.format === "epub";
+    const isHtmlBook = book.format === "epub" || book.format === "mobi";
     const isPageBased = ["pdf", "cbz", "cbr"].includes(book.format);
-    const readHash = isEpub ? `#/book/${id}/0/read` : (isPageBased ? `#/book/${id}/0/read` : "");
+    const readHash = isHtmlBook || isPageBased ? `#/book/${id}/0/read` : "";
 
     app().innerHTML = `
       <div class="header">
@@ -297,9 +297,12 @@
     if (!resp) return;
     const book = await resp.json();
 
-    const isEpub = book.format === "epub";
+    // MOBI and EPUB both render through the chapter-HTML endpoint; the
+    // server-side `/api/books/:id/chapters/:index` route dispatches to
+    // the right parser.
+    const isHtmlBook = book.format === "epub" || book.format === "mobi";
 
-    if (isEpub) {
+    if (isHtmlBook) {
       const chResp = await api(`/api/books/${id}/chapters/${index}`);
       if (!chResp) return;
       const html = await chResp.text();
