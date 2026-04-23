@@ -7,6 +7,11 @@ pub enum BookFormat {
     Cbz,
     Cbr,
     Pdf,
+    /// MOBI / AZW / AZW3 (KF8) — always present so library rows that
+    /// reference MOBI books stay readable in builds without the `mobi`
+    /// feature. Runtime operations on `Mobi` books return a clear
+    /// "not enabled" error when libmobi wasn't compiled in.
+    Mobi,
 }
 
 impl std::fmt::Display for BookFormat {
@@ -16,6 +21,7 @@ impl std::fmt::Display for BookFormat {
             BookFormat::Cbz => write!(f, "cbz"),
             BookFormat::Cbr => write!(f, "cbr"),
             BookFormat::Pdf => write!(f, "pdf"),
+            BookFormat::Mobi => write!(f, "mobi"),
         }
     }
 }
@@ -29,6 +35,7 @@ impl std::str::FromStr for BookFormat {
             "cbz" => Ok(BookFormat::Cbz),
             "cbr" => Ok(BookFormat::Cbr),
             "pdf" => Ok(BookFormat::Pdf),
+            "mobi" => Ok(BookFormat::Mobi),
             _ => Err(format!("unknown book format: {s}")),
         }
     }
@@ -222,6 +229,7 @@ mod tests {
         assert_eq!(BookFormat::Cbz.to_string(), "cbz");
         assert_eq!(BookFormat::Cbr.to_string(), "cbr");
         assert_eq!(BookFormat::Pdf.to_string(), "pdf");
+        assert_eq!(BookFormat::Mobi.to_string(), "mobi");
     }
 
     #[test]
@@ -230,13 +238,14 @@ mod tests {
         assert_eq!("cbz".parse::<BookFormat>().unwrap(), BookFormat::Cbz);
         assert_eq!("cbr".parse::<BookFormat>().unwrap(), BookFormat::Cbr);
         assert_eq!("pdf".parse::<BookFormat>().unwrap(), BookFormat::Pdf);
+        assert_eq!("mobi".parse::<BookFormat>().unwrap(), BookFormat::Mobi);
     }
 
     #[test]
     fn book_format_from_str_invalid() {
-        let err = "mobi".parse::<BookFormat>().unwrap_err();
+        let err = "xyz".parse::<BookFormat>().unwrap_err();
         assert!(err.contains("unknown book format"));
-        assert!(err.contains("mobi"));
+        assert!(err.contains("xyz"));
     }
 
     #[test]
@@ -320,6 +329,7 @@ mod tests {
             (BookFormat::Cbz, "\"cbz\""),
             (BookFormat::Cbr, "\"cbr\""),
             (BookFormat::Pdf, "\"pdf\""),
+            (BookFormat::Mobi, "\"mobi\""),
         ] {
             let json = serde_json::to_string(&variant).unwrap();
             assert_eq!(json, expected);

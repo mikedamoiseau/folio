@@ -396,11 +396,15 @@ export default function Library() {
       const selected = await open({
         multiple: true,
         filters: [
-          { name: "All Books", extensions: ["epub", "cbz", "cbr", "pdf"] },
+          {
+            name: "All Books",
+            extensions: ["epub", "cbz", "cbr", "pdf", "mobi", "azw", "azw3"],
+          },
           { name: "EPUB", extensions: ["epub"] },
           { name: "PDF", extensions: ["pdf"] },
           { name: "CBZ", extensions: ["cbz"] },
           { name: "CBR", extensions: ["cbr"] },
+          { name: "MOBI / AZW / AZW3", extensions: ["mobi", "azw", "azw3"] },
         ],
       });
 

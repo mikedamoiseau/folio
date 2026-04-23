@@ -54,12 +54,14 @@ fn book_to_entry(book: &Book) -> String {
         crate::models::BookFormat::Pdf => "pdf",
         crate::models::BookFormat::Cbz => "cbz",
         crate::models::BookFormat::Cbr => "cbr",
+        crate::models::BookFormat::Mobi => "mobi",
     };
     let mime = match book.format {
         crate::models::BookFormat::Epub => "application/epub+zip",
         crate::models::BookFormat::Pdf => "application/pdf",
         crate::models::BookFormat::Cbz => "application/x-cbz",
         crate::models::BookFormat::Cbr => "application/x-cbr",
+        crate::models::BookFormat::Mobi => "application/x-mobipocket-ebook",
     };
     let download_link = format!(
         r#"<link rel="http://opds-spec.org/acquisition" href="/api/books/{id}/download" type="{mime}" title="{title}.{ext}"/>"#

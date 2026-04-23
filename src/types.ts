@@ -6,7 +6,7 @@ export interface Book {
   cover_path: string | null;
   total_chapters: number;
   added_at: number;
-  format: "epub" | "cbz" | "cbr" | "pdf";
+  format: "epub" | "cbz" | "cbr" | "pdf" | "mobi";
   description: string | null;
   genres: string | null;
   rating: number | null;
@@ -28,7 +28,7 @@ export interface BookGridItem {
   cover_path: string | null;
   total_chapters: number;
   added_at: number;
-  format: "epub" | "cbz" | "cbr" | "pdf";
+  format: "epub" | "cbz" | "cbr" | "pdf" | "mobi";
   series: string | null;
   volume: number | null;
   rating: number | null;

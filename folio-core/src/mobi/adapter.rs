@@ -344,7 +344,9 @@ mod tests {
         let storage = LocalStorage::new(dir.path().to_path_buf()).unwrap();
         // Pre-seed a known image under the per-chapter key layout so the
         // rewriter finds it.
-        storage.put("bk/0/resource00000.jpg", b"\xFF\xD8\xFFdata").unwrap();
+        storage
+            .put("bk/0/resource00000.jpg", b"\xFF\xD8\xFFdata")
+            .unwrap();
 
         let html = r#"<p><img src="resource00000.jpg" alt="x"/></p>"#;
         let out = rewrite_mobi_image_refs(html, &storage, "bk/0");
@@ -377,8 +379,7 @@ mod tests {
     fn rewrite_mobi_image_refs_leaves_non_image_refs_alone() {
         let dir = tempdir().unwrap();
         let storage = LocalStorage::new(dir.path().to_path_buf()).unwrap();
-        let html =
-            r#"<link href="flow00001.css"/><img src="resource00001.svg"/><img src="flow00004.svg"/>"#;
+        let html = r#"<link href="flow00001.css"/><img src="resource00001.svg"/><img src="flow00004.svg"/>"#;
         let out = rewrite_mobi_image_refs(html, &storage, "bk/0");
         // CSS and SVG references pass through untouched.
         assert!(out.contains("flow00001.css"));

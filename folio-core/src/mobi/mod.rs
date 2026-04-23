@@ -42,10 +42,7 @@ impl MobiBook {
     /// file at all — with no obvious error.
     pub fn open(path: &Path) -> FolioResult<Self> {
         let path_str = path.to_str().ok_or_else(|| {
-            FolioError::InvalidInput(format!(
-                "MOBI path is not valid UTF-8: {}",
-                path.display()
-            ))
+            FolioError::InvalidInput(format!("MOBI path is not valid UTF-8: {}", path.display()))
         })?;
         let c_path = CString::new(path_str.as_bytes())
             .map_err(|_| FolioError::InvalidInput("MOBI path contained a NUL byte".into()))?;
@@ -494,8 +491,15 @@ mod tests {
             author.to_lowercase().contains("carroll"),
             "expected 'Carroll' in author, got {author:?}"
         );
-        assert!(!book.is_kf8(), "legacy Mobipocket must not be reported as KF8");
-        assert_eq!(book.file_version(), 6, "legacy Mobipocket is file version 6");
+        assert!(
+            !book.is_kf8(),
+            "legacy Mobipocket must not be reported as KF8"
+        );
+        assert_eq!(
+            book.file_version(),
+            6,
+            "legacy Mobipocket is file version 6"
+        );
     }
 
     #[test]
@@ -654,10 +658,9 @@ mod tests {
         // Raw code is preserved in the message for debuggability.
         let err = map_mobi_ret(ffi::MOBI_RET_MOBI_DATA_CORRUPT, "open foo");
         assert!(err.to_string().contains("open foo"));
-        assert!(err.to_string().contains(&format!(
-            "{}",
-            ffi::MOBI_RET_MOBI_DATA_CORRUPT
-        )));
+        assert!(err
+            .to_string()
+            .contains(&format!("{}", ffi::MOBI_RET_MOBI_DATA_CORRUPT)));
     }
 
     #[test]
@@ -679,7 +682,10 @@ mod tests {
 
     #[test]
     fn detect_image_ext_matches_known_signatures() {
-        assert_eq!(detect_image_ext(&[0xFF, 0xD8, 0xFF, 0xE0, 0x00]), Some("jpg"));
+        assert_eq!(
+            detect_image_ext(&[0xFF, 0xD8, 0xFF, 0xE0, 0x00]),
+            Some("jpg")
+        );
         assert_eq!(
             detect_image_ext(b"\x89PNG\r\n\x1a\n\x00\x00\x00\x0D"),
             Some("png")

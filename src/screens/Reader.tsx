@@ -35,7 +35,7 @@ interface BookInfo {
   cover_path: string | null;
   total_chapters: number;
   added_at: number;
-  format: "epub" | "cbz" | "cbr" | "pdf";
+  format: "epub" | "cbz" | "cbr" | "pdf" | "mobi";
 }
 
 // ---- Component ----
@@ -52,7 +52,7 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
   const { fontSize, setFontSize, fontFamily, scrollMode, typography, customCss, dualPage, setDualPage, mangaMode, setMangaMode, pageAnimation } = useTheme();
 
   const [bookTitle, setBookTitle] = useState("");
-  const [bookFormat, setBookFormat] = useState<"epub" | "cbz" | "cbr" | "pdf">("epub");
+  const [bookFormat, setBookFormat] = useState<"epub" | "cbz" | "cbr" | "pdf" | "mobi">("epub");
   const [toc, setToc] = useState<TocEntry[]>([]);
   const [chapterIndex, setChapterIndex] = useState(0);
   const [totalChapters, setTotalChapters] = useState(0);
@@ -92,7 +92,10 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
   const [allChaptersHtml, setAllChaptersHtml] = useState<string[]>([]);
   const [allChaptersLoaded, setAllChaptersLoaded] = useState(false);
   const chapterDivRefs = useRef<(HTMLDivElement | null)[]>([]);
-  const isContinuous = scrollMode === "continuous" && bookFormat === "epub";
+  // EPUB and MOBI are both chapter-HTML formats and share the Reader's
+  // text-rendering path; PDF/CBZ/CBR go through PageViewer instead.
+  const isHtmlBook = bookFormat === "epub" || bookFormat === "mobi";
+  const isContinuous = scrollMode === "continuous" && isHtmlBook;
 
   // Time-to-finish state
   const [chapterWordCounts, setChapterWordCounts] = useState<number[]>([]);
@@ -194,14 +197,14 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
     };
   }, [bookId]);
 
-  // ---- Fetch word counts for time-to-finish (EPUB only) ----
+  // ---- Fetch word counts for time-to-finish (HTML chapter formats) ----
 
   useEffect(() => {
-    if (!bookId || loading || bookFormat !== "epub") return;
+    if (!bookId || loading || !isHtmlBook) return;
     invoke<number[]>("get_chapter_word_counts", { bookId })
       .then(setChapterWordCounts)
       .catch(() => {}); // word counts are best-effort
-  }, [bookId, loading, bookFormat]);
+  }, [bookId, loading, isHtmlBook]);
 
   // ---- Load all chapters for continuous scroll mode ----
 
@@ -1320,7 +1323,7 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
           </div>
 
           {/* Dual-page toggle — hidden in continuous scroll mode */}
-          {!(isContinuous && bookFormat === "epub") && (
+          {!(isContinuous && isHtmlBook) && (
             <div className="flex items-center">
               <button
                 onClick={() => setDualPage(!dualPage)}
@@ -1497,7 +1500,7 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
         )}
 
         {/* Screen reader announcement for chapter changes (#56) */}
-        {bookFormat === "epub" && (
+        {isHtmlBook && (
           <div aria-live="polite" aria-atomic="true" className="sr-only">
             {t("reader.chapterOf", { current: chapterIndex + 1, total: totalChapters || 1 })}
           </div>
@@ -1512,8 +1515,8 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
           </div>
         )}
 
-        {/* Content area — epub chapter reader or page-based viewer */}
-        {bookFormat !== "epub" ? (
+        {/* Content area — chapter HTML (EPUB/MOBI) or page-based viewer */}
+        {!isHtmlBook ? (
           pageCount > 0 ? (
             <PageViewer
               bookId={bookId!}
@@ -1561,7 +1564,7 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
               className="flex-1 overflow-y-auto relative"
             >
               {/* Floating prev/next arrows — visible when bottom nav is scrolled out of view (paginated only) */}
-              {!isContinuous && !bottomNavVisible && bookFormat === "epub" && !dndMode && (
+              {!isContinuous && !bottomNavVisible && isHtmlBook && !dndMode && (
                 <>
                   {chapterIndex > 0 && (
                     <button

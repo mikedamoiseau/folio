@@ -516,6 +516,18 @@ pub async fn import_book(
             }
         }
         "pdf" => BookFormat::Pdf,
+        "mobi" | "azw" | "azw3" => {
+            #[cfg(feature = "mobi")]
+            {
+                BookFormat::Mobi
+            }
+            #[cfg(not(feature = "mobi"))]
+            {
+                return Err(FolioError::invalid(
+                    "MOBI/AZW/AZW3 support is not enabled in this build",
+                ));
+            }
+        }
         _ => {
             return Err(FolioError::invalid(format!(
                 "unsupported file format: .{extension}"
@@ -825,6 +837,93 @@ pub async fn import_book(
                 is_imported,
             }
         }
+        BookFormat::Mobi => {
+            #[cfg(feature = "mobi")]
+            {
+                use folio_core::mobi;
+                let meta = mobi::parse_mobi_metadata(&final_path).inspect_err(|_e| {
+                    if should_copy {
+                        let _ = std::fs::remove_file(&final_path);
+                    }
+                })?;
+                let cover_path = match mobi::extract_cover(&final_path) {
+                    Ok(Some(cover)) => {
+                        let saved = save_cover_via_storage(
+                            &*covers_storage,
+                            &book_id,
+                            &cover.bytes,
+                            &cover.ext,
+                        );
+                        if saved.is_some() {
+                            cover_saved = true;
+                        }
+                        saved
+                    }
+                    Ok(None) => None,
+                    Err(e) => {
+                        log::warn!("cover extraction failed for book {book_id}: {e}");
+                        None
+                    }
+                };
+                let chapters = mobi::get_chapter_list(&final_path).inspect_err(|_e| {
+                    if should_copy {
+                        let _ = std::fs::remove_file(&final_path);
+                    }
+                })?;
+                let title = if meta.title.is_empty() {
+                    original_stem.clone()
+                } else {
+                    meta.title
+                };
+                let language = if meta.language.is_empty() {
+                    None
+                } else {
+                    Some(meta.language.clone())
+                };
+                Book {
+                    id: book_id,
+                    title,
+                    author: meta.author,
+                    file_path: file_path_value.clone(),
+                    cover_path,
+                    total_chapters: chapters.len() as u32,
+                    added_at: std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs() as i64,
+                    format,
+                    file_hash: Some(hash),
+                    description: meta.description,
+                    genres: if meta.genres.is_empty() {
+                        None
+                    } else {
+                        Some(serde_json::to_string(&meta.genres).unwrap_or_default())
+                    },
+                    rating: None,
+                    isbn: meta.isbn,
+                    openlibrary_key: None,
+                    enrichment_status: None,
+                    series: None,
+                    volume: None,
+                    language,
+                    publisher: None,
+                    publish_year: None,
+                    is_imported,
+                }
+            }
+            // Unreachable in practice: the extension-detection arm above
+            // returns an error when the feature is off, so this branch
+            // only compiles as a placeholder for the exhaustive match.
+            #[cfg(not(feature = "mobi"))]
+            {
+                if should_copy {
+                    let _ = std::fs::remove_file(&final_path);
+                }
+                return Err(FolioError::invalid(
+                    "MOBI/AZW/AZW3 support is not enabled in this build",
+                ));
+            }
+        }
     };
 
     let mut conn = state.active_db()?.get()?;
@@ -995,7 +1094,16 @@ pub async fn scan_folder_for_books(folder_path: String) -> FolioResult<Vec<Strin
         )));
     }
 
-    let supported = ["epub", "cbz", "cbr", "pdf"];
+    let supported = {
+        #[cfg(feature = "mobi")]
+        {
+            &["epub", "cbz", "cbr", "pdf", "mobi", "azw", "azw3"][..]
+        }
+        #[cfg(not(feature = "mobi"))]
+        {
+            &["epub", "cbz", "cbr", "pdf"][..]
+        }
+    };
     let mut found = Vec::new();
 
     fn walk(dir: &std::path::Path, extensions: &[&str], results: &mut Vec<String>) {
@@ -1020,7 +1128,7 @@ pub async fn scan_folder_for_books(folder_path: String) -> FolioResult<Vec<Strin
         }
     }
 
-    walk(dir, &supported, &mut found);
+    walk(dir, supported, &mut found);
     found.sort();
     Ok(found)
 }
@@ -1190,27 +1298,45 @@ pub async fn get_chapter_content(
     chapter_index: u32,
     state: State<'_, AppState>,
 ) -> FolioResult<String> {
-    let file_path = {
+    let (file_path, format) = {
         let conn = state.active_db()?.get()?;
         let book = db::get_book(&conn, &book_id)?
             .ok_or_else(|| FolioError::not_found(format!("Book '{book_id}' not found")))?;
-        state.resolve_book_path(&book)?
+        (state.resolve_book_path(&book)?, book.format)
     };
 
     validate_file_exists(&file_path)?;
     let images_storage = state.images_storage()?;
 
-    let mut cache = state.epub_cache.lock()?;
-    ensure_epub_cached(&mut cache, &file_path);
-    let cached = cache
-        .get_mut(&file_path)
-        .ok_or_else(|| FolioError::internal("Failed to open EPUB archive"))?;
-    Ok(epub::get_chapter_content_from_cache(
-        cached,
-        chapter_index as usize,
-        images_storage.as_ref(),
-        &book_id,
-    )?)
+    match format {
+        BookFormat::Epub => {
+            let mut cache = state.epub_cache.lock()?;
+            ensure_epub_cached(&mut cache, &file_path);
+            let cached = cache
+                .get_mut(&file_path)
+                .ok_or_else(|| FolioError::internal("Failed to open EPUB archive"))?;
+            Ok(epub::get_chapter_content_from_cache(
+                cached,
+                chapter_index as usize,
+                images_storage.as_ref(),
+                &book_id,
+            )?)
+        }
+        #[cfg(feature = "mobi")]
+        BookFormat::Mobi => Ok(folio_core::mobi::get_chapter_content(
+            &file_path,
+            chapter_index as usize,
+            images_storage.as_ref(),
+            &book_id,
+        )?),
+        #[cfg(not(feature = "mobi"))]
+        BookFormat::Mobi => Err(FolioError::invalid(
+            "MOBI support is not enabled in this build",
+        )),
+        other => Err(FolioError::invalid(format!(
+            "get_chapter_content is not supported for format {other}"
+        ))),
+    }
 }
 
 #[tauri::command]
@@ -1261,21 +1387,34 @@ pub async fn get_chapter_word_counts(
     book_id: String,
     state: State<'_, AppState>,
 ) -> FolioResult<Vec<usize>> {
-    let file_path = {
+    let (file_path, format) = {
         let conn = state.active_db()?.get()?;
         let book = db::get_book(&conn, &book_id)?
             .ok_or_else(|| FolioError::not_found(format!("Book '{book_id}' not found")))?;
-        state.resolve_book_path(&book)?
+        (state.resolve_book_path(&book)?, book.format)
     };
 
     validate_file_exists(&file_path)?;
 
-    let mut cache = state.epub_cache.lock()?;
-    ensure_epub_cached(&mut cache, &file_path);
-    let cached = cache
-        .get_mut(&file_path)
-        .ok_or("Failed to open EPUB archive")?;
-    Ok(epub::get_chapter_word_counts(cached)?)
+    match format {
+        BookFormat::Epub => {
+            let mut cache = state.epub_cache.lock()?;
+            ensure_epub_cached(&mut cache, &file_path);
+            let cached = cache
+                .get_mut(&file_path)
+                .ok_or("Failed to open EPUB archive")?;
+            Ok(epub::get_chapter_word_counts(cached)?)
+        }
+        #[cfg(feature = "mobi")]
+        BookFormat::Mobi => Ok(folio_core::mobi::get_chapter_word_counts(&file_path)?),
+        #[cfg(not(feature = "mobi"))]
+        BookFormat::Mobi => Err(FolioError::invalid(
+            "MOBI support is not enabled in this build",
+        )),
+        other => Err(FolioError::invalid(format!(
+            "get_chapter_word_counts is not supported for format {other}"
+        ))),
+    }
 }
 
 #[tauri::command]
@@ -1283,30 +1422,59 @@ pub async fn get_all_chapters(
     book_id: String,
     state: State<'_, AppState>,
 ) -> FolioResult<Vec<String>> {
-    let (file_path, total_chapters) = {
+    let (file_path, total_chapters, format) = {
         let conn = state.active_db()?.get()?;
         let book = db::get_book(&conn, &book_id)?
             .ok_or_else(|| FolioError::not_found(format!("Book '{book_id}' not found")))?;
         let total = book.total_chapters;
-        (state.resolve_book_path(&book)?, total)
+        (state.resolve_book_path(&book)?, total, book.format)
     };
 
     validate_file_exists(&file_path)?;
     let images_storage = state.images_storage()?;
 
-    let mut cache = state.epub_cache.lock()?;
-    ensure_epub_cached(&mut cache, &file_path);
-    let cached = cache
-        .get_mut(&file_path)
-        .ok_or("Failed to open EPUB archive")?;
+    match format {
+        BookFormat::Epub => {
+            let mut cache = state.epub_cache.lock()?;
+            ensure_epub_cached(&mut cache, &file_path);
+            let cached = cache
+                .get_mut(&file_path)
+                .ok_or("Failed to open EPUB archive")?;
 
-    let mut chapters = Vec::with_capacity(total_chapters as usize);
-    for i in 0..total_chapters as usize {
-        let html =
-            epub::get_chapter_content_from_cache(cached, i, images_storage.as_ref(), &book_id)?;
-        chapters.push(html);
+            let mut chapters = Vec::with_capacity(total_chapters as usize);
+            for i in 0..total_chapters as usize {
+                let html = epub::get_chapter_content_from_cache(
+                    cached,
+                    i,
+                    images_storage.as_ref(),
+                    &book_id,
+                )?;
+                chapters.push(html);
+            }
+            Ok(chapters)
+        }
+        #[cfg(feature = "mobi")]
+        BookFormat::Mobi => {
+            let mut chapters = Vec::with_capacity(total_chapters as usize);
+            for i in 0..total_chapters as usize {
+                let html = folio_core::mobi::get_chapter_content(
+                    &file_path,
+                    i,
+                    images_storage.as_ref(),
+                    &book_id,
+                )?;
+                chapters.push(html);
+            }
+            Ok(chapters)
+        }
+        #[cfg(not(feature = "mobi"))]
+        BookFormat::Mobi => Err(FolioError::invalid(
+            "MOBI support is not enabled in this build",
+        )),
+        other => Err(FolioError::invalid(format!(
+            "get_all_chapters is not supported for format {other}"
+        ))),
     }
-    Ok(chapters)
 }
 
 #[tauri::command]

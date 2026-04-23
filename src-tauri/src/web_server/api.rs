@@ -243,19 +243,38 @@ async fn get_chapter_content(
         .map_err(folio_status)?
         .ok_or_else(|| (StatusCode::NOT_FOUND, "Book not found".to_string()))?;
 
-    if book.format != BookFormat::Epub {
-        return Err((StatusCode::BAD_REQUEST, "Not an EPUB book".to_string()));
-    }
-
     let file_path = state.resolve_book_path(&book).map_err(folio_status)?;
     let images_storage = state.images_storage().map_err(folio_status)?;
-    let html = crate::epub::get_chapter_content(&file_path, index, images_storage.as_ref(), &id)
-        .map_err(folio_status)?;
+
+    let html = match book.format {
+        BookFormat::Epub => {
+            crate::epub::get_chapter_content(&file_path, index, images_storage.as_ref(), &id)
+                .map_err(folio_status)?
+        }
+        #[cfg(feature = "mobi")]
+        BookFormat::Mobi => {
+            folio_core::mobi::get_chapter_content(&file_path, index, images_storage.as_ref(), &id)
+                .map_err(folio_status)?
+        }
+        #[cfg(not(feature = "mobi"))]
+        BookFormat::Mobi => {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                "MOBI support is not enabled in this build".to_string(),
+            ));
+        }
+        _ => {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                "Chapter content is only available for EPUB and MOBI books".to_string(),
+            ));
+        }
+    };
 
     // Rewrite asset:// URLs to HTTP URLs for web serving
     let html = rewrite_asset_urls_to_http(&html, &id, index);
 
-    // R3-1: Sanitize HTML to prevent XSS from malicious EPUB content
+    // R3-1: Sanitize HTML to prevent XSS from malicious book content
     let html = sanitize_chapter_html(&html);
 
     Ok(([(header::CONTENT_TYPE, "text/html; charset=utf-8")], html).into_response())
