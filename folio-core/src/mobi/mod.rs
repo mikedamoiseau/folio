@@ -1,19 +1,20 @@
 //! MOBI / AZW / AZW3 (KF8) parser backed by libmobi.
 //!
-//! This module is gated behind the `mobi` cargo feature (on by default).
-//! libmobi is dynamically linked (LGPL v3+); the library is located at
-//! build time via pkg-config or the `LIBMOBI_INCLUDE_DIR` /
-//! `LIBMOBI_LIB_DIR` env vars.
+//! This module is gated behind the `mobi` cargo feature (opt-in). libmobi is
+//! dynamically linked (LGPL v3+); the library is located at build time via
+//! pkg-config or the `LIBMOBI_INCLUDE_DIR` / `LIBMOBI_LIB_DIR` env vars.
 //!
-//! Right now the public surface is intentionally minimal — just enough to
-//! validate the FFI path end-to-end. Full chapter/cover/image extraction
-//! lands in follow-up commits (see ROADMAP #34).
+//! The public surface is shaped for the Folio BookFormat adapter
+//! (see ROADMAP #34): open a file, read metadata, reconstruct the rawml, walk
+//! markup/flow/resource parts, and extract the cover.
 
 mod ffi;
 
 use std::ffi::{CStr, CString};
+use std::marker::PhantomData;
 use std::path::Path;
-use std::ptr;
+use std::ptr::{self, NonNull};
+use std::slice;
 
 use crate::error::{FolioError, FolioResult};
 
@@ -85,6 +86,74 @@ impl MobiBook {
         // SAFETY: as above.
         unsafe { ffi::mobi_get_fileversion(self.handle) }
     }
+
+    /// Reconstruct the rawml view: markup parts (HTML), flow parts (CSS/SVG),
+    /// and resource parts (images/fonts). For legacy Mobipocket there is a
+    /// single markup part; KF8 yields one part per chunked HTML file.
+    ///
+    /// The returned [`MobiRawml`] borrows from `self`, so the book must
+    /// outlive it.
+    pub fn rawml(&self) -> FolioResult<MobiRawml<'_>> {
+        // libmobi splits allocation and parsing: `mobi_init_rawml` only
+        // allocates and zero-initializes the struct, `mobi_parse_rawml` is
+        // what populates markup/flow/resources. Calling only the first gives
+        // a non-null handle with empty part lists.
+        //
+        // SAFETY: `mobi_init_rawml` returns either null (OOM) or a heap-
+        // allocated `MOBIRawml` that we own via `MobiRawml`'s Drop. On
+        // parse failure we free it immediately to avoid a leak.
+        let ptr = unsafe { ffi::mobi_init_rawml(self.handle) };
+        let ptr = NonNull::new(ptr)
+            .ok_or_else(|| FolioError::Internal("libmobi failed to allocate rawml".into()))?;
+        let rc = unsafe { ffi::mobi_parse_rawml(ptr.as_ptr(), self.handle) };
+        if rc != ffi::MOBI_RET_MOBI_SUCCESS {
+            unsafe { ffi::mobi_free_rawml(ptr.as_ptr()) };
+            return Err(FolioError::InvalidInput(format!(
+                "libmobi failed to parse rawml: code {rc}"
+            )));
+        }
+        Ok(MobiRawml {
+            ptr,
+            _phantom: PhantomData,
+        })
+    }
+
+    /// Extract the full-size cover image. Returns `None` if the book has
+    /// no EXTH cover record or the referenced PDB record is missing/empty.
+    ///
+    /// The returned slice borrows from the underlying `MOBIData`, so the
+    /// book must outlive the cover.
+    pub fn cover(&self) -> Option<MobiCover<'_>> {
+        // SAFETY: libmobi returns either null or a pointer into `MOBIData`'s
+        // own EXTH/record storage. We only dereference after null-checking
+        // and treat the data as a shared borrow for `&self`'s lifetime.
+        unsafe {
+            let exth =
+                ffi::mobi_get_exthrecord_by_tag(self.handle, ffi::MOBIExthTag_EXTH_COVEROFFSET);
+            if exth.is_null() {
+                return None;
+            }
+            let exth_ref = &*exth;
+            if exth_ref.data.is_null() || exth_ref.size == 0 {
+                return None;
+            }
+            let offset =
+                ffi::mobi_decode_exthvalue(exth_ref.data as *const _, exth_ref.size as usize);
+            let first = ffi::mobi_get_first_resource_record(self.handle);
+            let seq = first.checked_add(offset as usize)?;
+            let rec = ffi::mobi_get_record_by_seqnumber(self.handle, seq);
+            if rec.is_null() {
+                return None;
+            }
+            let rec_ref = &*rec;
+            if rec_ref.data.is_null() || rec_ref.size == 0 {
+                return None;
+            }
+            let data = slice::from_raw_parts(rec_ref.data, rec_ref.size);
+            let extension = detect_image_ext(data).unwrap_or("jpg");
+            Some(MobiCover { data, extension })
+        }
+    }
 }
 
 impl Drop for MobiBook {
@@ -95,6 +164,205 @@ impl Drop for MobiBook {
             unsafe { ffi::mobi_free(self.handle) };
             self.handle = ptr::null_mut();
         }
+    }
+}
+
+/// Cover image extracted from the EXTH metadata. The slice borrows from the
+/// owning [`MobiBook`].
+pub struct MobiCover<'a> {
+    /// Raw image bytes as stored in the MOBI record (no re-encoding).
+    pub data: &'a [u8],
+    /// File extension (`"jpg"`, `"png"`, `"gif"`, `"bmp"`), detected by magic
+    /// bytes. Defaults to `"jpg"` for unrecognized signatures, which matches
+    /// the overwhelmingly common case for Kindle covers.
+    pub extension: &'static str,
+}
+
+/// Reconstructed rawml view: markup / flow / resource parts. Borrows from the
+/// owning [`MobiBook`] and frees the underlying `MOBIRawml` on drop.
+pub struct MobiRawml<'a> {
+    ptr: NonNull<ffi::MOBIRawml>,
+    _phantom: PhantomData<&'a MobiBook>,
+}
+
+impl MobiRawml<'_> {
+    /// Whether this rawml was reconstructed from the KF8 half.
+    pub fn is_kf8(&self) -> bool {
+        // SAFETY: `ptr` is non-null by construction.
+        unsafe { ffi::mobi_is_rawml_kf8(self.ptr.as_ptr()) }
+    }
+
+    /// Iterate markup parts (HTML for every ebook, one per KF8 chunked file
+    /// or a single blob for legacy Mobipocket).
+    pub fn parts(&self) -> PartIter<'_> {
+        // SAFETY: `ptr` is non-null; we read the `markup` head pointer and
+        // walk the linked list through `next`.
+        PartIter::new(unsafe { self.ptr.as_ref().markup })
+    }
+
+    /// Iterate flow parts (CSS, SVG). KF8-only; empty for legacy Mobipocket.
+    pub fn flows(&self) -> PartIter<'_> {
+        PartIter::new(unsafe { self.ptr.as_ref().flow })
+    }
+
+    /// Iterate resource parts (images, fonts). In KF8 files the cover may
+    /// also be present here; the canonical cover lookup is
+    /// [`MobiBook::cover`].
+    pub fn resources(&self) -> PartIter<'_> {
+        PartIter::new(unsafe { self.ptr.as_ref().resources })
+    }
+}
+
+impl Drop for MobiRawml<'_> {
+    fn drop(&mut self) {
+        // SAFETY: `ptr` came from `mobi_init_rawml` and hasn't been freed.
+        unsafe { ffi::mobi_free_rawml(self.ptr.as_ptr()) };
+    }
+}
+
+/// One entry in a rawml linked list (`markup`, `flow`, or `resources`).
+/// The `data` slice borrows from the owning [`MobiRawml`].
+pub struct MobiPart<'a> {
+    /// Stable identifier assigned by libmobi. For KF8 this matches the
+    /// numeric FID used in `kindle:flow:XXXX` / `kindle:embed:XXXX`
+    /// references inside the HTML.
+    pub uid: usize,
+    pub kind: PartKind,
+    pub data: &'a [u8],
+}
+
+/// Linked-list iterator over `MOBIPart` nodes.
+pub struct PartIter<'a> {
+    current: *mut ffi::MOBIPart,
+    _phantom: PhantomData<&'a MobiRawml<'a>>,
+}
+
+impl<'a> PartIter<'a> {
+    fn new(head: *mut ffi::MOBIPart) -> Self {
+        Self {
+            current: head,
+            _phantom: PhantomData,
+        }
+    }
+}
+
+impl<'a> Iterator for PartIter<'a> {
+    type Item = MobiPart<'a>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.current.is_null() {
+            return None;
+        }
+        // SAFETY: `current` is non-null and points into the MOBIPart list
+        // owned by `MobiRawml`, which outlives our borrow.
+        let part = unsafe { &*self.current };
+        self.current = part.next;
+        let data = if part.data.is_null() || part.size == 0 {
+            &[][..]
+        } else {
+            // SAFETY: libmobi owns `data` for `size` bytes; the borrow is
+            // scoped to `'a` which does not outlive the `MobiRawml`.
+            unsafe { slice::from_raw_parts(part.data, part.size) }
+        };
+        Some(MobiPart {
+            uid: part.uid,
+            kind: PartKind::from_filetype(part.type_),
+            data,
+        })
+    }
+}
+
+/// Content type of a rawml part, matching libmobi's `MOBIFiletype` enum.
+/// Unknown values land in [`PartKind::Other`] so forward-compat additions
+/// on the libmobi side don't silently disappear.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PartKind {
+    Html,
+    Css,
+    Svg,
+    Opf,
+    Ncx,
+    Jpg,
+    Gif,
+    Png,
+    Bmp,
+    Otf,
+    Ttf,
+    Other(u32),
+}
+
+impl PartKind {
+    fn from_filetype(ft: ffi::MOBIFiletype) -> Self {
+        #[allow(non_upper_case_globals)]
+        match ft {
+            ffi::MOBIFiletype_T_HTML => Self::Html,
+            ffi::MOBIFiletype_T_CSS => Self::Css,
+            ffi::MOBIFiletype_T_SVG => Self::Svg,
+            ffi::MOBIFiletype_T_OPF => Self::Opf,
+            ffi::MOBIFiletype_T_NCX => Self::Ncx,
+            ffi::MOBIFiletype_T_JPG => Self::Jpg,
+            ffi::MOBIFiletype_T_GIF => Self::Gif,
+            ffi::MOBIFiletype_T_PNG => Self::Png,
+            ffi::MOBIFiletype_T_BMP => Self::Bmp,
+            ffi::MOBIFiletype_T_OTF => Self::Otf,
+            ffi::MOBIFiletype_T_TTF => Self::Ttf,
+            other => Self::Other(other),
+        }
+    }
+
+    /// Whether this part is a raster image (JPEG/PNG/GIF/BMP).
+    pub fn is_image(&self) -> bool {
+        matches!(self, Self::Jpg | Self::Gif | Self::Png | Self::Bmp)
+    }
+
+    /// Conventional file extension for writing to disk or building keys.
+    /// `None` for unrecognized types.
+    pub fn extension(&self) -> Option<&'static str> {
+        Some(match self {
+            Self::Html => "html",
+            Self::Css => "css",
+            Self::Svg => "svg",
+            Self::Opf => "opf",
+            Self::Ncx => "ncx",
+            Self::Jpg => "jpg",
+            Self::Gif => "gif",
+            Self::Png => "png",
+            Self::Bmp => "bmp",
+            Self::Otf => "otf",
+            Self::Ttf => "ttf",
+            Self::Other(_) => return None,
+        })
+    }
+
+    /// MIME type suitable for `Content-Type` headers or `data:` URIs.
+    /// `None` for unrecognized types.
+    pub fn mime_type(&self) -> Option<&'static str> {
+        Some(match self {
+            Self::Html => "text/html",
+            Self::Css => "text/css",
+            Self::Svg => "image/svg+xml",
+            Self::Opf => "application/oebps-package+xml",
+            Self::Ncx => "application/x-dtbncx+xml",
+            Self::Jpg => "image/jpeg",
+            Self::Gif => "image/gif",
+            Self::Png => "image/png",
+            Self::Bmp => "image/bmp",
+            Self::Otf => "font/otf",
+            Self::Ttf => "font/ttf",
+            Self::Other(_) => return None,
+        })
+    }
+}
+
+/// Detect raster-image extension from magic bytes. Returns `None` for
+/// unknown signatures (the caller decides the fallback).
+fn detect_image_ext(data: &[u8]) -> Option<&'static str> {
+    match data {
+        [0xFF, 0xD8, 0xFF, ..] => Some("jpg"),
+        [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, ..] => Some("png"),
+        [b'G', b'I', b'F', b'8', _, b'a', ..] => Some("gif"),
+        [b'B', b'M', ..] => Some("bmp"),
+        _ => None,
     }
 }
 
@@ -175,5 +443,121 @@ mod tests {
         );
         assert!(book.is_kf8(), "AZW3 file must be detected as KF8");
         assert_eq!(book.file_version(), 8, "AZW3/KF8 is file version 8");
+    }
+
+    #[test]
+    fn rawml_yields_html_and_images_for_legacy_mobi() {
+        let Some(path) = fixture("alice-legacy.mobi") else {
+            eprintln!("skipping: alice-legacy.mobi not present");
+            return;
+        };
+        let book = MobiBook::open(&path).expect("open legacy MOBI");
+        let rawml = book.rawml().expect("reconstruct rawml");
+        assert!(!rawml.is_kf8(), "legacy rawml must not report KF8");
+
+        let html_parts: Vec<_> = rawml
+            .parts()
+            .filter(|p| matches!(p.kind, PartKind::Html))
+            .collect();
+        assert!(
+            !html_parts.is_empty(),
+            "legacy MOBI should have at least one HTML markup part"
+        );
+        assert!(
+            html_parts.iter().any(|p| !p.data.is_empty()),
+            "at least one HTML part should carry bytes"
+        );
+
+        let images: Vec<_> = rawml.resources().filter(|p| p.kind.is_image()).collect();
+        assert!(
+            !images.is_empty(),
+            "alice-legacy.mobi ships with illustrations — expected image resources"
+        );
+        assert!(images.iter().all(|p| !p.data.is_empty()));
+    }
+
+    #[test]
+    fn rawml_yields_html_and_images_for_kf8_mobi() {
+        let Some(path) = fixture("alice.mobi") else {
+            eprintln!("skipping: alice.mobi not present");
+            return;
+        };
+        let book = MobiBook::open(&path).expect("open KF8 MOBI");
+        let rawml = book.rawml().expect("reconstruct rawml");
+        assert!(rawml.is_kf8(), "KF8 rawml must report KF8");
+
+        // KF8 splits HTML into per-file chunks (via SKEL/FRAG indexes), so
+        // we expect multiple markup parts — not the single blob legacy
+        // Mobipocket produces.
+        let html_parts: Vec<_> = rawml
+            .parts()
+            .filter(|p| matches!(p.kind, PartKind::Html))
+            .collect();
+        assert!(
+            html_parts.len() > 1,
+            "KF8 MOBI should split HTML into multiple markup parts, got {}",
+            html_parts.len()
+        );
+        assert!(html_parts.iter().all(|p| !p.data.is_empty()));
+
+        // Flows are KF8-only and typically carry CSS reconstructed from
+        // inline style tags.
+        let css_flows = rawml
+            .flows()
+            .filter(|p| matches!(p.kind, PartKind::Css))
+            .count();
+        assert!(
+            css_flows > 0,
+            "KF8 alice.mobi should expose at least one CSS flow"
+        );
+
+        let images: Vec<_> = rawml.resources().filter(|p| p.kind.is_image()).collect();
+        assert!(
+            !images.is_empty(),
+            "alice.mobi ships with illustrations — expected image resources"
+        );
+    }
+
+    #[test]
+    fn cover_extraction_returns_jpeg_for_alice() {
+        let Some(path) = fixture("alice.mobi") else {
+            eprintln!("skipping: alice.mobi not present");
+            return;
+        };
+        let book = MobiBook::open(&path).expect("open KF8 MOBI");
+        let cover = book.cover().expect("alice.mobi has an EXTH cover");
+        assert!(!cover.data.is_empty(), "cover data must be non-empty");
+        assert!(
+            matches!(cover.extension, "jpg" | "png" | "gif" | "bmp"),
+            "expected a known image extension, got {:?}",
+            cover.extension
+        );
+        // Canonical JPEG magic for Project Gutenberg MOBI covers.
+        if cover.extension == "jpg" {
+            assert_eq!(&cover.data[..3], b"\xFF\xD8\xFF");
+        }
+    }
+
+    #[test]
+    fn part_kind_helpers() {
+        assert!(PartKind::Jpg.is_image());
+        assert!(!PartKind::Html.is_image());
+        assert_eq!(PartKind::Png.extension(), Some("png"));
+        assert_eq!(PartKind::Png.mime_type(), Some("image/png"));
+        assert_eq!(PartKind::Other(42).extension(), None);
+    }
+
+    #[test]
+    fn detect_image_ext_matches_known_signatures() {
+        assert_eq!(detect_image_ext(&[0xFF, 0xD8, 0xFF, 0xE0, 0x00]), Some("jpg"));
+        assert_eq!(
+            detect_image_ext(b"\x89PNG\r\n\x1a\n\x00\x00\x00\x0D"),
+            Some("png")
+        );
+        assert_eq!(detect_image_ext(b"GIF89a...."), Some("gif"));
+        assert_eq!(detect_image_ext(b"GIF87a...."), Some("gif"));
+        assert_eq!(detect_image_ext(b"BM\x00\x00"), Some("bmp"));
+        assert_eq!(detect_image_ext(b"abcdef"), None);
+        assert_eq!(detect_image_ext(&[]), None);
     }
 }
