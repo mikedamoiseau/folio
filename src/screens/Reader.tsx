@@ -748,23 +748,41 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
   const navigateToBookmark = useCallback(
     (targetChapter: number, targetScrollPosition: number) => {
       setBookmarksOpen(false);
-      if (targetChapter !== chapterIndex) {
-        setChapterIndex(targetChapter);
-        savedScrollPosition.current = targetScrollPosition;
-        restoringScroll.current = targetChapter;
-      } else if (scrollContainerRef.current) {
-        const container = scrollContainerRef.current;
-        // Same-chapter bookmark: positions are saved as chapter-local
-        // fractions for HTML books (`getChapterScrollPosition()`), so
-        // resolve them against the current chapter's geometry. In
-        // paginated / page-based modes the value is container-global.
+      const container = scrollContainerRef.current;
+
+      if (isContinuous && container) {
+        // Continuous mode: every chapter div is already mounted in the
+        // single scroll container, so we can jump directly regardless of
+        // whether this is a same-chapter or cross-chapter bookmark. The
+        // ref-based restore effect only re-fires on
+        // `[allChaptersLoaded, isContinuous]` changes, so it cannot be
+        // relied on for subsequent bookmark clicks.
+        if (targetChapter !== chapterIndex) setChapterIndex(targetChapter);
         const chapterDiv = chapterDivRefs.current[targetChapter];
-        const top = resolveBookmarkScrollTop(isContinuous, targetScrollPosition, {
+        container.scrollTop = resolveBookmarkScrollTop(true, targetScrollPosition, {
           chapterOffsetTop: chapterDiv?.offsetTop ?? 0,
           chapterHeight: chapterDiv?.offsetHeight ?? 0,
           containerScrollHeight: container.scrollHeight,
         });
-        container.scrollTop = top;
+        return;
+      }
+
+      if (targetChapter !== chapterIndex) {
+        // Paginated / single-chapter mode cross-chapter: switching chapters
+        // reloads the HTML, so defer the scroll restore until after the
+        // render via the ref-based handshake the load effect already
+        // consumes.
+        setChapterIndex(targetChapter);
+        savedScrollPosition.current = targetScrollPosition;
+        restoringScroll.current = targetChapter;
+      } else if (container) {
+        // Paginated same-chapter: positions are container-global.
+        const chapterDiv = chapterDivRefs.current[targetChapter];
+        container.scrollTop = resolveBookmarkScrollTop(false, targetScrollPosition, {
+          chapterOffsetTop: chapterDiv?.offsetTop ?? 0,
+          chapterHeight: chapterDiv?.offsetHeight ?? 0,
+          containerScrollHeight: container.scrollHeight,
+        });
       }
     },
     [chapterIndex, isContinuous]
