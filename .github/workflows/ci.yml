@@ -64,6 +64,22 @@ jobs:
         working-directory: src-tauri
         run: cargo test --features mobi
 
+      # `cargo test` from src-tauri/ only builds src-tauri's test binary —
+      # folio-core's unit tests (which carry the MOBI adapter smoke suite)
+      # are not compiled by that invocation even with `--features mobi`.
+      # Run them explicitly so regressions in folio-core actually fail CI.
+      #
+      # The fetch step pulls the gitignored MOBI corpus from Project
+      # Gutenberg; without it the fixture-gated smoke tests skip silently
+      # and we lose the end-to-end coverage they exist to provide. The
+      # fetch script `exit 1`s on network or magic-byte failures so a bad
+      # download fails the job instead of masquerading as a green run.
+      - name: Fetch MOBI test corpus
+        run: ./scripts/fetch-mobi-test-corpus.sh
+
+      - name: Run cargo test (folio-core, --features mobi)
+        run: cargo test -p folio-core --features mobi
+
   lint:
     name: Rust Lint
     runs-on: ubuntu-latest
@@ -151,6 +167,15 @@ jobs:
       - name: Run cargo test (--features mobi)
         working-directory: src-tauri
         run: cargo test --features mobi
+
+      # Same two-step pattern as the Linux job: fetch the corpus and then
+      # run folio-core's own test binary so the MOBI adapter smoke suite
+      # executes under CI instead of being silently skipped.
+      - name: Fetch MOBI test corpus
+        run: ./scripts/fetch-mobi-test-corpus.sh
+
+      - name: Run cargo test (folio-core, --features mobi)
+        run: cargo test -p folio-core --features mobi
 
   frontend-check:
     name: Frontend TypeScript Check
