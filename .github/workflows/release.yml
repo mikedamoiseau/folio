@@ -36,8 +36,13 @@ jobs:
             args: '--target aarch64-apple-darwin --features mobi'
             pdfium_archive: pdfium-mac-univ.tgz
             pdfium_lib: libpdfium.dylib
+          # macos-latest runners are arm64, so Homebrew installs an
+          # arm64 libmobi.dylib that can't be linked into an x86_64
+          # target. Ship x86_64 Mac without MOBI rather than adding a
+          # universal-libmobi build pipeline just for Intel Macs; arm64
+          # Mac users keep full MOBI support. See release note below.
           - platform: macos-latest
-            args: '--target x86_64-apple-darwin --features mobi'
+            args: '--target x86_64-apple-darwin'
             pdfium_archive: pdfium-mac-univ.tgz
             pdfium_lib: libpdfium.dylib
           # Windows: --no-default-features disables sftp (incompatible with
@@ -71,8 +76,13 @@ jobs:
       # Homebrew at build time; end users need libmobi installed on their
       # system (brew install libmobi) or the app will fail to start when
       # MOBI support is loaded. See docs/USER_GUIDE.md.
+      #
+      # Only the arm64 Mac build links against libmobi — the x86_64 matrix
+      # entry ships without MOBI (see matrix comment above), so installing
+      # an arm64 .dylib there is wasted work and would also trick the linker
+      # into picking it up if a stray `--features mobi` ever crept in.
       - name: Install libmobi (macOS)
-        if: matrix.platform == 'macos-latest'
+        if: matrix.platform == 'macos-latest' && contains(matrix.args, 'aarch64-apple-darwin')
         run: brew install libmobi
 
       - name: Setup pnpm
@@ -142,7 +152,7 @@ jobs:
 
             > **macOS note:** Because this app is not notarized, macOS Gatekeeper may show a "damaged" or "unidentified developer" warning. See the [installation guide](https://github.com/mikedamoiseau/folio/blob/main/docs/USER_GUIDE.md#installing) for the one-line fix.
             >
-            > **MOBI / AZW / AZW3 support (macOS and Linux only):** MOBI import links dynamically against libmobi. Install it before first MOBI open — `brew install libmobi` (macOS) or `sudo apt install libmobi0` (Debian / Ubuntu). EPUB / PDF / CBZ / CBR do not need libmobi. Windows builds do not include MOBI support.
+            > **MOBI / AZW / AZW3 support (arm64 macOS and Linux only):** MOBI import links dynamically against libmobi. Install it before first MOBI open — `brew install libmobi` (macOS) or `sudo apt install libmobi0` (Debian / Ubuntu). EPUB / PDF / CBZ / CBR do not need libmobi. The x86_64 (Intel) macOS build and all Windows builds do not include MOBI support.
           releaseDraft: false
           prerelease: false
           args: ${{ matrix.args }}
