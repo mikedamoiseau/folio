@@ -491,10 +491,18 @@ mod tests {
         resources.insert("resource00000.svg".into(), bytes);
         resources.insert("resource00.jpg".into(), bytes);
         resources.insert("flow00000.jpg".into(), bytes);
-        assert!(mobi_resource_to_asset_url("resource00000.css", &storage, "bk/0", &resources).is_none());
-        assert!(mobi_resource_to_asset_url("resource00000.svg", &storage, "bk/0", &resources).is_none());
-        assert!(mobi_resource_to_asset_url("resource00.jpg", &storage, "bk/0", &resources).is_none());
-        assert!(mobi_resource_to_asset_url("flow00000.jpg", &storage, "bk/0", &resources).is_none());
+        assert!(
+            mobi_resource_to_asset_url("resource00000.css", &storage, "bk/0", &resources).is_none()
+        );
+        assert!(
+            mobi_resource_to_asset_url("resource00000.svg", &storage, "bk/0", &resources).is_none()
+        );
+        assert!(
+            mobi_resource_to_asset_url("resource00.jpg", &storage, "bk/0", &resources).is_none()
+        );
+        assert!(
+            mobi_resource_to_asset_url("flow00000.jpg", &storage, "bk/0", &resources).is_none()
+        );
     }
 
     #[test]
@@ -524,9 +532,7 @@ mod tests {
                 .expect("get_chapter_content");
         }
 
-        let keys = storage
-            .list(&format!("{book_id}/"))
-            .expect("list storage");
+        let keys = storage.list(&format!("{book_id}/")).expect("list storage");
         let worst_case_amplified = chapter_count * total_images;
         assert!(
             keys.len() < worst_case_amplified,
