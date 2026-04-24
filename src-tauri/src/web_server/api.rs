@@ -27,6 +27,14 @@ pub fn routes(state: WebState) -> Router<WebState> {
         .route("/books/{id}/pages/{index}", get(get_page_image))
         .route("/books/{id}/page-count", get(get_page_count))
         .route("/books/{id}/download", get(download_book))
+        // OPDS feeds emit `/download/{book_id}.{ext}` so clients using URL-
+        // based extension detection can disambiguate AZW vs AZW3 (both share
+        // the `application/vnd.amazon.ebook` MIME). The filename segment is
+        // ignored server-side — the same handler serves the stored file.
+        .route(
+            "/books/{id}/download/{filename}",
+            get(download_book_with_filename),
+        )
         .route("/series", get(list_series))
         .route("/collections", get(list_collections))
         .route("/collections/{id}/books", get(get_collection_books))
@@ -224,12 +232,38 @@ async fn get_chapters(
         .map_err(folio_status)?
         .ok_or_else(|| (StatusCode::NOT_FOUND, "Book not found".to_string()))?;
 
-    if book.format != BookFormat::Epub {
-        return Err((StatusCode::BAD_REQUEST, "Not an EPUB book".to_string()));
-    }
-
     let file_path = state.resolve_book_path(&book).map_err(folio_status)?;
-    let toc = crate::epub::get_toc(&file_path).map_err(folio_status)?;
+    let toc = match book.format {
+        BookFormat::Epub => crate::epub::get_toc(&file_path).map_err(folio_status)?,
+        #[cfg(feature = "mobi")]
+        BookFormat::Mobi => {
+            // MOBI has no real TOC — mirror the desktop `get_toc` behaviour by
+            // synthesising a flat list from the chapter list.
+            let chapters = folio_core::mobi::get_chapter_list(&file_path).map_err(folio_status)?;
+            chapters
+                .into_iter()
+                .map(|c| crate::models::TocEntry {
+                    chapter_index: c.index as u32,
+                    label: c.title,
+                    play_order: format!("{}", c.index + 1),
+                    children: Vec::new(),
+                })
+                .collect()
+        }
+        #[cfg(not(feature = "mobi"))]
+        BookFormat::Mobi => {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                "MOBI support is not enabled in this build".to_string(),
+            ));
+        }
+        _ => {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                "TOC is only available for EPUB and MOBI books".to_string(),
+            ));
+        }
+    };
 
     Ok(Json(serde_json::to_value(toc).unwrap_or_default()))
 }
@@ -243,19 +277,38 @@ async fn get_chapter_content(
         .map_err(folio_status)?
         .ok_or_else(|| (StatusCode::NOT_FOUND, "Book not found".to_string()))?;
 
-    if book.format != BookFormat::Epub {
-        return Err((StatusCode::BAD_REQUEST, "Not an EPUB book".to_string()));
-    }
-
     let file_path = state.resolve_book_path(&book).map_err(folio_status)?;
     let images_storage = state.images_storage().map_err(folio_status)?;
-    let html = crate::epub::get_chapter_content(&file_path, index, images_storage.as_ref(), &id)
-        .map_err(folio_status)?;
+
+    let html = match book.format {
+        BookFormat::Epub => {
+            crate::epub::get_chapter_content(&file_path, index, images_storage.as_ref(), &id)
+                .map_err(folio_status)?
+        }
+        #[cfg(feature = "mobi")]
+        BookFormat::Mobi => {
+            folio_core::mobi::get_chapter_content(&file_path, index, images_storage.as_ref(), &id)
+                .map_err(folio_status)?
+        }
+        #[cfg(not(feature = "mobi"))]
+        BookFormat::Mobi => {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                "MOBI support is not enabled in this build".to_string(),
+            ));
+        }
+        _ => {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                "Chapter content is only available for EPUB and MOBI books".to_string(),
+            ));
+        }
+    };
 
     // Rewrite asset:// URLs to HTTP URLs for web serving
     let html = rewrite_asset_urls_to_http(&html, &id, index);
 
-    // R3-1: Sanitize HTML to prevent XSS from malicious EPUB content
+    // R3-1: Sanitize HTML to prevent XSS from malicious book content
     let html = sanitize_chapter_html(&html);
 
     Ok(([(header::CONTENT_TYPE, "text/html; charset=utf-8")], html).into_response())
@@ -504,6 +557,17 @@ async fn download_book(
         body,
     )
         .into_response())
+}
+
+/// Same as [`download_book`] but with a trailing filename segment that is
+/// discarded. The OPDS feed emits URLs of the form `/download/{id}.{ext}`
+/// so OPDS clients can key off the URL extension when the MIME is ambiguous
+/// (e.g. AZW vs AZW3 both use `application/vnd.amazon.ebook`).
+async fn download_book_with_filename(
+    state: State<WebState>,
+    Path((id, _filename)): Path<(String, String)>,
+) -> Result<Response, (StatusCode, String)> {
+    download_book(state, Path(id)).await
 }
 
 // ── Collections ──────────────────────────────────────────────────────────────

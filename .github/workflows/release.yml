@@ -19,18 +19,37 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # Linux + macOS: enable the mobi feature so MOBI/AZW/AZW3 import
+          # is compiled in. Windows stays on --no-default-features; see
+          # docs/USER_GUIDE.md for the platform support matrix.
+          #
+          # Linux carries an extra `--config tauri.linux.mobi.conf.json`
+          # which overlays the `libmobi0` / `libmobi` depends into the
+          # `.deb` / `.rpm` packages. The overlay is only applied when
+          # `--features mobi` is on, so a hypothetical non-mobi Linux
+          # build would ship honest metadata (no unneeded depends).
           - platform: ubuntu-latest
-            args: ''
+            args: '--config tauri.linux.mobi.conf.json --features mobi'
             pdfium_archive: pdfium-linux-x64.tgz
             pdfium_lib: libpdfium.so
           - platform: macos-latest
-            args: '--target aarch64-apple-darwin'
+            args: '--target aarch64-apple-darwin --features mobi'
             pdfium_archive: pdfium-mac-univ.tgz
             pdfium_lib: libpdfium.dylib
+          # macos-latest runners are arm64, so Homebrew installs an
+          # arm64 libmobi.dylib that can't be linked into an x86_64
+          # target. Ship x86_64 Mac without MOBI rather than adding a
+          # universal-libmobi build pipeline just for Intel Macs; arm64
+          # Mac users keep full MOBI support. See release note below.
           - platform: macos-latest
             args: '--target x86_64-apple-darwin'
             pdfium_archive: pdfium-mac-univ.tgz
             pdfium_lib: libpdfium.dylib
+          # Windows: --no-default-features disables sftp (incompatible with
+          # the Windows build path) AND omits mobi. libmobi does not have
+          # first-class MSVC support; enabling it would require an MSYS2/
+          # vcpkg build pipeline. Tracked as future work — MOBI on Windows
+          # is intentionally out of scope for v1 release.
           - platform: windows-latest
             args: '-- --no-default-features'
             pdfium_archive: pdfium-win-x64.tgz
@@ -50,7 +69,21 @@ jobs:
             libgtk-3-dev \
             libayatana-appindicator3-dev \
             librsvg2-dev \
-            patchelf
+            patchelf \
+            libmobi-dev
+
+      # libmobi (LGPL v3+) is required for the `mobi` feature. Installed from
+      # Homebrew at build time; end users need libmobi installed on their
+      # system (brew install libmobi) or the app will fail to start when
+      # MOBI support is loaded. See docs/USER_GUIDE.md.
+      #
+      # Only the arm64 Mac build links against libmobi — the x86_64 matrix
+      # entry ships without MOBI (see matrix comment above), so installing
+      # an arm64 .dylib there is wasted work and would also trick the linker
+      # into picking it up if a stray `--features mobi` ever crept in.
+      - name: Install libmobi (macOS)
+        if: matrix.platform == 'macos-latest' && contains(matrix.args, 'aarch64-apple-darwin')
+        run: brew install libmobi
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
@@ -118,6 +151,8 @@ jobs:
             See the assets below to download and install this version.
 
             > **macOS note:** Because this app is not notarized, macOS Gatekeeper may show a "damaged" or "unidentified developer" warning. See the [installation guide](https://github.com/mikedamoiseau/folio/blob/main/docs/USER_GUIDE.md#installing) for the one-line fix.
+            >
+            > **MOBI / AZW / AZW3 support (arm64 macOS and Linux only):** MOBI import links dynamically against libmobi. Install it before first MOBI open — `brew install libmobi` (macOS) or `sudo apt install libmobi0` (Debian / Ubuntu). EPUB / PDF / CBZ / CBR do not need libmobi. The x86_64 (Intel) macOS build and all Windows builds do not include MOBI support.
           releaseDraft: false
           prerelease: false
           args: ${{ matrix.args }}

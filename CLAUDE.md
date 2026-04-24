@@ -19,6 +19,11 @@ cargo clippy -- -D warnings  # Lint Rust code (CI-enforced)
 cargo fmt --check            # Check Rust formatting (CI-enforced)
 ```
 
+Running `cargo test` from `src-tauri/` only exercises the `folio` crate — `folio-core` has its own test binary that is not compiled by that invocation. For MOBI changes always also run (from the workspace root):
+```bash
+cargo test -p folio-core --features mobi
+```
+
 Frontend tests (run from project root):
 ```bash
 npm run test                 # Run Vitest (once)
@@ -26,6 +31,8 @@ npm run test:watch           # Run Vitest (watch mode)
 ```
 
 Rust tests use `tempfile` for DB fixtures. Frontend pure logic lives in `src/lib/utils.ts` for testability.
+
+MOBI tests require a public-domain test corpus under `src-tauri/test-fixtures/` (gitignored). Populate once with `./scripts/fetch-mobi-test-corpus.sh`. Fixture-gated tests skip with a clear message when fixtures are absent, so fresh clones stay green without the corpus.
 
 ## Architecture
 
@@ -126,4 +133,4 @@ GitHub Actions runs on push to main and PRs:
 - Release workflow (`release.yml`) builds platform binaries on tag push
 
 **Before pushing:** Always run the full CI check suite locally. A pre-push git hook enforces this:
-`cargo fmt --check && cargo clippy -- -D warnings && cargo test` (in `src-tauri/`) then `npm run type-check && npm run test` (in root).
+`cargo fmt --check && cargo clippy -- -D warnings && cargo test` (in `src-tauri/`) then `npm run type-check && npm run test` (in root). When touching MOBI code also run `cargo test -p folio-core --features mobi` from the workspace root — `src-tauri/`'s `cargo test` does not compile folio-core's test binary.

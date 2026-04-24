@@ -11,7 +11,7 @@ export interface BookCardData {
   author: string;
   coverPath: string | null;
   totalChapters: number;
-  format?: "epub" | "cbz" | "cbr" | "pdf";
+  format?: "epub" | "cbz" | "cbr" | "pdf" | "mobi";
   progress?: number; // 0-100
   language?: string | null;
   publishYear?: number | null;

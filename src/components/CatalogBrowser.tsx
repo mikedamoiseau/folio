@@ -2,6 +2,8 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useTranslation } from "react-i18next";
 import { friendlyError } from "../lib/errors";
+import { pickSupportedOpdsLink } from "../lib/utils";
+import { FALLBACK_FORMATS, useSupportedFormats } from "../lib/supportedFormats";
 
 interface OpdsCatalog {
   name: string;
@@ -46,6 +48,11 @@ export default function CatalogBrowser({ onClose, onBookImported }: CatalogBrows
   const [history, setHistory] = useState<{ url: string; title: string }[]>([]);
   const [downloading, setDownloading] = useState<string | null>(null);
   const [downloadedIds, setDownloadedIds] = useState<Set<string>>(new Set());
+  // Backend-supported formats for this build. `null` until the first fetch
+  // resolves — fall back to the safe pre-MOBI core set so we don't briefly
+  // offer `+ MOBI` buttons on `--no-default-features` builds during the
+  // 50 ms–2 s capability-probe window (would 500 on click).
+  const supportedFormats = useSupportedFormats();
 
   // Add catalog form
   const [showAddCatalog, setShowAddCatalog] = useState(false);
@@ -116,15 +123,21 @@ export default function CatalogBrowser({ onClose, onBookImported }: CatalogBrows
   }, [feed, searchQuery]);
 
   const handleDownload = useCallback(async (entry: OpdsEntry) => {
-    // Find the best download link (prefer epub)
-    const epubLink = entry.links.find((l) => l.mimeType.includes("epub"));
-    const pdfLink = entry.links.find((l) => l.mimeType.includes("pdf"));
-    const link = epubLink ?? pdfLink ?? entry.links[0];
-    if (!link) return;
+    // Walk the Folio preference order (EPUB → PDF → CBZ → CBR → AZW3 → MOBI
+    // → AZW) and pick the first matching link. If nothing matches, the UI
+    // should already have hidden the button; bail out rather than pulling an
+    // arbitrary non-importable link.
+    const picked = pickSupportedOpdsLink(entry.links, supportedFormats ?? FALLBACK_FORMATS);
+    if (!picked) return;
 
     setDownloading(entry.id);
     try {
-      await invoke("download_opds_book", { downloadUrl: link.href });
+      // Pass the MIME type so the backend can derive the file extension even
+      // when the acquisition URL is opaque (e.g. `/download/123`).
+      await invoke("download_opds_book", {
+        downloadUrl: picked.link.href,
+        mimeType: picked.link.mimeType,
+      });
       setDownloadedIds((prev) => new Set(prev).add(entry.id));
       onBookImported();
     } catch (err) {
@@ -132,7 +145,7 @@ export default function CatalogBrowser({ onClose, onBookImported }: CatalogBrows
     } finally {
       setDownloading(null);
     }
-  }, [onBookImported, t]);
+  }, [onBookImported, t, supportedFormats]);
 
   const handleAddCatalog = async () => {
     if (!newCatalogName.trim() || !newCatalogUrl.trim()) return;
@@ -234,8 +247,8 @@ export default function CatalogBrowser({ onClose, onBookImported }: CatalogBrows
                   </div>
                 ) : (
                   unifiedResults.map((entry) => {
-                    const supportedLinks = entry.links.filter((l) => l.mimeType.includes("epub") || l.mimeType.includes("pdf"));
-                    const hasDownloads = supportedLinks.length > 0;
+                    const picked = pickSupportedOpdsLink(entry.links, supportedFormats ?? FALLBACK_FORMATS);
+                    const hasDownloads = picked !== null;
                     const isDownloaded = downloadedIds.has(entry.id);
                     const isDownloading = downloading === entry.id;
 
@@ -272,7 +285,7 @@ export default function CatalogBrowser({ onClose, onBookImported }: CatalogBrows
                                   onClick={() => handleDownload(entry)}
                                   className="px-2 py-0.5 text-[11px] font-medium text-accent bg-accent-light hover:bg-accent hover:text-white rounded transition-colors"
                                 >
-                                  + {supportedLinks[0]?.mimeType.includes("epub") ? "EPUB" : "PDF"}
+                                  + {picked?.label ?? ""}
                                 </button>
                               )}
                             </div>
@@ -422,8 +435,8 @@ export default function CatalogBrowser({ onClose, onBookImported }: CatalogBrows
               </div>
             ) : (
               feed.entries.map((entry) => {
-                const supportedLinks = entry.links.filter((l) => l.mimeType.includes("epub") || l.mimeType.includes("pdf"));
-                const hasDownloads = supportedLinks.length > 0;
+                const picked = pickSupportedOpdsLink(entry.links, supportedFormats ?? FALLBACK_FORMATS);
+                const hasDownloads = picked !== null;
                 const isNav = !!entry.navUrl && !hasDownloads;
                 const isDownloaded = downloadedIds.has(entry.id);
                 const isDownloading = downloading === entry.id;
@@ -471,20 +484,14 @@ export default function CatalogBrowser({ onClose, onBookImported }: CatalogBrows
                               {t("common.downloading")}
                             </span>
                           ) : (
-                            entry.links
-                              .filter((l) => l.mimeType.includes("epub") || l.mimeType.includes("pdf"))
-                              .map((link, i) => {
-                                const label = link.mimeType.includes("epub") ? "EPUB" : "PDF";
-                                return (
-                                  <button
-                                    key={i}
-                                    onClick={(e) => { e.stopPropagation(); handleDownload(entry); }}
-                                    className="px-2 py-0.5 text-[11px] font-medium text-accent bg-accent-light hover:bg-accent hover:text-white rounded transition-colors"
-                                  >
-                                    + {label}
-                                  </button>
-                                );
-                              })
+                            picked && (
+                              <button
+                                onClick={(e) => { e.stopPropagation(); handleDownload(entry); }}
+                                className="px-2 py-0.5 text-[11px] font-medium text-accent bg-accent-light hover:bg-accent hover:text-white rounded transition-colors"
+                              >
+                                + {picked.label}
+                              </button>
+                            )
                           )}
                         </div>
                       )}

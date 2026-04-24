@@ -440,6 +440,29 @@ fn page_cache_storage(app: &AppHandle) -> FolioResult<folio_core::storage::Local
 
 // --- Library management ---
 
+/// Extensions the backend can import in this build. Core formats are
+/// always present; MOBI family is conditional on the `mobi` feature. Used
+/// both by the Tauri command exposed to the frontend and by internal
+/// validators like download_opds_book.
+pub fn supported_import_extensions() -> &'static [&'static str] {
+    #[cfg(feature = "mobi")]
+    {
+        &["epub", "pdf", "cbz", "cbr", "mobi", "azw", "azw3"]
+    }
+    #[cfg(not(feature = "mobi"))]
+    {
+        &["epub", "pdf", "cbz", "cbr"]
+    }
+}
+
+/// Return the list of file extensions the backend can import in this build.
+/// The frontend uses this to populate the file-picker and folder-scan
+/// filters so MOBI/AZW/AZW3 only appear when libmobi is compiled in.
+#[tauri::command]
+pub async fn get_supported_formats() -> FolioResult<Vec<&'static str>> {
+    Ok(supported_import_extensions().to_vec())
+}
+
 #[tauri::command]
 pub async fn import_book(
     file_path: String,
@@ -516,6 +539,18 @@ pub async fn import_book(
             }
         }
         "pdf" => BookFormat::Pdf,
+        "mobi" | "azw" | "azw3" => {
+            #[cfg(feature = "mobi")]
+            {
+                BookFormat::Mobi
+            }
+            #[cfg(not(feature = "mobi"))]
+            {
+                return Err(FolioError::invalid(
+                    "MOBI/AZW/AZW3 support is not enabled in this build",
+                ));
+            }
+        }
         _ => {
             return Err(FolioError::invalid(format!(
                 "unsupported file format: .{extension}"
@@ -825,6 +860,93 @@ pub async fn import_book(
                 is_imported,
             }
         }
+        BookFormat::Mobi => {
+            #[cfg(feature = "mobi")]
+            {
+                use folio_core::mobi;
+                let meta = mobi::parse_mobi_metadata(&final_path).inspect_err(|_e| {
+                    if should_copy {
+                        let _ = std::fs::remove_file(&final_path);
+                    }
+                })?;
+                let cover_path = match mobi::extract_cover(&final_path) {
+                    Ok(Some(cover)) => {
+                        let saved = save_cover_via_storage(
+                            &*covers_storage,
+                            &book_id,
+                            &cover.bytes,
+                            &cover.ext,
+                        );
+                        if saved.is_some() {
+                            cover_saved = true;
+                        }
+                        saved
+                    }
+                    Ok(None) => None,
+                    Err(e) => {
+                        log::warn!("cover extraction failed for book {book_id}: {e}");
+                        None
+                    }
+                };
+                let chapters = mobi::get_chapter_list(&final_path).inspect_err(|_e| {
+                    if should_copy {
+                        let _ = std::fs::remove_file(&final_path);
+                    }
+                })?;
+                let title = if meta.title.is_empty() {
+                    original_stem.clone()
+                } else {
+                    meta.title
+                };
+                let language = if meta.language.is_empty() {
+                    None
+                } else {
+                    Some(meta.language.clone())
+                };
+                Book {
+                    id: book_id,
+                    title,
+                    author: meta.author,
+                    file_path: file_path_value.clone(),
+                    cover_path,
+                    total_chapters: chapters.len() as u32,
+                    added_at: std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs() as i64,
+                    format,
+                    file_hash: Some(hash),
+                    description: meta.description,
+                    genres: if meta.genres.is_empty() {
+                        None
+                    } else {
+                        Some(serde_json::to_string(&meta.genres).unwrap_or_default())
+                    },
+                    rating: None,
+                    isbn: meta.isbn,
+                    openlibrary_key: None,
+                    enrichment_status: None,
+                    series: None,
+                    volume: None,
+                    language,
+                    publisher: None,
+                    publish_year: None,
+                    is_imported,
+                }
+            }
+            // Unreachable in practice: the extension-detection arm above
+            // returns an error when the feature is off, so this branch
+            // only compiles as a placeholder for the exhaustive match.
+            #[cfg(not(feature = "mobi"))]
+            {
+                if should_copy {
+                    let _ = std::fs::remove_file(&final_path);
+                }
+                return Err(FolioError::invalid(
+                    "MOBI/AZW/AZW3 support is not enabled in this build",
+                ));
+            }
+        }
     };
 
     let mut conn = state.active_db()?.get()?;
@@ -995,7 +1117,16 @@ pub async fn scan_folder_for_books(folder_path: String) -> FolioResult<Vec<Strin
         )));
     }
 
-    let supported = ["epub", "cbz", "cbr", "pdf"];
+    let supported = {
+        #[cfg(feature = "mobi")]
+        {
+            &["epub", "cbz", "cbr", "pdf", "mobi", "azw", "azw3"][..]
+        }
+        #[cfg(not(feature = "mobi"))]
+        {
+            &["epub", "cbz", "cbr", "pdf"][..]
+        }
+    };
     let mut found = Vec::new();
 
     fn walk(dir: &std::path::Path, extensions: &[&str], results: &mut Vec<String>) {
@@ -1020,7 +1151,7 @@ pub async fn scan_folder_for_books(folder_path: String) -> FolioResult<Vec<Strin
         }
     }
 
-    walk(dir, &supported, &mut found);
+    walk(dir, supported, &mut found);
     found.sort();
     Ok(found)
 }
@@ -1190,27 +1321,45 @@ pub async fn get_chapter_content(
     chapter_index: u32,
     state: State<'_, AppState>,
 ) -> FolioResult<String> {
-    let file_path = {
+    let (file_path, format) = {
         let conn = state.active_db()?.get()?;
         let book = db::get_book(&conn, &book_id)?
             .ok_or_else(|| FolioError::not_found(format!("Book '{book_id}' not found")))?;
-        state.resolve_book_path(&book)?
+        (state.resolve_book_path(&book)?, book.format)
     };
 
     validate_file_exists(&file_path)?;
     let images_storage = state.images_storage()?;
 
-    let mut cache = state.epub_cache.lock()?;
-    ensure_epub_cached(&mut cache, &file_path);
-    let cached = cache
-        .get_mut(&file_path)
-        .ok_or_else(|| FolioError::internal("Failed to open EPUB archive"))?;
-    Ok(epub::get_chapter_content_from_cache(
-        cached,
-        chapter_index as usize,
-        images_storage.as_ref(),
-        &book_id,
-    )?)
+    match format {
+        BookFormat::Epub => {
+            let mut cache = state.epub_cache.lock()?;
+            ensure_epub_cached(&mut cache, &file_path);
+            let cached = cache
+                .get_mut(&file_path)
+                .ok_or_else(|| FolioError::internal("Failed to open EPUB archive"))?;
+            Ok(epub::get_chapter_content_from_cache(
+                cached,
+                chapter_index as usize,
+                images_storage.as_ref(),
+                &book_id,
+            )?)
+        }
+        #[cfg(feature = "mobi")]
+        BookFormat::Mobi => Ok(folio_core::mobi::get_chapter_content(
+            &file_path,
+            chapter_index as usize,
+            images_storage.as_ref(),
+            &book_id,
+        )?),
+        #[cfg(not(feature = "mobi"))]
+        BookFormat::Mobi => Err(FolioError::invalid(
+            "MOBI support is not enabled in this build",
+        )),
+        other => Err(FolioError::invalid(format!(
+            "get_chapter_content is not supported for format {other}"
+        ))),
+    }
 }
 
 #[tauri::command]
@@ -1218,7 +1367,7 @@ pub async fn search_book_content(
     book_id: String,
     query: String,
     state: State<'_, AppState>,
-) -> FolioResult<Vec<epub::SearchResult>> {
+) -> FolioResult<Vec<crate::models::SearchResult>> {
     if query.trim().is_empty() {
         return Ok(Vec::new());
     }
@@ -1237,8 +1386,8 @@ pub async fn search_book_content(
             let results = pdf::search_pdf(&file_path, &query)?;
             Ok(results
                 .into_iter()
-                .map(|r| epub::SearchResult {
-                    chapter_index: r.chapter_index,
+                .map(|r| crate::models::SearchResult {
+                    chapter_index: r.chapter_index as u32,
                     snippet: r.snippet,
                     match_offset: r.match_offset,
                 })
@@ -1252,6 +1401,24 @@ pub async fn search_book_content(
                 .ok_or_else(|| FolioError::internal("Failed to open EPUB archive"))?;
             Ok(epub::search_book(cached, &query)?)
         }
+        #[cfg(feature = "mobi")]
+        BookFormat::Mobi => {
+            let images_storage = state.images_storage()?;
+            let chapters = folio_core::mobi::get_chapter_list(&file_path)?;
+            let chapter_indices: Vec<u32> = chapters.iter().map(|c| c.index as u32).collect();
+            folio_core::search::search_chapters(chapter_indices, &query, &book_id, |idx| {
+                folio_core::mobi::get_chapter_content(
+                    &file_path,
+                    idx as usize,
+                    images_storage.as_ref(),
+                    &book_id,
+                )
+            })
+        }
+        #[cfg(not(feature = "mobi"))]
+        BookFormat::Mobi => Err(FolioError::invalid(
+            "MOBI support is not enabled in this build",
+        )),
         _ => Ok(Vec::new()), // CBZ/CBR are image-only, no text to search
     }
 }
@@ -1261,21 +1428,34 @@ pub async fn get_chapter_word_counts(
     book_id: String,
     state: State<'_, AppState>,
 ) -> FolioResult<Vec<usize>> {
-    let file_path = {
+    let (file_path, format) = {
         let conn = state.active_db()?.get()?;
         let book = db::get_book(&conn, &book_id)?
             .ok_or_else(|| FolioError::not_found(format!("Book '{book_id}' not found")))?;
-        state.resolve_book_path(&book)?
+        (state.resolve_book_path(&book)?, book.format)
     };
 
     validate_file_exists(&file_path)?;
 
-    let mut cache = state.epub_cache.lock()?;
-    ensure_epub_cached(&mut cache, &file_path);
-    let cached = cache
-        .get_mut(&file_path)
-        .ok_or("Failed to open EPUB archive")?;
-    Ok(epub::get_chapter_word_counts(cached)?)
+    match format {
+        BookFormat::Epub => {
+            let mut cache = state.epub_cache.lock()?;
+            ensure_epub_cached(&mut cache, &file_path);
+            let cached = cache
+                .get_mut(&file_path)
+                .ok_or("Failed to open EPUB archive")?;
+            Ok(epub::get_chapter_word_counts(cached)?)
+        }
+        #[cfg(feature = "mobi")]
+        BookFormat::Mobi => Ok(folio_core::mobi::get_chapter_word_counts(&file_path)?),
+        #[cfg(not(feature = "mobi"))]
+        BookFormat::Mobi => Err(FolioError::invalid(
+            "MOBI support is not enabled in this build",
+        )),
+        other => Err(FolioError::invalid(format!(
+            "get_chapter_word_counts is not supported for format {other}"
+        ))),
+    }
 }
 
 #[tauri::command]
@@ -1283,52 +1463,108 @@ pub async fn get_all_chapters(
     book_id: String,
     state: State<'_, AppState>,
 ) -> FolioResult<Vec<String>> {
-    let (file_path, total_chapters) = {
+    let (file_path, total_chapters, format) = {
         let conn = state.active_db()?.get()?;
         let book = db::get_book(&conn, &book_id)?
             .ok_or_else(|| FolioError::not_found(format!("Book '{book_id}' not found")))?;
         let total = book.total_chapters;
-        (state.resolve_book_path(&book)?, total)
+        (state.resolve_book_path(&book)?, total, book.format)
     };
 
     validate_file_exists(&file_path)?;
     let images_storage = state.images_storage()?;
 
-    let mut cache = state.epub_cache.lock()?;
-    ensure_epub_cached(&mut cache, &file_path);
-    let cached = cache
-        .get_mut(&file_path)
-        .ok_or("Failed to open EPUB archive")?;
+    match format {
+        BookFormat::Epub => {
+            let mut cache = state.epub_cache.lock()?;
+            ensure_epub_cached(&mut cache, &file_path);
+            let cached = cache
+                .get_mut(&file_path)
+                .ok_or("Failed to open EPUB archive")?;
 
-    let mut chapters = Vec::with_capacity(total_chapters as usize);
-    for i in 0..total_chapters as usize {
-        let html =
-            epub::get_chapter_content_from_cache(cached, i, images_storage.as_ref(), &book_id)?;
-        chapters.push(html);
+            let mut chapters = Vec::with_capacity(total_chapters as usize);
+            for i in 0..total_chapters as usize {
+                let html = epub::get_chapter_content_from_cache(
+                    cached,
+                    i,
+                    images_storage.as_ref(),
+                    &book_id,
+                )?;
+                chapters.push(html);
+            }
+            Ok(chapters)
+        }
+        #[cfg(feature = "mobi")]
+        BookFormat::Mobi => {
+            let mut chapters = Vec::with_capacity(total_chapters as usize);
+            for i in 0..total_chapters as usize {
+                let html = folio_core::mobi::get_chapter_content(
+                    &file_path,
+                    i,
+                    images_storage.as_ref(),
+                    &book_id,
+                )?;
+                chapters.push(html);
+            }
+            Ok(chapters)
+        }
+        #[cfg(not(feature = "mobi"))]
+        BookFormat::Mobi => Err(FolioError::invalid(
+            "MOBI support is not enabled in this build",
+        )),
+        other => Err(FolioError::invalid(format!(
+            "get_all_chapters is not supported for format {other}"
+        ))),
     }
-    Ok(chapters)
 }
 
 #[tauri::command]
 pub async fn get_toc(
     book_id: String,
     state: State<'_, AppState>,
-) -> FolioResult<Vec<epub::TocEntry>> {
-    let file_path = {
+) -> FolioResult<Vec<crate::models::TocEntry>> {
+    let (file_path, format) = {
         let conn = state.active_db()?.get()?;
         let book = db::get_book(&conn, &book_id)?
             .ok_or_else(|| FolioError::not_found(format!("Book '{book_id}' not found")))?;
-        state.resolve_book_path(&book)?
+        (state.resolve_book_path(&book)?, book.format)
     };
 
     validate_file_exists(&file_path)?;
 
-    let mut cache = state.epub_cache.lock()?;
-    ensure_epub_cached(&mut cache, &file_path);
-    let cached = cache
-        .get_mut(&file_path)
-        .ok_or("Failed to open EPUB archive")?;
-    Ok(epub::get_toc_from_cache(cached)?)
+    match format {
+        BookFormat::Epub => {
+            let mut cache = state.epub_cache.lock()?;
+            ensure_epub_cached(&mut cache, &file_path);
+            let cached = cache
+                .get_mut(&file_path)
+                .ok_or("Failed to open EPUB archive")?;
+            Ok(epub::get_toc_from_cache(cached)?)
+        }
+        #[cfg(feature = "mobi")]
+        BookFormat::Mobi => {
+            // MOBI has no real TOC — synthesize a flat list from the
+            // adapter's chapter list so the Contents sidebar works. Each
+            // entry is a depth-0 leaf (no children).
+            let chapters = folio_core::mobi::get_chapter_list(&file_path)?;
+            Ok(chapters
+                .into_iter()
+                .map(|c| crate::models::TocEntry {
+                    chapter_index: c.index as u32,
+                    label: c.title,
+                    play_order: format!("{}", c.index + 1),
+                    children: Vec::new(),
+                })
+                .collect())
+        }
+        #[cfg(not(feature = "mobi"))]
+        BookFormat::Mobi => Err(FolioError::invalid(
+            "MOBI support is not enabled in this build",
+        )),
+        other => Err(FolioError::invalid(format!(
+            "get_toc is not supported for format {other}"
+        ))),
+    }
 }
 
 // --- Progress ---
@@ -2474,6 +2710,57 @@ pub async fn get_discover_books(state: State<'_, AppState>) -> FolioResult<Vec<o
     Ok(all_entries)
 }
 
+/// Pick the file extension from an OPDS acquisition URL. Parses the URL with
+/// the `url` crate and inspects the final non-empty path segment — query
+/// strings, fragments, and trailing slashes are handled by the parser, so
+/// feeds that append `?token=…` or `/` don't hide the extension.
+/// Returns `None` when the URL is unparseable or the extension isn't in our
+/// supported set; the caller decides the fallback.
+fn opds_extension_from_url(url: &str) -> Option<&'static str> {
+    let parsed = url::Url::parse(url).ok()?;
+    let last = parsed.path_segments()?.rfind(|s| !s.is_empty())?;
+    let ext = last.rsplit_once('.')?.1.to_ascii_lowercase();
+    match ext.as_str() {
+        "epub" => Some("epub"),
+        "pdf" => Some("pdf"),
+        "cbz" => Some("cbz"),
+        "cbr" => Some("cbr"),
+        "mobi" => Some("mobi"),
+        "azw" => Some("azw"),
+        "azw3" => Some("azw3"),
+        _ => None,
+    }
+}
+
+/// Map an OPDS acquisition link's MIME type to the file extension the import
+/// pipeline expects. Preferred over URL-based detection because many feeds
+/// serve opaque download URLs (e.g. `/download/123`) while still returning
+/// the correct MIME. Parameters (`; profile="…"`) are ignored.
+fn opds_extension_from_mime(mime: &str) -> Option<&'static str> {
+    let bare = mime
+        .split(';')
+        .next()
+        .unwrap_or(mime)
+        .trim()
+        .to_ascii_lowercase();
+    match bare.as_str() {
+        "application/epub+zip" => Some("epub"),
+        "application/pdf" => Some("pdf"),
+        // MOBI family. `x-mobipocket-ebook` is the historical MOBI MIME and
+        // unambiguous. `application/vnd.amazon.ebook` is the Amazon vendor
+        // MIME shared by both `.azw` and `.azw3` — mapping it to a specific
+        // extension here would collapse that distinction, so we return None
+        // and let URL-based detection disambiguate. A final default of
+        // `.azw3` (the more common container) is applied at the import
+        // layer when the URL is also opaque.
+        "application/x-mobipocket-ebook" => Some("mobi"),
+        // Comic book archives. Both vendor-prefixed and de-facto MIMEs seen in feeds.
+        "application/x-cbz" | "application/vnd.comicbook+zip" => Some("cbz"),
+        "application/x-cbr" | "application/vnd.comicbook-rar" => Some("cbr"),
+        _ => None,
+    }
+}
+
 #[tauri::command]
 pub async fn browse_opds(url: String) -> FolioResult<opds::OpdsFeed> {
     let (tx, rx) = std::sync::mpsc::channel();
@@ -2486,17 +2773,47 @@ pub async fn browse_opds(url: String) -> FolioResult<opds::OpdsFeed> {
 #[tauri::command]
 pub async fn download_opds_book(
     download_url: String,
+    mime_type: Option<String>,
     state: State<'_, AppState>,
     app: AppHandle,
 ) -> FolioResult<Book> {
-    // Determine file extension from URL
-    let ext = if download_url.contains(".pdf") {
-        "pdf"
-    } else if download_url.contains(".cbz") {
-        "cbz"
-    } else {
-        "epub" // default for OPDS
-    };
+    // Determine the file extension for the temp import path. Precedence:
+    //   1. URL suffix — Folio's own feed and many well-behaved feeds put the
+    //      extension in the path; this is the only signal that disambiguates
+    //      the AZW / AZW3 pair since they share
+    //      `application/vnd.amazon.ebook`.
+    //   2. MIME type — authoritative for unambiguous types and covers feeds
+    //      with opaque URLs like `/download/123`.
+    //   3. Vendor-MIME fallback — `application/vnd.amazon.ebook` resolves to
+    //      `.azw3` here (the far more common container), which kicks in only
+    //      when the URL also had no usable suffix.
+    //   4. Final fallback `.epub` so we never feed an extensionless file to
+    //      the importer.
+    let vendor_amazon = mime_type
+        .as_deref()
+        .map(|m| {
+            m.split(';')
+                .next()
+                .unwrap_or(m)
+                .trim()
+                .eq_ignore_ascii_case("application/vnd.amazon.ebook")
+        })
+        .unwrap_or(false);
+    let ext = opds_extension_from_url(&download_url)
+        .or_else(|| mime_type.as_deref().and_then(opds_extension_from_mime))
+        .or(if vendor_amazon { Some("azw3") } else { None })
+        .unwrap_or("epub");
+
+    // Defense in depth: reject unsupported formats before the download so
+    // non-`mobi` builds don't waste bandwidth/disk on a file they'll throw
+    // away in import_book. The frontend already hides these buttons via
+    // get_supported_formats, but feature flags could diverge (e.g. direct
+    // IPC calls from tests), and the import error is clearer here.
+    if !supported_import_extensions().contains(&ext) {
+        return Err(FolioError::invalid(format!(
+            "Format '.{ext}' is not supported in this build."
+        )));
+    }
 
     // Download to a temp file
     let temp_dir = std::env::temp_dir();
@@ -4752,6 +5069,208 @@ mod tests {
         let running = BACKUP_RUNNING.lock().unwrap();
         assert!(!running.contains(&a));
         assert!(!running.contains(&b));
+    }
+
+    #[test]
+    fn opds_mime_maps_epub_pdf() {
+        assert_eq!(
+            opds_extension_from_mime("application/epub+zip"),
+            Some("epub")
+        );
+        assert_eq!(opds_extension_from_mime("application/pdf"), Some("pdf"));
+    }
+
+    #[test]
+    fn opds_mime_maps_mobi_family() {
+        // x-mobipocket-ebook is the historical MOBI MIME.
+        assert_eq!(
+            opds_extension_from_mime("application/x-mobipocket-ebook"),
+            Some("mobi")
+        );
+        // `vnd.amazon.ebook` is ambiguous between .azw and .azw3 — the MIME
+        // mapper must surface this by returning None so callers fall back to
+        // URL-based disambiguation. A final default is applied at the import
+        // layer when the URL is also opaque.
+        assert_eq!(
+            opds_extension_from_mime("application/vnd.amazon.ebook"),
+            None
+        );
+    }
+
+    #[test]
+    fn opds_vendor_amazon_mime_falls_back_to_url_extension() {
+        // Defense-in-depth: the `download_opds_book` precedence must let URL
+        // extension win over the ambiguous vendor MIME so an `.azw` link is
+        // not silently renamed `.azw3` on import.
+        //
+        // We replicate the precedence used in `download_opds_book` here so a
+        // regression in that ordering is caught even without a full Tauri
+        // harness.
+        let mime = "application/vnd.amazon.ebook";
+        let url = "https://example.com/download/book.azw";
+        let ext = opds_extension_from_url(url)
+            .or_else(|| opds_extension_from_mime(mime))
+            .unwrap_or("epub");
+        assert_eq!(ext, "azw");
+    }
+
+    #[test]
+    fn opds_vendor_amazon_mime_with_opaque_url_defaults_to_azw3() {
+        // When the URL is opaque and MIME is the ambiguous vendor one, we
+        // still need a default — AZW3 is the far more common container in the
+        // wild today, so fall back to that.
+        let mime = "application/vnd.amazon.ebook";
+        let url = "https://example.com/download/123";
+        let ext = opds_extension_from_url(url)
+            .or_else(|| opds_extension_from_mime(mime))
+            .or(Some("azw3"))
+            .unwrap();
+        assert_eq!(ext, "azw3");
+    }
+
+    #[test]
+    fn opds_mime_maps_comic_archives() {
+        assert_eq!(
+            opds_extension_from_mime("application/vnd.comicbook+zip"),
+            Some("cbz")
+        );
+        assert_eq!(opds_extension_from_mime("application/x-cbz"), Some("cbz"));
+        assert_eq!(
+            opds_extension_from_mime("application/vnd.comicbook-rar"),
+            Some("cbr")
+        );
+        assert_eq!(opds_extension_from_mime("application/x-cbr"), Some("cbr"));
+    }
+
+    #[test]
+    fn opds_mime_strips_parameters_and_is_case_insensitive() {
+        assert_eq!(
+            opds_extension_from_mime("APPLICATION/EPUB+ZIP; profile=\"foo\""),
+            Some("epub")
+        );
+    }
+
+    #[test]
+    fn opds_mime_rejects_unknown_types() {
+        assert_eq!(opds_extension_from_mime("application/octet-stream"), None);
+        assert_eq!(opds_extension_from_mime(""), None);
+    }
+
+    #[test]
+    fn opds_url_detects_plain_extensions() {
+        assert_eq!(
+            opds_extension_from_url("https://example.com/book.epub"),
+            Some("epub")
+        );
+        assert_eq!(
+            opds_extension_from_url("https://example.com/foo/bar.pdf"),
+            Some("pdf")
+        );
+        assert_eq!(
+            opds_extension_from_url("https://example.com/book.AZW3"),
+            Some("azw3")
+        );
+    }
+
+    #[test]
+    fn opds_url_ignores_query_and_fragment() {
+        assert_eq!(
+            opds_extension_from_url("https://example.com/book.epub?token=abc"),
+            Some("epub")
+        );
+        assert_eq!(
+            opds_extension_from_url("https://example.com/book.epub#anchor"),
+            Some("epub")
+        );
+    }
+
+    #[test]
+    fn opds_url_disambiguates_azw_and_azw3() {
+        // Plain `.azw` and `.azw3` must not shadow each other.
+        assert_eq!(
+            opds_extension_from_url("https://example.com/book.azw"),
+            Some("azw")
+        );
+        assert_eq!(
+            opds_extension_from_url("https://example.com/book.azw3"),
+            Some("azw3")
+        );
+    }
+
+    #[test]
+    fn opds_url_returns_none_for_opaque_or_missing() {
+        // Opaque acquisition URLs (common in OPDS) — MIME path handles these.
+        assert_eq!(
+            opds_extension_from_url("https://example.com/download/123"),
+            None
+        );
+        // Unparseable / extensionless / non-matching.
+        assert_eq!(opds_extension_from_url("not a url"), None);
+        assert_eq!(opds_extension_from_url(""), None);
+        assert_eq!(
+            opds_extension_from_url("https://example.com/book.xyz"),
+            None
+        );
+    }
+
+    #[test]
+    fn opds_url_handles_trailing_slash() {
+        // Trailing slash: last non-empty segment still has the extension.
+        assert_eq!(
+            opds_extension_from_url("https://example.com/book.epub/"),
+            Some("epub")
+        );
+    }
+
+    #[test]
+    fn opds_url_disambiguates_folio_acquisition_urls() {
+        // Folio's own OPDS feed emits `/api/books/{id}/download/{id}.{ext}`
+        // specifically so URL-based detection can disambiguate AZW from AZW3
+        // when the MIME is the ambiguous `application/vnd.amazon.ebook`.
+        assert_eq!(
+            opds_extension_from_url("https://folio.local/api/books/abc123/download/abc123.azw"),
+            Some("azw")
+        );
+        assert_eq!(
+            opds_extension_from_url("https://folio.local/api/books/abc123/download/abc123.azw3"),
+            Some("azw3")
+        );
+        assert_eq!(
+            opds_extension_from_url("https://folio.local/api/books/abc123/download/abc123.mobi"),
+            Some("mobi")
+        );
+    }
+
+    #[test]
+    fn supported_import_extensions_always_includes_core_formats() {
+        let exts = supported_import_extensions();
+        for core in &["epub", "pdf", "cbz", "cbr"] {
+            assert!(
+                exts.contains(core),
+                "core format {core} missing from supported_import_extensions"
+            );
+        }
+    }
+
+    #[cfg(feature = "mobi")]
+    #[test]
+    fn supported_import_extensions_includes_mobi_family_when_feature_on() {
+        let exts = supported_import_extensions();
+        for mobi in &["mobi", "azw", "azw3"] {
+            assert!(exts.contains(mobi), "mobi feature on but {mobi} missing");
+        }
+    }
+
+    #[cfg(not(feature = "mobi"))]
+    #[test]
+    fn supported_import_extensions_excludes_mobi_family_when_feature_off() {
+        let exts = supported_import_extensions();
+        for mobi in &["mobi", "azw", "azw3"] {
+            assert!(
+                !exts.contains(mobi),
+                "mobi feature off but {mobi} still listed"
+            );
+        }
     }
 
     #[test]

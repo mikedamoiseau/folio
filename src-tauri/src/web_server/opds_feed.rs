@@ -31,6 +31,22 @@ fn xml_escape(s: &str) -> String {
         .replace('"', "&quot;")
 }
 
+/// Derive an OPDS acquisition extension + MIME from a MOBI-family book's
+/// stored file path. Import preserves the original extension when copying
+/// into the library, so the filename is authoritative. Falls back to plain
+/// `.mobi` when the extension is missing or unrecognized.
+fn mobi_ext_and_mime(file_path: &str) -> (&'static str, &'static str) {
+    let ext = std::path::Path::new(file_path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(str::to_ascii_lowercase);
+    match ext.as_deref() {
+        Some("azw3") => ("azw3", "application/vnd.amazon.ebook"),
+        Some("azw") => ("azw", "application/vnd.amazon.ebook"),
+        _ => ("mobi", "application/x-mobipocket-ebook"),
+    }
+}
+
 fn book_to_entry(book: &Book) -> String {
     let title = xml_escape(&book.title);
     let author = xml_escape(&book.author);
@@ -49,20 +65,24 @@ fn book_to_entry(book: &Book) -> String {
         r#"<link rel="http://opds-spec.org/image" href="/api/books/{id}/cover" type="image/jpeg"/>"#
     );
 
-    let ext = match book.format {
-        crate::models::BookFormat::Epub => "epub",
-        crate::models::BookFormat::Pdf => "pdf",
-        crate::models::BookFormat::Cbz => "cbz",
-        crate::models::BookFormat::Cbr => "cbr",
+    // `BookFormat::Mobi` is a single enum variant covering `.mobi`, `.azw`, and
+    // `.azw3` — we collapsed them on import. For OPDS we need the actual
+    // container type so clients pick the right parser/MIME; derive it from the
+    // stored file path (import preserves the original extension).
+    let (ext, mime) = match book.format {
+        crate::models::BookFormat::Epub => ("epub", "application/epub+zip"),
+        crate::models::BookFormat::Pdf => ("pdf", "application/pdf"),
+        crate::models::BookFormat::Cbz => ("cbz", "application/x-cbz"),
+        crate::models::BookFormat::Cbr => ("cbr", "application/x-cbr"),
+        crate::models::BookFormat::Mobi => mobi_ext_and_mime(&book.file_path),
     };
-    let mime = match book.format {
-        crate::models::BookFormat::Epub => "application/epub+zip",
-        crate::models::BookFormat::Pdf => "application/pdf",
-        crate::models::BookFormat::Cbz => "application/x-cbz",
-        crate::models::BookFormat::Cbr => "application/x-cbr",
-    };
+    // The extension is included in the URL path so `opds_extension_from_url`
+    // can disambiguate on import — this matters for the MOBI family, where
+    // `application/vnd.amazon.ebook` covers both `.azw` and `.azw3` and the
+    // MIME alone can't tell them apart. The filename is derived from the
+    // book id (stable, no escaping hazard) rather than the title.
     let download_link = format!(
-        r#"<link rel="http://opds-spec.org/acquisition" href="/api/books/{id}/download" type="{mime}" title="{title}.{ext}"/>"#
+        r#"<link rel="http://opds-spec.org/acquisition" href="/api/books/{id}/download/{id}.{ext}" type="{mime}" title="{title}.{ext}"/>"#
     );
 
     format!(
@@ -325,5 +345,111 @@ mod tests {
         assert!(entry.contains("application/epub+zip"));
         assert!(entry.contains("/api/books/test-1/download"));
         assert!(entry.contains("A &lt;great&gt; book"));
+    }
+
+    #[test]
+    fn mobi_ext_and_mime_preserves_original_extension() {
+        assert_eq!(
+            mobi_ext_and_mime("/lib/book.mobi"),
+            ("mobi", "application/x-mobipocket-ebook")
+        );
+        assert_eq!(
+            mobi_ext_and_mime("/lib/book.azw"),
+            ("azw", "application/vnd.amazon.ebook")
+        );
+        assert_eq!(
+            mobi_ext_and_mime("/lib/book.azw3"),
+            ("azw3", "application/vnd.amazon.ebook")
+        );
+        // Case-insensitive.
+        assert_eq!(
+            mobi_ext_and_mime("/lib/BOOK.AZW3"),
+            ("azw3", "application/vnd.amazon.ebook")
+        );
+    }
+
+    #[test]
+    fn mobi_ext_and_mime_falls_back_to_mobi() {
+        // Missing / unknown extension falls back to plain mobi.
+        assert_eq!(
+            mobi_ext_and_mime("/lib/book"),
+            ("mobi", "application/x-mobipocket-ebook")
+        );
+        assert_eq!(
+            mobi_ext_and_mime("/lib/book.xyz"),
+            ("mobi", "application/x-mobipocket-ebook")
+        );
+    }
+
+    fn make_book(file_path: &str, format: crate::models::BookFormat) -> Book {
+        Book {
+            id: "book-1".to_string(),
+            title: "Title".to_string(),
+            author: "A".to_string(),
+            file_path: file_path.to_string(),
+            cover_path: None,
+            total_chapters: 1,
+            added_at: 1700000000,
+            format,
+            file_hash: None,
+            description: None,
+            genres: None,
+            rating: None,
+            isbn: None,
+            openlibrary_key: None,
+            enrichment_status: None,
+            series: None,
+            volume: None,
+            language: None,
+            publisher: None,
+            publish_year: None,
+            is_imported: true,
+        }
+    }
+
+    #[test]
+    fn download_url_carries_extension_for_azw3() {
+        // Round-tripping AZW3 through OPDS must preserve the extension in
+        // the acquisition URL so opds_extension_from_url disambiguates the
+        // ambiguous `application/vnd.amazon.ebook` MIME.
+        let book = make_book("/lib/story.azw3", crate::models::BookFormat::Mobi);
+        let entry = book_to_entry(&book);
+        assert!(
+            entry.contains("/api/books/book-1/download/book-1.azw3"),
+            "acquisition href missing .azw3 suffix: {entry}"
+        );
+        assert!(entry.contains("application/vnd.amazon.ebook"));
+    }
+
+    #[test]
+    fn download_url_carries_extension_for_azw() {
+        let book = make_book("/lib/story.azw", crate::models::BookFormat::Mobi);
+        let entry = book_to_entry(&book);
+        assert!(
+            entry.contains("/api/books/book-1/download/book-1.azw"),
+            "acquisition href missing .azw suffix: {entry}"
+        );
+        // Plain .azw and .azw3 share a MIME but the URL extension now
+        // disambiguates.
+        assert!(!entry.contains("/api/books/book-1/download/book-1.azw3"));
+    }
+
+    #[test]
+    fn download_url_carries_extension_for_core_formats() {
+        for (path, fmt, ext) in [
+            ("/lib/a.epub", crate::models::BookFormat::Epub, "epub"),
+            ("/lib/a.pdf", crate::models::BookFormat::Pdf, "pdf"),
+            ("/lib/a.cbz", crate::models::BookFormat::Cbz, "cbz"),
+            ("/lib/a.cbr", crate::models::BookFormat::Cbr, "cbr"),
+            ("/lib/a.mobi", crate::models::BookFormat::Mobi, "mobi"),
+        ] {
+            let book = make_book(path, fmt);
+            let entry = book_to_entry(&book);
+            let expected = format!("/api/books/book-1/download/book-1.{ext}");
+            assert!(
+                entry.contains(&expected),
+                "{ext} entry missing {expected}:\n{entry}"
+            );
+        }
     }
 }

@@ -19,6 +19,8 @@ import KeyboardShortcutsHelp from "../components/KeyboardShortcutsHelp";
 import TagFilter from "../components/TagFilter";
 import { startDrag, endDrag, isDragging, getDraggedCoverSrc, subscribe } from "../lib/dragState";
 import { friendlyError } from "../lib/errors";
+import { pickSupportedOpdsLink } from "../lib/utils";
+import { FALLBACK_FORMATS, getSupportedFormats, useSupportedFormats } from "../lib/supportedFormats";
 import { LiveRegion } from "../components/LiveRegion";
 import { useToast } from "../components/Toast";
 import { useDebounce } from "../hooks/useDebounce";
@@ -45,6 +47,10 @@ export default function Library() {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const { addToast } = useToast();
+  // Backend-supported formats for this build — drives OPDS download-link
+  // gating and drag-drop filtering so MOBI/AZW/AZW3 don't appear on builds
+  // that weren't compiled with the `mobi` feature.
+  const supportedFormats = useSupportedFormats();
   const [books, setBooks] = useState<BookGridItem[]>([]);
   const [progressMap, setProgressMap] = useState<Record<string, number>>({});
   const [lastReadMap, setLastReadMap] = useState<Record<string, number>>({});
@@ -393,16 +399,24 @@ export default function Library() {
 
   const handleImport = useCallback(async () => {
     try {
-      const selected = await open({
-        multiple: true,
-        filters: [
-          { name: "All Books", extensions: ["epub", "cbz", "cbr", "pdf"] },
-          { name: "EPUB", extensions: ["epub"] },
-          { name: "PDF", extensions: ["pdf"] },
-          { name: "CBZ", extensions: ["cbz"] },
-          { name: "CBR", extensions: ["cbr"] },
-        ],
-      });
+      // Query the backend for the list of formats it can actually import in
+      // this build. MOBI/AZW/AZW3 only appear here when the `mobi` feature
+      // was compiled in — otherwise the user would see them in the picker
+      // and get a "not enabled in this build" error after selecting one.
+      const supported = Array.from(await getSupportedFormats());
+      const has = (ext: string) => supported.includes(ext);
+      const filters: { name: string; extensions: string[] }[] = [
+        { name: "All Books", extensions: supported },
+        { name: "EPUB", extensions: ["epub"] },
+        { name: "PDF", extensions: ["pdf"] },
+        { name: "CBZ", extensions: ["cbz"] },
+        { name: "CBR", extensions: ["cbr"] },
+      ];
+      const mobiExts = ["mobi", "azw", "azw3"].filter(has);
+      if (mobiExts.length > 0) {
+        filters.push({ name: "MOBI / AZW / AZW3", extensions: mobiExts });
+      }
+      const selected = await open({ multiple: true, filters });
 
       if (!selected) return;
 
@@ -411,7 +425,7 @@ export default function Library() {
     } catch (err) {
       setError(friendlyError(err, t));
     }
-  }, [importFiles]);
+  }, [importFiles, t]);
 
   const handleImportUrl = useCallback(async (url: string) => {
     try {
@@ -439,10 +453,18 @@ export default function Library() {
         } else if (type === "drop") {
           setDragging(false);
           const paths = event.payload.paths;
-          const supportedExtensions = [".epub", ".cbz", ".cbr", ".pdf"];
-          const bookPaths = paths.filter((p) =>
-            supportedExtensions.some((ext) => p.toLowerCase().endsWith(ext))
-          );
+          // Use the same backend-derived list as handleImport so MOBI/AZW/
+          // AZW3 only go through when the `mobi` feature is compiled in.
+          // getSupportedFormats() is memoized, so this is cheap on every
+          // drop after the first.
+          const supported = await getSupportedFormats();
+          const bookPaths = paths.filter((p) => {
+            const lower = p.toLowerCase();
+            for (const ext of supported) {
+              if (lower.endsWith(`.${ext}`)) return true;
+            }
+            return false;
+          });
           if (bookPaths.length > 0) {
             importFiles(bookPaths);
           }
@@ -967,9 +989,10 @@ export default function Library() {
                   </>
                 )}
                 {discoverBooks.map((entry) => {
-                  const epubLink = entry.links.find((l) => l.mimeType.includes("epub"));
-                  const pdfLink = entry.links.find((l) => l.mimeType.includes("pdf"));
-                  const downloadLink = epubLink ?? pdfLink;
+                  // Pick across every importable format (EPUB → PDF → CBZ →
+                  // CBR → AZW3 → MOBI → AZW), but only if the backend can
+                  // actually handle the format in this build.
+                  const picked = pickSupportedOpdsLink(entry.links, supportedFormats ?? FALLBACK_FORMATS);
                   const plainSummary = entry.summary?.replace(/<[^>]*>/g, "").trim();
                   return (
                     <div
@@ -1008,11 +1031,14 @@ export default function Library() {
                       <div className="px-2 py-1.5">
                         <p className="text-xs font-medium text-ink truncate">{entry.title}</p>
                         {entry.author && <p className="text-[10px] text-ink-muted truncate">{entry.author}</p>}
-                        {downloadLink && (
+                        {picked && (
                           <button
                             onClick={async () => {
                               try {
-                                await invoke("download_opds_book", { downloadUrl: downloadLink.href });
+                                await invoke("download_opds_book", {
+                                  downloadUrl: picked.link.href,
+                                  mimeType: picked.link.mimeType,
+                                });
                                 await loadBooks(activeCollectionIdRef.current);
                                 setDiscoverBooks((prev) => prev.filter((e) => e.id !== entry.id));
                               } catch (err) {

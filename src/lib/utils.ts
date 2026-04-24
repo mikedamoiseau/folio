@@ -103,6 +103,44 @@ export function clamp(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max);
 }
 
+/** Geometry inputs for {@link resolveBookmarkScrollTop}. All values are in
+ *  CSS pixels and come from `HTMLElement.offsetTop`, `offsetHeight`, and
+ *  the container's `scrollHeight`. */
+export interface ChapterGeometry {
+  chapterOffsetTop: number;
+  chapterHeight: number;
+  containerScrollHeight: number;
+}
+
+/**
+ * Convert a stored bookmark `scroll_position` (fraction 0–1) back into an
+ * absolute `container.scrollTop` value.
+ *
+ * HTML-reflowable books (EPUB, MOBI) store a **chapter-local** fraction
+ * when they're in continuous-scroll mode — the same coordinate system
+ * `getChapterScrollPosition()` produces on save. Resolving it requires
+ * the chapter's geometry because the container holds every chapter end
+ * to end.
+ *
+ * Paginated / single-chapter rendering modes treat the fraction as
+ * container-global, so we just scale against the container's
+ * `scrollHeight` and ignore chapter geometry.
+ *
+ * The function is pure: it does not clamp out-of-range fractions (a
+ * saved value should already be in [0, 1]) and returns `chapterOffsetTop`
+ * when the chapter has zero height instead of producing NaN.
+ */
+export function resolveBookmarkScrollTop(
+  isContinuous: boolean,
+  storedPosition: number,
+  geometry: ChapterGeometry,
+): number {
+  if (isContinuous) {
+    return geometry.chapterOffsetTop + storedPosition * geometry.chapterHeight;
+  }
+  return storedPosition * geometry.containerScrollHeight;
+}
+
 const SUPPORTED_EXTENSIONS = [".epub", ".cbz", ".cbr", ".pdf"];
 
 /** Check if a filename has a supported ebook extension. */
@@ -151,6 +189,79 @@ export function formatMetadataPills(meta: {
     pills.push({ label: seriesLabel });
   }
   return pills;
+}
+
+export interface OpdsLinkLike {
+  href: string;
+  mimeType: string;
+}
+
+// Format preference for OPDS acquisition: EPUB first (best reflowable
+// rendering), then PDF/CBZ/CBR for page-based books, then MOBI/AZW3/AZW.
+// `ext` is the canonical extension used to filter against the backend's
+// get_supported_formats() list; `mimeNeedles` / `extNeedles` are loose
+// substring matches tolerating the MIME + URL variations seen in the wild.
+const OPDS_FORMATS: Array<{
+  label: string;
+  ext: string;
+  mimeNeedles: string[];
+  extNeedles: string[];
+}> = [
+  { label: "EPUB", ext: "epub", mimeNeedles: ["epub"], extNeedles: ["epub"] },
+  { label: "PDF", ext: "pdf", mimeNeedles: ["pdf"], extNeedles: ["pdf"] },
+  { label: "CBZ", ext: "cbz", mimeNeedles: ["cbz", "comicbook+zip"], extNeedles: ["cbz"] },
+  { label: "CBR", ext: "cbr", mimeNeedles: ["cbr", "comicbook-rar"], extNeedles: ["cbr"] },
+  { label: "AZW3", ext: "azw3", mimeNeedles: ["vnd.amazon.ebook", "azw3"], extNeedles: ["azw3"] },
+  { label: "MOBI", ext: "mobi", mimeNeedles: ["mobipocket", "mobi"], extNeedles: ["mobi"] },
+  { label: "AZW", ext: "azw", mimeNeedles: ["azw"], extNeedles: ["azw"] },
+];
+
+function matchesMime(link: OpdsLinkLike, mimeNeedles: string[]): boolean {
+  const mime = link.mimeType.toLowerCase();
+  return mimeNeedles.some((n) => mime.includes(n));
+}
+
+function matchesExt(link: OpdsLinkLike, extNeedles: string[]): boolean {
+  const href = link.href.toLowerCase();
+  return extNeedles.some((n) => href.includes(`.${n}`));
+}
+
+/**
+ * Pick the best OPDS acquisition link for import. Walks the Folio preference
+ * order and returns the first matching link along with a human-readable
+ * label. When `allowedExtensions` is supplied (e.g. the set returned by the
+ * backend's get_supported_formats command), formats not in the allowlist are
+ * skipped — this prevents the UI from offering e.g. `+ MOBI` on builds that
+ * weren't compiled with the `mobi` feature.
+ *
+ * For each candidate format we look at URL extension matches before MIME
+ * matches. This matters for the MOBI family: `application/vnd.amazon.ebook`
+ * is shared by `.azw` and `.azw3`, so a MIME-first rule silently renames
+ * AZW downloads to AZW3. The URL path is the only signal that disambiguates.
+ *
+ * Returns null when no supported + allowed link is found; callers should
+ * hide the download action rather than pulling an arbitrary link.
+ */
+export function pickSupportedOpdsLink<T extends OpdsLinkLike>(
+  links: T[],
+  allowedExtensions?: ReadonlySet<string>,
+): { link: T; label: string } | null {
+  // URL-extension pass: if any link has a definite URL extension matching a
+  // preferred format, use it. This runs through formats in preference order
+  // and checks URL suffixes only.
+  for (const { label, ext, extNeedles } of OPDS_FORMATS) {
+    if (allowedExtensions && !allowedExtensions.has(ext)) continue;
+    const match = links.find((l) => matchesExt(l, extNeedles));
+    if (match) return { link: match, label };
+  }
+  // MIME-type fallback pass: when nothing in the URL path matched, trust
+  // the advertised MIME.
+  for (const { label, ext, mimeNeedles } of OPDS_FORMATS) {
+    if (allowedExtensions && !allowedExtensions.has(ext)) continue;
+    const match = links.find((l) => matchesMime(l, mimeNeedles));
+    if (match) return { link: match, label };
+  }
+  return null;
 }
 
 /**

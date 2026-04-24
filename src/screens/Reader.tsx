@@ -11,12 +11,14 @@ import BookmarksPanel from "../components/BookmarksPanel";
 import BookmarkToast from "../components/BookmarkToast";
 import LanguageSwitcher from "../components/LanguageSwitcher";
 import { friendlyError, toFolioError } from "../lib/errors";
+import { resolveBookmarkScrollTop } from "../lib/utils";
 
 // ---- Types matching Rust backend ----
 
 interface TocEntry {
   label: string;
   chapter_index: number;
+  play_order: string;
   children: TocEntry[];
 }
 
@@ -35,7 +37,7 @@ interface BookInfo {
   cover_path: string | null;
   total_chapters: number;
   added_at: number;
-  format: "epub" | "cbz" | "cbr" | "pdf";
+  format: "epub" | "cbz" | "cbr" | "pdf" | "mobi";
 }
 
 // ---- Component ----
@@ -52,7 +54,7 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
   const { fontSize, setFontSize, fontFamily, scrollMode, typography, customCss, dualPage, setDualPage, mangaMode, setMangaMode, pageAnimation } = useTheme();
 
   const [bookTitle, setBookTitle] = useState("");
-  const [bookFormat, setBookFormat] = useState<"epub" | "cbz" | "cbr" | "pdf">("epub");
+  const [bookFormat, setBookFormat] = useState<"epub" | "cbz" | "cbr" | "pdf" | "mobi">("epub");
   const [toc, setToc] = useState<TocEntry[]>([]);
   const [chapterIndex, setChapterIndex] = useState(0);
   const [totalChapters, setTotalChapters] = useState(0);
@@ -92,7 +94,10 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
   const [allChaptersHtml, setAllChaptersHtml] = useState<string[]>([]);
   const [allChaptersLoaded, setAllChaptersLoaded] = useState(false);
   const chapterDivRefs = useRef<(HTMLDivElement | null)[]>([]);
-  const isContinuous = scrollMode === "continuous" && bookFormat === "epub";
+  // EPUB and MOBI are both chapter-HTML formats and share the Reader's
+  // text-rendering path; PDF/CBZ/CBR go through PageViewer instead.
+  const isHtmlBook = bookFormat === "epub" || bookFormat === "mobi";
+  const isContinuous = scrollMode === "continuous" && isHtmlBook;
 
   // Time-to-finish state
   const [chapterWordCounts, setChapterWordCounts] = useState<number[]>([]);
@@ -135,9 +140,16 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
         setBookFormat(bookInfo.format);
         setTotalChapters(bookInfo.total_chapters);
 
-        if (bookInfo.format === "epub") {
+        // `isHtmlBook` is derived from React state (`bookFormat`), which still
+        // holds the previous render's value here — `setBookFormat` above is
+        // asynchronous. Gate on the freshly-fetched format so we don't ask
+        // the backend for a TOC on PDF/CBZ/CBR (which returns an error and
+        // prevents the book from loading).
+        if (bookInfo.format === "epub" || bookInfo.format === "mobi") {
           const tocEntries = await invoke<TocEntry[]>("get_toc", { bookId });
           if (!cancelled) setToc(tocEntries);
+        } else if (!cancelled) {
+          setToc([]);
         }
 
         if (bookInfo.format === "cbz" || bookInfo.format === "cbr") {
@@ -148,7 +160,10 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
           }
         }
 
-        if (bookInfo.format !== "epub") {
+        // Page count is only meaningful for fixed-layout (PDF) and image
+        // (CBZ/CBR) formats. HTML-reflowable books (EPUB + MOBI) use scroll
+        // progress instead, so skip the fetch and leave pageCount at 0.
+        if (bookInfo.format === "pdf" || bookInfo.format === "cbz" || bookInfo.format === "cbr") {
           try {
             const command =
               bookInfo.format === "pdf"
@@ -194,14 +209,14 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
     };
   }, [bookId]);
 
-  // ---- Fetch word counts for time-to-finish (EPUB only) ----
+  // ---- Fetch word counts for time-to-finish (HTML chapter formats) ----
 
   useEffect(() => {
-    if (!bookId || loading || bookFormat !== "epub") return;
+    if (!bookId || loading || !isHtmlBook) return;
     invoke<number[]>("get_chapter_word_counts", { bookId })
       .then(setChapterWordCounts)
       .catch(() => {}); // word counts are best-effort
-  }, [bookId, loading, bookFormat]);
+  }, [bookId, loading, isHtmlBook]);
 
   // ---- Load all chapters for continuous scroll mode ----
 
@@ -733,16 +748,44 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
   const navigateToBookmark = useCallback(
     (targetChapter: number, targetScrollPosition: number) => {
       setBookmarksOpen(false);
+      const container = scrollContainerRef.current;
+
+      if (isContinuous && container) {
+        // Continuous mode: every chapter div is already mounted in the
+        // single scroll container, so we can jump directly regardless of
+        // whether this is a same-chapter or cross-chapter bookmark. The
+        // ref-based restore effect only re-fires on
+        // `[allChaptersLoaded, isContinuous]` changes, so it cannot be
+        // relied on for subsequent bookmark clicks.
+        if (targetChapter !== chapterIndex) setChapterIndex(targetChapter);
+        const chapterDiv = chapterDivRefs.current[targetChapter];
+        container.scrollTop = resolveBookmarkScrollTop(true, targetScrollPosition, {
+          chapterOffsetTop: chapterDiv?.offsetTop ?? 0,
+          chapterHeight: chapterDiv?.offsetHeight ?? 0,
+          containerScrollHeight: container.scrollHeight,
+        });
+        return;
+      }
+
       if (targetChapter !== chapterIndex) {
+        // Paginated / single-chapter mode cross-chapter: switching chapters
+        // reloads the HTML, so defer the scroll restore until after the
+        // render via the ref-based handshake the load effect already
+        // consumes.
         setChapterIndex(targetChapter);
         savedScrollPosition.current = targetScrollPosition;
         restoringScroll.current = targetChapter;
-      } else if (scrollContainerRef.current) {
-        const container = scrollContainerRef.current;
-        container.scrollTop = targetScrollPosition * container.scrollHeight;
+      } else if (container) {
+        // Paginated same-chapter: positions are container-global.
+        const chapterDiv = chapterDivRefs.current[targetChapter];
+        container.scrollTop = resolveBookmarkScrollTop(false, targetScrollPosition, {
+          chapterOffsetTop: chapterDiv?.offsetTop ?? 0,
+          chapterHeight: chapterDiv?.offsetHeight ?? 0,
+          containerScrollHeight: container.scrollHeight,
+        });
       }
     },
-    [chapterIndex]
+    [chapterIndex, isContinuous]
   );
 
   const prevChapter = useCallback(() => {
@@ -790,7 +833,7 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
     const result = searchResults[index];
     setActiveMatchIndex(index);
 
-    if (bookFormat !== "epub") {
+    if (!isHtmlBook) {
       // PDF/CBZ/CBR: page-level navigation only
       goToChapter(result.chapterIndex);
       return;
@@ -830,24 +873,30 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
   const addBookmarkAtCurrentPosition = useCallback(async () => {
     if (!bookId) return;
     try {
-      const isPageBased = bookFormat !== "epub";
+      // HTML-reflowable books (EPUB + MOBI) store a chapter-local scroll
+      // fraction — `getChapterScrollPosition()` produces the same coordinate
+      // system that `saveProgress` uses, so bookmarks and reading progress
+      // round-trip consistently. In continuous mode `scrollProgress` would
+      // be book-global, which mismatched the restore path and landed the
+      // user far from the saved passage. Page-based books (PDF + CBZ + CBR)
+      // store page-fraction.
       const bookmark = await invoke<{ id: string }>("add_bookmark", {
         bookId,
         chapterIndex,
-        scrollPosition: isPageBased
-          ? pageCount > 0 ? chapterIndex / pageCount : 0
-          : scrollProgress,
+        scrollPosition: isHtmlBook
+          ? getChapterScrollPosition()
+          : pageCount > 0 ? chapterIndex / pageCount : 0,
       });
       setToastBookmarkId(bookmark.id);
     } catch {
       // silently fail
     }
-  }, [bookId, chapterIndex, scrollProgress, bookFormat, pageCount]);
+  }, [bookId, chapterIndex, getChapterScrollPosition, isHtmlBook, pageCount]);
 
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
-      // Cmd/Ctrl+F — open book search (EPUB and PDF)
-      if ((e.metaKey || e.ctrlKey) && e.key === "f" && (bookFormat === "epub" || bookFormat === "pdf")) {
+      // Cmd/Ctrl+F — open book search (HTML-reflowable books + PDF)
+      if ((e.metaKey || e.ctrlKey) && e.key === "f" && (isHtmlBook || bookFormat === "pdf")) {
         e.preventDefault();
         setSearchOpen(true);
         setSearchQuery("");
@@ -870,8 +919,9 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
       // Don't navigate chapters when any panel is open
       if ((settingsOpen || tocOpen || bookmarksOpen) && (e.key === "ArrowLeft" || e.key === "ArrowRight")) return;
 
-      // For image-based formats (CBZ/CBR/PDF), PageViewer handles arrow keys
-      if (bookFormat !== "epub" && (e.key === "ArrowLeft" || e.key === "ArrowRight")) return;
+      // For image-based formats (CBZ/CBR/PDF), PageViewer handles arrow keys.
+      // HTML books (EPUB + MOBI) use chapter navigation here.
+      if (!isHtmlBook && (e.key === "ArrowLeft" || e.key === "ArrowRight")) return;
 
       if (e.key === "ArrowLeft") {
         prevChapter();
@@ -896,7 +946,7 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [prevChapter, nextChapter, addBookmarkAtCurrentPosition, showShortcuts, tocOpen, bookmarksOpen, dndMode, settingsOpen, navigate, bookFormat, searchOpen]);
+  }, [prevChapter, nextChapter, addBookmarkAtCurrentPosition, showShortcuts, tocOpen, bookmarksOpen, dndMode, settingsOpen, navigate, bookFormat, isHtmlBook, searchOpen]);
 
   // ---- TOC focus trap ----
 
@@ -1009,7 +1059,7 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
   // ---- Time-to-finish estimates ----
 
   const timeEstimate = useMemo(() => {
-    if (chapterWordCounts.length === 0 || bookFormat !== "epub") return null;
+    if (chapterWordCounts.length === 0 || !isHtmlBook) return null;
     const currentChapterWords = chapterWordCounts[chapterIndex] ?? 0;
     // In continuous mode, scrollProgress is book-global; use chapter-local fraction instead
     const chapterProgress = isContinuous ? getChapterScrollPosition() : scrollProgress;
@@ -1034,7 +1084,7 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
       chapter: formatTime(minsLeftChapter),
       book: formatTime(minsLeftBook),
     };
-  }, [chapterWordCounts, chapterIndex, scrollProgress, bookFormat, isContinuous, getChapterScrollPosition]);
+  }, [chapterWordCounts, chapterIndex, scrollProgress, isHtmlBook, isContinuous, getChapterScrollPosition]);
 
   // ---- Render ----
 
@@ -1258,8 +1308,8 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
             {currentChapterTitle}
           </h1>
 
-          {/* Search button (EPUB and PDF) */}
-          {(bookFormat === "epub" || bookFormat === "pdf") && (
+          {/* Search button (HTML-reflowable books + PDF) */}
+          {(isHtmlBook || bookFormat === "pdf") && (
             <button
               onClick={() => { setSearchOpen(true); setSearchQuery(""); setSearchResults([]); }}
               className={`p-1.5 transition-colors rounded-lg focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 ${searchOpen ? "text-accent bg-accent-light" : "text-ink-muted hover:text-ink hover:bg-warm-subtle"}`}
@@ -1320,7 +1370,7 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
           </div>
 
           {/* Dual-page toggle — hidden in continuous scroll mode */}
-          {!(isContinuous && bookFormat === "epub") && (
+          {!isContinuous && (
             <div className="flex items-center">
               <button
                 onClick={() => setDualPage(!dualPage)}
@@ -1397,7 +1447,7 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
         </header>
 
         {/* Book search panel */}
-        {searchOpen && (bookFormat === "epub" || bookFormat === "pdf") && (
+        {searchOpen && (isHtmlBook || bookFormat === "pdf") && (
           <div className="shrink-0 border-b border-warm-border bg-surface px-4 py-2 flex items-center gap-2">
             <svg width="14" height="14" viewBox="0 0 20 20" fill="none" className="text-ink-muted shrink-0">
               <circle cx="9" cy="9" r="6" stroke="currentColor" strokeWidth="2" />
@@ -1497,7 +1547,7 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
         )}
 
         {/* Screen reader announcement for chapter changes (#56) */}
-        {bookFormat === "epub" && (
+        {isHtmlBook && (
           <div aria-live="polite" aria-atomic="true" className="sr-only">
             {t("reader.chapterOf", { current: chapterIndex + 1, total: totalChapters || 1 })}
           </div>
@@ -1512,8 +1562,8 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
           </div>
         )}
 
-        {/* Content area — epub chapter reader or page-based viewer */}
-        {bookFormat !== "epub" ? (
+        {/* Content area — chapter HTML (EPUB/MOBI) or page-based viewer */}
+        {!isHtmlBook ? (
           pageCount > 0 ? (
             <PageViewer
               bookId={bookId!}
@@ -1561,7 +1611,7 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
               className="flex-1 overflow-y-auto relative"
             >
               {/* Floating prev/next arrows — visible when bottom nav is scrolled out of view (paginated only) */}
-              {!isContinuous && !bottomNavVisible && bookFormat === "epub" && !dndMode && (
+              {!isContinuous && !bottomNavVisible && isHtmlBook && !dndMode && (
                 <>
                   {chapterIndex > 0 && (
                     <button

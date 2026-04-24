@@ -44,5 +44,9 @@ ammonia = "4"
 unrar = "0.5"
 pdfium-render = { version = "0.8", features = ["image"] }
 
+# libmobi FFI (#34 MOBI/AZW/AZW3 support)
+bindgen = "0.71"
+pkg-config = "0.3"
+
 # Dev
 tempfile = "3"

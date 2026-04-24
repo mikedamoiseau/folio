@@ -26,7 +26,8 @@ jobs:
             libgtk-3-dev \
             libayatana-appindicator3-dev \
             librsvg2-dev \
-            patchelf
+            patchelf \
+            libmobi-dev
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -52,9 +53,44 @@ jobs:
           tar xzf /tmp/pdfium.tgz -C /tmp/pdfium-extracted
           cp /tmp/pdfium-extracted/lib/libpdfium.so src-tauri/resources/
 
-      - name: Run cargo test
+      - name: Run cargo test (default features)
         working-directory: src-tauri
         run: cargo test
+
+      # Exercise the mobi feature path so the libmobi-linked code compiles
+      # and its unit tests run under CI. Kept as a separate step (not a
+      # matrix) so default-feature breakage is still visible independently.
+      - name: Run cargo test (--features mobi)
+        working-directory: src-tauri
+        run: cargo test --features mobi
+
+      # `cargo test` from src-tauri/ only builds src-tauri's test binary —
+      # folio-core's unit tests (which carry the MOBI adapter smoke suite)
+      # are not compiled by that invocation even with `--features mobi`.
+      # Run them explicitly so regressions in folio-core actually fail CI.
+      #
+      # The fetch step pulls the gitignored MOBI corpus from Project
+      # Gutenberg; without it the fixture-gated smoke tests skip silently
+      # and we lose the end-to-end coverage they exist to provide. The
+      # fetch script pins each file by SHA-256 and retries transient
+      # network failures, so a bad download either succeeds after a
+      # retry or fails the job loudly.
+      #
+      # Cache the downloaded fixtures so the happy path (URL + hash
+      # unchanged) doesn't hit Gutenberg on every CI run. The cache key
+      # includes the script hash, so any edit to URLs or pinned hashes
+      # invalidates the cache automatically.
+      - name: Cache MOBI test corpus
+        uses: actions/cache@v4
+        with:
+          path: src-tauri/test-fixtures
+          key: mobi-corpus-${{ hashFiles('scripts/fetch-mobi-test-corpus.sh') }}
+
+      - name: Fetch MOBI test corpus
+        run: ./scripts/fetch-mobi-test-corpus.sh
+
+      - name: Run cargo test (folio-core, --features mobi)
+        run: cargo test -p folio-core --features mobi
 
   lint:
     name: Rust Lint
@@ -70,7 +106,8 @@ jobs:
             libgtk-3-dev \
             libayatana-appindicator3-dev \
             librsvg2-dev \
-            patchelf
+            patchelf \
+            libmobi-dev
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -85,13 +122,79 @@ jobs:
       - name: Ensure resources dir exists with placeholder
         run: mkdir -p src-tauri/resources && touch src-tauri/resources/.gitkeep
 
-      - name: cargo clippy
+      - name: cargo clippy (default features)
         working-directory: src-tauri
         run: cargo clippy -- -D warnings
+
+      # Lint the mobi feature too so clippy catches regressions in the
+      # libmobi-gated code paths.
+      - name: cargo clippy (--features mobi)
+        working-directory: src-tauri
+        run: cargo clippy --features mobi -- -D warnings
 
       - name: cargo fmt check
         working-directory: src-tauri
         run: cargo fmt --check
+
+  test-mobi-macos:
+    # Second-class smoke test for the mobi feature on macOS (Linux is the
+    # primary test runner). libmobi on macOS uses a different iconv (Apple's
+    # libiconv vs GNU libiconv on Linux), so keeping a macOS runner catches
+    # platform-specific regressions in the FFI layer before release.
+    name: Rust Tests (macOS, --features mobi)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install libmobi
+        run: brew install libmobi
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          # Separate cache bucket from the Linux job; macOS builds produce
+          # incompatible artifacts.
+          key: macos-mobi
+
+      - name: Cache pdfium
+        id: cache-pdfium
+        uses: actions/cache@v4
+        with:
+          path: src-tauri/resources
+          key: pdfium-${{ env.PDFIUM_VERSION }}-macos-univ
+
+      - name: Download pdfium
+        if: steps.cache-pdfium.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p src-tauri/resources /tmp/pdfium-extracted
+          curl -L -o /tmp/pdfium.tgz \
+            "https://github.com/bblanchon/pdfium-binaries/releases/download/chromium%2F${{ env.PDFIUM_VERSION }}/pdfium-mac-univ.tgz"
+          tar xzf /tmp/pdfium.tgz -C /tmp/pdfium-extracted
+          cp /tmp/pdfium-extracted/lib/libpdfium.dylib src-tauri/resources/
+
+      - name: Run cargo test (--features mobi)
+        working-directory: src-tauri
+        run: cargo test --features mobi
+
+      # Same pattern as the Linux job: cache, fetch, run folio-core's
+      # own test binary so the MOBI adapter smoke suite executes under
+      # CI. The cache key includes the script hash, so URL or pinned-
+      # checksum edits invalidate it automatically.
+      - name: Cache MOBI test corpus
+        uses: actions/cache@v4
+        with:
+          path: src-tauri/test-fixtures
+          key: mobi-corpus-${{ hashFiles('scripts/fetch-mobi-test-corpus.sh') }}
+
+      - name: Fetch MOBI test corpus
+        run: ./scripts/fetch-mobi-test-corpus.sh
+
+      - name: Run cargo test (folio-core, --features mobi)
+        run: cargo test -p folio-core --features mobi
 
   frontend-check:
     name: Frontend TypeScript Check

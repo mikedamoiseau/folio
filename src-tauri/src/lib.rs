@@ -1,4 +1,8 @@
 pub mod commands;
+#[cfg(test)]
+mod release_workflow_test;
+#[cfg(test)]
+mod tauri_config_test;
 pub mod tray;
 pub mod web_server;
 
@@ -218,6 +222,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::import_book,
+            commands::get_supported_formats,
             commands::get_library,
             commands::get_library_grid,
             commands::get_recently_read,

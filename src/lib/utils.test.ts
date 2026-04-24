@@ -9,6 +9,8 @@ import {
   formatMetadataPills,
   getSpreadPages,
   sanitizeCss,
+  pickSupportedOpdsLink,
+  resolveBookmarkScrollTop,
   type BookLike,
 } from "./utils";
 
@@ -358,5 +360,202 @@ describe("sanitizeCss", () => {
   it("allows normal selectors and properties", () => {
     const css = ".reader-content p { line-height: 1.8; margin-bottom: 1em; text-align: justify; }";
     expect(sanitizeCss(css)).toBe(css);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// pickSupportedOpdsLink
+// ---------------------------------------------------------------------------
+describe("pickSupportedOpdsLink", () => {
+  it("prefers EPUB over PDF when both are available", () => {
+    const picked = pickSupportedOpdsLink([
+      { href: "http://host/book.pdf", mimeType: "application/pdf" },
+      { href: "http://host/book.epub", mimeType: "application/epub+zip" },
+    ]);
+    expect(picked?.label).toBe("EPUB");
+    expect(picked?.link.href).toContain(".epub");
+  });
+
+  it("picks MOBI when only MOBI is offered", () => {
+    const picked = pickSupportedOpdsLink([
+      { href: "http://host/book.mobi", mimeType: "application/x-mobipocket-ebook" },
+    ]);
+    expect(picked?.label).toBe("MOBI");
+  });
+
+  it("picks AZW3 via amazon vendor MIME even with opaque URL", () => {
+    const picked = pickSupportedOpdsLink([
+      { href: "http://host/download/123", mimeType: "application/vnd.amazon.ebook" },
+    ]);
+    expect(picked?.label).toBe("AZW3");
+  });
+
+  it("falls back to URL extension when MIME is generic", () => {
+    // Feeds that serve everything as octet-stream still put the extension in
+    // the URL. We can't learn the format from the MIME, but the URL does.
+    const picked = pickSupportedOpdsLink([
+      { href: "http://host/book.cbz?token=abc", mimeType: "application/octet-stream" },
+    ]);
+    expect(picked?.label).toBe("CBZ");
+  });
+
+  it("returns null when nothing is importable", () => {
+    const picked = pickSupportedOpdsLink([
+      { href: "http://host/cover.jpg", mimeType: "image/jpeg" },
+      { href: "http://host/info.html", mimeType: "text/html" },
+    ]);
+    expect(picked).toBeNull();
+  });
+
+  it("picks CBR correctly (not shadowed by CBZ)", () => {
+    const picked = pickSupportedOpdsLink([
+      { href: "http://host/book.cbr", mimeType: "application/x-cbr" },
+    ]);
+    expect(picked?.label).toBe("CBR");
+  });
+
+  it("skips formats outside the allowlist (feature-gating)", () => {
+    // A MOBI-only entry on a build that didn't compile with --features mobi.
+    const picked = pickSupportedOpdsLink(
+      [{ href: "http://host/book.mobi", mimeType: "application/x-mobipocket-ebook" }],
+      new Set(["epub", "pdf", "cbz", "cbr"]),
+    );
+    expect(picked).toBeNull();
+  });
+
+  it("falls back to EPUB when the allowlist forbids higher-priority matches", () => {
+    // A feed offering both AZW3 and EPUB, on a build without the mobi
+    // feature. Without the allowlist, AZW3 would win the lookup order;
+    // with it, we should fall through to EPUB.
+    const picked = pickSupportedOpdsLink(
+      [
+        { href: "http://host/book.azw3", mimeType: "application/vnd.amazon.ebook" },
+        { href: "http://host/book.epub", mimeType: "application/epub+zip" },
+      ],
+      new Set(["epub", "pdf", "cbz", "cbr"]),
+    );
+    expect(picked?.label).toBe("EPUB");
+  });
+
+  it("treats an undefined allowlist as 'allow everything'", () => {
+    // Existing behavior — allowlist is optional.
+    const picked = pickSupportedOpdsLink([
+      { href: "http://host/book.mobi", mimeType: "application/x-mobipocket-ebook" },
+    ]);
+    expect(picked?.label).toBe("MOBI");
+  });
+
+  it("labels a .azw URL as AZW even when MIME is the ambiguous vendor one", () => {
+    // The vendor MIME `application/vnd.amazon.ebook` is shared by .azw and
+    // .azw3 in the wild. The previous iteration order made AZW3 always win,
+    // silently renaming AZW downloads. URL extension must take precedence
+    // over the ambiguous MIME so round-tripping preserves the container.
+    const picked = pickSupportedOpdsLink([
+      { href: "http://host/book.azw", mimeType: "application/vnd.amazon.ebook" },
+    ]);
+    expect(picked?.label).toBe("AZW");
+    expect(picked?.link.href).toContain(".azw");
+    expect(picked?.link.href).not.toContain(".azw3");
+  });
+
+  it("labels a .azw3 URL as AZW3 with the vendor MIME", () => {
+    const picked = pickSupportedOpdsLink([
+      { href: "http://host/book.azw3", mimeType: "application/vnd.amazon.ebook" },
+    ]);
+    expect(picked?.label).toBe("AZW3");
+  });
+
+  it("prefers EPUB link over AZW link when both are offered", () => {
+    // Confirms the AZW URL-first fix doesn't override the global format
+    // preference order (EPUB is still the best reflowable option).
+    const picked = pickSupportedOpdsLink([
+      { href: "http://host/book.azw", mimeType: "application/vnd.amazon.ebook" },
+      { href: "http://host/book.epub", mimeType: "application/epub+zip" },
+    ]);
+    expect(picked?.label).toBe("EPUB");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// resolveBookmarkScrollTop
+// ---------------------------------------------------------------------------
+describe("resolveBookmarkScrollTop", () => {
+  // HTML-reflowable books store bookmark positions as chapter-local fractions
+  // (0–1 of the current chapter's height). `resolveBookmarkScrollTop` turns
+  // that back into an absolute container.scrollTop value the reader assigns
+  // when the bookmark is reopened.
+
+  it("continuous mode: midpoint of 2000 px chapter at offset 5000", () => {
+    const top = resolveBookmarkScrollTop(true, 0.5, {
+      chapterOffsetTop: 5000,
+      chapterHeight: 2000,
+      containerScrollHeight: 12000,
+    });
+    expect(top).toBe(6000);
+  });
+
+  it("continuous mode: top of chapter lands exactly at chapter offset", () => {
+    const top = resolveBookmarkScrollTop(true, 0, {
+      chapterOffsetTop: 3500,
+      chapterHeight: 1000,
+      containerScrollHeight: 8000,
+    });
+    expect(top).toBe(3500);
+  });
+
+  it("continuous mode: end of chapter lands at chapter bottom", () => {
+    const top = resolveBookmarkScrollTop(true, 1, {
+      chapterOffsetTop: 3500,
+      chapterHeight: 1000,
+      containerScrollHeight: 8000,
+    });
+    expect(top).toBe(4500);
+  });
+
+  it("paginated mode: fraction of container.scrollHeight (not chapter-relative)", () => {
+    const top = resolveBookmarkScrollTop(false, 0.25, {
+      chapterOffsetTop: 5000,
+      chapterHeight: 2000,
+      containerScrollHeight: 8000,
+    });
+    expect(top).toBe(2000);
+  });
+
+  it("paginated mode: ignores chapter geometry entirely", () => {
+    const a = resolveBookmarkScrollTop(false, 0.5, {
+      chapterOffsetTop: 5000,
+      chapterHeight: 2000,
+      containerScrollHeight: 10000,
+    });
+    const b = resolveBookmarkScrollTop(false, 0.5, {
+      chapterOffsetTop: 99,
+      chapterHeight: 123,
+      containerScrollHeight: 10000,
+    });
+    expect(a).toBe(b);
+  });
+
+  it("continuous mode: out-of-range fraction is clamped by caller's geometry", () => {
+    // The helper doesn't clamp — it's a pure arithmetic function. Callers
+    // that already clamp on save (getChapterScrollPosition does) won't emit
+    // out-of-range values, but document the contract here so a future
+    // change doesn't silently clamp and mask save-side bugs.
+    const top = resolveBookmarkScrollTop(true, 1.25, {
+      chapterOffsetTop: 1000,
+      chapterHeight: 800,
+      containerScrollHeight: 5000,
+    });
+    expect(top).toBe(2000); // 1000 + 1.25 * 800 = 2000
+  });
+
+  it("continuous mode: zero-height chapter returns the chapter offset", () => {
+    // Guard against divide-by-zero in the reader: an empty chapter shouldn't
+    // scroll to NaN. Any fraction × 0 = 0, so scrollTop == chapterOffsetTop.
+    const top = resolveBookmarkScrollTop(true, 0.5, {
+      chapterOffsetTop: 4200,
+      chapterHeight: 0,
+      containerScrollHeight: 8000,
+    });
+    expect(top).toBe(4200);
   });
 });
