@@ -101,10 +101,8 @@ mod tests {
     fn aggregation_stops_at_global_cap() {
         // 50 chapters × 5 matches = 250 total — global cap is 200.
         let chapters: Vec<u32> = (0..50).collect();
-        let res = search_chapters(chapters, "x", "book-1", |_idx| {
-            Ok("x x x x x ".to_string())
-        })
-        .unwrap();
+        let res =
+            search_chapters(chapters, "x", "book-1", |_idx| Ok("x x x x x ".to_string())).unwrap();
         assert_eq!(res.len(), MAX_SEARCH_RESULTS);
     }
 

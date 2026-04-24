@@ -673,14 +673,7 @@ mod tests {
     fn clear_cache_removes_all_entries() {
         let (_d, storage) = temp_storage();
 
-        create_fake_cache(
-            &storage,
-            "a",
-            "hash_a",
-            2,
-            100,
-            "2026-01-01T00:00:00+00:00",
-        );
+        create_fake_cache(&storage, "a", "hash_a", 2, 100, "2026-01-01T00:00:00+00:00");
         assert!(!storage.list(CACHE_PREFIX).unwrap().is_empty());
 
         clear_cache(&storage).unwrap();
@@ -764,14 +757,7 @@ mod tests {
     #[test]
     fn ensure_cached_hit_updates_last_accessed() {
         let (_d, storage) = temp_storage();
-        create_fake_cache(
-            &storage,
-            "a",
-            "hash_a",
-            1,
-            100,
-            "2020-01-01T00:00:00+00:00",
-        );
+        create_fake_cache(&storage, "a", "hash_a", 1, 100, "2020-01-01T00:00:00+00:00");
 
         // Use Cbz format — with an existing valid manifest, the archive is
         // never touched, so the file_path can be bogus.

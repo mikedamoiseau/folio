@@ -15,7 +15,6 @@ pub mod enrichment;
 pub mod epub;
 pub mod error;
 pub mod isbn;
-pub mod search;
 #[cfg(feature = "mobi")]
 pub mod mobi;
 pub mod models;
@@ -25,6 +24,7 @@ pub mod page_cache;
 pub mod paths;
 pub mod pdf;
 pub mod providers;
+pub mod search;
 pub mod storage;
 pub mod sync;
 
