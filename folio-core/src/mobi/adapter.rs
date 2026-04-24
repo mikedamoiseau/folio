@@ -542,4 +542,113 @@ mod tests {
             worst_case_amplified
         );
     }
+
+    /// End-to-end smoke test that drives the full MOBI pipeline the Reader
+    /// exercises at runtime: metadata, cover, chapter list, sanitized HTML
+    /// content, word counts, and full-text search. If any single step
+    /// regresses this test fails with a pointed message rather than
+    /// surfacing at import time in the desktop app.
+    ///
+    /// Both MOBI variants are covered: legacy Mobipocket (`alice-legacy.mobi`,
+    /// file version 6) and KF8 / AZW3 (`alice.mobi`, file version 8). Run
+    /// `scripts/fetch-mobi-test-corpus.sh` to populate the fixtures before
+    /// running the test; without the fixtures the test is skipped.
+    fn run_full_pipeline_smoke(fixture_name: &str, expected_file_version: usize) {
+        use crate::search::search_chapters;
+        use crate::storage::LocalStorage;
+
+        let Some(path) = fixture(fixture_name) else {
+            eprintln!(
+                "skipping: {fixture_name} not present — run scripts/fetch-mobi-test-corpus.sh"
+            );
+            return;
+        };
+        let path_str = path.to_str().expect("fixture path is UTF-8");
+
+        // 1. Open and sanity-check the file variant. Mismatched file
+        //    versions almost always mean the fetch script pulled the
+        //    wrong URL (KF8 vs legacy are both served under `.mobi`).
+        let book = MobiBook::open(&path).expect("open MOBI");
+        assert_eq!(
+            book.file_version(),
+            expected_file_version,
+            "{fixture_name}: expected file version {expected_file_version}, got {}",
+            book.file_version()
+        );
+
+        // 2. Metadata round-trip. Gutenberg ships Alice with title and
+        //    author populated; an empty string means the EXTH record
+        //    didn't decode and downstream imports would show the
+        //    filename as the title.
+        let meta = parse_mobi_metadata(path_str).expect("parse metadata");
+        assert!(
+            meta.title.to_lowercase().contains("alice"),
+            "title missing 'alice': {:?}",
+            meta.title
+        );
+        assert!(
+            meta.author.to_lowercase().contains("carroll"),
+            "author missing 'carroll': {:?}",
+            meta.author
+        );
+
+        // 3. Cover extraction. Alice ships with a cover; a missing one
+        //    here means EXTH traversal broke.
+        let cover = extract_cover(path_str)
+            .expect("cover result")
+            .expect("alice ships with a cover");
+        assert!(!cover.bytes.is_empty(), "cover bytes are empty");
+
+        // 4. Chapter list. Both variants must produce at least one
+        //    chapter; KF8 splits into multiple markup parts via SKEL/FRAG.
+        let chapters = get_chapter_list(path_str).expect("chapter list");
+        assert!(!chapters.is_empty(), "chapter list is empty");
+
+        // 5. Chapter content is fragment-level sanitized HTML with the
+        //    XML prologue and document wrappers stripped.
+        let dir = tempdir().unwrap();
+        let storage = LocalStorage::new(dir.path().to_path_buf()).unwrap();
+        let book_id = "smoke-book";
+        let html = get_chapter_content(path_str, 0, &storage, book_id).expect("chapter 0");
+        assert!(!html.is_empty(), "chapter 0 is empty");
+        assert!(
+            !html.contains("<?xml"),
+            "chapter 0 still has XML prologue: {html:.200}"
+        );
+
+        // 6. Word counts are populated — the Reader uses these to paint
+        //    the progress bar. At least one chapter should be > 50
+        //    words (Alice is a novel).
+        let counts = get_chapter_word_counts(path_str).expect("word counts");
+        assert_eq!(counts.len(), chapters.len(), "word counts ≠ chapters");
+        assert!(
+            counts.iter().any(|&c| c > 50),
+            "no chapter with > 50 words: {counts:?}"
+        );
+
+        // 7. Search surface: "Alice" must match in at least one chapter.
+        //    Uses the same aggregator the MOBI arm of `search_book_content`
+        //    uses in production, so a regression there is caught here.
+        let results = search_chapters(
+            0..(chapters.len() as u32),
+            "Alice",
+            book_id,
+            |idx| get_chapter_content(path_str, idx as usize, &storage, book_id),
+        )
+        .expect("search");
+        assert!(
+            !results.is_empty(),
+            "'Alice' not found in any chapter of {fixture_name}"
+        );
+    }
+
+    #[test]
+    fn mobi_kf8_pipeline_smoke() {
+        run_full_pipeline_smoke("alice.mobi", 8);
+    }
+
+    #[test]
+    fn mobi_legacy_pipeline_smoke() {
+        run_full_pipeline_smoke("alice-legacy.mobi", 6);
+    }
 }

@@ -27,6 +27,8 @@ npm run test:watch           # Run Vitest (watch mode)
 
 Rust tests use `tempfile` for DB fixtures. Frontend pure logic lives in `src/lib/utils.ts` for testability.
 
+MOBI tests require a public-domain test corpus under `src-tauri/test-fixtures/` (gitignored). Populate once with `./scripts/fetch-mobi-test-corpus.sh`. Fixture-gated tests skip with a clear message when fixtures are absent, so fresh clones stay green without the corpus.
+
 ## Architecture
 
 **Tauri v2 desktop app** (branded "Folio") — Rust backend + React 19 frontend communicating via IPC. Frontend uses Tailwind CSS v4, react-router-dom for routing, and DOMPurify for HTML sanitization.
