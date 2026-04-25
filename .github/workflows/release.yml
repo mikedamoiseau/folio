@@ -9,6 +9,12 @@ env:
   # Pin to a specific chromium build. Update to latest from:
   # https://github.com/bblanchon/pdfium-binaries/releases
   PDFIUM_VERSION: "7763"
+  # Pinned libmobi tag. The Windows build path compiles libmobi from
+  # source (the project has CMake support since v0.10 — see
+  # https://github.com/bfabiszewski/libmobi/blob/v0.12/CMakeLists.txt).
+  # Bumping this invalidates the libmobi cache so the next CI run
+  # rebuilds against the new tag.
+  LIBMOBI_VERSION: "v0.12"
 
 jobs:
   publish-tauri:
@@ -45,11 +51,12 @@ jobs:
             args: '--target x86_64-apple-darwin'
             pdfium_archive: pdfium-mac-univ.tgz
             pdfium_lib: libpdfium.dylib
-          # Windows: --no-default-features disables sftp (incompatible with
-          # the Windows build path) AND omits mobi. libmobi does not have
-          # first-class MSVC support; enabling it would require an MSYS2/
-          # vcpkg build pipeline. Tracked as future work — MOBI on Windows
-          # is intentionally out of scope for v1 release.
+          # Windows: --no-default-features drops the sftp feature (the
+          # services-ftp transitive dep does not build cleanly under MSVC
+          # at the moment). MOBI is wired up in a follow-up milestone —
+          # this matrix entry currently stays MOBI-less; the libmobi
+          # build step further down produces the DLL the future release
+          # will link against.
           - platform: windows-latest
             args: '-- --no-default-features'
             pdfium_archive: pdfium-win-x64.tgz
@@ -84,6 +91,56 @@ jobs:
       - name: Install libmobi (macOS)
         if: matrix.platform == 'macos-latest' && contains(matrix.args, 'aarch64-apple-darwin')
         run: brew install libmobi
+
+      # libmobi has no Windows package in vcpkg or any other registry
+      # we ship against, but it does have first-class CMake support
+      # (since v0.10) so we build a DLL from source on the runner.
+      # USE_ZLIB=OFF / USE_LIBXML2=OFF picks libmobi's bundled miniz
+      # and internal xmlwriter, avoiding any external dependency the
+      # MSVC toolchain would otherwise need from vcpkg.
+      #
+      # The cache key includes both LIBMOBI_VERSION and the target
+      # arch so a pin bump or arch change invalidates automatically.
+      # Cache miss costs ~1–2 min on a stock windows-latest runner;
+      # cache hit is a few seconds.
+      - name: Cache libmobi (Windows)
+        if: matrix.platform == 'windows-latest'
+        id: cache-libmobi-windows
+        uses: actions/cache@v4
+        with:
+          path: .libmobi-windows
+          key: libmobi-${{ env.LIBMOBI_VERSION }}-windows-x64
+
+      - name: Build libmobi (Windows)
+        if: matrix.platform == 'windows-latest' && steps.cache-libmobi-windows.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          $src = "$env:RUNNER_TEMP\libmobi-src"
+          $build = "$env:RUNNER_TEMP\libmobi-build"
+          $prefix = "$env:GITHUB_WORKSPACE\.libmobi-windows"
+          git clone --depth 1 --branch "$env:LIBMOBI_VERSION" `
+            https://github.com/bfabiszewski/libmobi.git $src
+          cmake -B $build -S $src `
+            -G "Visual Studio 17 2022" -A x64 `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DBUILD_SHARED_LIBS=ON `
+            -DUSE_LIBXML2=OFF `
+            -DUSE_ZLIB=OFF `
+            -DCMAKE_INSTALL_PREFIX="$prefix"
+          cmake --build $build --config Release --parallel
+          cmake --install $build --config Release
+          # Sanity-check the artifacts the linker / loader will pick up
+          # later. Failing here surfaces CMake config drift loudly,
+          # rather than letting a half-broken cache silently take over.
+          $expectedDll = Join-Path $prefix "bin\mobi.dll"
+          $expectedLib = Join-Path $prefix "lib\mobi.lib"
+          $expectedHdr = Join-Path $prefix "include\mobi.h"
+          foreach ($p in @($expectedDll, $expectedLib, $expectedHdr)) {
+            if (-not (Test-Path $p)) {
+              throw "libmobi build produced no $p — CMake install layout changed?"
+            }
+          }
+          Write-Host "libmobi installed: $prefix"
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4

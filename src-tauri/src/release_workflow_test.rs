@@ -12,8 +12,11 @@
 //!   with file built for macOS-arm64"). Until we ship a universal
 //!   libmobi (or drop x86_64 Mac entirely), Intel-Mac users get
 //!   EPUB/PDF/CBZ/CBR only.
-//! * Windows still uses `--no-default-features` — libmobi has no
-//!   first-class MSVC build path.
+//! * Windows builds libmobi from source via CMake + MSVC (libmobi has
+//!   first-class CMake support since v0.10) with `USE_ZLIB=OFF` and
+//!   `USE_LIBXML2=OFF` so the build has no external deps to satisfy.
+//!   The libmobi artifact is cached so a rerun on an unchanged pin is
+//!   fast.
 
 #[cfg(test)]
 mod tests {
@@ -79,7 +82,65 @@ mod tests {
         let line = args_for("-- --no-default-features");
         assert!(
             line.contains("--no-default-features"),
-            "Windows build must keep --no-default-features (no sftp, no mobi)"
+            "Windows build must keep --no-default-features (sftp incompatible with Windows build)"
+        );
+    }
+
+    /// Pinning the libmobi commit/tag is what makes the cache deterministic.
+    /// If the pin disappears, every CI run rebuilds from `master` and the
+    /// cache key collapses to whatever the last run produced.
+    #[test]
+    fn windows_libmobi_version_is_pinned() {
+        assert!(
+            RELEASE_YML.contains("LIBMOBI_VERSION:"),
+            "release.yml must define a `LIBMOBI_VERSION` env var so the \
+             Windows libmobi build is reproducible and cache-keyable. \
+             Without a pinned version, every push rebuilds from libmobi's \
+             moving `master` branch."
+        );
+    }
+
+    /// Each build of libmobi from source on a stock Windows runner takes
+    /// minutes; without an actions/cache step keyed on version + arch the
+    /// release workflow would pay that cost on every tag push. The test
+    /// asserts the cache key includes both so an unchanged pin re-uses
+    /// the artifact.
+    #[test]
+    fn windows_libmobi_build_is_cached() {
+        let cache_block = "libmobi-${{ env.LIBMOBI_VERSION }}-windows-x64";
+        assert!(
+            RELEASE_YML.contains(cache_block),
+            "release.yml must cache the Windows libmobi build under a key \
+             that includes both the pinned version and the target arch — \
+             expected substring `{cache_block}` not found. Without this \
+             cache, every tag push spends minutes rebuilding libmobi from \
+             source on the Windows runner."
+        );
+    }
+
+    /// The libmobi build step must be Windows-only — it uses CMake +
+    /// MSVC and would error or duplicate work if it ran on the
+    /// Linux/macOS matrix entries.
+    #[test]
+    fn windows_libmobi_build_step_is_windows_only() {
+        let needle = "Build libmobi (Windows)";
+        assert!(
+            RELEASE_YML.contains(needle),
+            "release.yml must include a step named `{needle}` so the \
+             Windows libmobi build path is auditable from the workflow at \
+             a glance. The step itself gates on `matrix.platform == \
+             'windows-latest'` to keep it off the Unix runners."
+        );
+        // The step's `if:` guard is the actual gating mechanism — a missing
+        // guard would silently run the libmobi build on every matrix entry.
+        let after_marker = RELEASE_YML.split_once(needle).expect("checked above").1;
+        let next_300 = &after_marker[..after_marker.len().min(300)];
+        assert!(
+            next_300.contains("matrix.platform == 'windows-latest'"),
+            "the `{needle}` step must be gated on \
+             `matrix.platform == 'windows-latest'` — without the guard it \
+             would also run on the Linux/macOS matrix entries and fail \
+             (no MSVC toolchain). Got: {next_300}"
         );
     }
 }
