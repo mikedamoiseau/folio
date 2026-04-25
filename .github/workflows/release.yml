@@ -111,8 +111,16 @@ jobs:
       # arch so a pin bump or arch change invalidates automatically.
       # Cache miss costs ~1–2 min on a stock windows-latest runner;
       # cache hit is a few seconds.
+      #
+      # The `if:` gate also requires `--features mobi` to be in the
+      # Windows matrix args. Until that flip lands (W3), the libmobi
+      # build is dormant on the release runner — staging the wiring
+      # without burning CI minutes or adding a failure point that
+      # produces no shipped artifact. PR-CI's `test-mobi-windows`
+      # job (ci.yml) exercises the build path on every PR, so this
+      # gate does not reduce coverage.
       - name: Cache libmobi (Windows)
-        if: matrix.platform == 'windows-latest'
+        if: matrix.platform == 'windows-latest' && contains(matrix.args, '--features mobi')
         id: cache-libmobi-windows
         uses: actions/cache@v4
         with:
@@ -120,7 +128,7 @@ jobs:
           key: libmobi-${{ env.LIBMOBI_VERSION }}-windows-x64
 
       - name: Build libmobi (Windows)
-        if: matrix.platform == 'windows-latest' && steps.cache-libmobi-windows.outputs.cache-hit != 'true'
+        if: matrix.platform == 'windows-latest' && contains(matrix.args, '--features mobi') && steps.cache-libmobi-windows.outputs.cache-hit != 'true'
         shell: pwsh
         run: |
           $src = "$env:RUNNER_TEMP\libmobi-src"
