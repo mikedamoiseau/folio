@@ -21,6 +21,25 @@
 #[cfg(test)]
 mod tests {
     const RELEASE_YML: &str = include_str!("../../.github/workflows/release.yml");
+    const CI_YML: &str = include_str!("../../.github/workflows/ci.yml");
+
+    /// Pull the value of `LIBMOBI_VERSION:` out of a workflow file.
+    /// We deliberately *don't* depend on a YAML crate — the only
+    /// shape we care about (`LIBMOBI_VERSION: "<value>"`) is stable
+    /// and trivial to extract by hand.
+    fn parse_libmobi_version(yml: &str) -> &str {
+        let line = yml
+            .lines()
+            .find(|l| l.trim_start().starts_with("LIBMOBI_VERSION:"))
+            .expect("workflow must define `LIBMOBI_VERSION`");
+        let value = line
+            .split_once(':')
+            .expect("LIBMOBI_VERSION line must contain a colon")
+            .1
+            .trim();
+        // Strip the surrounding quotes that the YAML uses.
+        value.trim_matches('"')
+    }
 
     /// Locate the single `args: '…'` matrix line that contains `needle`
     /// and return the whole line. We do string scanning instead of
@@ -115,6 +134,49 @@ mod tests {
              expected substring `{cache_block}` not found. Without this \
              cache, every tag push spends minutes rebuilding libmobi from \
              source on the Windows runner."
+        );
+    }
+
+    /// Both ci.yml and release.yml must build the *same* libmobi
+    /// revision; otherwise PR CI could green-light a build against a
+    /// libmobi the release pipeline never sees, masking MSVC-specific
+    /// regressions until tag-push. The pin is a full commit SHA in
+    /// both files, so this is a string equality check.
+    #[test]
+    fn libmobi_version_matches_between_ci_and_release() {
+        let release_pin = parse_libmobi_version(RELEASE_YML);
+        let ci_pin = parse_libmobi_version(CI_YML);
+        assert_eq!(
+            release_pin, ci_pin,
+            "LIBMOBI_VERSION drift: release.yml pins `{release_pin}`, \
+             ci.yml pins `{ci_pin}`. Both files must build the same \
+             libmobi revision so PR CI exercises the exact source \
+             release.yml will ship against."
+        );
+    }
+
+    /// We pin a full commit SHA (40 lowercase hex chars) rather than
+    /// a tag. Tags are mutable — a retargeted upstream tag can change
+    /// the source CMake runs against on a cache miss. Catching this
+    /// in a test means a future "let's switch back to a friendly tag"
+    /// edit is rejected loudly instead of quietly weakening the pin.
+    #[test]
+    fn libmobi_version_is_a_full_commit_sha() {
+        let pin = parse_libmobi_version(RELEASE_YML);
+        assert_eq!(
+            pin.len(),
+            40,
+            "LIBMOBI_VERSION must be a 40-char commit SHA, not a tag \
+             or short SHA. Got `{pin}` (len {}). Tags are mutable; a \
+             retargeted upstream tag would silently change what the \
+             release runner builds.",
+            pin.len()
+        );
+        assert!(
+            pin.chars()
+                .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()),
+            "LIBMOBI_VERSION must be lowercase hex (a commit SHA). \
+             Got `{pin}`."
         );
     }
 

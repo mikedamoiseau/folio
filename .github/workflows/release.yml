@@ -9,12 +9,20 @@ env:
   # Pin to a specific chromium build. Update to latest from:
   # https://github.com/bblanchon/pdfium-binaries/releases
   PDFIUM_VERSION: "7763"
-  # Pinned libmobi tag. The Windows build path compiles libmobi from
-  # source (the project has CMake support since v0.10 — see
+  # Pinned libmobi commit. The Windows build path compiles libmobi
+  # from source (the project has CMake support since v0.10 — see
   # https://github.com/bfabiszewski/libmobi/blob/v0.12/CMakeLists.txt).
-  # Bumping this invalidates the libmobi cache so the next CI run
-  # rebuilds against the new tag.
-  LIBMOBI_VERSION: "v0.12"
+  #
+  # Pinned to a full commit SHA rather than a moving tag so a
+  # retargeted tag (or upstream takeover) cannot silently change the
+  # source CMake runs against on a cache miss. The drift test in
+  # `src-tauri/src/release_workflow_test.rs` enforces that this value
+  # matches the equivalent pin in `ci.yml`. Bumping this invalidates
+  # the libmobi cache (key includes the SHA) so the next CI run
+  # rebuilds against the new revision.
+  #
+  # Current pin: tag v0.12 (https://github.com/bfabiszewski/libmobi/releases/tag/v0.12)
+  LIBMOBI_VERSION: "85dcfe803fc2a21020ddcf15c3eb66b93d388add"
 
 jobs:
   publish-tauri:
@@ -118,8 +126,18 @@ jobs:
           $src = "$env:RUNNER_TEMP\libmobi-src"
           $build = "$env:RUNNER_TEMP\libmobi-build"
           $prefix = "$env:GITHUB_WORKSPACE\.libmobi-windows"
-          git clone --depth 1 --branch "$env:LIBMOBI_VERSION" `
-            https://github.com/bfabiszewski/libmobi.git $src
+          # Clone + checkout-by-SHA rather than `--branch <ref>`:
+          # `git clone --branch` does not accept commit SHAs, and we
+          # pin SHAs (not tags) to keep the upstream source bytes
+          # immutable. Verify after checkout so a clone-time race
+          # between `git clone` and `git checkout` cannot land us on
+          # a different revision than the pinned one.
+          git clone https://github.com/bfabiszewski/libmobi.git $src
+          git -C $src checkout "$env:LIBMOBI_VERSION"
+          $head = git -C $src rev-parse HEAD
+          if ($head.Trim() -ne $env:LIBMOBI_VERSION) {
+            throw "libmobi checkout drifted: expected $env:LIBMOBI_VERSION, got $head"
+          }
           cmake -B $build -S $src `
             -G "Visual Studio 17 2022" -A x64 `
             -DCMAKE_BUILD_TYPE=Release `
