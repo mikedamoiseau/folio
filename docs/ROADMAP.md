@@ -377,7 +377,8 @@ Expand where books come from and how they persist.
 - ~~OPDS download with AZW vs AZW3 disambiguation via URL path~~
 - ~~Conditional `.deb` / `.rpm` libmobi depends via Tauri config overlay~~
 - ~~Fixture-gated end-to-end smoke tests + CI corpus fetch (SHA-256 pinned, retry-armed, cached)~~
-- Available on **arm64 macOS** and **Linux**. The **x86_64 macOS** and **Windows** builds intentionally ship without MOBI support — libmobi has no first-class MSVC build path, and the macos-latest runner's Homebrew libmobi is arm64-only. Re-enabling either target needs a universal libmobi (Mac) or an MSYS2 / vcpkg pipeline (Windows).
+- ~~**Windows MOBI support** via static libmobi linkage — libmobi built from source on the runner with CMake (`USE_ZLIB=OFF` + `USE_LIBXML2=OFF` keeps the static archive self-contained, baked into `folio.exe`). PR CI builds the same `mobi.lib` to catch MSVC regressions before tag-push.~~
+- Available on **Linux**, **arm64 macOS**, and **Windows**. The **x86_64 macOS** build is the only release that intentionally ships without MOBI support — the macos-latest runner's Homebrew libmobi is arm64-only and won't link into an x86_64 target. Re-enabling Intel Mac would need a universal libmobi (Rosetta-cross-build or manual fat-dylib).
 
 ### Power User & Reader Enhancements
 

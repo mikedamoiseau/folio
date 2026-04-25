@@ -745,15 +745,16 @@ The file is probably corrupted or uses a format variant the parser can't handle.
 
 ### Supported formats
 
-Folio supports **EPUB** (versions 2 and 3), **PDF**, **CBZ**, and **CBR** on every platform. **MOBI**, **AZW**, and **AZW3** are supported on arm64 macOS and Linux release builds; the Intel (x86_64) macOS build and all Windows builds do not include MOBI support. DjVu is not supported.
+Folio supports **EPUB** (versions 2 and 3), **PDF**, **CBZ**, and **CBR** on every platform. **MOBI**, **AZW**, and **AZW3** are supported on arm64 macOS, Linux, and Windows release builds; the Intel (x86_64) macOS build is the only release that ships without MOBI support. DjVu is not supported.
 
-MOBI support links dynamically against [libmobi](https://github.com/bfabiszewski/libmobi) (LGPL v3+). The arm64 macOS and Linux release builds link libmobi at process load time, so the shared library **must be installed before first launch** — without it, the app fails to start regardless of which format you open. Install libmobi via your system package manager:
+MOBI support uses [libmobi](https://github.com/bfabiszewski/libmobi) (LGPL v3+). How libmobi is delivered depends on the platform:
 
-- **macOS (arm64 / Apple Silicon):** `brew install libmobi`
-- **Linux (Debian / Ubuntu):** `sudo apt install libmobi0` (the `.deb` declares this as a dependency, so an `apt install` of Folio will pull it in automatically)
-- **Linux (Fedora / RHEL):** `sudo dnf install libmobi`
+- **macOS (arm64 / Apple Silicon):** `brew install libmobi` — Folio dynamically links against the Homebrew-installed shared library, so it **must be installed before first launch** or the app fails to start.
+- **Linux (Debian / Ubuntu):** `sudo apt install libmobi0` (the `.deb` declares this as a dependency, so an `apt install` of Folio will pull it in automatically). Same dynamic-linking model as macOS.
+- **Linux (Fedora / RHEL):** `sudo dnf install libmobi`.
+- **Windows:** No installation step needed. The Windows build statically links libmobi into `folio.exe`, so the installer is fully self-contained.
 
-If you do not need MOBI support, use the Intel macOS or Windows release build; both are compiled without the `mobi` feature and have no libmobi dependency.
+If you do not need MOBI support, use the Intel (x86_64) macOS release build — it ships without the `mobi` feature and has no libmobi dependency.
 
 ### Where is my data stored?
 

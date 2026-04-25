@@ -4,7 +4,7 @@ A local-first desktop app for people who want to read and organize the books the
 
 ![Folio library](screenshots/01-library-light.png)
 
-Folio is a cross-platform reader for EPUB, PDF, CBZ, and CBR. It keeps your library on your machine and gives you the tools to actually use it well: solid reading controls, sensible organization, metadata cleanup, highlights, profiles, backup, and OPDS catalog support.
+Folio is a cross-platform reader for EPUB, MOBI / AZW / AZW3, PDF, CBZ, and CBR. It keeps your library on your machine and gives you the tools to actually use it well: solid reading controls, sensible organization, metadata cleanup, highlights, profiles, backup, and OPDS catalog support.
 
 ## Why Folio?
 
@@ -134,17 +134,18 @@ Then launch the app normally.
 
 ### Windows
 
-Run the `.msi` installer and follow the prompts.
+Run the `.msi` installer and follow the prompts. MOBI support is statically linked into `folio.exe` — no separate libmobi install is needed.
 
 ### Linux
 
-Use the provided `.AppImage` or `.deb` release artifact.
+Use the provided `.AppImage` or `.deb` release artifact. For MOBI support, install libmobi via your package manager (`sudo apt install libmobi0` on Debian/Ubuntu — the `.deb` package declares this as a dependency).
 
 ## Supported formats
 
 | Format | Notes |
 |---|---|
 | EPUB 2 / EPUB 3 | Reflowable reading with search, themes, typography, highlights |
+| MOBI / AZW / AZW3 | Mobipocket and Kindle formats via libmobi (Linux, arm64 macOS, Windows; not Intel macOS) |
 | PDF | Page-based reading via Pdfium |
 | CBZ | Comic archive (ZIP) |
 | CBR | Comic archive (RAR) |
