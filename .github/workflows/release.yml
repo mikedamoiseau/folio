@@ -60,13 +60,14 @@ jobs:
             pdfium_archive: pdfium-mac-univ.tgz
             pdfium_lib: libpdfium.dylib
           # Windows: --no-default-features drops the sftp feature (the
-          # services-ftp transitive dep does not build cleanly under MSVC
-          # at the moment). MOBI is wired up in a follow-up milestone —
-          # this matrix entry currently stays MOBI-less; the libmobi
-          # build step further down produces the DLL the future release
-          # will link against.
+          # services-ftp transitive dep does not build cleanly under
+          # MSVC at the moment). `--features mobi` re-enables MOBI/AZW/
+          # AZW3 import — libmobi is built from source as a static
+          # archive (`mobi.lib`, no DLL) earlier in the job and linked
+          # directly into folio.exe. See `windows_libmobi_build_is_static`
+          # in src-tauri/src/release_workflow_test.rs for why static.
           - platform: windows-latest
-            args: '-- --no-default-features'
+            args: '-- --no-default-features --features mobi'
             pdfium_archive: pdfium-win-x64.tgz
             pdfium_lib: pdfium.dll
 
@@ -146,22 +147,28 @@ jobs:
           if ($head.Trim() -ne $env:LIBMOBI_VERSION) {
             throw "libmobi checkout drifted: expected $env:LIBMOBI_VERSION, got $head"
           }
+          # BUILD_SHARED_LIBS=OFF produces a static `mobi.lib` archive
+          # (no DLL). With USE_ZLIB=OFF + USE_LIBXML2=OFF the archive
+          # is fully self-contained, so `cargo:rustc-link-lib=static=
+          # mobi` (folio-core/build.rs) bakes libmobi into folio.exe
+          # without any runtime DLL dependency. This avoids the
+          # Tauri-bundler complications of placing a DLL where the
+          # OS loader will find it next to the installed binary.
           cmake -B $build -S $src `
             -G "Visual Studio 17 2022" -A x64 `
             -DCMAKE_BUILD_TYPE=Release `
-            -DBUILD_SHARED_LIBS=ON `
+            -DBUILD_SHARED_LIBS=OFF `
             -DUSE_LIBXML2=OFF `
             -DUSE_ZLIB=OFF `
             -DCMAKE_INSTALL_PREFIX="$prefix"
           cmake --build $build --config Release --parallel
           cmake --install $build --config Release
-          # Sanity-check the artifacts the linker / loader will pick up
-          # later. Failing here surfaces CMake config drift loudly,
-          # rather than letting a half-broken cache silently take over.
-          $expectedDll = Join-Path $prefix "bin\mobi.dll"
+          # Sanity-check the artifacts the linker will pick up later.
+          # Failing here surfaces CMake config drift loudly, rather
+          # than letting a half-broken cache silently take over.
           $expectedLib = Join-Path $prefix "lib\mobi.lib"
           $expectedHdr = Join-Path $prefix "include\mobi.h"
-          foreach ($p in @($expectedDll, $expectedLib, $expectedHdr)) {
+          foreach ($p in @($expectedLib, $expectedHdr)) {
             if (-not (Test-Path $p)) {
               throw "libmobi build produced no $p — CMake install layout changed?"
             }
@@ -227,6 +234,15 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # folio-core/build.rs uses pkg-config first, then falls back
+          # to LIBMOBI_INCLUDE_DIR / LIBMOBI_LIB_DIR. MSVC has no
+          # pkg-config in PATH on a stock runner, so the fallback is
+          # the actually exercised path on Windows. On Linux/macOS
+          # these env vars are empty strings — pkg-config takes over
+          # via the libmobi-dev / brew install — and `Option::filter`
+          # in the build script ignores empty paths gracefully.
+          LIBMOBI_INCLUDE_DIR: ${{ matrix.platform == 'windows-latest' && format('{0}\.libmobi-windows\include', github.workspace) || '' }}
+          LIBMOBI_LIB_DIR: ${{ matrix.platform == 'windows-latest' && format('{0}\.libmobi-windows\lib', github.workspace) || '' }}
         with:
           tagName: ${{ github.ref_name }}
           releaseName: 'Folio ${{ github.ref_name }}'
@@ -235,7 +251,7 @@ jobs:
 
             > **macOS note:** Because this app is not notarized, macOS Gatekeeper may show a "damaged" or "unidentified developer" warning. See the [installation guide](https://github.com/mikedamoiseau/folio/blob/main/docs/USER_GUIDE.md#installing) for the one-line fix.
             >
-            > **MOBI / AZW / AZW3 support (arm64 macOS and Linux only):** MOBI import links dynamically against libmobi. Install it before first MOBI open — `brew install libmobi` (macOS) or `sudo apt install libmobi0` (Debian / Ubuntu). EPUB / PDF / CBZ / CBR do not need libmobi. The x86_64 (Intel) macOS build and all Windows builds do not include MOBI support.
+            > **MOBI / AZW / AZW3 support:** MOBI import is included on Linux, arm64 macOS, and Windows. Linux and macOS dynamically link against libmobi — install it before first MOBI open with `sudo apt install libmobi0` (Debian / Ubuntu) or `brew install libmobi` (macOS). The Windows build statically links libmobi, so no extra install is needed there. EPUB / PDF / CBZ / CBR do not need libmobi. The x86_64 (Intel) macOS build does not include MOBI support — use a different format on that platform.
           releaseDraft: false
           prerelease: false
           args: ${{ matrix.args }}

@@ -17,6 +17,12 @@
 //!   `USE_LIBXML2=OFF` so the build has no external deps to satisfy.
 //!   The libmobi artifact is cached so a rerun on an unchanged pin is
 //!   fast.
+//! * Windows MOBI linkage is **static** (`BUILD_SHARED_LIBS=OFF`,
+//!   producing `mobi.lib` only). This keeps the Windows release as a
+//!   single self-contained `folio.exe` — no `mobi.dll` to ship next to
+//!   the binary, no Tauri bundler gymnastics for OS-loader DLL search
+//!   path. Linux/macOS keep dynamic linking; the platform difference
+//!   lives in `folio-core/build.rs`.
 
 #[cfg(test)]
 mod tests {
@@ -102,6 +108,68 @@ mod tests {
         assert!(
             line.contains("--no-default-features"),
             "Windows build must keep --no-default-features (sftp incompatible with Windows build)"
+        );
+    }
+
+    /// Windows users get MOBI from the v1.5 series onwards. The matrix
+    /// entry must enable the feature explicitly; the libmobi build
+    /// step's `if:` guard keys off `--features mobi` being present in
+    /// `matrix.args`, so without this flag the libmobi build is also
+    /// skipped (and the resulting Windows binary has no MOBI support).
+    #[test]
+    fn windows_build_enables_mobi_feature() {
+        let line = args_for("-- --no-default-features");
+        assert!(
+            line.contains("--features mobi"),
+            "Windows release must enable --features mobi alongside \
+             --no-default-features so MOBI/AZW/AZW3 import is compiled \
+             into the shipped binary. Got: {line}"
+        );
+    }
+
+    /// We statically link libmobi on Windows (`BUILD_SHARED_LIBS=OFF`)
+    /// so the Windows release ships as a single self-contained
+    /// `folio.exe` — no `mobi.dll` next to the binary, no Tauri
+    /// bundler config to coerce the loader's DLL search path.
+    /// Switching back to a shared build would require simultaneous
+    /// changes to `tauri.conf.json` (resource layout), the OS
+    /// DLL-loading story, and `folio-core/build.rs` (link kind), so
+    /// the test guards the static decision at the build-config level.
+    #[test]
+    fn windows_libmobi_build_is_static() {
+        assert!(
+            RELEASE_YML.contains("-DBUILD_SHARED_LIBS=OFF"),
+            "release.yml must build libmobi with `BUILD_SHARED_LIBS=OFF` \
+             on Windows so the resulting `mobi.lib` static archive can \
+             be linked directly into folio.exe — flipping this to ON \
+             would require shipping `mobi.dll` next to the binary, \
+             which Tauri's bundler does not do out of the box."
+        );
+    }
+
+    /// Once `--features mobi` is on, the Tauri build step needs to
+    /// know where libmobi's headers/libs live — `folio-core/build.rs`
+    /// uses pkg-config first, falls back to LIBMOBI_INCLUDE_DIR /
+    /// LIBMOBI_LIB_DIR. MSVC has no pkg-config in PATH on a stock
+    /// runner, so the fallback is the actual exercised path. Without
+    /// these env vars the bindgen step fails with "is libmobi
+    /// installed?" at link time.
+    #[test]
+    fn windows_release_passes_libmobi_env_to_tauri_build() {
+        assert!(
+            RELEASE_YML.contains("LIBMOBI_INCLUDE_DIR:"),
+            "release.yml must export `LIBMOBI_INCLUDE_DIR` to the \
+             Tauri build step on Windows — folio-core/build.rs needs \
+             it to locate `mobi.h` for bindgen. Without this, the \
+             Windows release fails at bindgen time."
+        );
+        assert!(
+            RELEASE_YML.contains("LIBMOBI_LIB_DIR:"),
+            "release.yml must export `LIBMOBI_LIB_DIR` to the Tauri \
+             build step on Windows — folio-core/build.rs needs it to \
+             tell rustc where `mobi.lib` lives. Without this, the \
+             Windows release fails at link time with \"cannot find \
+             -lmobi\"."
         );
     }
 

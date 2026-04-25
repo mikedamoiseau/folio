@@ -70,6 +70,24 @@ mod tests {
         );
     }
 
+    /// CI must build libmobi the same way (static archive) the
+    /// release does. A divergence here would mean PR CI exercises a
+    /// configuration the release pipeline never ships against — the
+    /// whole point of the Windows MOBI test job is to catch MSVC
+    /// regressions before tag-push, and that only works if the
+    /// build configs match.
+    #[test]
+    fn ci_libmobi_build_is_static() {
+        assert!(
+            CI_YML.contains("-DBUILD_SHARED_LIBS=OFF"),
+            "ci.yml must build libmobi with `BUILD_SHARED_LIBS=OFF` \
+             to match release.yml. A shared (DLL) build in CI vs a \
+             static build in release would mean PR CI cannot catch \
+             MSVC regressions in the static-link path the release \
+             actually ships."
+        );
+    }
+
     /// The Windows MOBI build is expensive on a stock runner; without
     /// caching, every PR push pays the rebuild cost. The cache key
     /// must include the version pin so a bump invalidates correctly.
