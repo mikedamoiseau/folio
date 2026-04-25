@@ -629,12 +629,9 @@ mod tests {
         // 7. Search surface: "Alice" must match in at least one chapter.
         //    Uses the same aggregator the MOBI arm of `search_book_content`
         //    uses in production, so a regression there is caught here.
-        let results = search_chapters(
-            0..(chapters.len() as u32),
-            "Alice",
-            book_id,
-            |idx| get_chapter_content(path_str, idx as usize, &storage, book_id),
-        )
+        let results = search_chapters(0..(chapters.len() as u32), "Alice", book_id, |idx| {
+            get_chapter_content(path_str, idx as usize, &storage, book_id)
+        })
         .expect("search");
         assert!(
             !results.is_empty(),
