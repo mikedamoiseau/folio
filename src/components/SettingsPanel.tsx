@@ -1934,7 +1934,18 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                 <ul className="space-y-1.5 text-ink-muted">
                   <li>
                     <span className="text-ink">libmobi</span> — LGPL-3.0-or-later,{" "}
-                    {t("settings.dynamicallyLinked")}.{" "}
+                    {/*
+                      Windows ships a statically-linked libmobi (mobi.lib baked
+                      into folio.exe). Linux and arm64 macOS dynamically link
+                      against the system libmobi. Using `navigator.userAgent`
+                      avoids pulling in `@tauri-apps/plugin-os` for this single
+                      string — the user-agent inside Tauri's WebView reliably
+                      contains "Windows NT" on Windows builds.
+                    */}
+                    {navigator.userAgent.includes("Windows")
+                      ? t("settings.staticallyLinked")
+                      : t("settings.dynamicallyLinked")}
+                    .{" "}
                     <a
                       href="https://github.com/bfabiszewski/libmobi"
                       target="_blank"
