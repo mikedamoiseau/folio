@@ -228,6 +228,13 @@ jobs:
       # a composite action) because the duplication is small and
       # extracting an action would obscure where the libmobi build
       # steps actually run.
+      # MSVC dev environment for direct `lib.exe` invocation in the
+      # post-build merge step — see release.yml.
+      - name: Set up MSVC dev environment
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
       - name: Cache libmobi (Windows)
         id: cache-libmobi-windows
         uses: actions/cache@v4

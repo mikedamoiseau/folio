@@ -120,6 +120,17 @@ jobs:
       # produces no shipped artifact. PR-CI's `test-mobi-windows`
       # job (ci.yml) exercises the build path on every PR, so this
       # gate does not reduce coverage.
+      # MSVC dev environment for direct `lib.exe` invocation. CMake
+      # loads this internally for its own builds, but the post-build
+      # merge step below (which archives miniz objs into mobi.lib)
+      # spawns `lib.exe` from a plain pwsh shell, where MSVC tools
+      # are not on PATH unless explicitly set up.
+      - name: Set up MSVC dev environment (Windows)
+        if: matrix.platform == 'windows-latest' && contains(matrix.args, '--features mobi')
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
       - name: Cache libmobi (Windows)
         if: matrix.platform == 'windows-latest' && contains(matrix.args, '--features mobi')
         id: cache-libmobi-windows
