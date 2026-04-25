@@ -58,19 +58,22 @@ pub fn extract_cover(file_path: &str) -> FolioResult<Option<ExtractedCover>> {
 /// per-chapter title without parsing the NCX, which is a separate
 /// follow-up.
 pub fn get_chapter_list(file_path: &str) -> FolioResult<Vec<ChapterInfo>> {
-    let book = MobiBook::open(Path::new(file_path))?;
-    let rawml = book.rawml()?;
-    let chapters: Vec<ChapterInfo> = rawml
-        .parts()
-        .filter(|p| matches!(p.kind, PartKind::Html))
+    let cached = CachedMobiBook::open(file_path)?;
+    Ok(get_chapter_list_from_cache(&cached))
+}
+
+/// Like [`get_chapter_list`] but operates on a pre-parsed [`CachedMobiBook`].
+pub fn get_chapter_list_from_cache(cached: &CachedMobiBook) -> Vec<ChapterInfo> {
+    cached
+        .parts
+        .iter()
         .enumerate()
         .map(|(index, part)| ChapterInfo {
             index,
             title: format!("Chapter {}", index + 1),
             href: format!("part{:05}.html", part.uid),
         })
-        .collect();
-    Ok(chapters)
+        .collect()
 }
 
 /// Extract sanitized HTML for a single chapter and rewrite inline image
@@ -94,62 +97,78 @@ pub fn get_chapter_content(
     storage: &dyn Storage,
     book_id: &str,
 ) -> FolioResult<String> {
-    let book = MobiBook::open(Path::new(file_path))?;
-    let rawml = book.rawml()?;
+    let cached = CachedMobiBook::open(file_path)?;
+    get_chapter_content_from_cache(&cached, chapter_index, storage, book_id)
+}
 
-    let html_parts: Vec<_> = rawml
-        .parts()
-        .filter(|p| matches!(p.kind, PartKind::Html))
-        .collect();
-
-    let part = html_parts.get(chapter_index).ok_or_else(|| {
+/// Like [`get_chapter_content`] but operates on a pre-parsed
+/// [`CachedMobiBook`], avoiding the libmobi reopen/reparse on each call.
+/// Used by desktop hot paths (continuous-scroll loads, per-chapter
+/// search) where the same book is touched many times in a row.
+pub fn get_chapter_content_from_cache(
+    cached: &CachedMobiBook,
+    chapter_index: usize,
+    storage: &dyn Storage,
+    book_id: &str,
+) -> FolioResult<String> {
+    let part = cached.parts.get(chapter_index).ok_or_else(|| {
         FolioError::invalid(format!(
             "MOBI chapter index {chapter_index} out of range (have {} HTML parts)",
-            html_parts.len()
+            cached.parts.len()
         ))
     })?;
+    let image_resources = cached.image_resources_borrowed();
+    render_chapter_html(
+        &part.data,
+        &image_resources,
+        storage,
+        book_id,
+        chapter_index,
+    )
+}
 
+/// Sanitize and rewrite a single chapter's HTML. Shared between the
+/// path-based [`get_chapter_content`] and the cache-based
+/// [`get_chapter_content_from_cache`] so both paths use identical
+/// rendering — the only difference is where the input bytes come from.
+fn render_chapter_html(
+    part_data: &[u8],
+    image_resources: &HashMap<String, &[u8]>,
+    storage: &dyn Storage,
+    book_id: &str,
+    chapter_index: usize,
+) -> FolioResult<String> {
     // Sanitize first so ammonia strips the XML prologue, `<html>/<head>/
     // <body>`, scripts, and external link rels before our rewriter sees
     // the markup. The result is fragment-level HTML suitable for the
     // Reader pane.
-    let raw_html = str::from_utf8(part.data)
+    let raw_html = str::from_utf8(part_data)
         .map_err(|e| FolioError::invalid(format!("MOBI chapter is not valid UTF-8: {e}")))?;
     let cleaned = clean(raw_html);
-
-    // Index image resources by their canonical filename (`resource00001.jpg`)
-    // so the rewriter can look up only the ones the chapter actually
-    // references. Writing every image for every chapter (the previous
-    // behavior) causes on-disk amplification of ~N×M for an N-chapter /
-    // M-image book; illustrated MOBI files can easily burn gigabytes of
-    // library storage with mostly-duplicate copies.
-    let image_resources: HashMap<String, &[u8]> = rawml
-        .resources()
-        .filter(|p| p.kind.is_image())
-        .filter_map(|r| {
-            let ext = r.kind.extension()?;
-            Some((format!("resource{:05}.{ext}", r.uid), r.data))
-        })
-        .collect();
 
     let key_prefix = format!("{book_id}/{chapter_index}");
     Ok(rewrite_mobi_image_refs(
         &cleaned,
         storage,
         &key_prefix,
-        &image_resources,
+        image_resources,
     ))
 }
 
 /// Per-chapter word counts, matching `epub::get_chapter_word_counts`.
 /// Used by the Reader to draw the reading-progress bar.
 pub fn get_chapter_word_counts(file_path: &str) -> FolioResult<Vec<usize>> {
-    let book = MobiBook::open(Path::new(file_path))?;
-    let rawml = book.rawml()?;
-    rawml
-        .parts()
-        .filter(|p| matches!(p.kind, PartKind::Html))
-        .map(|p| chapter_word_count(p.data))
+    let cached = CachedMobiBook::open(file_path)?;
+    get_chapter_word_counts_from_cache(&cached)
+}
+
+/// Like [`get_chapter_word_counts`] but operates on a pre-parsed
+/// [`CachedMobiBook`].
+pub fn get_chapter_word_counts_from_cache(cached: &CachedMobiBook) -> FolioResult<Vec<usize>> {
+    cached
+        .parts
+        .iter()
+        .map(|p| chapter_word_count(&p.data))
         .collect()
 }
 
@@ -158,6 +177,85 @@ fn chapter_word_count(html_bytes: &[u8]) -> FolioResult<usize> {
         .map_err(|e| FolioError::invalid(format!("MOBI chapter is not valid UTF-8: {e}")))?;
     let cleaned = clean(html);
     Ok(count_words(&strip_html_tags(&cleaned)))
+}
+
+/// Owned, parsed snapshot of a MOBI/AZW/AZW3 file: the bytes for every
+/// HTML chapter and every referenced image resource, copied out of
+/// libmobi's `MOBIData` and `MOBIRawml` structures so the libmobi
+/// handles can be dropped before this struct is returned.
+///
+/// Why owned bytes:
+/// - libmobi's borrowed slices tie the lifetime of `MobiPart::data` to
+///   the `MobiRawml`, which itself borrows from `MobiBook`. Caching that
+///   chain in an `LruCache<MobiBook>` would require a self-referential
+///   struct or `ouroboros`; copying once at open time is simpler and
+///   keeps the cache `Send` for use behind a Mutex.
+/// - Re-running `mobi_load_filename` + `mobi_parse_rawml` for every
+///   chapter request scales poorly on KF8 books because the SKEL/FRAG
+///   reconstruction dominates per-call cost. Caching the post-parse
+///   bytes amortizes that across page turns, search, and the
+///   continuous-scroll/full-book read path.
+pub struct CachedMobiBook {
+    parts: Vec<CachedMobiPart>,
+    image_resources: HashMap<String, Vec<u8>>,
+}
+
+/// One HTML markup part lifted out of libmobi's rawml. `uid` is preserved
+/// so the synthesized chapter href (`partNNNNN.html`) stays stable
+/// between the path-based and cache-based code paths.
+struct CachedMobiPart {
+    uid: usize,
+    data: Vec<u8>,
+}
+
+impl CachedMobiBook {
+    /// Parse a MOBI/AZW/AZW3 file from disk and copy its HTML parts and
+    /// image resources into owned buffers. The libmobi `MobiBook` and
+    /// `MobiRawml` are dropped before this returns.
+    pub fn open(file_path: &str) -> FolioResult<Self> {
+        let book = MobiBook::open(Path::new(file_path))?;
+        let rawml = book.rawml()?;
+        let parts: Vec<CachedMobiPart> = rawml
+            .parts()
+            .filter(|p| matches!(p.kind, PartKind::Html))
+            .map(|p| CachedMobiPart {
+                uid: p.uid,
+                data: p.data.to_vec(),
+            })
+            .collect();
+        // Index image resources by their canonical filename
+        // (`resource00001.jpg`) so the rewriter can look up only the ones
+        // a given chapter actually references. Mirrors the layout the
+        // path-based path already used.
+        let image_resources: HashMap<String, Vec<u8>> = rawml
+            .resources()
+            .filter(|p| p.kind.is_image())
+            .filter_map(|r| {
+                let ext = r.kind.extension()?;
+                Some((format!("resource{:05}.{ext}", r.uid), r.data.to_vec()))
+            })
+            .collect();
+        Ok(Self {
+            parts,
+            image_resources,
+        })
+    }
+
+    /// Number of HTML chapters in the cached book. Mirrors the length of
+    /// `get_chapter_list_from_cache(self)`.
+    pub fn chapter_count(&self) -> usize {
+        self.parts.len()
+    }
+
+    /// Build a borrowed view of the image resources for the rewriter,
+    /// which uses `&[u8]` so it can also work with libmobi's borrowed
+    /// data on the path-based code path.
+    fn image_resources_borrowed(&self) -> HashMap<String, &[u8]> {
+        self.image_resources
+            .iter()
+            .map(|(k, v)| (k.clone(), v.as_slice()))
+            .collect()
+    }
 }
 
 /// Walk the sanitized HTML looking for quoted attribute values that match
@@ -658,5 +756,111 @@ mod tests {
     #[test]
     fn mobi_legacy_pipeline_smoke() {
         run_full_pipeline_smoke("alice-legacy.mobi", 6);
+    }
+
+    /// `CachedMobiBook::open` must produce the same chapter count as the
+    /// path-based `get_chapter_list`. This is the structural invariant
+    /// the cache relies on — every from_cache variant addresses chapters
+    /// by index, so a divergence here would silently shift content under
+    /// the Reader.
+    #[test]
+    fn cached_mobi_book_chapter_count_matches_path_version() {
+        let Some(path) = fixture("alice.mobi") else {
+            return;
+        };
+        let chapters = get_chapter_list(path.to_str().unwrap()).expect("chapters");
+        let cached = CachedMobiBook::open(path.to_str().unwrap()).expect("open cached");
+        assert_eq!(cached.chapter_count(), chapters.len());
+    }
+
+    /// Round-trip equivalence: `get_chapter_list_from_cache` returns the
+    /// same vec as the path-based `get_chapter_list`. Indexes, synthetic
+    /// titles, and `partNNNNN.html` hrefs (which encode libmobi's part
+    /// uid) must all match — anything else means the desktop and OPDS
+    /// paths see different views of the same book.
+    #[test]
+    fn get_chapter_list_from_cache_matches_path_version() {
+        let Some(path) = fixture("alice.mobi") else {
+            return;
+        };
+        let path_chapters = get_chapter_list(path.to_str().unwrap()).expect("chapters");
+        let cached = CachedMobiBook::open(path.to_str().unwrap()).expect("open cached");
+        let cached_chapters = get_chapter_list_from_cache(&cached);
+        assert_eq!(cached_chapters.len(), path_chapters.len());
+        for (a, b) in cached_chapters.iter().zip(path_chapters.iter()) {
+            assert_eq!(a.index, b.index);
+            assert_eq!(a.title, b.title);
+            assert_eq!(a.href, b.href, "synthesized hrefs must match");
+        }
+    }
+
+    /// Round-trip equivalence: `get_chapter_word_counts_from_cache` must
+    /// return the same per-chapter counts as the path-based version. The
+    /// Reader's progress bar consumes these values, so any divergence
+    /// would visibly mis-paint the gauge.
+    #[test]
+    fn get_chapter_word_counts_from_cache_matches_path_version() {
+        let Some(path) = fixture("alice.mobi") else {
+            return;
+        };
+        let path_counts = get_chapter_word_counts(path.to_str().unwrap()).expect("path counts");
+        let cached = CachedMobiBook::open(path.to_str().unwrap()).expect("open cached");
+        let cached_counts = get_chapter_word_counts_from_cache(&cached).expect("cached counts");
+        assert_eq!(cached_counts, path_counts);
+    }
+
+    /// Round-trip equivalence: `get_chapter_content_from_cache` must
+    /// return byte-identical HTML to the path-based version for every
+    /// chapter. Image rewriting writes to the same on-disk layout because
+    /// both code paths funnel through `render_chapter_html`, which uses
+    /// the `{book_id}/{chapter_index}` key prefix.
+    #[test]
+    fn get_chapter_content_from_cache_matches_path_version() {
+        let Some(path) = fixture("alice.mobi") else {
+            return;
+        };
+        // Two storage roots so the rewriter's idempotency check
+        // (`storage.exists` before `put`) can't influence the text the
+        // function returns. Both calls write fresh.
+        let dir_a = tempdir().unwrap();
+        let storage_a = LocalStorage::new(dir_a.path().to_path_buf()).unwrap();
+        let dir_b = tempdir().unwrap();
+        let storage_b = LocalStorage::new(dir_b.path().to_path_buf()).unwrap();
+        let book_id = "round-trip";
+
+        let cached = CachedMobiBook::open(path.to_str().unwrap()).expect("open cached");
+        let chapter_count = cached.chapter_count();
+        assert!(chapter_count > 0, "fixture must yield at least one chapter");
+
+        for ch in 0..chapter_count {
+            let path_html =
+                get_chapter_content(path.to_str().unwrap(), ch, &storage_a, book_id).expect("path");
+            let cache_html =
+                get_chapter_content_from_cache(&cached, ch, &storage_b, book_id).expect("cached");
+            assert_eq!(
+                path_html, cache_html,
+                "chapter {ch} content diverged between path and cache paths"
+            );
+        }
+    }
+
+    /// `get_chapter_content_from_cache` must surface the same out-of-
+    /// range error the path-based version returns, so callers don't need
+    /// to special-case the cached arm.
+    #[test]
+    fn get_chapter_content_from_cache_rejects_out_of_range_index() {
+        let Some(path) = fixture("alice.mobi") else {
+            return;
+        };
+        let dir = tempdir().unwrap();
+        let storage = LocalStorage::new(dir.path().to_path_buf()).unwrap();
+        let cached = CachedMobiBook::open(path.to_str().unwrap()).expect("open cached");
+        let bad_index = cached.chapter_count() + 10;
+        let err = get_chapter_content_from_cache(&cached, bad_index, &storage, "bk")
+            .expect_err("out-of-range index must error");
+        assert!(
+            err.to_string().contains("out of range"),
+            "unexpected error: {err}"
+        );
     }
 }
