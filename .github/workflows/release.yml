@@ -166,21 +166,35 @@ jobs:
             -DUSE_LIBXML2=OFF `
             -DUSE_ZLIB=OFF `
             -DCMAKE_INSTALL_PREFIX="$prefix"
-          # Build only the `mobi` library target plus its private
-          # `miniz` OBJECT-library dependency. libmobi's `tools/`
-          # subdirectory builds CLI binaries (mobitool, mobidrm,
-          # mobimeta) that pull in `getopt` (unavailable on MSVC) and,
-          # under USE_ZLIB=OFF, also fail to link the bundled miniz
-          # symbols. Folio doesn't ship those binaries, so skipping
-          # them avoids paying for a Windows-portability fix we'd
-          # never use.
+          # Build everything and tolerate a non-zero exit from
+          # cmake --build. libmobi's `tools/` subdirectory produces
+          # CLI binaries (mobitool, mobidrm, mobimeta) that depend on
+          # `getopt` (unavailable on MSVC) and on miniz symbols that
+          # don't satisfy under `USE_ZLIB=OFF`. Folio doesn't ship
+          # those tools, so their link failure is expected and not
+          # a release-blocker.
           #
-          # CMake's MSBuild backend does not auto-build OBJECT-library
-          # dependencies of a `--target` argument the way it does for
-          # static/shared libs. Explicitly listing `miniz` keeps the
-          # post-build merge step (below) from trying to archive an
-          # object file that was never compiled.
-          cmake --build $build --config Release --parallel --target mobi --target miniz
+          # We can't `--target mobi` instead because libmobi's
+          # `miniz` is declared as a CMake OBJECT library, which the
+          # MSBuild generator doesn't surface as a standalone
+          # `.vcxproj`. Explicitly targeting `miniz` errors with
+          # `MSBUILD : error MSB1009: Project file does not exist.
+          # Switch: miniz.vcxproj`. Building everything is the only
+          # way to get MSBuild to compile the miniz objects we need
+          # to merge into mobi.lib below.
+          #
+          # `$PSNativeCommandUseErrorActionPreference = $false` on
+          # this single statement keeps GitHub Actions' default
+          # "throw on native non-zero exit" from blocking the rest
+          # of the script. The post-build verification is `mobi.lib
+          # exists`, which is the property we actually care about.
+          $oldPref = $PSNativeCommandUseErrorActionPreference
+          $PSNativeCommandUseErrorActionPreference = $false
+          cmake --build $build --config Release --parallel
+          $PSNativeCommandUseErrorActionPreference = $oldPref
+          if (-not (Test-Path "$build\src\Release\mobi.lib")) {
+            throw "cmake --build did not produce mobi.lib (tools/ link failures are expected; mobi.lib being absent is not)"
+          }
           # libmobi's CMake declares miniz as an OBJECT library and
           # links it `PRIVATE` into the mobi target. CMake's normal
           # path expects the consumer to also be a CMake target, in

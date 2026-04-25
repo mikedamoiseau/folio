@@ -270,14 +270,20 @@ jobs:
             -DUSE_LIBXML2=OFF `
             -DUSE_ZLIB=OFF `
             -DCMAKE_INSTALL_PREFIX="$prefix"
-          # Build only the `mobi` library + `miniz` OBJECT dep — see
-          # release.yml for the full rationale. tl;dr: libmobi's
-          # `tools/` CLIs pull in `getopt` (no MSVC equivalent) and
-          # miniz symbols that don't link under USE_ZLIB=OFF; we
-          # don't ship those binaries. MSBuild needs `miniz` listed
-          # explicitly because it doesn't auto-build OBJECT-library
-          # dependencies of `--target`.
-          cmake --build $build --config Release --parallel --target mobi --target miniz
+          # Build everything and tolerate cmake --build's non-zero
+          # exit — see release.yml for the full rationale. tl;dr:
+          # libmobi's tools/ CLIs link-fail on MSVC, but mobi.lib
+          # itself builds; --target mobi alone skips the miniz
+          # OBJECT lib (no .vcxproj for OBJECT libs in MSBuild),
+          # so we have to take the whole build and ignore the
+          # tools' failure.
+          $oldPref = $PSNativeCommandUseErrorActionPreference
+          $PSNativeCommandUseErrorActionPreference = $false
+          cmake --build $build --config Release --parallel
+          $PSNativeCommandUseErrorActionPreference = $oldPref
+          if (-not (Test-Path "$build\src\Release\mobi.lib")) {
+            throw "cmake --build did not produce mobi.lib"
+          }
           # Archive miniz's OBJECT-library output into mobi.lib so the
           # static archive is self-contained when consumed by cargo —
           # see release.yml for the full rationale.
