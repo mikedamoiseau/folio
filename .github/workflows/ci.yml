@@ -233,7 +233,11 @@ jobs:
         uses: actions/cache@v4
         with:
           path: .libmobi-windows
-          key: libmobi-${{ env.LIBMOBI_VERSION }}-windows-x64
+          # Suffix encodes the build flavor (link kind + which optional
+          # deps are off). Must match the key in release.yml so a single
+          # cache shape covers both pipelines and a flavor change in
+          # release surfaces here too.
+          key: libmobi-${{ env.LIBMOBI_VERSION }}-windows-x64-static-nozlib-nolibxml2-v1
 
       - name: Build libmobi (Windows)
         if: steps.cache-libmobi-windows.outputs.cache-hit != 'true'
@@ -268,6 +272,27 @@ jobs:
             -DCMAKE_INSTALL_PREFIX="$prefix"
           cmake --build $build --config Release --parallel
           cmake --install $build --config Release
+
+      # Runs on both cache hit and cache miss so a corrupted or
+      # mis-flavored cache fails loudly rather than letting the
+      # cargo test step link against the wrong artifact.
+      - name: Verify libmobi artifacts (Windows)
+        shell: pwsh
+        run: |
+          $prefix = "$env:GITHUB_WORKSPACE\.libmobi-windows"
+          $expectedLib = Join-Path $prefix "lib\mobi.lib"
+          $expectedHdr = Join-Path $prefix "include\mobi.h"
+          $expectedDll = Join-Path $prefix "bin\mobi.dll"
+          foreach ($p in @($expectedLib, $expectedHdr)) {
+            if (-not (Test-Path $p)) {
+              throw "libmobi artifact missing: $p — cache flavor mismatch?"
+            }
+          }
+          # Static build expects no DLL; a DLL on disk means a stale
+          # shared-build cache leaked in.
+          if (Test-Path $expectedDll) {
+            throw "Unexpected mobi.dll at $expectedDll — cache contains a shared (DLL) build, but ci expects a static (mobi.lib) one. Bump the cache-key suffix."
+          }
 
       # folio-core/build.rs uses pkg-config first, then falls back to
       # LIBMOBI_INCLUDE_DIR + LIBMOBI_LIB_DIR. Windows MSVC has no

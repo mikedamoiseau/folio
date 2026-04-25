@@ -126,7 +126,12 @@ jobs:
         uses: actions/cache@v4
         with:
           path: .libmobi-windows
-          key: libmobi-${{ env.LIBMOBI_VERSION }}-windows-x64
+          # Suffix encodes the build flavor (link kind + which optional
+          # deps are off). If we ever flip BUILD_SHARED_LIBS or re-enable
+          # zlib/libxml2 without bumping LIBMOBI_VERSION, the cache key
+          # changes too — preventing a stale cache from masquerading as
+          # a fresh build of the new flavor.
+          key: libmobi-${{ env.LIBMOBI_VERSION }}-windows-x64-static-nozlib-nolibxml2-v1
 
       - name: Build libmobi (Windows)
         if: matrix.platform == 'windows-latest' && contains(matrix.args, '--features mobi') && steps.cache-libmobi-windows.outputs.cache-hit != 'true'
@@ -163,17 +168,31 @@ jobs:
             -DCMAKE_INSTALL_PREFIX="$prefix"
           cmake --build $build --config Release --parallel
           cmake --install $build --config Release
-          # Sanity-check the artifacts the linker will pick up later.
-          # Failing here surfaces CMake config drift loudly, rather
-          # than letting a half-broken cache silently take over.
+          Write-Host "libmobi installed: $prefix"
+
+      # Runs on both cache hit and cache miss so a corrupted or
+      # mis-flavored cache (e.g. someone manually edited the cache key
+      # without bumping the suffix) fails loudly rather than letting
+      # the Tauri build link against the wrong artifact.
+      - name: Verify libmobi artifacts (Windows)
+        if: matrix.platform == 'windows-latest' && contains(matrix.args, '--features mobi')
+        shell: pwsh
+        run: |
+          $prefix = "$env:GITHUB_WORKSPACE\.libmobi-windows"
           $expectedLib = Join-Path $prefix "lib\mobi.lib"
           $expectedHdr = Join-Path $prefix "include\mobi.h"
+          $expectedDll = Join-Path $prefix "bin\mobi.dll"
           foreach ($p in @($expectedLib, $expectedHdr)) {
             if (-not (Test-Path $p)) {
-              throw "libmobi build produced no $p — CMake install layout changed?"
+              throw "libmobi artifact missing: $p — cache flavor mismatch?"
             }
           }
-          Write-Host "libmobi installed: $prefix"
+          # We build static (BUILD_SHARED_LIBS=OFF), so a DLL appearing
+          # in the prefix means a previous shared-build cache leaked
+          # in under a key that should not have matched.
+          if (Test-Path $expectedDll) {
+            throw "Unexpected mobi.dll at $expectedDll — cache contains a shared (DLL) build, but the release expects a static (mobi.lib) one. Bump the cache-key suffix."
+          }
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4

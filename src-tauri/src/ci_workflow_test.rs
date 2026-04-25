@@ -89,17 +89,21 @@ mod tests {
     }
 
     /// The Windows MOBI build is expensive on a stock runner; without
-    /// caching, every PR push pays the rebuild cost. The cache key
-    /// must include the version pin so a bump invalidates correctly.
+    /// caching, every PR push pays the rebuild cost. The cache key in
+    /// ci.yml must match release.yml exactly — including the build-
+    /// flavor suffix — so the same artifact is reused across pipelines
+    /// and a flavor change in either file surfaces as a mismatch in
+    /// the cross-file drift test.
     #[test]
     fn ci_caches_windows_libmobi_build() {
-        let cache_key = "libmobi-${{ env.LIBMOBI_VERSION }}-windows-x64";
+        let cache_key = "libmobi-${{ env.LIBMOBI_VERSION }}-windows-x64-static-nozlib-nolibxml2-v1";
         assert!(
             CI_YML.contains(cache_key),
             "ci.yml must cache the Windows libmobi build under the same \
-             key shape release.yml uses (`{cache_key}`). Mismatched keys \
-             would force separate rebuilds and could even let the CI \
-             cache age past the release cache."
+             flavor-encoded key release.yml uses (`{cache_key}`). \
+             Mismatched keys would force separate rebuilds and could \
+             let the CI cache drift to a different build flavor than \
+             the one the release pipeline ships."
         );
     }
 }

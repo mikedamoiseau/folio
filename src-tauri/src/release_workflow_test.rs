@@ -189,19 +189,23 @@ mod tests {
 
     /// Each build of libmobi from source on a stock Windows runner takes
     /// minutes; without an actions/cache step keyed on version + arch the
-    /// release workflow would pay that cost on every tag push. The test
-    /// asserts the cache key includes both so an unchanged pin re-uses
-    /// the artifact.
+    /// release workflow would pay that cost on every tag push. The cache
+    /// key also encodes the *build flavor* (static + no-zlib +
+    /// no-libxml2) so a flag flip cannot silently reuse an incompatible
+    /// cached archive. Bumping the trailing `-vN` is the escape hatch
+    /// for "same flavor name, but the build is actually different now."
     #[test]
     fn windows_libmobi_build_is_cached() {
-        let cache_block = "libmobi-${{ env.LIBMOBI_VERSION }}-windows-x64";
+        let cache_block =
+            "libmobi-${{ env.LIBMOBI_VERSION }}-windows-x64-static-nozlib-nolibxml2-v1";
         assert!(
             RELEASE_YML.contains(cache_block),
             "release.yml must cache the Windows libmobi build under a key \
-             that includes both the pinned version and the target arch — \
-             expected substring `{cache_block}` not found. Without this \
-             cache, every tag push spends minutes rebuilding libmobi from \
-             source on the Windows runner."
+             that pins both the source revision and the build flavor — \
+             expected substring `{cache_block}` not found. Without the \
+             flavor token, a future flip of BUILD_SHARED_LIBS or the \
+             zlib/libxml2 options could reuse a stale cached archive of \
+             the previous flavor and silently link the wrong thing."
         );
     }
 
