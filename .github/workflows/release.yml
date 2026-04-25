@@ -174,6 +174,27 @@ jobs:
           # them avoids paying for a Windows-portability fix we'd
           # never use.
           cmake --build $build --config Release --parallel --target mobi
+          # libmobi's CMake declares miniz as an OBJECT library and
+          # links it `PRIVATE` into the mobi target. CMake's normal
+          # path expects the consumer to also be a CMake target, in
+          # which case the miniz object files are added to the
+          # consumer's link line automatically. Folio's consumer is
+          # cargo (not CMake), so when rustc links the static
+          # `mobi.lib` it sees `mobi.lib(util.obj)` referencing
+          # `mz_uncompress` / `mz_crc32` with no archive providing
+          # them — `lib.exe` does not pull OBJECT-library objects
+          # into a STATIC `.lib` on its own.
+          #
+          # Fix: archive the miniz object file into `mobi.lib` so the
+          # static archive is genuinely self-contained. `lib /OUT:foo
+          # foo objs…` rebuilds `foo` with its existing members plus
+          # the new ones.
+          $minizObj = Get-ChildItem "$build\src" -Recurse -Filter "miniz*.obj" | Select-Object -First 1
+          if ($null -eq $minizObj) {
+            throw "Could not locate built miniz object file under $build\src — libmobi CMake layout changed?"
+          }
+          & lib /NOLOGO "/OUT:$build\src\Release\mobi.lib" "$build\src\Release\mobi.lib" $minizObj.FullName
+          if ($LASTEXITCODE -ne 0) { throw "lib.exe failed merging miniz into mobi.lib (exit $LASTEXITCODE)" }
           # libmobi v0.12 defines no `install()` rules in any of its
           # CMakeLists, so `cmake --install` is a no-op. Copy the
           # static archive and the public header into the install
