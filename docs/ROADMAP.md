@@ -370,10 +370,14 @@ Expand where books come from and how they persist.
 - ~~Filterable by action type with pagination (load more)~~
 - ~~14 data-changing commands instrumented with activity logging~~
 
-#### 34. MOBI/AZW Support — **P2**
-- Add MOBI/AZW/AZW3 format parsing (common for older Kindle libraries)
-- New `BookFormat` enum variant, new parser module
-- Extract metadata, cover, and chapter content
+#### 34. MOBI/AZW Support — **Done**
+- ~~Add MOBI/AZW/AZW3 format parsing (common for older Kindle libraries)~~
+- ~~New `BookFormat::Mobi` enum variant, new parser module backed by libmobi~~
+- ~~Extract metadata, cover, and chapter content (legacy Mobipocket v6 + KF8)~~
+- ~~OPDS download with AZW vs AZW3 disambiguation via URL path~~
+- ~~Conditional `.deb` / `.rpm` libmobi depends via Tauri config overlay~~
+- ~~Fixture-gated end-to-end smoke tests + CI corpus fetch (SHA-256 pinned, retry-armed, cached)~~
+- Available on **arm64 macOS** and **Linux**. The **x86_64 macOS** and **Windows** builds intentionally ship without MOBI support — libmobi has no first-class MSVC build path, and the macos-latest runner's Homebrew libmobi is arm64-only. Re-enabling either target needs a universal libmobi (Mac) or an MSYS2 / vcpkg pipeline (Windows).
 
 ### Power User & Reader Enhancements
 
