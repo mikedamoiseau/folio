@@ -354,7 +354,16 @@ impl PartKind {
             ffi::MOBIFiletype_T_BMP => Self::Bmp,
             ffi::MOBIFiletype_T_OTF => Self::Otf,
             ffi::MOBIFiletype_T_TTF => Self::Ttf,
-            other => Self::Other(other),
+            // bindgen surfaces C enums with the underlying integer type,
+            // which on MSVC is `i32` (signed by default) but on GCC/Clang
+            // is `u32`. Cast through `u32` so the same source compiles on
+            // both link paths. Negative MSVC values would round-trip as
+            // their two's-complement bit pattern, which is fine for an
+            // opaque "other" sentinel. Clippy flags the cast as redundant
+            // on the Linux/macOS bindgen output where the type is already
+            // `u32`; the allow keeps the cross-platform path uniform.
+            #[allow(clippy::unnecessary_cast)]
+            other => Self::Other(other as u32),
         }
     }
 

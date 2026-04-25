@@ -1,3 +1,5 @@
+#[cfg(test)]
+mod ci_workflow_test;
 pub mod commands;
 #[cfg(test)]
 mod release_workflow_test;

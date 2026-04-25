@@ -21,7 +21,18 @@ fn build_libmobi_bindings() {
 
     let (include_paths, link_dir) = resolve_libmobi_paths();
 
-    println!("cargo:rustc-link-lib=dylib=mobi");
+    // Windows ships a statically-linked libmobi (`mobi.lib`) baked
+    // into folio.exe — so the release artifact is a single self-
+    // contained executable, with no `mobi.dll` next to it that the
+    // Tauri bundler would have to place where the OS loader can
+    // find it. Linux/macOS keep dynamic linkage so users can swap
+    // libmobi via their distro package manager (apt, brew).
+    let link_kind = if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
+        "static"
+    } else {
+        "dylib"
+    };
+    println!("cargo:rustc-link-lib={link_kind}=mobi");
     if let Some(dir) = link_dir {
         println!("cargo:rustc-link-search=native={}", dir.display());
     }
@@ -56,7 +67,18 @@ fn resolve_libmobi_paths() -> (Vec<PathBuf>, Option<PathBuf>) {
         return (lib.include_paths, link_dir);
     }
 
-    let include = env::var("LIBMOBI_INCLUDE_DIR").map(PathBuf::from).ok();
-    let lib_dir = env::var("LIBMOBI_LIB_DIR").map(PathBuf::from).ok();
+    // GitHub Actions can pass empty strings for these env vars on
+    // platforms that don't need them (the release workflow uses a
+    // ternary expression to set them only on Windows). Treat empty
+    // values as "unset" so we don't end up emitting a useless `-I`
+    // or `-L` to the bindgen / linker invocation.
+    let include = env::var("LIBMOBI_INCLUDE_DIR")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .map(PathBuf::from);
+    let lib_dir = env::var("LIBMOBI_LIB_DIR")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .map(PathBuf::from);
     (include.into_iter().collect(), lib_dir)
 }

@@ -332,6 +332,7 @@
     "aboutLicense": "Publié sous licence MIT.",
     "thirdPartyHeading": "Composants tiers",
     "dynamicallyLinked": "lié dynamiquement",
+    "staticallyLinked": "lié statiquement",
     "bundled": "intégré",
     "source": "source",
     "aboutFullNotice": "Avis complet dans",

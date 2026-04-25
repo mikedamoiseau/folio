@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 # Build libmobi from source into a workspace-local prefix and print the env
 # vars Cargo needs to find it. Only macOS and Linux are supported here —
-# Windows builds are handled by CI (see .github/workflows/).
+# Windows builds are handled by CI (see .github/workflows/) using libmobi's
+# CMake support to produce a static `mobi.lib` that gets baked into the
+# release binary. Local Windows dev builds can replicate that recipe by
+# hand (CMake + MSVC, BUILD_SHARED_LIBS=OFF, USE_ZLIB=OFF, USE_LIBXML2=OFF).
 #
 # Use this when you don't want to (or can't) install libmobi system-wide via
 # `brew install libmobi` or `apt install libmobi-dev`. It leaves no global
@@ -28,7 +31,8 @@ case "$(uname -s)" in
   Linux)  JOBS_DEFAULT="$(nproc)" ;;
   *)
     echo "error: unsupported platform '$(uname -s)'. This script targets macOS and Linux." >&2
-    echo "       On Windows, use the CI build (.github/workflows/) or MSYS2/vcpkg." >&2
+    echo "       On Windows, use the CI build (.github/workflows/) or run libmobi's" >&2
+    echo "       CMake build manually: cmake -B build -DBUILD_SHARED_LIBS=OFF -DUSE_ZLIB=OFF -DUSE_LIBXML2=OFF" >&2
     exit 1
     ;;
 esac

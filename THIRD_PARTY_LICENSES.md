@@ -21,47 +21,82 @@ to or ships in its release artifacts.
 - **Upstream:** <https://github.com/bfabiszewski/libmobi>
 - **License:** GNU Lesser General Public License v3.0 or later (LGPL-3.0-or-later)
 - **License text:** <https://www.gnu.org/licenses/lgpl-3.0.html>
-- **How Folio uses it:** Dynamically linked at runtime to parse MOBI / AZW /
-  AZW3 (KF8) ebook files. Enabled when Folio is built with the `mobi` cargo
+- **How Folio uses it:** Folio links against libmobi to parse MOBI / AZW /
+  AZW3 (KF8) ebook files. The link mode differs by platform — see
+  *Distribution* below. Enabled when Folio is built with the `mobi` cargo
   feature.
-- **Platform availability:** MOBI support is compiled into **macOS and
-  Linux** release builds only. **Windows** builds do not include MOBI
-  support — libmobi has no first-class MSVC build path, so shipping it
-  would require an MSYS2 / vcpkg pipeline that is out of scope for v1.
-- **Distribution:** Folio does not currently bundle libmobi into its
-  release artifacts. The macOS / Linux release builds link libmobi at
-  process load time, so end users **must install libmobi before first
-  launch** — without it, the app fails to start (not just MOBI open).
-  Install from the system package manager:
-  - macOS: `brew install libmobi`
-  - Debian / Ubuntu: `sudo apt install libmobi0`
+- **Platform availability:** MOBI support is compiled into **Linux**,
+  **arm64 (Apple Silicon) macOS**, and **Windows** release builds. The
+  **x86_64 (Intel) macOS** build is the only release that ships without
+  MOBI support — Homebrew on the macos-latest CI runner installs an
+  arm64-only libmobi.dylib that cannot be linked into an x86_64 target.
+
+### Distribution
+
+Folio's link mode for libmobi is platform-specific:
+
+- **Linux** and **arm64 macOS**: libmobi is **dynamically linked** at
+  process load time. The release binaries do **not** ship libmobi —
+  end users **must install libmobi before first launch**, otherwise the
+  app fails to start (not just MOBI open). Install from the system
+  package manager:
+  - macOS (Apple Silicon): `brew install libmobi`
+  - Debian / Ubuntu: `sudo apt install libmobi0` (the `.deb` package
+    declares this as a dependency, so a typical `apt install` of Folio
+    pulls libmobi in automatically)
   - Fedora / RHEL: `sudo dnf install libmobi`
 
-  This keeps the relinking clause of the LGPL trivially satisfied — users
-  can swap in their own compatible build of libmobi without touching
-  Folio. Bundling libmobi inside the `.app` / `.AppImage` / `.deb` (with
-  `install_name_tool` rewriting for macOS) is tracked as future work.
+- **Windows**: libmobi is **statically linked** into `folio.exe`. The
+  Tauri bundler does not place sibling DLLs where the OS loader expects
+  them at process start, so the Windows build of libmobi is produced as
+  a self-contained `mobi.lib` static archive (CMake configured with
+  `BUILD_SHARED_LIBS=OFF`, `USE_ZLIB=OFF`, `USE_LIBXML2=OFF`) and baked
+  directly into the executable. End users do **not** install libmobi
+  separately on Windows.
 
 ### LGPL compliance notes
 
-LGPL v3+ permits dynamic linking from MIT-licensed applications, subject to
-these obligations — all satisfied by the dynamic-linking layout described
-above:
+LGPL v3+ permits both dynamic and static linking from MIT-licensed
+applications, subject to the obligations below. The dynamic and static
+paths satisfy the *relinking* obligation differently; both are addressed.
 
-1. **Attribution.** This file and the in-app About screen identify libmobi,
-   its license, and its upstream source.
+1. **Attribution.** This file and the in-app About screen identify
+   libmobi, its license, and its upstream source.
 2. **License availability.** The LGPL v3 text is available at the link
-   above and is reproduced in the upstream libmobi repository's `COPYING`
-   file.
-3. **Source availability.** libmobi's source is published on GitHub at the
-   upstream URL; anyone wishing to rebuild or modify the library can obtain
-   it there. Folio does not carry a fork.
-4. **Relinking.** Because libmobi is dynamically linked, a user may replace
-   the shipped shared library with their own compatible build of libmobi
-   without modifying Folio. No special re-linking support is required from
-   the application beyond the dynamic-library layout.
-5. **Modifications.** Folio does not modify libmobi. If that ever changes,
-   the modified source will be published alongside the release.
+   above and is reproduced in the upstream libmobi repository's
+   `COPYING` file.
+3. **Source availability.** libmobi's source is published on GitHub at
+   the upstream URL. The exact commit Folio links against is pinned by
+   `LIBMOBI_VERSION` in
+   [`.github/workflows/release.yml`](./.github/workflows/release.yml)
+   so any release can be matched to the specific upstream revision.
+   Folio does not carry a fork or apply patches.
+4. **Relinking.**
+   - **Linux / arm64 macOS (dynamic):** Users may replace the shipped
+     shared library with their own compatible build of libmobi without
+     modifying or rebuilding Folio. No further action is required from
+     the application beyond the dynamic-library layout.
+   - **Windows (static):** LGPL §6 requires that recipients be able to
+     re-link Folio against a modified libmobi. The complete chain
+     needed for this is published openly:
+     - Folio's source is on GitHub under MIT — see [the repository root](./).
+     - The libmobi commit Folio statically links is pinned by SHA in
+       `release.yml` (see *Source availability* above) and the exact
+       CMake recipe used to produce the static archive is in the
+       same workflow file (`Build libmobi (Windows)` step).
+     - A user wishing to substitute a modified libmobi can rebuild
+       Folio from source against a different libmobi by changing the
+       pinned SHA (or by replacing `.libmobi-windows/lib/mobi.lib`
+       in the build tree before `cargo build`) and re-running the
+       Tauri build. The same `LIBMOBI_INCLUDE_DIR` / `LIBMOBI_LIB_DIR`
+       env vars used by CI are honoured by `folio-core/build.rs`.
+
+     If you need pre-built object files (`.obj`) or the unmodified
+     `mobi.lib` Folio shipped a particular Windows release with, open
+     an issue on the GitHub repository and we will provide them.
+5. **Modifications.** Folio does not modify libmobi. If that ever
+   changes, the modified source will be published alongside the
+   release.
 
 ---
 
