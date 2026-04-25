@@ -47,6 +47,20 @@ fn mobi_ext_and_mime(file_path: &str) -> (&'static str, &'static str) {
     }
 }
 
+fn cover_mime(cover_path: Option<&str>) -> &'static str {
+    match cover_path
+        .and_then(|path| std::path::Path::new(path).extension())
+        .and_then(|ext| ext.to_str())
+        .map(str::to_ascii_lowercase)
+        .as_deref()
+    {
+        Some("png") => "image/png",
+        Some("gif") => "image/gif",
+        Some("bmp") => "image/bmp",
+        _ => "image/jpeg",
+    }
+}
+
 fn book_to_entry(book: &Book) -> String {
     let title = xml_escape(&book.title);
     let author = xml_escape(&book.author);
@@ -62,7 +76,8 @@ fn book_to_entry(book: &Book) -> String {
         .unwrap_or_default();
 
     let cover_link = format!(
-        r#"<link rel="http://opds-spec.org/image" href="/api/books/{id}/cover" type="image/jpeg"/>"#
+        r#"<link rel="http://opds-spec.org/image" href="/api/books/{id}/cover" type="{}"/>"#,
+        cover_mime(book.cover_path.as_deref())
     );
 
     // `BookFormat::Mobi` is a single enum variant covering `.mobi`, `.azw`, and
@@ -381,6 +396,16 @@ mod tests {
         );
     }
 
+    #[test]
+    fn cover_mime_matches_cover_extension() {
+        assert_eq!(cover_mime(Some("/tmp/cover.jpg")), "image/jpeg");
+        assert_eq!(cover_mime(Some("/tmp/cover.png")), "image/png");
+        assert_eq!(cover_mime(Some("/tmp/cover.gif")), "image/gif");
+        assert_eq!(cover_mime(Some("/tmp/cover.bmp")), "image/bmp");
+        assert_eq!(cover_mime(Some("/tmp/cover.webp")), "image/jpeg");
+        assert_eq!(cover_mime(None), "image/jpeg");
+    }
+
     fn make_book(file_path: &str, format: crate::models::BookFormat) -> Book {
         Book {
             id: "book-1".to_string(),
@@ -451,5 +476,18 @@ mod tests {
                 "{ext} entry missing {expected}:\n{entry}"
             );
         }
+    }
+
+    #[test]
+    fn opds_cover_link_uses_real_cover_mime() {
+        let mut book = make_book("/lib/story.mobi", crate::models::BookFormat::Mobi);
+        book.cover_path = Some("/tmp/covers/book-1/cover.png".to_string());
+
+        let entry = book_to_entry(&book);
+
+        assert!(
+            entry.contains(r#"href="/api/books/book-1/cover" type="image/png""#),
+            "cover link should advertise png mime:\n{entry}"
+        );
     }
 }

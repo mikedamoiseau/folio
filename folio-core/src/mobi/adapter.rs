@@ -146,16 +146,18 @@ pub fn get_chapter_content(
 pub fn get_chapter_word_counts(file_path: &str) -> FolioResult<Vec<usize>> {
     let book = MobiBook::open(Path::new(file_path))?;
     let rawml = book.rawml()?;
-    let counts: Vec<usize> = rawml
+    rawml
         .parts()
         .filter(|p| matches!(p.kind, PartKind::Html))
-        .map(|p| {
-            let html = str::from_utf8(p.data).unwrap_or("");
-            let cleaned = clean(html);
-            count_words(&strip_html_tags(&cleaned))
-        })
-        .collect();
-    Ok(counts)
+        .map(|p| chapter_word_count(p.data))
+        .collect()
+}
+
+fn chapter_word_count(html_bytes: &[u8]) -> FolioResult<usize> {
+    let html = str::from_utf8(html_bytes)
+        .map_err(|e| FolioError::invalid(format!("MOBI chapter is not valid UTF-8: {e}")))?;
+    let cleaned = clean(html);
+    Ok(count_words(&strip_html_tags(&cleaned)))
 }
 
 /// Walk the sanitized HTML looking for quoted attribute values that match
@@ -356,6 +358,15 @@ mod tests {
             counts.iter().any(|&c| c > 200),
             "expected at least one chapter with >200 words, got {:?}",
             &counts[..counts.len().min(5)]
+        );
+    }
+
+    #[test]
+    fn chapter_word_count_rejects_invalid_utf8() {
+        let err = chapter_word_count(b"\xFF\xFEbroken").expect_err("invalid utf8 must error");
+        assert!(
+            err.to_string().contains("not valid UTF-8"),
+            "unexpected error: {err}"
         );
     }
 
