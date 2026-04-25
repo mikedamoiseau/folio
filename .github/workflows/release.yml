@@ -210,10 +210,22 @@ jobs:
           # static archive is genuinely self-contained. `lib /OUT:foo
           # foo objs…` rebuilds `foo` with its existing members plus
           # the new ones.
-          $minizObj = Get-ChildItem "$build\src" -Recurse -Filter "miniz*.obj" | Select-Object -First 1
+          # Search the whole build tree because libmobi has TWO
+          # places that compile miniz.c: the `miniz` OBJECT lib in
+          # `src/CMakeLists.txt` (links into `mobi`) and the `zip`
+          # OBJECT lib in `tools/CMakeLists.txt` (links into the CLI
+          # tools). With CMake's MSBuild generator the `miniz` target
+          # may not actually emit an `.obj` (OBJECT libs aren't
+          # always built when they're only linked by another target),
+          # so we accept either compile output — both define the
+          # same `mz_uncompress` / `mz_crc32` symbols mobi.lib needs.
+          $minizObj = Get-ChildItem "$build" -Recurse -Filter "miniz*.obj" | Select-Object -First 1
           if ($null -eq $minizObj) {
-            throw "Could not locate built miniz object file under $build\src — libmobi CMake layout changed?"
+            Write-Host "build tree contents (debug):"
+            Get-ChildItem "$build" -Recurse -Filter "*.obj" | Select-Object -ExpandProperty FullName
+            throw "Could not locate built miniz object file under $build — libmobi CMake layout changed?"
           }
+          Write-Host "Merging $($minizObj.FullName) into mobi.lib"
           & lib /NOLOGO "/OUT:$build\src\Release\mobi.lib" "$build\src\Release\mobi.lib" $minizObj.FullName
           if ($LASTEXITCODE -ne 0) { throw "lib.exe failed merging miniz into mobi.lib (exit $LASTEXITCODE)" }
           # libmobi v0.12 defines no `install()` rules in any of its

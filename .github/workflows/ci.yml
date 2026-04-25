@@ -286,11 +286,15 @@ jobs:
           }
           # Archive miniz's OBJECT-library output into mobi.lib so the
           # static archive is self-contained when consumed by cargo —
-          # see release.yml for the full rationale.
-          $minizObj = Get-ChildItem "$build\src" -Recurse -Filter "miniz*.obj" | Select-Object -First 1
+          # search the whole build tree because libmobi compiles
+          # miniz.c in two places (src/miniz target + tools/zip
+          # target); either object provides the symbols mobi.lib
+          # needs. See release.yml for the full rationale.
+          $minizObj = Get-ChildItem "$build" -Recurse -Filter "miniz*.obj" | Select-Object -First 1
           if ($null -eq $minizObj) {
-            throw "Could not locate built miniz object file under $build\src — libmobi CMake layout changed?"
+            throw "Could not locate built miniz object file under $build — libmobi CMake layout changed?"
           }
+          Write-Host "Merging $($minizObj.FullName) into mobi.lib"
           & lib /NOLOGO "/OUT:$build\src\Release\mobi.lib" "$build\src\Release\mobi.lib" $minizObj.FullName
           if ($LASTEXITCODE -ne 0) { throw "lib.exe failed merging miniz into mobi.lib (exit $LASTEXITCODE)" }
           # libmobi v0.12 defines no `install()` rules; copy the static
