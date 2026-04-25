@@ -270,7 +270,11 @@ jobs:
             -DUSE_LIBXML2=OFF `
             -DUSE_ZLIB=OFF `
             -DCMAKE_INSTALL_PREFIX="$prefix"
-          cmake --build $build --config Release --parallel
+          # Build only the `mobi` library target — see release.yml for
+          # the full rationale. tl;dr: libmobi's `tools/` CLIs pull in
+          # `getopt` (no MSVC equivalent) and miniz symbols that don't
+          # link under USE_ZLIB=OFF; we don't ship those binaries.
+          cmake --build $build --config Release --parallel --target mobi
           cmake --install $build --config Release
 
       # Runs on both cache hit and cache miss so a corrupted or

@@ -166,7 +166,15 @@ jobs:
             -DUSE_LIBXML2=OFF `
             -DUSE_ZLIB=OFF `
             -DCMAKE_INSTALL_PREFIX="$prefix"
-          cmake --build $build --config Release --parallel
+          # Build only the `mobi` library target. libmobi's `tools/`
+          # subdirectory builds CLI binaries (mobitool, mobidrm,
+          # mobimeta) that pull in `getopt` (unavailable on MSVC) and,
+          # under USE_ZLIB=OFF, also fail to link the bundled miniz
+          # symbols. Folio doesn't ship those binaries, so skipping
+          # them avoids paying for a Windows-portability fix we'd
+          # never use. The install step then copies just the headers
+          # and `mobi.lib` into the prefix.
+          cmake --build $build --config Release --parallel --target mobi
           cmake --install $build --config Release
           Write-Host "libmobi installed: $prefix"
 
