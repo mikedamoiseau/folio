@@ -172,10 +172,17 @@ jobs:
           # under USE_ZLIB=OFF, also fail to link the bundled miniz
           # symbols. Folio doesn't ship those binaries, so skipping
           # them avoids paying for a Windows-portability fix we'd
-          # never use. The install step then copies just the headers
-          # and `mobi.lib` into the prefix.
+          # never use.
           cmake --build $build --config Release --parallel --target mobi
-          cmake --install $build --config Release
+          # libmobi v0.12 defines no `install()` rules in any of its
+          # CMakeLists, so `cmake --install` is a no-op. Copy the
+          # static archive and the public header into the install
+          # prefix by hand. (`mobi.h` only includes standard C headers
+          # — stdio.h, stdint.h, stdbool.h, time.h — so we don't have
+          # to ship libmobi's private headers alongside it.)
+          New-Item -ItemType Directory -Force -Path "$prefix\lib", "$prefix\include" | Out-Null
+          Copy-Item "$build\src\Release\mobi.lib" "$prefix\lib\mobi.lib"
+          Copy-Item "$src\src\mobi.h" "$prefix\include\mobi.h"
           Write-Host "libmobi installed: $prefix"
 
       # Runs on both cache hit and cache miss so a corrupted or

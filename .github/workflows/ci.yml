@@ -275,7 +275,12 @@ jobs:
           # `getopt` (no MSVC equivalent) and miniz symbols that don't
           # link under USE_ZLIB=OFF; we don't ship those binaries.
           cmake --build $build --config Release --parallel --target mobi
-          cmake --install $build --config Release
+          # libmobi v0.12 defines no `install()` rules; copy the static
+          # archive + public header into the prefix by hand. See
+          # release.yml for the full rationale.
+          New-Item -ItemType Directory -Force -Path "$prefix\lib", "$prefix\include" | Out-Null
+          Copy-Item "$build\src\Release\mobi.lib" "$prefix\lib\mobi.lib"
+          Copy-Item "$src\src\mobi.h" "$prefix\include\mobi.h"
 
       # Runs on both cache hit and cache miss so a corrupted or
       # mis-flavored cache fails loudly rather than letting the
