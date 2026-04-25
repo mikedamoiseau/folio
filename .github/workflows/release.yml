@@ -166,14 +166,21 @@ jobs:
             -DUSE_LIBXML2=OFF `
             -DUSE_ZLIB=OFF `
             -DCMAKE_INSTALL_PREFIX="$prefix"
-          # Build only the `mobi` library target. libmobi's `tools/`
+          # Build only the `mobi` library target plus its private
+          # `miniz` OBJECT-library dependency. libmobi's `tools/`
           # subdirectory builds CLI binaries (mobitool, mobidrm,
           # mobimeta) that pull in `getopt` (unavailable on MSVC) and,
           # under USE_ZLIB=OFF, also fail to link the bundled miniz
           # symbols. Folio doesn't ship those binaries, so skipping
           # them avoids paying for a Windows-portability fix we'd
           # never use.
-          cmake --build $build --config Release --parallel --target mobi
+          #
+          # CMake's MSBuild backend does not auto-build OBJECT-library
+          # dependencies of a `--target` argument the way it does for
+          # static/shared libs. Explicitly listing `miniz` keeps the
+          # post-build merge step (below) from trying to archive an
+          # object file that was never compiled.
+          cmake --build $build --config Release --parallel --target mobi --target miniz
           # libmobi's CMake declares miniz as an OBJECT library and
           # links it `PRIVATE` into the mobi target. CMake's normal
           # path expects the consumer to also be a CMake target, in
