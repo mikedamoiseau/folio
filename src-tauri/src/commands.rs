@@ -306,6 +306,12 @@ fn ensure_epub_cached(cache: &mut LruCache<epub::CachedEpubArchive>, file_path: 
 /// MOBI counterpart of `ensure_epub_cached`. Returns an error when libmobi
 /// can't parse the file so the caller can surface it instead of falling
 /// through with an empty cache miss — `cache.get()` only signals presence.
+///
+/// Inserts via `insert_with_size` so the byte budget configured on
+/// `mobi_cache` in `lib.rs` actually drives eviction. Owned MOBI bytes
+/// (chapters + image resources) can run hundreds of MB on illustrated
+/// AZW3s; relying on entry count alone would let a small handful of
+/// books pin multi-GB of RAM.
 #[cfg(feature = "mobi")]
 fn ensure_mobi_cached(
     cache: &mut LruCache<folio_core::mobi::CachedMobiBook>,
@@ -316,7 +322,8 @@ fn ensure_mobi_cached(
         return Ok(());
     }
     let cached = folio_core::mobi::CachedMobiBook::open(file_path)?;
-    cache.insert(file_path.to_string(), cached);
+    let size = cached.byte_size();
+    cache.insert_with_size(file_path.to_string(), cached, size);
     Ok(())
 }
 

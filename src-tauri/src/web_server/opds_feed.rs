@@ -48,6 +48,13 @@ fn mobi_ext_and_mime(file_path: &str) -> (&'static str, &'static str) {
 }
 
 fn cover_mime(cover_path: Option<&str>) -> &'static str {
+    // Stays in lockstep with the actual cover endpoint at
+    // `web_server/api.rs::get_cover`, which derives the response
+    // `Content-Type` from the path extension via `mime_guess`. If the
+    // feed advertised a different MIME than the endpoint serves, strict
+    // OPDS clients can mis-cache or reject the response — that is the
+    // exact bug this function exists to prevent, so the explicit
+    // `webp` arm is required (mime_guess returns `image/webp` for it).
     match cover_path
         .and_then(|path| std::path::Path::new(path).extension())
         .and_then(|ext| ext.to_str())
@@ -57,6 +64,7 @@ fn cover_mime(cover_path: Option<&str>) -> &'static str {
         Some("png") => "image/png",
         Some("gif") => "image/gif",
         Some("bmp") => "image/bmp",
+        Some("webp") => "image/webp",
         _ => "image/jpeg",
     }
 }
@@ -402,7 +410,13 @@ mod tests {
         assert_eq!(cover_mime(Some("/tmp/cover.png")), "image/png");
         assert_eq!(cover_mime(Some("/tmp/cover.gif")), "image/gif");
         assert_eq!(cover_mime(Some("/tmp/cover.bmp")), "image/bmp");
-        assert_eq!(cover_mime(Some("/tmp/cover.webp")), "image/jpeg");
+        assert_eq!(cover_mime(Some("/tmp/cover.webp")), "image/webp");
+        assert_eq!(cover_mime(Some("/tmp/cover.jpeg")), "image/jpeg");
+        // Unknown / missing extensions default to JPEG so the link tag
+        // still validates; the cover endpoint's mime_guess fallback is
+        // also octet-stream → image/jpeg here is the safer OPDS-side
+        // default since clients will at least try to render it.
+        assert_eq!(cover_mime(Some("/tmp/cover.xyz")), "image/jpeg");
         assert_eq!(cover_mime(None), "image/jpeg");
     }
 

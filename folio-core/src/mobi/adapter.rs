@@ -247,6 +247,17 @@ impl CachedMobiBook {
         self.parts.len()
     }
 
+    /// Total bytes the cache entry holds: chapter HTML + image resources.
+    /// Used by the desktop `mobi_cache` (`LruCache::insert_with_size`) so
+    /// the LRU can evict by total memory rather than only entry count —
+    /// without this, a few illustrated AZW3s at hundreds of MB each would
+    /// pin gigabytes of resident memory.
+    pub fn byte_size(&self) -> usize {
+        let parts: usize = self.parts.iter().map(|p| p.data.len()).sum();
+        let images: usize = self.image_resources.values().map(Vec::len).sum();
+        parts + images
+    }
+
     /// Build a borrowed view of the image resources for the rewriter,
     /// which uses `&[u8]` so it can also work with libmobi's borrowed
     /// data on the path-based code path.
