@@ -150,9 +150,10 @@ impl<V> LruCache<V> {
 ///
 /// 1. `profile_state` — profile name + pool map
 /// 2. `epub_cache` — EPUB archive LRU cache
-/// 3. `pdf_cache` — PDF render LRU cache
-/// 4. `enrichment_registry` — metadata provider registry
-/// 5. `web_server_handle` — running web server handle
+/// 3. `mobi_cache` — MOBI parsed-book LRU cache (mobi feature only)
+/// 4. `pdf_cache` — PDF render LRU cache
+/// 5. `enrichment_registry` — metadata provider registry
+/// 6. `web_server_handle` — running web server handle
 pub struct ProfileState {
     pub active: String,
     pub pools: std::collections::HashMap<String, DbPool>,
@@ -166,16 +167,22 @@ pub struct AppState {
     /// EPUB archive LRU cache (lock #2). Single Mutex replaces the former
     /// dual-Mutex (epub_cache + epub_cache_order).
     pub epub_cache: std::sync::Mutex<LruCache<epub::CachedEpubArchive>>,
-    /// PDF render LRU cache (lock #3). Single Mutex replaces the former
+    /// MOBI parsed-book LRU cache (lock #3). Holds the post-parse view
+    /// (HTML parts + image resources) so chapter reads, full-book loads,
+    /// and search don't reopen and reparse the file via libmobi on every
+    /// request. Mirrors the EPUB cache's role for the MOBI hot paths.
+    #[cfg(feature = "mobi")]
+    pub mobi_cache: std::sync::Mutex<LruCache<folio_core::mobi::CachedMobiBook>>,
+    /// PDF render LRU cache (lock #4). Single Mutex replaces the former
     /// dual-Mutex (pdf_render_cache + pdf_render_cache_order).
     pub pdf_cache: std::sync::Mutex<LruCache<String>>,
-    /// Metadata provider registry (lock #4).
+    /// Metadata provider registry (lock #5).
     pub enrichment_registry: std::sync::Mutex<crate::providers::ProviderRegistry>,
     /// DB pool shared with the web server, swapped on profile switch.
     pub shared_active_pool: std::sync::Arc<std::sync::Mutex<DbPool>>,
     /// PIN hash shared with the web server, updated by `web_server_set_pin`.
     pub shared_pin_hash: std::sync::Arc<std::sync::Mutex<Option<String>>>,
-    /// Handle to the running web server (lock #5).
+    /// Handle to the running web server (lock #6).
     pub web_server_handle: std::sync::Mutex<Option<crate::web_server::WebServerHandle>>,
 }
 
@@ -294,6 +301,30 @@ fn ensure_epub_cached(cache: &mut LruCache<epub::CachedEpubArchive>, file_path: 
     if let Ok(archive) = epub::CachedEpubArchive::open(file_path) {
         cache.insert(file_path.to_string(), archive);
     }
+}
+
+/// MOBI counterpart of `ensure_epub_cached`. Returns an error when libmobi
+/// can't parse the file so the caller can surface it instead of falling
+/// through with an empty cache miss — `cache.get()` only signals presence.
+///
+/// Inserts via `insert_with_size` so the byte budget configured on
+/// `mobi_cache` in `lib.rs` actually drives eviction. Owned MOBI bytes
+/// (chapters + image resources) can run hundreds of MB on illustrated
+/// AZW3s; relying on entry count alone would let a small handful of
+/// books pin multi-GB of RAM.
+#[cfg(feature = "mobi")]
+fn ensure_mobi_cached(
+    cache: &mut LruCache<folio_core::mobi::CachedMobiBook>,
+    file_path: &str,
+) -> FolioResult<()> {
+    if cache.get(file_path).is_some() {
+        cache.touch(file_path);
+        return Ok(());
+    }
+    let cached = folio_core::mobi::CachedMobiBook::open(file_path)?;
+    let size = cached.byte_size();
+    cache.insert_with_size(file_path.to_string(), cached, size);
+    Ok(())
 }
 
 // --- Activity logging ---
@@ -1059,6 +1090,10 @@ pub async fn remove_book(book_id: String, state: State<'_, AppState>) -> FolioRe
         if let Ok(mut cache) = state.epub_cache.lock() {
             cache.remove(path);
         }
+        #[cfg(feature = "mobi")]
+        if let Ok(mut cache) = state.mobi_cache.lock() {
+            cache.remove(path);
+        }
     }
 
     // Remove the physical file only if it was imported (copied) into the library.
@@ -1346,12 +1381,19 @@ pub async fn get_chapter_content(
             )?)
         }
         #[cfg(feature = "mobi")]
-        BookFormat::Mobi => Ok(folio_core::mobi::get_chapter_content(
-            &file_path,
-            chapter_index as usize,
-            images_storage.as_ref(),
-            &book_id,
-        )?),
+        BookFormat::Mobi => {
+            let mut cache = state.mobi_cache.lock()?;
+            ensure_mobi_cached(&mut cache, &file_path)?;
+            let cached = cache
+                .get(&file_path)
+                .ok_or_else(|| FolioError::internal("Failed to open MOBI book"))?;
+            Ok(folio_core::mobi::get_chapter_content_from_cache(
+                cached,
+                chapter_index as usize,
+                images_storage.as_ref(),
+                &book_id,
+            )?)
+        }
         #[cfg(not(feature = "mobi"))]
         BookFormat::Mobi => Err(FolioError::invalid(
             "MOBI support is not enabled in this build",
@@ -1404,11 +1446,16 @@ pub async fn search_book_content(
         #[cfg(feature = "mobi")]
         BookFormat::Mobi => {
             let images_storage = state.images_storage()?;
-            let chapters = folio_core::mobi::get_chapter_list(&file_path)?;
+            let mut cache = state.mobi_cache.lock()?;
+            ensure_mobi_cached(&mut cache, &file_path)?;
+            let cached = cache
+                .get(&file_path)
+                .ok_or_else(|| FolioError::internal("Failed to open MOBI book"))?;
+            let chapters = folio_core::mobi::get_chapter_list_from_cache(cached);
             let chapter_indices: Vec<u32> = chapters.iter().map(|c| c.index as u32).collect();
             folio_core::search::search_chapters(chapter_indices, &query, &book_id, |idx| {
-                folio_core::mobi::get_chapter_content(
-                    &file_path,
+                folio_core::mobi::get_chapter_content_from_cache(
+                    cached,
                     idx as usize,
                     images_storage.as_ref(),
                     &book_id,
@@ -1447,7 +1494,16 @@ pub async fn get_chapter_word_counts(
             Ok(epub::get_chapter_word_counts(cached)?)
         }
         #[cfg(feature = "mobi")]
-        BookFormat::Mobi => Ok(folio_core::mobi::get_chapter_word_counts(&file_path)?),
+        BookFormat::Mobi => {
+            let mut cache = state.mobi_cache.lock()?;
+            ensure_mobi_cached(&mut cache, &file_path)?;
+            let cached = cache
+                .get(&file_path)
+                .ok_or_else(|| FolioError::internal("Failed to open MOBI book"))?;
+            Ok(folio_core::mobi::get_chapter_word_counts_from_cache(
+                cached,
+            )?)
+        }
         #[cfg(not(feature = "mobi"))]
         BookFormat::Mobi => Err(FolioError::invalid(
             "MOBI support is not enabled in this build",
@@ -1496,10 +1552,15 @@ pub async fn get_all_chapters(
         }
         #[cfg(feature = "mobi")]
         BookFormat::Mobi => {
+            let mut cache = state.mobi_cache.lock()?;
+            ensure_mobi_cached(&mut cache, &file_path)?;
+            let cached = cache
+                .get(&file_path)
+                .ok_or_else(|| FolioError::internal("Failed to open MOBI book"))?;
             let mut chapters = Vec::with_capacity(total_chapters as usize);
             for i in 0..total_chapters as usize {
-                let html = folio_core::mobi::get_chapter_content(
-                    &file_path,
+                let html = folio_core::mobi::get_chapter_content_from_cache(
+                    cached,
                     i,
                     images_storage.as_ref(),
                     &book_id,
@@ -1546,7 +1607,12 @@ pub async fn get_toc(
             // MOBI has no real TOC — synthesize a flat list from the
             // adapter's chapter list so the Contents sidebar works. Each
             // entry is a depth-0 leaf (no children).
-            let chapters = folio_core::mobi::get_chapter_list(&file_path)?;
+            let mut cache = state.mobi_cache.lock()?;
+            ensure_mobi_cached(&mut cache, &file_path)?;
+            let cached = cache
+                .get(&file_path)
+                .ok_or_else(|| FolioError::internal("Failed to open MOBI book"))?;
+            let chapters = folio_core::mobi::get_chapter_list_from_cache(cached);
             Ok(chapters
                 .into_iter()
                 .map(|c| crate::models::TocEntry {
@@ -4246,6 +4312,10 @@ pub async fn cleanup_library(
 
         // Evict EPUB cache entry.
         if let Ok(mut cache) = state.epub_cache.lock() {
+            cache.remove(&resolved);
+        }
+        #[cfg(feature = "mobi")]
+        if let Ok(mut cache) = state.mobi_cache.lock() {
             cache.remove(&resolved);
         }
 

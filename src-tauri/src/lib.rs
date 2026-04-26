@@ -137,6 +137,16 @@ pub fn run() {
                 }),
                 data_dir,
                 epub_cache: std::sync::Mutex::new(LruCache::new(5)),
+                #[cfg(feature = "mobi")]
+                mobi_cache: std::sync::Mutex::new({
+                    let mut c = LruCache::new(5);
+                    // Cap by total bytes — owned MOBI bytes (chapter HTML +
+                    // image resources) can run hundreds of MB on illustrated
+                    // AZW3s, so entry count alone is not a sufficient guard.
+                    // 200 MB matches the PDF cache budget below.
+                    c.set_max_bytes(200 * 1024 * 1024);
+                    c
+                }),
                 pdf_cache: std::sync::Mutex::new({
                     let mut c = LruCache::new(20);
                     c.set_max_bytes(200 * 1024 * 1024); // 200 MB memory limit (#52)
