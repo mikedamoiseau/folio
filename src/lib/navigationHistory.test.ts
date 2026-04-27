@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   emptyHistory,
   pushEntry,
+  replaceCurrent,
   goBack,
   goForward,
   canGoBack,
@@ -63,34 +64,36 @@ describe("pushEntry", () => {
     expect(canGoForward(h)).toBe(false);
   });
 
-  it("truncates forward entries even when the new push collapses with the current position", () => {
+  it("truncates the forward branch on push, even when the new position matches the cursor", () => {
     let h = emptyHistory<ChapterMeta>();
     h = pushEntry(h, { position: 0 });
     h = pushEntry(h, { position: 1 });
     h = pushEntry(h, { position: 2 });
-    // Go back to cursor=1.
     h = goBack(h).history;
     expect(canGoForward(h)).toBe(true);
-    // Same-position push at the current cursor must still drop the forward
-    // branch — otherwise users could navigate forward into stale state.
     h = pushEntry(h, { position: 1, meta: { scroll: 50 } });
-    expect(h.entries.map((e) => e.position)).toEqual([0, 1]);
-    expect(h.cursor).toBe(1);
+    // Push always grows: forward branch is gone, but the duplicate-position
+    // entry at the cursor is preserved AND the new entry is appended.
+    expect(h.entries.map((e) => e.position)).toEqual([0, 1, 1]);
+    expect(h.cursor).toBe(2);
     expect(canGoForward(h)).toBe(false);
-    expect(h.entries[1].meta).toEqual({ scroll: 50 });
+    expect(h.entries[2].meta).toEqual({ scroll: 50 });
   });
 
-  it("collapses pushes that match the current entry's position (dedupe)", () => {
+  it("treats same-chapter, different-scroll jumps as distinct entries (no position-only dedupe)", () => {
     let h = emptyHistory<ChapterMeta>();
     h = pushEntry(h, { position: 4, meta: { scroll: 0 } });
-    h = pushEntry(h, { position: 4, meta: { scroll: 100 } });
-    expect(h.entries).toHaveLength(1);
-    // Meta is updated in place to reflect the latest position state.
-    expect(h.entries[0].meta).toEqual({ scroll: 100 });
-    expect(h.cursor).toBe(0);
+    h = pushEntry(h, { position: 4, meta: { scroll: 0.8 } });
+    expect(h.entries).toHaveLength(2);
+    expect(h.cursor).toBe(1);
+    expect(h.entries[0].meta).toEqual({ scroll: 0 });
+    expect(h.entries[1].meta).toEqual({ scroll: 0.8 });
+    // Back must reach the earlier in-chapter location.
+    const { entry } = goBack(h);
+    expect(entry).toEqual({ position: 4, meta: { scroll: 0 } });
   });
 
-  it("does not collapse when meta differs but position differs", () => {
+  it("treats different-chapter pushes as distinct entries", () => {
     let h = emptyHistory<ChapterMeta>();
     h = pushEntry(h, { position: 4 });
     h = pushEntry(h, { position: 5 });
@@ -182,6 +185,39 @@ describe("goBack / goForward", () => {
     goBack(h);
     goForward(h);
     pushEntry(h, { position: 99 });
+    expect(JSON.stringify(h)).toBe(snapshot);
+  });
+});
+
+describe("replaceCurrent", () => {
+  it("rewrites the cursor entry without changing length, cursor, or the forward branch", () => {
+    let h = emptyHistory<ChapterMeta>();
+    h = pushEntry(h, { position: 0, meta: { scroll: 0 } });
+    h = pushEntry(h, { position: 1, meta: { scroll: 0 } });
+    h = pushEntry(h, { position: 2, meta: { scroll: 0 } });
+    h = goBack(h).history; // cursor = 1
+    expect(canGoForward(h)).toBe(true);
+
+    const replaced = replaceCurrent(h, { position: 7, meta: { scroll: 0.42 } });
+    expect(replaced.entries).toHaveLength(3);
+    expect(replaced.cursor).toBe(1);
+    expect(replaced.entries[1]).toEqual({ position: 7, meta: { scroll: 0.42 } });
+    // Forward branch must survive — back/forward stamping must not destroy it.
+    expect(replaced.entries[2]).toEqual({ position: 2, meta: { scroll: 0 } });
+    expect(canGoForward(replaced)).toBe(true);
+  });
+
+  it("is a no-op on an empty history", () => {
+    const h = emptyHistory<ChapterMeta>();
+    const result = replaceCurrent(h, { position: 5, meta: { scroll: 0 } });
+    expect(result).toEqual(h);
+  });
+
+  it("does not mutate the input history", () => {
+    let h = emptyHistory<ChapterMeta>();
+    h = pushEntry(h, { position: 0, meta: { scroll: 0 } });
+    const snapshot = JSON.stringify(h);
+    replaceCurrent(h, { position: 99, meta: { scroll: 0.9 } });
     expect(JSON.stringify(h)).toBe(snapshot);
   });
 });

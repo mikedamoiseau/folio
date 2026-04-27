@@ -16,11 +16,11 @@ import { resolveBookmarkScrollTop, isExternalUrl } from "../lib/utils";
 import {
   emptyHistory,
   pushEntry,
+  replaceCurrent,
   goBack as historyGoBack,
   goForward as historyGoForward,
   canGoBack,
   canGoForward,
-  currentEntry,
   type NavigationEntry,
   type NavigationHistory,
 } from "../lib/navigationHistory";
@@ -138,6 +138,13 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
   const restoringScroll = useRef<number | null>(null);
   const savedScrollPosition = useRef<number | null>(null);
   const targetMatchOffset = useRef<number | null>(null);
+  // Source capture for search jumps — committed to history once the
+  // destination scroll is resolved (either synchronously for same-chapter or
+  // after the chapter renders for cross-chapter paginated search).
+  const pendingSearchHistory = useRef<{
+    source: { position: number; scroll: number };
+    destChapter: number;
+  } | null>(null);
   const userHasInteracted = useRef(false);
 
   const isFileNotFound = (err: unknown): boolean => {
@@ -415,6 +422,18 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
     requestAnimationFrame(() => {
       const textLen = container.textContent?.length || 1;
       container.scrollTop = (offset / textLen) * container.scrollHeight;
+
+      // Commit pending search history with the achieved destination scroll.
+      const pending = pendingSearchHistory.current;
+      pendingSearchHistory.current = null;
+      if (pending) {
+        const sh = container.scrollHeight;
+        const destScroll = sh > 0 ? container.scrollTop / sh : 0;
+        recordJumpFromRef.current?.(pending.source, {
+          position: pending.destChapter,
+          scroll: destScroll,
+        });
+      }
     });
   }, [chapterHtml]);
 
@@ -841,21 +860,46 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
     [chapterIndex, isContinuous]
   );
 
-  // Stamp the current entry's scroll, then push the destination. This is the
-  // "browser pushState"-equivalent for jumps initiated by the user.
+  // Stamp the *live* reader position onto the current history entry, then
+  // push the destination. This is the "browser pushState"-equivalent for
+  // user-initiated jumps where the destination scroll is known up front
+  // (TOC clicks, bookmark clicks).
   const recordJump = useCallback(
     (target: number, targetScroll: number = 0) => {
       const liveScroll = getChapterScrollPosition();
-      setHistory((prev) => {
-        const cur = currentEntry(prev);
-        const stamped = cur
-          ? pushEntry(prev, { position: cur.position, meta: { scroll: liveScroll } })
-          : prev;
-        return pushEntry(stamped, { position: target, meta: { scroll: targetScroll } });
-      });
+      const liveChapter = chapterIndex;
+      setHistory((prev) =>
+        pushEntry(
+          replaceCurrent(prev, { position: liveChapter, meta: { scroll: liveScroll } }),
+          { position: target, meta: { scroll: targetScroll } },
+        ),
+      );
     },
-    [getChapterScrollPosition]
+    [getChapterScrollPosition, chapterIndex]
   );
+
+  // Variant that takes an explicit source — for paths where the destination
+  // scroll is computed *after* a chapter change (e.g. cross-chapter search).
+  // Capture `source` before triggering the chapter render, then call this
+  // once `dest` is resolved so history stamps the correct origin.
+  const recordJumpFrom = useCallback(
+    (
+      source: { position: number; scroll: number },
+      dest: { position: number; scroll: number },
+    ) => {
+      setHistory((prev) =>
+        pushEntry(
+          replaceCurrent(prev, { position: source.position, meta: { scroll: source.scroll } }),
+          { position: dest.position, meta: { scroll: dest.scroll } },
+        ),
+      );
+    },
+    []
+  );
+  // Ref so the search-match scroll effect can call recordJumpFrom without
+  // adding a non-stable dep that would re-bind the effect on every render.
+  const recordJumpFromRef = useRef(recordJumpFrom);
+  useEffect(() => { recordJumpFromRef.current = recordJumpFrom; }, [recordJumpFrom]);
 
   const applyHistoryEntry = useCallback(
     (entry: NavigationEntry<ChapterHistoryMeta>) => {
@@ -895,21 +939,13 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
     [recordJump, applyChapterPosition]
   );
 
-  // Stamp scroll on the current entry without truncating the forward branch —
-  // back/forward must preserve the full timeline.
+  // Stamp the *live* reader position onto the cursor entry without changing
+  // length, cursor, or the forward branch. Used before back/forward so the
+  // entry the user is leaving reflects their actual chapter and scroll.
   const stampLiveScroll = useCallback(
-    (h: NavigationHistory<ChapterHistoryMeta>): NavigationHistory<ChapterHistoryMeta> => {
-      const cur = currentEntry(h);
-      if (!cur) return h;
-      const liveScroll = getChapterScrollPosition();
-      return {
-        ...h,
-        entries: h.entries.map((e, i) =>
-          i === h.cursor ? { position: cur.position, meta: { scroll: liveScroll } } : e,
-        ),
-      };
-    },
-    [getChapterScrollPosition]
+    (h: NavigationHistory<ChapterHistoryMeta>): NavigationHistory<ChapterHistoryMeta> =>
+      replaceCurrent(h, { position: chapterIndex, meta: { scroll: getChapterScrollPosition() } }),
+    [chapterIndex, getChapterScrollPosition]
   );
 
   const goHistoryBack = useCallback(() => {
@@ -974,27 +1010,58 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
     setActiveMatchIndex(index);
 
     if (!isHtmlBook) {
-      // PDF/CBZ/CBR: page-level navigation only
+      // PDF/CBZ/CBR: page-level navigation only (M3 wires history).
       goToChapter(result.chapterIndex);
       return;
     }
 
-    // EPUB: store match offset for scroll-after-load
+    // Capture the live source position *before* any state change so history
+    // doesn't stamp the destination as the source after the render lands.
+    const source = { position: chapterIndex, scroll: getChapterScrollPosition() };
+    pendingSearchHistory.current = { source, destChapter: result.chapterIndex };
     targetMatchOffset.current = result.matchOffset;
 
     if (result.chapterIndex === chapterIndex && scrollContainerRef.current) {
-      // Same chapter — scroll immediately
+      // Same chapter — scroll immediately, then commit history with the
+      // achieved scroll fraction.
       requestAnimationFrame(() => {
         const container = scrollContainerRef.current;
         if (!container || targetMatchOffset.current === null) return;
         const textLen = container.textContent?.length || 1;
         container.scrollTop = (targetMatchOffset.current / textLen) * container.scrollHeight;
         targetMatchOffset.current = null;
+        const pending = pendingSearchHistory.current;
+        pendingSearchHistory.current = null;
+        if (pending) {
+          const sh = container.scrollHeight;
+          const destScroll = sh > 0 ? container.scrollTop / sh : 0;
+          recordJumpFrom(pending.source, {
+            position: pending.destChapter,
+            scroll: destScroll,
+          });
+        }
       });
+    } else if (isContinuous) {
+      // Continuous cross-chapter — match-scroll across chapters in continuous
+      // mode is a pre-existing limitation (the search math is global, not
+      // chapter-local). Land at the chapter top and commit immediately.
+      const chapterDiv = chapterDivRefs.current[result.chapterIndex];
+      const container = scrollContainerRef.current;
+      if (chapterDiv && container) container.scrollTop = chapterDiv.offsetTop;
+      targetMatchOffset.current = null;
+      const pending = pendingSearchHistory.current;
+      pendingSearchHistory.current = null;
+      if (pending) {
+        recordJumpFrom(pending.source, { position: pending.destChapter, scroll: 0 });
+      }
     } else {
-      goToChapter(result.chapterIndex);
+      // Paginated cross-chapter — let the targetMatchOffset useEffect scroll
+      // to the match after the new chapter HTML mounts; it will commit
+      // pendingSearchHistory then. setChapterIndex directly so we don't
+      // re-push history via goToChapter.
+      setChapterIndex(result.chapterIndex);
     }
-  }, [searchResults, goToChapter, bookFormat, chapterIndex]);
+  }, [searchResults, goToChapter, isHtmlBook, isContinuous, chapterIndex, getChapterScrollPosition, recordJumpFrom]);
 
   const prevMatch = useCallback(() => {
     if (searchResults.length === 0) return;

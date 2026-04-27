@@ -6,10 +6,12 @@
  * context they want to restore on back/forward.
  *
  * Semantics mirror a web browser's history stack:
- *   - pushEntry while not at the head truncates the forward entries.
- *   - Consecutive pushes at the same position collapse into one entry; the
- *     latest meta overwrites the previous one (useful for refreshing scroll
- *     state on the current entry without growing the stack).
+ *   - pushEntry always grows the stack, even when the new entry's position
+ *     matches the cursor entry (different scroll within the same chapter is
+ *     a legitimate distinct jump). Forward entries are truncated.
+ *   - replaceCurrent rewrites the cursor entry in place — same length, same
+ *     cursor, forward branch preserved. Use it for "stamp current scroll"
+ *     before navigating, never as a navigation primitive.
  *   - When the entry count exceeds `max`, the oldest entry is evicted.
  */
 
@@ -53,19 +55,8 @@ export function pushEntry<M>(
   h: NavigationHistory<M>,
   entry: NavigationEntry<M>,
 ): NavigationHistory<M> {
-  // Truncate any forward entries first — a push must invalidate the forward
-  // branch, regardless of whether the new entry collapses with the current
-  // one. Doing this before the dedupe check guarantees `canGoForward` is
-  // false after every push.
+  // Truncate the forward branch — a push always invalidates it.
   const truncated = h.entries.slice(0, h.cursor + 1);
-  const head = truncated[truncated.length - 1];
-
-  // Collapse consecutive same-position pushes — refresh meta in place.
-  if (head && head.position === entry.position) {
-    truncated[truncated.length - 1] = { ...entry };
-    return { ...h, entries: truncated, cursor: truncated.length - 1 };
-  }
-
   truncated.push({ ...entry });
 
   // Enforce capacity by dropping the oldest entry.
@@ -74,6 +65,21 @@ export function pushEntry<M>(
   }
 
   return { ...h, entries: truncated, cursor: truncated.length - 1 };
+}
+
+/**
+ * Replace the entry at the cursor without changing length, cursor, or the
+ * forward branch. Intended for "stamp live state" use cases (e.g. recording
+ * the current scroll on the active entry before navigating).
+ */
+export function replaceCurrent<M>(
+  h: NavigationHistory<M>,
+  entry: NavigationEntry<M>,
+): NavigationHistory<M> {
+  if (h.cursor < 0) return h;
+  const entries = h.entries.slice();
+  entries[h.cursor] = { ...entry };
+  return { ...h, entries };
 }
 
 export function goBack<M>(
