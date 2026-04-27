@@ -23,6 +23,13 @@ interface PageViewerProps {
   totalPages: number;
   initialPage?: number;
   onPageChange?: (pageIndex: number) => void;
+  /**
+   * Fires when the user jumps to a non-adjacent page via the "Go to page"
+   * input — distinct from prev/next sequential navigation. The receiver is
+   * expected to record the jump in navigation history so back/forward can
+   * return to the source page.
+   */
+  onPageJump?: (targetIndex: number) => void;
   dualPage?: boolean;
   mangaMode?: boolean;
   pageAnimation?: boolean;
@@ -34,6 +41,7 @@ export default function PageViewer({
   totalPages,
   initialPage = 0,
   onPageChange,
+  onPageJump,
   dualPage = false,
   mangaMode = false,
   pageAnimation = true,
@@ -385,6 +393,10 @@ export default function PageViewer({
       const tag = (e.target as HTMLElement)?.tagName;
       if (tag === "INPUT" || tag === "TEXTAREA") return;
 
+      // Alt+Arrow is reserved for the Reader's navigation history; don't
+      // also consume it as page-prev/next.
+      if (e.altKey && (e.key === "ArrowLeft" || e.key === "ArrowRight")) return;
+
       if (e.key === "ArrowLeft") mangaMode ? nextSpread() : prevSpread();
       else if (e.key === "ArrowRight") mangaMode ? prevSpread() : nextSpread();
       else if ((e.key === "=" || e.key === "+") && (e.metaKey || e.ctrlKey)) {
@@ -495,10 +507,14 @@ export default function PageViewer({
     const num = parseInt(pageInput, 10);
     if (!isNaN(num) && num >= 1 && num <= totalPages) {
       directionRef.current = "right";
-      goTo(num - 1);
+      const target = num - 1;
+      // Fire the jump notification *before* goTo so the listener can read the
+      // pre-jump page index for history's source entry.
+      if (target !== pageIndex) onPageJump?.(target);
+      goTo(target);
     }
     setEditingPage(false);
-  }, [pageInput, totalPages, goTo]);
+  }, [pageInput, totalPages, pageIndex, goTo, onPageJump]);
 
   useEffect(() => {
     if (editingPage && pageInputRef.current) {

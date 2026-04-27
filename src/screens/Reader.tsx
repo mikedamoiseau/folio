@@ -1124,9 +1124,8 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
       if (settingsOpen && (e.key === "Escape" || e.key === "Tab")) return;
 
       // Alt+Left / Alt+Right → navigation history (jump back / forward).
-      // Browser-style binding; takes precedence over chapter prev/next.
+      // Browser-style binding; takes precedence over chapter/page prev/next.
       if (e.altKey && (e.key === "ArrowLeft" || e.key === "ArrowRight")) {
-        if (!isHtmlBook) return;
         e.preventDefault();
         if (e.key === "ArrowLeft") goHistoryBack();
         else goHistoryForward();
@@ -1521,33 +1520,29 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
             </svg>
           </button>
 
-          {/* Navigation history (HTML books only — M3 will lift the gate) */}
-          {isHtmlBook && (
-            <>
-              <button
-                onClick={goHistoryBack}
-                disabled={!canGoBack(history)}
-                className="p-1.5 text-ink-muted hover:text-ink transition-colors rounded-lg hover:bg-warm-subtle focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-ink-muted"
-                aria-label={t("reader.historyBack")}
-                title={t("reader.historyBackShortcut")}
-              >
-                <svg width="18" height="18" viewBox="0 0 20 20" fill="none">
-                  <path d="M11 4l-5 6 5 6M6 10h10" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" />
-                </svg>
-              </button>
-              <button
-                onClick={goHistoryForward}
-                disabled={!canGoForward(history)}
-                className="p-1.5 text-ink-muted hover:text-ink transition-colors rounded-lg hover:bg-warm-subtle focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-ink-muted"
-                aria-label={t("reader.historyForward")}
-                title={t("reader.historyForwardShortcut")}
-              >
-                <svg width="18" height="18" viewBox="0 0 20 20" fill="none">
-                  <path d="M9 4l5 6-5 6M14 10H4" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" />
-                </svg>
-              </button>
-            </>
-          )}
+          {/* Navigation history — available for all formats */}
+          <button
+            onClick={goHistoryBack}
+            disabled={!canGoBack(history)}
+            className="p-1.5 text-ink-muted hover:text-ink transition-colors rounded-lg hover:bg-warm-subtle focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-ink-muted"
+            aria-label={t("reader.historyBack")}
+            title={t("reader.historyBackShortcut")}
+          >
+            <svg width="18" height="18" viewBox="0 0 20 20" fill="none">
+              <path d="M11 4l-5 6 5 6M6 10h10" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </button>
+          <button
+            onClick={goHistoryForward}
+            disabled={!canGoForward(history)}
+            className="p-1.5 text-ink-muted hover:text-ink transition-colors rounded-lg hover:bg-warm-subtle focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-ink-muted"
+            aria-label={t("reader.historyForward")}
+            title={t("reader.historyForwardShortcut")}
+          >
+            <svg width="18" height="18" viewBox="0 0 20 20" fill="none">
+              <path d="M9 4l5 6-5 6M14 10H4" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </button>
 
           <h1 className="flex-1 text-sm text-ink-muted truncate font-medium px-1">
             {currentChapterTitle}
@@ -1816,6 +1811,7 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
               totalPages={pageCount}
               initialPage={chapterIndex}
               onPageChange={(index) => setChapterIndex(index)}
+              onPageJump={(target) => recordJump(target, 0)}
               dualPage={dualPage}
               mangaMode={mangaMode}
               pageAnimation={pageAnimation}
