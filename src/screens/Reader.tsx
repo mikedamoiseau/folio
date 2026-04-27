@@ -403,7 +403,11 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
     if (scrollPos !== null && scrollContainerRef.current) {
       const container = scrollContainerRef.current;
       requestAnimationFrame(() => {
-        container.scrollTop = scrollPos * container.scrollHeight;
+        // Match the save-side denominator: scrollProgress is computed as
+        // scrollTop / (scrollHeight - clientHeight). Restore must invert
+        // that, otherwise long chapters drift towards the bottom.
+        const max = Math.max(0, container.scrollHeight - container.clientHeight);
+        container.scrollTop = scrollPos * max;
         restoringScroll.current = null;
         savedScrollPosition.current = null;
       });
@@ -424,11 +428,13 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
       container.scrollTop = (offset / textLen) * container.scrollHeight;
 
       // Commit pending search history with the achieved destination scroll.
+      // Use the scrollProgress denominator (scrollHeight - clientHeight) so
+      // a later restore via resolveBookmarkScrollTop lands on the same pixel.
       const pending = pendingSearchHistory.current;
       pendingSearchHistory.current = null;
       if (pending) {
-        const sh = container.scrollHeight;
-        const destScroll = sh > 0 ? container.scrollTop / sh : 0;
+        const max = Math.max(0, container.scrollHeight - container.clientHeight);
+        const destScroll = max > 0 ? container.scrollTop / max : 0;
         recordJumpFromRef.current?.(pending.source, {
           position: pending.destChapter,
           scroll: destScroll,
@@ -854,6 +860,7 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
           chapterOffsetTop: chapterDiv?.offsetTop ?? 0,
           chapterHeight: chapterDiv?.offsetHeight ?? 0,
           containerScrollHeight: container.scrollHeight,
+          containerClientHeight: container.clientHeight,
         });
       }
     },
@@ -1033,8 +1040,10 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
         const pending = pendingSearchHistory.current;
         pendingSearchHistory.current = null;
         if (pending) {
-          const sh = container.scrollHeight;
-          const destScroll = sh > 0 ? container.scrollTop / sh : 0;
+          // Match the scrollProgress denominator (scrollHeight - clientHeight)
+          // so back/forward restore lands at the same pixel.
+          const max = Math.max(0, container.scrollHeight - container.clientHeight);
+          const destScroll = max > 0 ? container.scrollTop / max : 0;
           recordJumpFrom(pending.source, {
             position: pending.destChapter,
             scroll: destScroll,

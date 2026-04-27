@@ -131,31 +131,36 @@ export function clamp(value: number, min: number, max: number): number {
 }
 
 /** Geometry inputs for {@link resolveBookmarkScrollTop}. All values are in
- *  CSS pixels and come from `HTMLElement.offsetTop`, `offsetHeight`, and
- *  the container's `scrollHeight`. */
+ *  CSS pixels and come from `HTMLElement.offsetTop`, `offsetHeight`, the
+ *  container's `scrollHeight`, and (for paginated mode) `clientHeight`. */
 export interface ChapterGeometry {
   chapterOffsetTop: number;
   chapterHeight: number;
   containerScrollHeight: number;
+  /** Container's `clientHeight` — used as the divisor for the paginated
+   *  scroll fraction so save/restore use the same denominator
+   *  (`scrollTop / (scrollHeight - clientHeight)` on the save side). */
+  containerClientHeight?: number;
 }
 
 /**
- * Convert a stored bookmark `scroll_position` (fraction 0–1) back into an
- * absolute `container.scrollTop` value.
+ * Convert a stored bookmark/history `scroll_position` (fraction 0–1) back
+ * into an absolute `container.scrollTop` value.
  *
- * HTML-reflowable books (EPUB, MOBI) store a **chapter-local** fraction
- * when they're in continuous-scroll mode — the same coordinate system
- * `getChapterScrollPosition()` produces on save. Resolving it requires
- * the chapter's geometry because the container holds every chapter end
- * to end.
+ * Continuous mode: the fraction is **chapter-local** — same coordinate
+ * system `getChapterScrollPosition()` produces on save. Resolving it
+ * requires the chapter's geometry because the container holds every
+ * chapter end to end.
  *
- * Paginated / single-chapter rendering modes treat the fraction as
- * container-global, so we just scale against the container's
- * `scrollHeight` and ignore chapter geometry.
+ * Paginated mode: the fraction is **container-global** and matches the
+ * `scrollProgress` formula `scrollTop / (scrollHeight - clientHeight)`,
+ * so the inverse multiplies by that same denominator. When `clientHeight`
+ * isn't supplied (older callers / synthetic geometry), this falls back to
+ * the full `scrollHeight` for backward compatibility.
  *
- * The function is pure: it does not clamp out-of-range fractions (a
- * saved value should already be in [0, 1]) and returns `chapterOffsetTop`
- * when the chapter has zero height instead of producing NaN.
+ * Pure: does not clamp out-of-range fractions (saved values should
+ * already be in [0, 1]) and returns `chapterOffsetTop` when the chapter
+ * has zero height instead of producing NaN.
  */
 export function resolveBookmarkScrollTop(
   isContinuous: boolean,
@@ -165,7 +170,11 @@ export function resolveBookmarkScrollTop(
   if (isContinuous) {
     return geometry.chapterOffsetTop + storedPosition * geometry.chapterHeight;
   }
-  return storedPosition * geometry.containerScrollHeight;
+  const denom =
+    typeof geometry.containerClientHeight === "number"
+      ? Math.max(0, geometry.containerScrollHeight - geometry.containerClientHeight)
+      : geometry.containerScrollHeight;
+  return storedPosition * denom;
 }
 
 const SUPPORTED_EXTENSIONS = [".epub", ".cbz", ".cbr", ".pdf"];
