@@ -156,12 +156,28 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
     return message.toLowerCase().includes("book file not found");
   };
 
+  // ---- Reset in-session state when switching books ----
+  // Reader stays mounted across `/reader/:bookId` changes (no route key), so
+  // anything keyed to the old book — navigation history, pending search
+  // refs, the search match offset — must be cleared on bookId change before
+  // the init effect seeds the new book's history.
+  useEffect(() => {
+    setHistory(emptyHistory<ChapterHistoryMeta>());
+    historyInitialized.current = false;
+    pendingSearchHistory.current = null;
+    targetMatchOffset.current = null;
+  }, [bookId]);
+
   // ---- Load book info, TOC, and saved progress on mount ----
 
   useEffect(() => {
     if (!bookId) return;
 
     let cancelled = false;
+    // Re-enter the loading state on book change so downstream effects (incl.
+    // the nav-history seed) wait for the new book's progress fetch instead
+    // of firing with the previous book's chapterIndex.
+    setLoading(true);
 
     async function init() {
       try {
