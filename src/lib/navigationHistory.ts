@@ -53,17 +53,19 @@ export function pushEntry<M>(
   h: NavigationHistory<M>,
   entry: NavigationEntry<M>,
 ): NavigationHistory<M> {
-  const head = currentEntry(h);
+  // Truncate any forward entries first — a push must invalidate the forward
+  // branch, regardless of whether the new entry collapses with the current
+  // one. Doing this before the dedupe check guarantees `canGoForward` is
+  // false after every push.
+  const truncated = h.entries.slice(0, h.cursor + 1);
+  const head = truncated[truncated.length - 1];
 
   // Collapse consecutive same-position pushes — refresh meta in place.
   if (head && head.position === entry.position) {
-    const entries = h.entries.slice();
-    entries[h.cursor] = { ...entry };
-    return { ...h, entries };
+    truncated[truncated.length - 1] = { ...entry };
+    return { ...h, entries: truncated, cursor: truncated.length - 1 };
   }
 
-  // Truncate any forward entries past the current cursor, then append.
-  const truncated = h.entries.slice(0, h.cursor + 1);
   truncated.push({ ...entry });
 
   // Enforce capacity by dropping the oldest entry.

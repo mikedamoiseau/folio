@@ -63,6 +63,23 @@ describe("pushEntry", () => {
     expect(canGoForward(h)).toBe(false);
   });
 
+  it("truncates forward entries even when the new push collapses with the current position", () => {
+    let h = emptyHistory<ChapterMeta>();
+    h = pushEntry(h, { position: 0 });
+    h = pushEntry(h, { position: 1 });
+    h = pushEntry(h, { position: 2 });
+    // Go back to cursor=1.
+    h = goBack(h).history;
+    expect(canGoForward(h)).toBe(true);
+    // Same-position push at the current cursor must still drop the forward
+    // branch — otherwise users could navigate forward into stale state.
+    h = pushEntry(h, { position: 1, meta: { scroll: 50 } });
+    expect(h.entries.map((e) => e.position)).toEqual([0, 1]);
+    expect(h.cursor).toBe(1);
+    expect(canGoForward(h)).toBe(false);
+    expect(h.entries[1].meta).toEqual({ scroll: 50 });
+  });
+
   it("collapses pushes that match the current entry's position (dedupe)", () => {
     let h = emptyHistory<ChapterMeta>();
     h = pushEntry(h, { position: 4, meta: { scroll: 0 } });
