@@ -98,7 +98,12 @@ jobs:
         run: ./scripts/fetch-mobi-test-corpus.sh
 
       - name: Run cargo test (folio-core, --features mobi)
-        run: cargo test -p folio-core --features mobi
+        # libmobi's C-side cleanup races across threads on Linux — when the
+        # test runner opens multiple MOBIs in parallel, drop ordering can
+        # double-free shared internal state and SIGABRT after a passing
+        # test. Serialise the suite to avoid the flake. The crate is tiny,
+        # so the overhead is minimal.
+        run: cargo test -p folio-core --features mobi -- --test-threads=1
 
   lint:
     name: Rust Lint
