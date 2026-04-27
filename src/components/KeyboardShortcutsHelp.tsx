@@ -28,6 +28,7 @@ export default function KeyboardShortcutsHelp({ context, onClose }: KeyboardShor
     shortcuts: [
       { keys: "\u2190 / \u2192", description: t("shortcuts.prevNextChapter") },
       { keys: "\u2190 / \u2192", description: t("shortcuts.prevNextPage") },
+      { keys: "\u2325\u2190 / \u2325\u2192", description: t("shortcuts.historyBackForward") },
       { keys: "+ / \u2212", description: t("shortcuts.zoomInOut") },
       { keys: "0", description: t("shortcuts.resetZoom") },
       { keys: "t", description: t("shortcuts.toggleToc") },
