@@ -542,22 +542,19 @@ Open-core transition: after Folio 2.0 ships, the free desktop/web app enters mai
 
 **Priority legend** (used throughout this roadmap for unfinished items): **P1** = do first, **P2** = do next, **P3** = planned but not urgent, **P4** = later / nice to have. Unmarked unfinished items default to P4.
 
-### 63. `folio-core` Workspace Refactor — **P2**
-- Extract shared library crate from `src-tauri/src/`
-- Moves into core: `models`, `db`, parsers (`epub/pdf/cbz/cbr`), `enrichment`, `backup`, `page_cache`, `sync`
-- Stays in `folio-desktop`: `commands.rs` (shrinks to thin adapters), Tauri-specific `AppState`, the current embedded web server
-- `folio-core` has zero Tauri or axum dependencies — pure library
-- Commands collapse to one-liners: `folio_core::library::list(&pool).map_err(Into::into)`
-- Extraction is incremental within one focused push: parsers → models → db → enrichment → backup → orchestration. Each step is one reviewable commit.
-- *Depends on: #55 Structured Errors (core needs a typed `CoreError`, not `Result<T, String>`)*
+### 63. `folio-core` Workspace Refactor — **Done**
+- ~~Extract shared library crate from `src-tauri/src/`~~
+- ~~Moves into core: `models`, `db`, parsers (`epub`/`pdf`/`cbz`/`cbr`/`mobi`), `enrichment`, `backup`, `page_cache`, `sync`, `search`, `isbn`, `openlibrary`, `opds`, `paths`~~
+- ~~`folio-desktop` keeps `commands.rs` as thin adapters plus Tauri-specific `AppState` and the embedded web server~~
+- ~~`folio-core` has zero Tauri or axum dependencies — pure library~~
+- ~~Shipped incrementally across M1–M5, each one a reviewable PR~~
 
-### 64. Storage Abstraction Trait — **P2**
-- New `Storage` trait in `folio-core`, abstracting where book files, covers, EPUB inline images, and page caches live
-- Default implementation: local filesystem (no behavior change for the free app)
-- DB `file_path` column becomes a storage key, not a filesystem path
-- Paid server adds S3/object-store implementation in its own crate
-- Local disk cache layer in front of remote backends — page turns can't be raw S3 GETs
-- *Depends on: #63*
+### 64. Storage Abstraction Trait — **Done**
+- ~~`Storage` trait in `folio-core`, abstracting where book files, covers, EPUB inline images, and page caches live~~
+- ~~Local-filesystem implementation (no behavior change for the free app)~~
+- ~~DB `file_path` column stores storage keys, not raw filesystem paths — backup, sync, and cover routing all go through the trait~~
+- ~~Shipped incrementally across M1–M4 (PRs #15 → #18)~~
+- Paid server will add an S3/object-store implementation in its own crate, with a local disk cache layer in front (page turns can't be raw S3 GETs). *Out of scope for the free app.*
 
 ### 65. `folio-server` — Headless Multi-User Server — **P3**
 
@@ -590,18 +587,16 @@ Separate binary, private repo. Sold as a self-host license first; managed hostin
 
 ## Recommended Implementation Order
 
-The remaining free-app roadmap items ship first and mark Folio 2.0 as a stable cutoff. After that, development pivots to the refactor and the paid server. The sequence below avoids double-churn on the same code.
+The free-app roadmap is nearly closed out. The structural refactors that used to gate the paid server have already shipped; what's left is one Phase 8 feature, the 2.0 tag, and the paid server itself.
 
-1. ~~**#55 Structured Error Types — P1, do first.** Blocks clean `folio-core` extraction. Typed errors must exist before moving functions into the core crate; otherwise every function signature gets rewritten twice.~~ **Done** — `FolioError` enum + `FolioResult<T>` in `src-tauri/src/error.rs`, all commands migrated.
-2. **Remaining Phase 8 items** — ~~#34 MOBI~~ ✓, ~~#36 Navigation History~~ ✓, #40 Split View. Finishes the free app's feature set.
-3. **Tag Folio 2.0.** Publicly marks the free app as stable — a clean mental and marketing cutoff before the paid pivot.
-4. **#63 `folio-core` extraction.** Pure mechanical refactor once errors are typed. One focused push, incremental commits, each independently reviewable.
-5. **#64 Storage abstraction trait.** Added *inside* the now-clean `folio-core` crate, with a single local-FS implementation. No user-visible change in the desktop app.
+1. ~~**#55 Structured Error Types.** `FolioError` enum + `FolioResult<T>` in `src-tauri/src/error.rs`, all commands migrated.~~ **Done.**
+2. ~~**#63 `folio-core` extraction.** Workspace crate carved out of `src-tauri/src/`; commands collapsed to thin adapters. Shipped incrementally as M1–M5.~~ **Done.**
+3. ~~**#64 Storage abstraction trait.** `Storage` trait inside `folio-core` with a local-FS implementation; DB `file_path` column now stores storage keys. Shipped incrementally as M1–M4.~~ **Done.**
+4. ~~**Phase 8 — #34 MOBI**~~ ✓ and ~~**#36 Navigation History**~~ ✓. **Remaining: #40 Split View.** Last feature before the 2.0 cutoff.
+5. **Tag Folio 2.0.** Publicly marks the free app as stable — a clean mental and marketing cutoff before the paid pivot.
 6. **#65 `folio-server` bootstrap** in the private repo. Pulls `folio-core` as a git dependency pinned to a tag.
 
-### Why not storage-trait-first
-
-Designing the `Storage` trait before the workspace refactor would mean touching files in `src-tauri/src/` that are about to be relocated during extraction — double churn on the same lines. The trait's shape also becomes clearer inside a pure library crate, where Tauri orchestration and direct filesystem access aren't mixed into the same modules.
+The historical reasoning ("don't do storage trait before the workspace refactor — double churn") played out in practice: errors landed first, then extraction, then the storage trait inside the now-clean crate. Same logic now suggests #40 can ship before or after the 2.0 tag depending on appetite — there's no architectural blocker either way, just feature scope.
 
 ### Free app maintenance mode (post-2.0)
 
@@ -703,6 +698,6 @@ Tauri v2 supports mobile targets. The React frontend renders in a mobile WebView
 | 6 | Remote Library Access, OPDS Server | Done | Remote access |
 | 8 | Sepia Theme, OpenDyslexic, Star Ratings, In-Book Search, Typography, Custom Fonts, Continuous Scroll, Time-to-Finish, Bookmark Naming, Series, Activity Log, MOBI, Nav History, Custom CSS, Dual-Page/Manga, Settings Reorg, i18n (EN+FR), PDF Zoom Quality, Go to Page, Animations, Comic Page Cache, Split View | 19 done | Reader & library enhancements |
 | 9 | DB Migration Versioning, Transaction Boundaries, Zip Bomb Protection, PDF Cache Memory Limits, Thread Pool, Backup Secret Atomicity, Screen Reader Live Regions, Loading Skeletons, Toast System, Search Nav, Bulk Actions, Highlight Positioning, Structured Errors | 13 done | Hardening & polish |
-| 10 | `folio-core` refactor, Storage trait, `folio-server` (private) | Not started — see Recommended Implementation Order | Open-core + paid server |
+| 10 | `folio-core` refactor, Storage trait, `folio-server` (private) | 2 done (#63, #64), `folio-server` not started | Open-core + paid server |
 | N/H | Dictionary, Vocabulary Builder, TTS, Library-Wide Search, Annotation Exports, Plugins/Hooks | Not started (User Themes done) | Nice to have |
 | Deferred | Android & iOS App (was Phase 7) | Deferred — web server covers the primary mobile use case | Mobile |
