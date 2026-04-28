@@ -388,9 +388,14 @@ Expand where books come from and how they persist.
 - ~~Inline editing in bookmarks panel: click name to edit, Enter/blur saves, Escape cancels~~
 - ~~New `name` column in bookmarks table; `note` field preserved for future use~~
 
-#### 36. Navigation History (Back/Forward) — **P2**
-- Browser-like back/forward buttons after following TOC links or internal references in EPUBs
-- Maintain a navigation stack per reading session
+#### 36. Navigation History (Back/Forward) — **Done**
+- ~~Browser-like back/forward buttons in the reader header (all formats)~~
+- ~~`Alt+←` / `Alt+→` keyboard shortcuts (HTML + image/PDF)~~
+- ~~Pure `navigationHistory` utility with browser-style stack semantics — `pushEntry` truncates the forward branch, `replaceCurrent` stamps the cursor entry without touching length or forward, capacity-bounded eviction~~
+- ~~In-session navigation stack stamps the source's live chapter+scroll on the active entry, then pushes the destination — so back/forward returns to the exact passage the user left~~
+- ~~Recorded jumps: TOC click, search-result navigation (same- and cross-chapter), highlight-panel jump, bookmark navigation, "Go to page" submission. Sequential prev/next chapter or page is *not* recorded (reading flow ≠ jump)~~
+- ~~Cross-chapter search uses `recordJumpFrom(source, dest)` with an explicit pre-render source capture — destination scroll is committed only after the chapter renders and the match scroll is resolved~~
+- ~~Unified paginated scroll save/restore denominator (`scrollHeight - clientHeight`), correcting a latent drift that also affected bookmark restore for long chapters~~
 
 #### 37. Custom CSS Override — **Done**
 - ~~Let users inject custom CSS into EPUB rendering~~
@@ -588,7 +593,7 @@ Separate binary, private repo. Sold as a self-host license first; managed hostin
 The remaining free-app roadmap items ship first and mark Folio 2.0 as a stable cutoff. After that, development pivots to the refactor and the paid server. The sequence below avoids double-churn on the same code.
 
 1. ~~**#55 Structured Error Types — P1, do first.** Blocks clean `folio-core` extraction. Typed errors must exist before moving functions into the core crate; otherwise every function signature gets rewritten twice.~~ **Done** — `FolioError` enum + `FolioResult<T>` in `src-tauri/src/error.rs`, all commands migrated.
-2. **Remaining Phase 8 items** — #34 MOBI, #36 Navigation History, #40 Split View. Finishes the free app's feature set.
+2. **Remaining Phase 8 items** — ~~#34 MOBI~~ ✓, ~~#36 Navigation History~~ ✓, #40 Split View. Finishes the free app's feature set.
 3. **Tag Folio 2.0.** Publicly marks the free app as stable — a clean mental and marketing cutoff before the paid pivot.
 4. **#63 `folio-core` extraction.** Pure mechanical refactor once errors are typed. One focused push, incremental commits, each independently reviewable.
 5. **#64 Storage abstraction trait.** Added *inside* the now-clean `folio-core` crate, with a single local-FS implementation. No user-visible change in the desktop app.

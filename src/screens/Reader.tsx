@@ -13,6 +13,17 @@ import LanguageSwitcher from "../components/LanguageSwitcher";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { friendlyError, toFolioError } from "../lib/errors";
 import { resolveBookmarkScrollTop, isExternalUrl } from "../lib/utils";
+import {
+  emptyHistory,
+  pushEntry,
+  replaceCurrent,
+  goBack as historyGoBack,
+  goForward as historyGoForward,
+  canGoBack,
+  canGoForward,
+  type NavigationEntry,
+  type NavigationHistory,
+} from "../lib/navigationHistory";
 
 // ---- Types matching Rust backend ----
 
@@ -91,6 +102,20 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
   const [chapterError, setChapterError] = useState<string | null>(null);
   const [missingFileDialog, setMissingFileDialog] = useState(false);
 
+  // ---- Navigation history (back/forward) ----
+  // Tracks jump-style navigations (TOC clicks, search-result jumps, bookmark
+  // navigation). Sequential prev/next chapter changes are *not* recorded —
+  // they're reading flow, not jumps.
+  type ChapterHistoryMeta = { scroll: number };
+  const [history, setHistory] = useState<NavigationHistory<ChapterHistoryMeta>>(
+    () => emptyHistory<ChapterHistoryMeta>(),
+  );
+  const historyRef = useRef(history);
+  useEffect(() => {
+    historyRef.current = history;
+  }, [history]);
+  const historyInitialized = useRef(false);
+
   // Continuous scroll mode state
   const [allChaptersHtml, setAllChaptersHtml] = useState<string[]>([]);
   const [allChaptersLoaded, setAllChaptersLoaded] = useState(false);
@@ -113,6 +138,13 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
   const restoringScroll = useRef<number | null>(null);
   const savedScrollPosition = useRef<number | null>(null);
   const targetMatchOffset = useRef<number | null>(null);
+  // Source capture for search jumps — committed to history once the
+  // destination scroll is resolved (either synchronously for same-chapter or
+  // after the chapter renders for cross-chapter paginated search).
+  const pendingSearchHistory = useRef<{
+    source: { position: number; scroll: number };
+    destChapter: number;
+  } | null>(null);
   const userHasInteracted = useRef(false);
 
   const isFileNotFound = (err: unknown): boolean => {
@@ -124,12 +156,28 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
     return message.toLowerCase().includes("book file not found");
   };
 
+  // ---- Reset in-session state when switching books ----
+  // Reader stays mounted across `/reader/:bookId` changes (no route key), so
+  // anything keyed to the old book — navigation history, pending search
+  // refs, the search match offset — must be cleared on bookId change before
+  // the init effect seeds the new book's history.
+  useEffect(() => {
+    setHistory(emptyHistory<ChapterHistoryMeta>());
+    historyInitialized.current = false;
+    pendingSearchHistory.current = null;
+    targetMatchOffset.current = null;
+  }, [bookId]);
+
   // ---- Load book info, TOC, and saved progress on mount ----
 
   useEffect(() => {
     if (!bookId) return;
 
     let cancelled = false;
+    // Re-enter the loading state on book change so downstream effects (incl.
+    // the nav-history seed) wait for the new book's progress fetch instead
+    // of firing with the previous book's chapterIndex.
+    setLoading(true);
 
     async function init() {
       try {
@@ -209,6 +257,21 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
       cancelled = true;
     };
   }, [bookId]);
+
+  // ---- Seed navigation history with the initial chapter ----
+  // Fires once after the initial load so the user's starting position is the
+  // first entry on the back stack.
+  useEffect(() => {
+    if (loading || historyInitialized.current) return;
+    historyInitialized.current = true;
+    setHistory(
+      pushEntry(emptyHistory<ChapterHistoryMeta>(), {
+        position: chapterIndex,
+        meta: { scroll: savedScrollPosition.current ?? 0 },
+      }),
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loading]);
 
   // ---- Fetch word counts for time-to-finish (HTML chapter formats) ----
 
@@ -356,7 +419,11 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
     if (scrollPos !== null && scrollContainerRef.current) {
       const container = scrollContainerRef.current;
       requestAnimationFrame(() => {
-        container.scrollTop = scrollPos * container.scrollHeight;
+        // Match the save-side denominator: scrollProgress is computed as
+        // scrollTop / (scrollHeight - clientHeight). Restore must invert
+        // that, otherwise long chapters drift towards the bottom.
+        const max = Math.max(0, container.scrollHeight - container.clientHeight);
+        container.scrollTop = scrollPos * max;
         restoringScroll.current = null;
         savedScrollPosition.current = null;
       });
@@ -375,6 +442,20 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
     requestAnimationFrame(() => {
       const textLen = container.textContent?.length || 1;
       container.scrollTop = (offset / textLen) * container.scrollHeight;
+
+      // Commit pending search history with the achieved destination scroll.
+      // Use the scrollProgress denominator (scrollHeight - clientHeight) so
+      // a later restore via resolveBookmarkScrollTop lands on the same pixel.
+      const pending = pendingSearchHistory.current;
+      pendingSearchHistory.current = null;
+      if (pending) {
+        const max = Math.max(0, container.scrollHeight - container.clientHeight);
+        const destScroll = max > 0 ? container.scrollTop / max : 0;
+        recordJumpFromRef.current?.(pending.source, {
+          position: pending.destChapter,
+          scroll: destScroll,
+        });
+      }
     });
   }, [chapterHtml]);
 
@@ -768,38 +849,13 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
 
   // ---- Navigation ----
 
-  const goToChapter = useCallback(
-    (index: number) => {
-      if (index >= 0 && index < totalChapters) {
-        userHasInteracted.current = true;
-        if (isContinuous) {
-          // Scroll to the chapter div
-          const chapterDiv = chapterDivRefs.current[index];
-          const container = scrollContainerRef.current;
-          if (chapterDiv && container) {
-            container.scrollTop = chapterDiv.offsetTop;
-          }
-        } else {
-          setChapterIndex(index);
-        }
-        setTocOpen(false);
-      }
-    },
-    [totalChapters, isContinuous]
-  );
-
-  const navigateToBookmark = useCallback(
+  // Pure scroll/chapter restore — no history side effects. Shared by jump
+  // navigations and history back/forward.
+  const applyChapterPosition = useCallback(
     (targetChapter: number, targetScrollPosition: number) => {
-      setBookmarksOpen(false);
       const container = scrollContainerRef.current;
 
       if (isContinuous && container) {
-        // Continuous mode: every chapter div is already mounted in the
-        // single scroll container, so we can jump directly regardless of
-        // whether this is a same-chapter or cross-chapter bookmark. The
-        // ref-based restore effect only re-fires on
-        // `[allChaptersLoaded, isContinuous]` changes, so it cannot be
-        // relied on for subsequent bookmark clicks.
         if (targetChapter !== chapterIndex) setChapterIndex(targetChapter);
         const chapterDiv = chapterDivRefs.current[targetChapter];
         container.scrollTop = resolveBookmarkScrollTop(true, targetScrollPosition, {
@@ -811,32 +867,132 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
       }
 
       if (targetChapter !== chapterIndex) {
-        // Paginated / single-chapter mode cross-chapter: switching chapters
-        // reloads the HTML, so defer the scroll restore until after the
-        // render via the ref-based handshake the load effect already
-        // consumes.
         setChapterIndex(targetChapter);
         savedScrollPosition.current = targetScrollPosition;
         restoringScroll.current = targetChapter;
       } else if (container) {
-        // Paginated same-chapter: positions are container-global.
         const chapterDiv = chapterDivRefs.current[targetChapter];
         container.scrollTop = resolveBookmarkScrollTop(false, targetScrollPosition, {
           chapterOffsetTop: chapterDiv?.offsetTop ?? 0,
           chapterHeight: chapterDiv?.offsetHeight ?? 0,
           containerScrollHeight: container.scrollHeight,
+          containerClientHeight: container.clientHeight,
         });
       }
     },
     [chapterIndex, isContinuous]
   );
 
+  // Stamp the *live* reader position onto the current history entry, then
+  // push the destination. This is the "browser pushState"-equivalent for
+  // user-initiated jumps where the destination scroll is known up front
+  // (TOC clicks, bookmark clicks).
+  const recordJump = useCallback(
+    (target: number, targetScroll: number = 0) => {
+      const liveScroll = getChapterScrollPosition();
+      const liveChapter = chapterIndex;
+      setHistory((prev) =>
+        pushEntry(
+          replaceCurrent(prev, { position: liveChapter, meta: { scroll: liveScroll } }),
+          { position: target, meta: { scroll: targetScroll } },
+        ),
+      );
+    },
+    [getChapterScrollPosition, chapterIndex]
+  );
+
+  // Variant that takes an explicit source — for paths where the destination
+  // scroll is computed *after* a chapter change (e.g. cross-chapter search).
+  // Capture `source` before triggering the chapter render, then call this
+  // once `dest` is resolved so history stamps the correct origin.
+  const recordJumpFrom = useCallback(
+    (
+      source: { position: number; scroll: number },
+      dest: { position: number; scroll: number },
+    ) => {
+      setHistory((prev) =>
+        pushEntry(
+          replaceCurrent(prev, { position: source.position, meta: { scroll: source.scroll } }),
+          { position: dest.position, meta: { scroll: dest.scroll } },
+        ),
+      );
+    },
+    []
+  );
+  // Ref so the search-match scroll effect can call recordJumpFrom without
+  // adding a non-stable dep that would re-bind the effect on every render.
+  const recordJumpFromRef = useRef(recordJumpFrom);
+  useEffect(() => { recordJumpFromRef.current = recordJumpFrom; }, [recordJumpFrom]);
+
+  const applyHistoryEntry = useCallback(
+    (entry: NavigationEntry<ChapterHistoryMeta>) => {
+      applyChapterPosition(entry.position, entry.meta?.scroll ?? 0);
+    },
+    [applyChapterPosition]
+  );
+
+  const goToChapter = useCallback(
+    (index: number, opts?: { recordHistory?: boolean }) => {
+      if (index >= 0 && index < totalChapters) {
+        userHasInteracted.current = true;
+        if (opts?.recordHistory ?? true) {
+          recordJump(index, 0);
+        }
+        if (isContinuous) {
+          const chapterDiv = chapterDivRefs.current[index];
+          const container = scrollContainerRef.current;
+          if (chapterDiv && container) {
+            container.scrollTop = chapterDiv.offsetTop;
+          }
+        } else {
+          setChapterIndex(index);
+        }
+        setTocOpen(false);
+      }
+    },
+    [totalChapters, isContinuous, recordJump]
+  );
+
+  const navigateToBookmark = useCallback(
+    (targetChapter: number, targetScrollPosition: number) => {
+      setBookmarksOpen(false);
+      recordJump(targetChapter, targetScrollPosition);
+      applyChapterPosition(targetChapter, targetScrollPosition);
+    },
+    [recordJump, applyChapterPosition]
+  );
+
+  // Stamp the *live* reader position onto the cursor entry without changing
+  // length, cursor, or the forward branch. Used before back/forward so the
+  // entry the user is leaving reflects their actual chapter and scroll.
+  const stampLiveScroll = useCallback(
+    (h: NavigationHistory<ChapterHistoryMeta>): NavigationHistory<ChapterHistoryMeta> =>
+      replaceCurrent(h, { position: chapterIndex, meta: { scroll: getChapterScrollPosition() } }),
+    [chapterIndex, getChapterScrollPosition]
+  );
+
+  const goHistoryBack = useCallback(() => {
+    const stamped = stampLiveScroll(historyRef.current);
+    const { history: next, entry } = historyGoBack(stamped);
+    if (!entry) return;
+    setHistory(next);
+    applyHistoryEntry(entry);
+  }, [stampLiveScroll, applyHistoryEntry]);
+
+  const goHistoryForward = useCallback(() => {
+    const stamped = stampLiveScroll(historyRef.current);
+    const { history: next, entry } = historyGoForward(stamped);
+    if (!entry) return;
+    setHistory(next);
+    applyHistoryEntry(entry);
+  }, [stampLiveScroll, applyHistoryEntry]);
+
   const prevChapter = useCallback(() => {
-    goToChapter(chapterIndex - 1);
+    goToChapter(chapterIndex - 1, { recordHistory: false });
   }, [chapterIndex, goToChapter]);
 
   const nextChapter = useCallback(() => {
-    goToChapter(chapterIndex + 1);
+    goToChapter(chapterIndex + 1, { recordHistory: false });
   }, [chapterIndex, goToChapter]);
 
   // ---- Focus search input when search panel opens ----
@@ -877,27 +1033,60 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
     setActiveMatchIndex(index);
 
     if (!isHtmlBook) {
-      // PDF/CBZ/CBR: page-level navigation only
+      // PDF/CBZ/CBR: page-level navigation only (M3 wires history).
       goToChapter(result.chapterIndex);
       return;
     }
 
-    // EPUB: store match offset for scroll-after-load
+    // Capture the live source position *before* any state change so history
+    // doesn't stamp the destination as the source after the render lands.
+    const source = { position: chapterIndex, scroll: getChapterScrollPosition() };
+    pendingSearchHistory.current = { source, destChapter: result.chapterIndex };
     targetMatchOffset.current = result.matchOffset;
 
     if (result.chapterIndex === chapterIndex && scrollContainerRef.current) {
-      // Same chapter — scroll immediately
+      // Same chapter — scroll immediately, then commit history with the
+      // achieved scroll fraction.
       requestAnimationFrame(() => {
         const container = scrollContainerRef.current;
         if (!container || targetMatchOffset.current === null) return;
         const textLen = container.textContent?.length || 1;
         container.scrollTop = (targetMatchOffset.current / textLen) * container.scrollHeight;
         targetMatchOffset.current = null;
+        const pending = pendingSearchHistory.current;
+        pendingSearchHistory.current = null;
+        if (pending) {
+          // Match the scrollProgress denominator (scrollHeight - clientHeight)
+          // so back/forward restore lands at the same pixel.
+          const max = Math.max(0, container.scrollHeight - container.clientHeight);
+          const destScroll = max > 0 ? container.scrollTop / max : 0;
+          recordJumpFrom(pending.source, {
+            position: pending.destChapter,
+            scroll: destScroll,
+          });
+        }
       });
+    } else if (isContinuous) {
+      // Continuous cross-chapter — match-scroll across chapters in continuous
+      // mode is a pre-existing limitation (the search math is global, not
+      // chapter-local). Land at the chapter top and commit immediately.
+      const chapterDiv = chapterDivRefs.current[result.chapterIndex];
+      const container = scrollContainerRef.current;
+      if (chapterDiv && container) container.scrollTop = chapterDiv.offsetTop;
+      targetMatchOffset.current = null;
+      const pending = pendingSearchHistory.current;
+      pendingSearchHistory.current = null;
+      if (pending) {
+        recordJumpFrom(pending.source, { position: pending.destChapter, scroll: 0 });
+      }
     } else {
-      goToChapter(result.chapterIndex);
+      // Paginated cross-chapter — let the targetMatchOffset useEffect scroll
+      // to the match after the new chapter HTML mounts; it will commit
+      // pendingSearchHistory then. setChapterIndex directly so we don't
+      // re-push history via goToChapter.
+      setChapterIndex(result.chapterIndex);
     }
-  }, [searchResults, goToChapter, bookFormat, chapterIndex]);
+  }, [searchResults, goToChapter, isHtmlBook, isContinuous, chapterIndex, getChapterScrollPosition, recordJumpFrom]);
 
   const prevMatch = useCallback(() => {
     if (searchResults.length === 0) return;
@@ -959,6 +1148,15 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
       // Let SettingsPanel handle Escape and Tab when it is open
       if (settingsOpen && (e.key === "Escape" || e.key === "Tab")) return;
 
+      // Alt+Left / Alt+Right → navigation history (jump back / forward).
+      // Browser-style binding; takes precedence over chapter/page prev/next.
+      if (e.altKey && (e.key === "ArrowLeft" || e.key === "ArrowRight")) {
+        e.preventDefault();
+        if (e.key === "ArrowLeft") goHistoryBack();
+        else goHistoryForward();
+        return;
+      }
+
       // Don't navigate chapters when any panel is open
       if ((settingsOpen || tocOpen || bookmarksOpen) && (e.key === "ArrowLeft" || e.key === "ArrowRight")) return;
 
@@ -989,7 +1187,7 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [prevChapter, nextChapter, addBookmarkAtCurrentPosition, showShortcuts, tocOpen, bookmarksOpen, dndMode, settingsOpen, navigate, bookFormat, isHtmlBook, searchOpen]);
+  }, [prevChapter, nextChapter, goHistoryBack, goHistoryForward, addBookmarkAtCurrentPosition, showShortcuts, tocOpen, bookmarksOpen, dndMode, settingsOpen, navigate, bookFormat, isHtmlBook, searchOpen]);
 
   // ---- TOC focus trap ----
 
@@ -1347,6 +1545,30 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
             </svg>
           </button>
 
+          {/* Navigation history — available for all formats */}
+          <button
+            onClick={goHistoryBack}
+            disabled={!canGoBack(history)}
+            className="p-1.5 text-ink-muted hover:text-ink transition-colors rounded-lg hover:bg-warm-subtle focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-ink-muted"
+            aria-label={t("reader.historyBack")}
+            title={t("reader.historyBackShortcut")}
+          >
+            <svg width="18" height="18" viewBox="0 0 20 20" fill="none">
+              <path d="M11 4l-5 6 5 6M6 10h10" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </button>
+          <button
+            onClick={goHistoryForward}
+            disabled={!canGoForward(history)}
+            className="p-1.5 text-ink-muted hover:text-ink transition-colors rounded-lg hover:bg-warm-subtle focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-ink-muted"
+            aria-label={t("reader.historyForward")}
+            title={t("reader.historyForwardShortcut")}
+          >
+            <svg width="18" height="18" viewBox="0 0 20 20" fill="none">
+              <path d="M9 4l5 6-5 6M14 10H4" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </button>
+
           <h1 className="flex-1 text-sm text-ink-muted truncate font-medium px-1">
             {currentChapterTitle}
           </h1>
@@ -1614,6 +1836,7 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
               totalPages={pageCount}
               initialPage={chapterIndex}
               onPageChange={(index) => setChapterIndex(index)}
+              onPageJump={(target) => recordJump(target, 0)}
               dualPage={dualPage}
               mangaMode={mangaMode}
               pageAnimation={pageAnimation}
