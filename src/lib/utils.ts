@@ -2,6 +2,33 @@
  * Pure utility functions extracted for testability.
  */
 
+/** Schemes that should escape the WebView and open in the user's default
+ *  handler (browser, mail client, dialer). All other schemes — including
+ *  Tauri's own asset/IPC schemes and relative paths — stay in-app. */
+const EXTERNAL_URL_SCHEMES = new Set([
+  "http:",
+  "https:",
+  "mailto:",
+  "tel:",
+  "ftp:",
+  "ftps:",
+  "sftp:",
+]);
+
+/**
+ * True when `href` parses as an absolute URL with a scheme that should be
+ * delegated to the OS (web browser, mail client, …). Relative URLs and
+ * fragment-only hrefs return false and stay in-app.
+ */
+export function isExternalUrl(href: string): boolean {
+  try {
+    const url = new URL(href);
+    return EXTERNAL_URL_SCHEMES.has(url.protocol);
+  } catch {
+    return false;
+  }
+}
+
 /** Format seconds into human-readable duration (e.g. "5s", "12m", "2h 30m"). */
 export function formatDuration(secs: number): string {
   if (secs < 60) return `${secs}s`;

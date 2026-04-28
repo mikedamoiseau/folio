@@ -10,8 +10,9 @@ import HighlightsPanel, { HIGHLIGHT_COLORS } from "../components/HighlightsPanel
 import BookmarksPanel from "../components/BookmarksPanel";
 import BookmarkToast from "../components/BookmarkToast";
 import LanguageSwitcher from "../components/LanguageSwitcher";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { friendlyError, toFolioError } from "../lib/errors";
-import { resolveBookmarkScrollTop } from "../lib/utils";
+import { resolveBookmarkScrollTop, isExternalUrl } from "../lib/utils";
 
 // ---- Types matching Rust backend ----
 
@@ -652,6 +653,48 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
     }
     return result;
   }, [chapterHtml, highlights]);
+
+  // ---- Intercept clicks on links inside chapter HTML ----
+  // The chapter content is sanitized but anchors survive — left to the
+  // WebView, an http(s) link would replace the in-app page with the remote
+  // site (Project Gutenberg, etc.). Delegate the click: external schemes
+  // open in the user's default app via the opener plugin; relative paths
+  // are blocked (internal cross-chapter resolution is a separate feature);
+  // fragment-only hashes fall through so the browser scrolls naturally.
+  useEffect(() => {
+    const container = contentRef.current;
+    if (!container) return;
+
+    function handleClick(e: MouseEvent) {
+      if (e.defaultPrevented || e.button !== 0) return;
+      // Let the user open links in a new window/tab via modifier keys
+      // (Cmd/Ctrl+click) — those go through the WebView's default handling.
+      if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+
+      const root = contentRef.current;
+      const anchor = (e.target as HTMLElement | null)?.closest("a");
+      if (!root || !anchor || !root.contains(anchor)) return;
+      const href = anchor.getAttribute("href");
+      if (!href) return;
+
+      if (isExternalUrl(href)) {
+        e.preventDefault();
+        openUrl(href).catch((err) => console.error("Failed to open external link:", err));
+        return;
+      }
+
+      // Fragment-only links: let the browser scroll into view.
+      if (href.startsWith("#")) return;
+
+      // Relative paths (e.g. cross-chapter EPUB references): suppress so
+      // the WebView doesn't navigate to a non-existent route. Resolving
+      // these to TOC chapters is a future enhancement.
+      e.preventDefault();
+    }
+
+    container.addEventListener("click", handleClick);
+    return () => container.removeEventListener("click", handleClick);
+  }, [chapterHtml, allChaptersLoaded, isContinuous]);
 
   // Apply search term highlighting on top of existing highlights
   const searchHighlightedHtml = useMemo(() => {
