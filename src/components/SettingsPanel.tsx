@@ -1418,6 +1418,13 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
               >
                 {t("settings.checkMissingFiles")}
               </button>
+              <button
+                type="button"
+                onClick={() => setShowActivityLog(true)}
+                className="w-full px-3 py-2 text-sm text-ink-muted hover:text-ink bg-warm-subtle hover:bg-warm-border rounded-xl transition-colors text-left"
+              >
+                {t("settings.viewActivityLog")}
+              </button>
 
               <div className="mt-3 pt-3 border-t border-warm-border/50">
                 <label className="text-xs font-medium text-ink-muted mb-2 block">{t("settings.importMode")}</label>
@@ -1640,13 +1647,6 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                 </div>
               )}
             </div>
-          </Accordion>
-
-          <Accordion title={t("settings.activity")} open={openSection === "activity"} onToggle={() => toggleSection("activity")}>
-            <button type="button" onClick={() => setShowActivityLog(true)}
-              className="w-full px-3 py-2 text-sm text-ink-muted hover:text-ink bg-warm-subtle hover:bg-warm-border rounded-xl transition-colors text-left">
-              {t("settings.viewActivityLog")}
-            </button>
           </Accordion>
 
           <Accordion title={t("settings.remoteAccess")} open={openSection === "webserver"} onToggle={() => toggleSection("webserver")}>
