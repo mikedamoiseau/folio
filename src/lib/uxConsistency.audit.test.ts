@@ -2,7 +2,9 @@ import { describe, it, expect } from "vitest";
 import { resolve } from "node:path";
 import {
   findOffGridSpacing,
+  findOffNormStrokeWidth,
   scanTreeForOffGridSpacing,
+  scanTreeForOffNormStrokeWidth,
 } from "./uxConsistency.audit";
 
 const SRC = resolve(__dirname, "..");
@@ -52,8 +54,56 @@ describe("findOffGridSpacing", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Repo guard — fails if any production source file ships off-grid arbitrary
-// spacing values. Locks in the current clean state.
+// findOffNormStrokeWidth — unit-level checks against synthetic SVG snippets.
+// ---------------------------------------------------------------------------
+describe("findOffNormStrokeWidth", () => {
+  it("accepts the canonical strokes (1.5 and 2)", () => {
+    const src = `<svg><path strokeWidth="1.5"/></svg><svg><path strokeWidth="2"/></svg>`;
+    expect(findOffNormStrokeWidth(src, "x.tsx")).toEqual([]);
+  });
+
+  it("flags non-canonical strokes outside spinner context", () => {
+    const src = `<svg><path strokeWidth="1.75"/></svg>`;
+    const out = findOffNormStrokeWidth(src, "x.tsx");
+    expect(out.map((f) => f.match)).toEqual([`strokeWidth="1.75"`]);
+  });
+
+  it("flags 2.5 even though it is between the two cluster values", () => {
+    const src = `<svg><path strokeWidth="2.5"/></svg>`;
+    expect(findOffNormStrokeWidth(src, "x.tsx")).toHaveLength(1);
+  });
+
+  it("allows strokeWidth 3 inside an animate-spin SVG", () => {
+    const src = `<svg className="animate-spin"><circle strokeWidth="3"/></svg>`;
+    expect(findOffNormStrokeWidth(src, "x.tsx")).toEqual([]);
+  });
+
+  it("allows strokeWidth 4 inside an animate-spin SVG", () => {
+    const src = `<svg className="animate-spin"><circle strokeWidth="4"/></svg>`;
+    expect(findOffNormStrokeWidth(src, "x.tsx")).toEqual([]);
+  });
+
+  it("flags strokeWidth 3 outside an animate-spin SVG", () => {
+    const src = `<svg className="text-red-500"><path strokeWidth="3"/></svg>`;
+    expect(findOffNormStrokeWidth(src, "x.tsx")).toHaveLength(1);
+  });
+
+  it("supports curly-brace JSX values", () => {
+    const src = `<svg><path strokeWidth={1.5}/></svg><svg><path strokeWidth={3}/></svg>`;
+    const out = findOffNormStrokeWidth(src, "x.tsx");
+    expect(out.map((f) => f.match)).toEqual([`strokeWidth={3}`]);
+  });
+
+  it("reports correct line numbers", () => {
+    const src = `// 1\n<svg>\n  <path strokeWidth="2.5"/>\n</svg>`;
+    const out = findOffNormStrokeWidth(src, "x.tsx");
+    expect(out).toHaveLength(1);
+    expect(out[0].line).toBe(3);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Repo guards
 // ---------------------------------------------------------------------------
 describe("repo spacing", () => {
   it("contains no off-grid arbitrary spacing values", () => {
@@ -64,6 +114,21 @@ describe("repo spacing", () => {
         .join("\n");
       throw new Error(
         `Off-grid spacing values found (must be 4px multiples):\n${detail}`,
+      );
+    }
+    expect(findings).toEqual([]);
+  });
+});
+
+describe("repo SVG strokes", () => {
+  it("uses only 1.5 / 2 strokes (3 / 4 allowed only on animate-spin SVGs)", () => {
+    const findings = scanTreeForOffNormStrokeWidth(SRC);
+    if (findings.length > 0) {
+      const detail = findings
+        .map((f) => `  ${f.file}:${f.line}  ${f.match}`)
+        .join("\n");
+      throw new Error(
+        `Off-norm SVG strokeWidth values found (must be 1.5 or 2; 3 / 4 allowed only inside animate-spin SVGs):\n${detail}`,
       );
     }
     expect(findings).toEqual([]);

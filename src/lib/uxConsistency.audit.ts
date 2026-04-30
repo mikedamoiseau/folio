@@ -103,3 +103,52 @@ export function scanTreeForOffGridSpacing(root: string): Finding[] {
   }
   return out;
 }
+
+// ---------------------------------------------------------------------------
+// SVG stroke-width — the codebase uses two strokes (1.5 for outline icons,
+// 2 for filled-edge icons). Loading spinners with `animate-spin` may use a
+// thicker stroke (3 or 4) for legibility at small sizes.
+// ---------------------------------------------------------------------------
+
+const ALLOWED_STROKES = new Set(["1.5", "2"]);
+const SPINNER_STROKES = new Set(["3", "4"]);
+const STROKE_RE = /strokeWidth=(?:"([0-9.]+)"|\{([0-9.]+)\})/g;
+
+export function findOffNormStrokeWidth(source: string, file: string): Finding[] {
+  const out: Finding[] = [];
+  STROKE_RE.lastIndex = 0;
+  let m: RegExpExecArray | null;
+  while ((m = STROKE_RE.exec(source)) !== null) {
+    const value = (m[1] ?? m[2]).trim();
+    if (ALLOWED_STROKES.has(value)) continue;
+    if (SPINNER_STROKES.has(value) && enclosingSvgIsSpinner(source, m.index)) continue;
+    const line = source.slice(0, m.index).split("\n").length;
+    out.push({ file, line, match: m[0] });
+  }
+  return out;
+}
+
+function enclosingSvgIsSpinner(source: string, pos: number): boolean {
+  // Find the nearest preceding "<svg" tag. We don't need a real parser:
+  // there are no nested SVGs in this codebase.
+  const head = source.slice(0, pos);
+  const svgStart = head.lastIndexOf("<svg");
+  if (svgStart < 0) return false;
+  // Slice from "<svg" through the strokeWidth match — captures the opening
+  // tag's attributes plus any intervening JSX. If "animate-spin" appears
+  // anywhere in that slice (typically as a className on the svg element or
+  // a wrapping element), treat the match as a spinner.
+  const slice = source.slice(svgStart, pos);
+  return slice.includes("animate-spin");
+}
+
+export function scanTreeForOffNormStrokeWidth(root: string): Finding[] {
+  const out: Finding[] = [];
+  for (const file of collectSourceFiles(root)) {
+    const source = readFileSync(file, "utf8");
+    out.push(
+      ...findOffNormStrokeWidth(source, relative(root, file)),
+    );
+  }
+  return out;
+}

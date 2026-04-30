@@ -1554,7 +1554,7 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
             title={t("reader.historyBackShortcut")}
           >
             <svg width="18" height="18" viewBox="0 0 20 20" fill="none">
-              <path d="M11 4l-5 6 5 6M6 10h10" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" />
+              <path d="M11 4l-5 6 5 6M6 10h10" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
             </svg>
           </button>
           <button
@@ -1565,7 +1565,7 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
             title={t("reader.historyForwardShortcut")}
           >
             <svg width="18" height="18" viewBox="0 0 20 20" fill="none">
-              <path d="M9 4l5 6-5 6M14 10H4" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" />
+              <path d="M9 4l5 6-5 6M14 10H4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
             </svg>
           </button>
 
