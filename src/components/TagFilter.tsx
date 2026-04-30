@@ -182,7 +182,7 @@ export default function TagFilter({
                   <span className="w-3.5 shrink-0">
                     {selectedSet.has(tag.id) && (
                       <svg width="12" height="12" viewBox="0 0 20 20" fill="none">
-                        <path d="M4 10l4 4 8-8" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
+                        <path d="M4 10l4 4 8-8" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
                       </svg>
                     )}
                   </span>

@@ -6,6 +6,7 @@ import {
   groupBy,
   clamp,
   isSupportedFile,
+  isExternalUrl,
   formatMetadataPills,
   getSpreadPages,
   sanitizeCss,
@@ -512,7 +513,34 @@ describe("resolveBookmarkScrollTop", () => {
     expect(top).toBe(4500);
   });
 
-  it("paginated mode: fraction of container.scrollHeight (not chapter-relative)", () => {
+  it("paginated mode: with clientHeight, denominator is scrollHeight - clientHeight", () => {
+    // scrollProgress save side = scrollTop / (scrollHeight - clientHeight),
+    // so the restore multiplier must match: 0.5 of (2000 - 1000) = 500.
+    const top = resolveBookmarkScrollTop(false, 0.5, {
+      chapterOffsetTop: 0,
+      chapterHeight: 0,
+      containerScrollHeight: 2000,
+      containerClientHeight: 1000,
+    });
+    expect(top).toBe(500);
+  });
+
+  it("paginated mode: round-trip — save fraction restores to source pixel", () => {
+    // Reproduces the round-trip: scrollTop=500 in a 2000/1000 container.
+    const scrollTop = 500;
+    const scrollHeight = 2000;
+    const clientHeight = 1000;
+    const stored = scrollTop / (scrollHeight - clientHeight); // 0.5
+    const restored = resolveBookmarkScrollTop(false, stored, {
+      chapterOffsetTop: 0,
+      chapterHeight: 0,
+      containerScrollHeight: scrollHeight,
+      containerClientHeight: clientHeight,
+    });
+    expect(restored).toBe(scrollTop);
+  });
+
+  it("paginated mode: clientHeight undefined → falls back to scrollHeight (legacy)", () => {
     const top = resolveBookmarkScrollTop(false, 0.25, {
       chapterOffsetTop: 5000,
       chapterHeight: 2000,
@@ -526,11 +554,13 @@ describe("resolveBookmarkScrollTop", () => {
       chapterOffsetTop: 5000,
       chapterHeight: 2000,
       containerScrollHeight: 10000,
+      containerClientHeight: 800,
     });
     const b = resolveBookmarkScrollTop(false, 0.5, {
       chapterOffsetTop: 99,
       chapterHeight: 123,
       containerScrollHeight: 10000,
+      containerClientHeight: 800,
     });
     expect(a).toBe(b);
   });
@@ -557,5 +587,39 @@ describe("resolveBookmarkScrollTop", () => {
       containerScrollHeight: 8000,
     });
     expect(top).toBe(4200);
+  });
+});
+
+describe("isExternalUrl", () => {
+  it("recognises http(s) URLs as external", () => {
+    expect(isExternalUrl("http://example.com")).toBe(true);
+    expect(isExternalUrl("https://example.com/path?q=1#x")).toBe(true);
+  });
+
+  it("recognises mailto and tel as external", () => {
+    expect(isExternalUrl("mailto:author@example.com")).toBe(true);
+    expect(isExternalUrl("tel:+15551234567")).toBe(true);
+  });
+
+  it("treats relative paths and fragments as internal", () => {
+    expect(isExternalUrl("chapter02.html")).toBe(false);
+    expect(isExternalUrl("../images/cover.jpg")).toBe(false);
+    expect(isExternalUrl("/absolute/path")).toBe(false);
+    expect(isExternalUrl("#section-3")).toBe(false);
+  });
+
+  it("treats unknown / dangerous schemes as internal (no escape to OS)", () => {
+    // javascript: and data: URIs must NOT be openUrl-ed — keep them in-app
+    // where DOMPurify already neutralised them via sanitisation.
+    expect(isExternalUrl("javascript:alert(1)")).toBe(false);
+    expect(isExternalUrl("data:text/html,<script>alert(1)</script>")).toBe(false);
+    expect(isExternalUrl("file:///etc/passwd")).toBe(false);
+    expect(isExternalUrl("asset://localhost/foo")).toBe(false);
+  });
+
+  it("returns false for empty or malformed input", () => {
+    expect(isExternalUrl("")).toBe(false);
+    expect(isExternalUrl("   ")).toBe(false);
+    expect(isExternalUrl("not a url")).toBe(false);
   });
 });
