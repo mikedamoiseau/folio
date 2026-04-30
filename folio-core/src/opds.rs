@@ -101,6 +101,23 @@ pub fn host_port_from_url(url: &str) -> Option<String> {
     Some(format!("{host}:{port}"))
 }
 
+/// Upgrade a cover URL from `http://` to `https://` so it satisfies the
+/// renderer's CSP — unless the host is in `trusted`, in which case the
+/// upgrade is skipped (LAN/loopback servers typically don't speak TLS, so
+/// upgrading would break the image). Non-`http://` URLs are returned
+/// unchanged.
+fn maybe_upgrade_http(url: &str, trusted: &[String]) -> String {
+    if !url.starts_with("http://") {
+        return url.to_string();
+    }
+    if let Some(hp) = host_port_from_url(url) {
+        if trusted.iter().any(|t| t.eq_ignore_ascii_case(&hp)) {
+            return url.to_string();
+        }
+    }
+    url.replacen("http://", "https://", 1)
+}
+
 /// Validate a URL the user typed in "Add custom OPDS catalog". Permissive
 /// about destination (private/loopback hosts are allowed because the user
 /// explicitly entered them) but strict about scheme — only `http://` or
@@ -189,11 +206,24 @@ pub fn fetch_feed_with_trusted(url: &str, trusted: &[String]) -> FolioResult<Opd
         return Err(FolioError::invalid("Response too large (limit: 5 MB)."));
     }
     let xml = String::from_utf8_lossy(&bytes).to_string();
-    parse_feed(&xml, url)
+    parse_feed_with_trusted(&xml, url, trusted)
 }
 
 /// Parse OPDS/Atom XML into structured data.
+/// Test-only convenience wrapper; production callers route through
+/// [`parse_feed_with_trusted`] via [`fetch_feed_with_trusted`].
+#[cfg(test)]
 fn parse_feed(xml: &str, base_url: &str) -> FolioResult<OpdsFeed> {
+    parse_feed_with_trusted(xml, base_url, &[])
+}
+
+/// Parse OPDS/Atom XML; skip the `http://` → `https://` cover upgrade when
+/// the cover URL targets a trusted host (LAN servers don't speak TLS).
+fn parse_feed_with_trusted(
+    xml: &str,
+    base_url: &str,
+    trusted: &[String],
+) -> FolioResult<OpdsFeed> {
     let mut reader = Reader::from_str(xml);
     reader.config_mut().trim_text(true);
 
@@ -282,11 +312,7 @@ fn parse_feed(xml: &str, base_url: &str) -> FolioResult<OpdsFeed> {
                             if key == "url" {
                                 let url = attr.unescape_value().unwrap_or_default().to_string();
                                 let url = resolve(&url);
-                                entry_cover = Some(if url.starts_with("http://") {
-                                    url.replacen("http://", "https://", 1)
-                                } else {
-                                    url
-                                });
+                                entry_cover = Some(maybe_upgrade_http(&url, trusted));
                             }
                         }
                     }
@@ -320,13 +346,7 @@ fn parse_feed(xml: &str, base_url: &str) -> FolioResult<OpdsFeed> {
                                     || rel.contains("image")
                                     || (mime.starts_with("image/") && rel != "alternate")
                                 {
-                                    // Upgrade http to https for CSP compatibility
-                                    let cover_href = if href.starts_with("http://") {
-                                        href.replacen("http://", "https://", 1)
-                                    } else {
-                                        href.clone()
-                                    };
-                                    entry_cover = Some(cover_href);
+                                    entry_cover = Some(maybe_upgrade_http(&href, trusted));
                                 }
                                 // Navigation (sub-catalog)
                                 if mime.contains("atom+xml")
@@ -738,6 +758,56 @@ mod tests {
         assert!(!is_user_addable_url(""));
         // Empty authority is rejected by the url crate's parser
         assert!(!is_user_addable_url("http://"));
+    }
+
+    #[test]
+    fn maybe_upgrade_http_keeps_trusted_lan_url_as_http() {
+        let trusted = vec!["192.168.0.12:7788".to_string()];
+        // Trusted LAN host: keep http so the LAN server (no TLS) can serve covers.
+        assert_eq!(
+            maybe_upgrade_http("http://192.168.0.12:7788/api/cover/abc.jpg", &trusted),
+            "http://192.168.0.12:7788/api/cover/abc.jpg"
+        );
+    }
+
+    #[test]
+    fn maybe_upgrade_http_upgrades_untrusted_public_url() {
+        let trusted = vec!["192.168.0.12:7788".to_string()];
+        assert_eq!(
+            maybe_upgrade_http("http://covers.example.com/x.jpg", &trusted),
+            "https://covers.example.com/x.jpg"
+        );
+    }
+
+    #[test]
+    fn maybe_upgrade_http_passthrough_for_https_and_others() {
+        let trusted: Vec<String> = vec![];
+        assert_eq!(
+            maybe_upgrade_http("https://x.com/y.jpg", &trusted),
+            "https://x.com/y.jpg"
+        );
+        assert_eq!(maybe_upgrade_http("", &trusted), "");
+    }
+
+    #[test]
+    fn parse_feed_keeps_http_cover_for_trusted_host() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <feed xmlns="http://www.w3.org/2005/Atom">
+          <title>LAN</title>
+          <entry>
+            <id>1</id>
+            <title>Book</title>
+            <link href="/api/books/123/cover" type="image/jpeg" rel="http://opds-spec.org/image"/>
+          </entry>
+        </feed>"#;
+        let trusted = vec!["192.168.0.12:7788".to_string()];
+        let feed =
+            parse_feed_with_trusted(xml, "http://192.168.0.12:7788/opds/all", &trusted).unwrap();
+        // Trusted LAN host — http preserved.
+        assert_eq!(
+            feed.entries[0].cover_url.as_deref(),
+            Some("http://192.168.0.12:7788/api/books/123/cover")
+        );
     }
 
     #[test]
