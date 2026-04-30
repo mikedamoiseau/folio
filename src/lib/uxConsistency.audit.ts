@@ -212,3 +212,91 @@ export function findSettingsSections(source: string): string[] {
   }
   return out;
 }
+
+// ---------------------------------------------------------------------------
+// Dark-mode pass — Tailwind classes using "extreme" shades (50/100/200 for
+// pale tints; 700/800/900 for deep saturations) of non-semantic palettes
+// (red, amber, gray, …) must have a `dark:` companion in the same className,
+// otherwise the surface looks broken on the opposite theme.
+//
+// Folio's primary theming is CSS-variable-based (bg-paper, text-ink, …) and
+// auto-swaps; the only places that need explicit `dark:` prefixes are
+// non-semantic palette colors used for status (errors, warnings) or hard-
+// coded surfaces.
+// ---------------------------------------------------------------------------
+
+const DARK_PALETTES = ["red", "amber", "yellow", "green", "blue", "gray", "slate", "zinc", "neutral", "stone"];
+// Per-property risk shades — only flag what would actually look broken on
+// the opposite theme:
+//   • bg-{p}-50/100/200 — light tints unreadable on dark surfaces
+//   • text-{p}-700/800/900 — deep tints unreadable as text on dark
+//   • border-{p}-50/100/200 — light borders disappear on dark surfaces
+// Mid-shade saturated bg (red-600/700) is intentional emphasis (destructive
+// buttons, badges) and stays the same in both themes.
+const RISK_SHADES_BY_PROPERTY: Record<string, string[]> = {
+  bg: ["50", "100", "200"],
+  text: ["700", "800", "900"],
+  border: ["50", "100", "200"],
+};
+
+const CLASSNAME_RE = /className=(?:"([^"]*)"|\{`([^`]*)`\})/g;
+
+export function findMissingDarkVariants(source: string, file: string): Finding[] {
+  const out: Finding[] = [];
+  CLASSNAME_RE.lastIndex = 0;
+  let m: RegExpExecArray | null;
+  while ((m = CLASSNAME_RE.exec(source)) !== null) {
+    const classes = m[1] ?? m[2];
+    const hits = riskClasses(classes);
+    for (const hit of hits) {
+      if (!hasDarkCompanion(classes, hit)) {
+        const line = source.slice(0, m.index).split("\n").length;
+        out.push({ file, line, match: hit.full });
+      }
+    }
+  }
+  return out;
+}
+
+interface RiskHit {
+  full: string; // e.g. "bg-red-50"
+  property: string; // "bg" | "text" | "border"
+  palette: string;
+  shade: string;
+}
+
+function riskClasses(classNames: string): RiskHit[] {
+  const out: RiskHit[] = [];
+  for (const [property, shades] of Object.entries(RISK_SHADES_BY_PROPERTY)) {
+    const re = new RegExp(
+      String.raw`(?:^|\s|:)((${property})-(${DARK_PALETTES.join("|")})-(${shades.join("|")}))(?![\w-])`,
+      "g",
+    );
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(classNames)) !== null) {
+      out.push({ full: m[1], property: m[2], palette: m[3], shade: m[4] });
+    }
+  }
+  return out;
+}
+
+function hasDarkCompanion(classNames: string, hit: RiskHit): boolean {
+  // A companion is any `dark:<state-prefix?>{property}-{palette}-…` token
+  // for the same property + palette. We don't insist on the same shade —
+  // common patterns include red-50 → dark:red-900/20.
+  const re = new RegExp(
+    String.raw`\bdark:(?:hover:|focus:|active:|disabled:)?${hit.property}-${hit.palette}-`,
+  );
+  return re.test(classNames);
+}
+
+export function scanTreeForMissingDarkVariants(root: string): Finding[] {
+  const out: Finding[] = [];
+  for (const file of collectSourceFiles(root)) {
+    const source = readFileSync(file, "utf8");
+    out.push(
+      ...findMissingDarkVariants(source, relative(root, file)),
+    );
+  }
+  return out;
+}

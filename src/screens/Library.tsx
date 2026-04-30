@@ -893,12 +893,12 @@ export default function Library() {
 
       {/* Error toast */}
       {error && (
-        <div className="mx-6 mt-3 px-4 py-2.5 bg-red-50 text-red-700 text-sm rounded-xl flex items-center gap-2 border border-red-200">
+        <div className="mx-6 mt-3 px-4 py-2.5 bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-300 text-sm rounded-xl flex items-center gap-2 border border-red-200 dark:border-red-900/40">
           <span className="flex-1">{error}</span>
           <button
             type="button"
             onClick={() => setError(null)}
-            className="text-red-400 hover:text-red-600 p-1 rounded transition-colors"
+            className="text-red-400 hover:text-red-600 dark:text-red-500 dark:hover:text-red-300 p-1 rounded transition-colors"
             aria-label={t("reader.dismiss")}
           >
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
@@ -1328,7 +1328,7 @@ export default function Library() {
             <button
               type="button"
               onClick={() => { importCancelledRef.current = true; }}
-              className="shrink-0 px-3 py-1.5 text-sm text-ink-muted hover:text-red-600 bg-warm-subtle hover:bg-red-50 rounded-lg transition-colors"
+              className="shrink-0 px-3 py-1.5 text-sm text-ink-muted hover:text-red-600 dark:hover:text-red-400 bg-warm-subtle hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition-colors"
             >
               {t("common.cancel")}
             </button>
