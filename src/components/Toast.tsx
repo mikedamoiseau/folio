@@ -2,6 +2,15 @@ import { createContext, useContext, useState, useCallback, useRef, type ReactNod
 
 export type ToastType = "success" | "error" | "info";
 
+/**
+ * Auto-dismiss interval for toasts (ms).
+ *
+ * Toasts are intentionally transient — anything that needs to persist past
+ * this window belongs in an inline error banner or a dialog instead. See
+ * `docs/UX-CONVENTIONS.md` for the surface taxonomy.
+ */
+export const TOAST_AUTO_DISMISS_MS = 4000;
+
 interface Toast {
   id: number;
   message: string;
@@ -29,7 +38,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
     setToasts((prev) => [...prev, { id, message, type }]);
     setTimeout(() => {
       setToasts((prev) => prev.filter((t) => t.id !== id));
-    }, 4000);
+    }, TOAST_AUTO_DISMISS_MS);
   }, []);
 
   return (
