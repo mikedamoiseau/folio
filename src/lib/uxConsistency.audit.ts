@@ -193,3 +193,22 @@ export function scanTreeForOffClusterDuration(root: string): Finding[] {
   }
   return out;
 }
+
+// ---------------------------------------------------------------------------
+// SettingsPanel section ordering — locks the accordion list so future
+// reorders are intentional. Tracked as a static-text snapshot so an empty
+// 1-button section (like the old "Activity" launcher) can't sneak back in
+// without explicitly updating the expected list.
+// ---------------------------------------------------------------------------
+
+const ACCORDION_TITLE_RE = /<Accordion\s+title=\{t\(["']settings\.([a-zA-Z]+)["']\)\}/g;
+
+export function findSettingsSections(source: string): string[] {
+  const out: string[] = [];
+  ACCORDION_TITLE_RE.lastIndex = 0;
+  let m: RegExpExecArray | null;
+  while ((m = ACCORDION_TITLE_RE.exec(source)) !== null) {
+    out.push(m[1]);
+  }
+  return out;
+}
