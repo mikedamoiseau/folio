@@ -152,3 +152,44 @@ export function scanTreeForOffNormStrokeWidth(root: string): Finding[] {
   }
   return out;
 }
+
+// ---------------------------------------------------------------------------
+// Animation timing — Tailwind duration classes must come from the cluster the
+// codebase already converged on: 150 / 200 / 300 ms. Arbitrary `duration-[…]`
+// brackets are banned outright.
+// ---------------------------------------------------------------------------
+
+const ALLOWED_DURATIONS = new Set(["150", "200", "300"]);
+const DURATION_RE = /\bduration-(\[[^\]]+\]|\d+)(?![a-z0-9_-])/g;
+
+export function findOffClusterDuration(source: string, file: string): Finding[] {
+  const out: Finding[] = [];
+  const lines = source.split("\n");
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    DURATION_RE.lastIndex = 0;
+    let m: RegExpExecArray | null;
+    while ((m = DURATION_RE.exec(line)) !== null) {
+      const value = m[1];
+      if (value.startsWith("[")) {
+        out.push({ file, line: i + 1, match: m[0] });
+        continue;
+      }
+      if (!ALLOWED_DURATIONS.has(value)) {
+        out.push({ file, line: i + 1, match: m[0] });
+      }
+    }
+  }
+  return out;
+}
+
+export function scanTreeForOffClusterDuration(root: string): Finding[] {
+  const out: Finding[] = [];
+  for (const file of collectSourceFiles(root)) {
+    const source = readFileSync(file, "utf8");
+    out.push(
+      ...findOffClusterDuration(source, relative(root, file)),
+    );
+  }
+  return out;
+}
