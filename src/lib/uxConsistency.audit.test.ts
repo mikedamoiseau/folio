@@ -1,8 +1,10 @@
 import { describe, it, expect } from "vitest";
 import { resolve } from "node:path";
 import {
+  findOffClusterDuration,
   findOffGridSpacing,
   findOffNormStrokeWidth,
+  scanTreeForOffClusterDuration,
   scanTreeForOffGridSpacing,
   scanTreeForOffNormStrokeWidth,
 } from "./uxConsistency.audit";
@@ -103,6 +105,32 @@ describe("findOffNormStrokeWidth", () => {
 });
 
 // ---------------------------------------------------------------------------
+// findOffClusterDuration — Tailwind animation duration cluster.
+// ---------------------------------------------------------------------------
+describe("findOffClusterDuration", () => {
+  it("accepts the cluster (150 / 200 / 300)", () => {
+    const src = `<div className="duration-150 duration-200 duration-300">x</div>`;
+    expect(findOffClusterDuration(src, "x.tsx")).toEqual([]);
+  });
+
+  it("flags off-cluster integer durations", () => {
+    const src = `<div className="duration-250 duration-400">x</div>`;
+    const out = findOffClusterDuration(src, "x.tsx");
+    expect(out.map((f) => f.match)).toEqual(["duration-250", "duration-400"]);
+  });
+
+  it("flags arbitrary bracket durations", () => {
+    const src = `<div className="duration-[180ms]">x</div>`;
+    expect(findOffClusterDuration(src, "x.tsx")).toHaveLength(1);
+  });
+
+  it("ignores unrelated `duration` substrings", () => {
+    const src = `const duration = 200; // not a class`;
+    expect(findOffClusterDuration(src, "x.tsx")).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Repo guards
 // ---------------------------------------------------------------------------
 describe("repo spacing", () => {
@@ -129,6 +157,21 @@ describe("repo SVG strokes", () => {
         .join("\n");
       throw new Error(
         `Off-norm SVG strokeWidth values found (must be 1.5 or 2; 3 / 4 allowed only inside animate-spin SVGs):\n${detail}`,
+      );
+    }
+    expect(findings).toEqual([]);
+  });
+});
+
+describe("repo animation durations", () => {
+  it("uses only the 150 / 200 / 300 ms cluster (no arbitrary brackets)", () => {
+    const findings = scanTreeForOffClusterDuration(SRC);
+    if (findings.length > 0) {
+      const detail = findings
+        .map((f) => `  ${f.file}:${f.line}  ${f.match}`)
+        .join("\n");
+      throw new Error(
+        `Off-cluster Tailwind duration classes found (must be 150 / 200 / 300):\n${detail}`,
       );
     }
     expect(findings).toEqual([]);
