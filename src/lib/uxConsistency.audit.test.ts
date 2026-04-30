@@ -2,10 +2,12 @@ import { describe, it, expect } from "vitest";
 import { resolve } from "node:path";
 import { readFileSync } from "node:fs";
 import {
+  findMissingDarkVariants,
   findOffClusterDuration,
   findOffGridSpacing,
   findOffNormStrokeWidth,
   findSettingsSections,
+  scanTreeForMissingDarkVariants,
   scanTreeForOffClusterDuration,
   scanTreeForOffGridSpacing,
   scanTreeForOffNormStrokeWidth,
@@ -165,6 +167,51 @@ describe("repo SVG strokes", () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// findMissingDarkVariants — risk-shade palette colors must have a dark companion.
+// ---------------------------------------------------------------------------
+describe("findMissingDarkVariants", () => {
+  it("flags bg-red-50 without a dark companion", () => {
+    const src = `<div className="bg-red-50 text-red-700">x</div>`;
+    const out = findMissingDarkVariants(src, "x.tsx");
+    expect(out.map((f) => f.match)).toEqual(["bg-red-50", "text-red-700"]);
+  });
+
+  it("accepts bg-red-50 paired with dark:bg-red-900/20", () => {
+    const src = `<div className="bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-300">x</div>`;
+    expect(findMissingDarkVariants(src, "x.tsx")).toEqual([]);
+  });
+
+  it("does not flag mid-saturation accent colors (red-600)", () => {
+    // bg-red-600 is a saturated destructive accent — fine on both themes.
+    const src = `<div className="bg-red-600 text-white">x</div>`;
+    expect(findMissingDarkVariants(src, "x.tsx")).toEqual([]);
+  });
+
+  it("flags hover:bg-red-50 without a dark hover companion", () => {
+    const src = `<button className="bg-warm-subtle hover:bg-red-50">x</button>`;
+    const out = findMissingDarkVariants(src, "x.tsx");
+    expect(out.map((f) => f.match)).toEqual(["bg-red-50"]);
+  });
+
+  it("accepts hover:bg-red-50 paired with dark:hover:bg-red-900/20", () => {
+    const src = `<button className="bg-warm-subtle hover:bg-red-50 dark:hover:bg-red-900/20">x</button>`;
+    expect(findMissingDarkVariants(src, "x.tsx")).toEqual([]);
+  });
+
+  it("requires same property+palette in companion (text-red-700 needs dark:text-red-*)", () => {
+    // Only providing dark:bg-red-* doesn't satisfy text-red-700.
+    const src = `<div className="bg-red-50 dark:bg-red-900/20 text-red-700">x</div>`;
+    const out = findMissingDarkVariants(src, "x.tsx");
+    expect(out.map((f) => f.match)).toEqual(["text-red-700"]);
+  });
+
+  it("ignores semantic Folio tokens (bg-paper, text-ink)", () => {
+    const src = `<div className="bg-paper text-ink border-warm-border">x</div>`;
+    expect(findMissingDarkVariants(src, "x.tsx")).toEqual([]);
+  });
+});
+
 describe("SettingsPanel section list", () => {
   it("matches the expected ordered list (no orphan or single-button sections)", () => {
     const source = readFileSync(
@@ -197,6 +244,21 @@ describe("repo animation durations", () => {
         .join("\n");
       throw new Error(
         `Off-cluster Tailwind duration classes found (must be 150 / 200 / 300):\n${detail}`,
+      );
+    }
+    expect(findings).toEqual([]);
+  });
+});
+
+describe("repo dark-mode coverage", () => {
+  it("pairs every risk-shade palette class with a dark companion", () => {
+    const findings = scanTreeForMissingDarkVariants(SRC);
+    if (findings.length > 0) {
+      const detail = findings
+        .map((f) => `  ${f.file}:${f.line}  ${f.match}`)
+        .join("\n");
+      throw new Error(
+        `Tailwind risk-shade colors missing a dark: companion:\n${detail}`,
       );
     }
     expect(findings).toEqual([]);

@@ -93,3 +93,31 @@ Anti-patterns to avoid:
 The `useToast` hook lives at `components/Toast.tsx`. There is no
 corresponding error-banner hook — banners live close to the screen state
 they describe and don't generalize.
+
+## Dark mode — semantic tokens by default; risk-shade colors need `dark:`
+
+Folio's primary theming is **CSS-variable-based**. Tokens like `bg-paper`,
+`text-ink`, `text-ink-muted`, `border-warm-border`, `bg-warm-subtle`,
+`text-accent`, etc. swap automatically when the `.dark` class is set on the
+root. Reach for these first — they are the only way to stay theme-correct
+without thinking about it.
+
+When you must use a non-semantic Tailwind palette color (typically for
+status: errors, warnings, info), the rule is:
+
+| Property | Risk shades | Why |
+|---|---|---|
+| `bg-{palette}-50/100/200` | light tints | unreadable on dark surfaces |
+| `text-{palette}-700/800/900` | deep tints | unreadable as text on dark surfaces |
+| `border-{palette}-50/100/200` | light borders | invisible on dark surfaces |
+
+Each of these must have a `dark:` companion in the same `className` string,
+matching the same property and palette. Common pattern:
+
+```jsx
+className="bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-300 border-red-200 dark:border-red-900/40"
+```
+
+A scanner test enforces this — risk-shade classes lacking a dark companion
+fail CI. Mid-saturation accent fills (`bg-red-600` for destructive buttons,
+`bg-blue-500` for info pills) stay the same in both themes and are exempt.
