@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { resolve } from "node:path";
 import { readFileSync } from "node:fs";
 import {
+  findButtonOpensModal,
   findMissingDarkVariants,
   findOffClusterDuration,
   findOffGridSpacing,
@@ -232,6 +233,46 @@ describe("SettingsPanel section list", () => {
       "remoteBackup",
       "aboutSection",
     ]);
+  });
+
+  it("View Activity Log button still opens the modal after the M5 move", () => {
+    // M5 folded the orphan "Activity" accordion into Library. The snapshot
+    // test above only asserts the section list — this one asserts the
+    // moved button is still wired to setShowActivityLog(true).
+    const source = readFileSync(
+      resolve(SRC, "components/SettingsPanel.tsx"),
+      "utf8",
+    );
+    expect(
+      findButtonOpensModal(source, "settings.viewActivityLog", "setShowActivityLog"),
+    ).toBe(true);
+  });
+});
+
+describe("findButtonOpensModal", () => {
+  it("returns true when an i18n-labeled button calls the handler with true", () => {
+    const src = `
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        className="x"
+      >
+        {t("dialog.openLabel")}
+      </button>
+    `;
+    expect(findButtonOpensModal(src, "dialog.openLabel", "setOpen")).toBe(true);
+  });
+
+  it("returns false when the button is not wired to the expected handler", () => {
+    const src = `
+      <button
+        type="button"
+        onClick={() => somethingElse()}
+      >
+        {t("dialog.openLabel")}
+      </button>
+    `;
+    expect(findButtonOpensModal(src, "dialog.openLabel", "setOpen")).toBe(false);
   });
 });
 

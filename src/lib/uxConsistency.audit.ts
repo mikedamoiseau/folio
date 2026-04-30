@@ -213,6 +213,36 @@ export function findSettingsSections(source: string): string[] {
   return out;
 }
 
+// Asserts that a button labelled by `i18nKey` calls `handlerName(true)` in
+// its onClick. Used to lock the wiring of moved/relocated launcher buttons
+// (e.g. View Activity Log inside the Library section) without standing up
+// a full DOM test harness.
+export function findButtonOpensModal(
+  source: string,
+  i18nKey: string,
+  handlerName: string,
+): boolean {
+  // Locate every <button …onClick=… >…t("<i18nKey>")…</button> block and
+  // check the onClick line invokes handlerName(true). Buttons in the file
+  // are short (≤8 lines) so a small window is enough.
+  const labelRe = new RegExp(String.raw`t\(["']${escapeRe(i18nKey)}["']\)`, "g");
+  let m: RegExpExecArray | null;
+  while ((m = labelRe.exec(source)) !== null) {
+    // Slice ~12 lines back from the label match — that covers the whole
+    // <button …> opening tag including its onClick.
+    const before = source.slice(0, m.index);
+    const start = before.split("\n").slice(-12).join("\n");
+    if (start.includes(`onClick={() => ${handlerName}(true)}`)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function escapeRe(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 // ---------------------------------------------------------------------------
 // Dark-mode pass — Tailwind classes using "extreme" shades (50/100/200 for
 // pale tints; 700/800/900 for deep saturations) of non-semantic palettes
