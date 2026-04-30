@@ -1,9 +1,11 @@
 import { describe, it, expect } from "vitest";
 import { resolve } from "node:path";
+import { readFileSync } from "node:fs";
 import {
   findOffClusterDuration,
   findOffGridSpacing,
   findOffNormStrokeWidth,
+  findSettingsSections,
   scanTreeForOffClusterDuration,
   scanTreeForOffGridSpacing,
   scanTreeForOffNormStrokeWidth,
@@ -160,6 +162,29 @@ describe("repo SVG strokes", () => {
       );
     }
     expect(findings).toEqual([]);
+  });
+});
+
+describe("SettingsPanel section list", () => {
+  it("matches the expected ordered list (no orphan or single-button sections)", () => {
+    const source = readFileSync(
+      resolve(SRC, "components/SettingsPanel.tsx"),
+      "utf8",
+    );
+    const sections = findSettingsSections(source);
+    // Order matters — this is the visual ordering shown to the user.
+    // To intentionally re-order or add a section, update this list.
+    expect(sections).toEqual([
+      "general",
+      "appearance",
+      "pageLayout",
+      "librarySection",
+      "backupRestore",
+      "metadataScan",
+      "remoteAccess",
+      "remoteBackup",
+      "aboutSection",
+    ]);
   });
 });
 

@@ -306,7 +306,6 @@
     "enrichmentSources": "Enrichment Sources",
     "enrichmentSourcesOrder": "Tried in order from top to bottom",
     "apiKeyPlaceholder": "API key (optional)",
-    "activity": "Activity",
     "viewActivityLog": "View activity log",
     "general": "General",
     "launchAtStartup": "Launch at startup",
