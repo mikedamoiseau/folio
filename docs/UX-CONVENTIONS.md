@@ -58,3 +58,38 @@ where possible rather than introducing a fresh duration.
 The `prefers-reduced-motion: reduce` block in `src/index.css` collapses
 animation/transition durations to `0.01ms` — that override is exempt from
 all duration rules.
+
+## Error surfaces — toast vs inline vs dialog
+
+Three surfaces exist; each has a clear job. Pick by *how the user must
+react*, not by how loud the message feels.
+
+| Surface | When to use | API |
+|---|---|---|
+| **Toast** | Transient feedback after a deliberate user action that the user can shrug off and move on from. The view is still usable. Auto-dismisses in `TOAST_AUTO_DISMISS_MS` (4 s). | `useToast().addToast(msg, "success" \| "error" \| "info")` from `components/Toast.tsx` |
+| **Inline error** | Operation-local failure tied to a specific field, button, or panel. Stays visible until the user retries or dismisses. | Local `useState` for the message, rendered as `{error && <p className="text-red-500 text-sm">{error}</p>}` (or the `bg-red-50` banner pattern at screen scope) |
+| **Dialog** | Decisions: confirmations, destructive actions, choices that block the user from continuing. | A modal component with `role="dialog" aria-modal="true"` (see `BulkEditDialog`, `EditBookDialog`, the missing-file dialog in Reader) |
+
+Decision rules:
+
+1. **If the user must decide → Dialog.** A toast or inline message gives no
+   way to choose between options.
+2. **If the failure prevents the surrounding view from doing its job →
+   Inline error.** A toast disappears in 4 s; a stuck-state failure shouldn't.
+   Library-scope and Settings-scope errors use the `bg-red-50` banner at the
+   top of the screen; component-scope errors use a small `text-red-500` line.
+3. **Otherwise → Toast.** Bulk-action results, "Copied to clipboard",
+   secondary "could not load X" failures where the page still works.
+
+Anti-patterns to avoid:
+
+- **Both** a toast *and* an inline error for the same failure — pick one.
+- A toast for an error that recurs every render (it'll re-fire forever).
+- A dialog for a non-decision message ("Saved successfully" should be a
+  toast).
+- A persistent banner for a transient success ("Imported 3 books" should be
+  a toast).
+
+The `useToast` hook lives at `components/Toast.tsx`. There is no
+corresponding error-banner hook — banners live close to the screen state
+they describe and don't generalize.

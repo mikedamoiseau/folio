@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { renderToString } from "react-dom/server";
-import { ToastProvider, ToastContainer } from "./Toast";
+import { ToastProvider, ToastContainer, TOAST_AUTO_DISMISS_MS } from "./Toast";
 
 describe("Toast System", () => {
   it("ToastProvider renders children", () => {
@@ -31,5 +31,11 @@ describe("Toast System", () => {
     );
     expect(html).toContain("fixed");
     expect(html).toContain("bottom");
+  });
+
+  it("auto-dismisses transient toasts after the documented interval", () => {
+    // Locks the doc/code contract: toasts are short-lived (4s). Anything
+    // longer-lived should use an inline banner — see UX-CONVENTIONS.md.
+    expect(TOAST_AUTO_DISMISS_MS).toBe(4000);
   });
 });
