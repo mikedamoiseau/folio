@@ -20,3 +20,16 @@ fails CI rather than waiting on review.
 If you find yourself reaching for `p-[5px]`, the answer is almost always `p-1`
 (4px) or `p-1.5` (6px). If you reach for `mt-[15px]`, the answer is `mt-4`
 (16px).
+
+## Inline SVG icons — strokeWidth 1.5 or 2
+
+- **Outline icons** (Heroicons-style): `strokeWidth="1.5"`. Used for icons
+  where the stroke carries the meaning (chevrons, arrows, tab-bar glyphs).
+- **Filled-edge icons** (chunkier, square-cap glyphs): `strokeWidth="2"`.
+  Used for header buttons, badges, X / + / checkmark glyphs.
+- **Loading spinners** (`<svg className="animate-spin">…`): `strokeWidth="3"`
+  or `"4"` allowed — small spinners need a thicker arc to read.
+
+A scanner test enforces this — values like `1.75`, `2.5`, `3` (outside a
+spinner), and `4` (outside a spinner) fail CI. Pick the cluster that matches
+the icon family you're cribbing from; don't introduce a third stroke weight.
