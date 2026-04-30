@@ -12,11 +12,40 @@ const HTTP_TIMEOUT: Duration = Duration::from_secs(15);
 const MAX_RESPONSE_BYTES: usize = 5 * 1024 * 1024;
 
 /// Validate that a URL is safe to fetch (no file://, no private IPs).
+/// Test-only convenience for the strict variant; production callers go
+/// through [`is_safe_url_with_trusted`] (with an empty list when no
+/// trusted catalogs are configured).
+#[cfg(test)]
 fn is_safe_url(url: &str) -> bool {
-    // Only allow http:// and https:// schemes
+    is_safe_url_with_trusted(url, &[])
+}
+
+/// Like [`is_safe_url`], but bypasses the private-IP / loopback block when the
+/// URL's `host:port` matches an entry in `trusted`. The HTTP(S) scheme check
+/// is still enforced — a trusted host cannot smuggle in `file://` or
+/// `javascript:` URLs.
+///
+/// Used to allow user-added catalogs on private/LAN addresses (the user typed
+/// the URL themselves, so SSRF protection isn't applicable there) while
+/// keeping the strict check for arbitrary URLs encountered in untrusted feed
+/// content.
+pub fn is_safe_url_with_trusted(url: &str, trusted: &[String]) -> bool {
+    // Only allow http:// and https:// schemes — the trusted list does not
+    // relax this; `file://`, `javascript:`, etc. are always rejected.
     if !url.starts_with("http://") && !url.starts_with("https://") {
         return false;
     }
+
+    // If the URL's host:port matches a trusted entry, allow it without
+    // applying the private-range block.
+    if !trusted.is_empty() {
+        if let Some(hp) = host_port_from_url(url) {
+            if trusted.iter().any(|t| t.eq_ignore_ascii_case(&hp)) {
+                return true;
+            }
+        }
+    }
+
     // Extract host portion
     let after_scheme = if let Some(s) = url.strip_prefix("https://") {
         s
@@ -59,6 +88,31 @@ fn is_safe_url(url: &str) -> bool {
         }
     }
     true
+}
+
+/// Extract a normalized `host:port` representation from a URL. Used by
+/// callers to build the trusted-host list for [`is_safe_url_with_trusted`].
+/// Falls back to the scheme's default port (80/443) when none is specified
+/// so that `http://example.com/x` and `http://example.com:80/x` match.
+pub fn host_port_from_url(url: &str) -> Option<String> {
+    let parsed = url::Url::parse(url).ok()?;
+    let host = parsed.host_str()?.to_ascii_lowercase();
+    let port = parsed.port_or_known_default()?;
+    Some(format!("{host}:{port}"))
+}
+
+/// Validate a URL the user typed in "Add custom OPDS catalog". Permissive
+/// about destination (private/loopback hosts are allowed because the user
+/// explicitly entered them) but strict about scheme — only `http://` or
+/// `https://` URLs are accepted, and the URL must parse with a host.
+pub fn is_user_addable_url(url: &str) -> bool {
+    if !url.starts_with("http://") && !url.starts_with("https://") {
+        return false;
+    }
+    match url::Url::parse(url).ok().and_then(|u| u.host_str().map(str::to_string)) {
+        Some(host) => !host.is_empty(),
+        None => false,
+    }
 }
 
 /// A single entry from an OPDS feed (book or navigation link).
@@ -107,7 +161,14 @@ fn http_client() -> FolioResult<reqwest::blocking::Client> {
 
 /// Fetch and parse an OPDS feed from a URL.
 pub fn fetch_feed(url: &str) -> FolioResult<OpdsFeed> {
-    if !is_safe_url(url) {
+    fetch_feed_with_trusted(url, &[])
+}
+
+/// Like [`fetch_feed`], but allows URLs whose `host:port` matches a trusted
+/// entry — lets user-added LAN catalogs work without disabling the SSRF
+/// guard for arbitrary feed-derived URLs.
+pub fn fetch_feed_with_trusted(url: &str, trusted: &[String]) -> FolioResult<OpdsFeed> {
+    if !is_safe_url_with_trusted(url, trusted) {
         return Err(FolioError::invalid(
             "URL blocked: only public HTTP/HTTPS URLs are allowed.",
         ));
@@ -553,6 +614,142 @@ mod tests {
     }
 
     #[test]
+    fn is_safe_url_blocks_private_ips_and_loopback() {
+        assert!(!is_safe_url("http://192.168.0.12:7788/opds"));
+        assert!(!is_safe_url("http://10.0.0.1/"));
+        assert!(!is_safe_url("http://172.16.5.5/"));
+        assert!(!is_safe_url("http://127.0.0.1/"));
+        assert!(!is_safe_url("http://localhost/"));
+        assert!(!is_safe_url("http://169.254.169.254/"));
+    }
+
+    #[test]
+    fn is_safe_url_allows_public_hosts() {
+        assert!(is_safe_url("https://example.com/opds"));
+        assert!(is_safe_url("http://standardebooks.org/feeds"));
+        assert!(is_safe_url("https://m.gutenberg.org/ebooks.opds/"));
+    }
+
+    #[test]
+    fn is_safe_url_blocks_non_http_schemes() {
+        assert!(!is_safe_url("file:///etc/passwd"));
+        assert!(!is_safe_url("javascript:alert(1)"));
+        assert!(!is_safe_url("ftp://example.com/"));
+        assert!(!is_safe_url("data:text/html,<h1>hi"));
+    }
+
+    #[test]
+    fn trusted_host_bypasses_private_ip_block() {
+        let trusted = vec!["192.168.0.12:7788".to_string()];
+        assert!(is_safe_url_with_trusted(
+            "http://192.168.0.12:7788/opds",
+            &trusted
+        ));
+        assert!(is_safe_url_with_trusted(
+            "http://192.168.0.12:7788/opds/all",
+            &trusted
+        ));
+        assert!(is_safe_url_with_trusted(
+            "http://192.168.0.12:7788/api/cover/abc.jpg",
+            &trusted
+        ));
+    }
+
+    #[test]
+    fn trusted_host_with_different_port_still_blocked() {
+        let trusted = vec!["192.168.0.12:7788".to_string()];
+        // Different port on same IP — could be a different service
+        assert!(!is_safe_url_with_trusted(
+            "http://192.168.0.12:8080/opds",
+            &trusted
+        ));
+        // Different IP on the LAN
+        assert!(!is_safe_url_with_trusted(
+            "http://192.168.0.13:7788/opds",
+            &trusted
+        ));
+        // No port on the URL means default 80, which doesn't match :7788
+        assert!(!is_safe_url_with_trusted(
+            "http://192.168.0.12/opds",
+            &trusted
+        ));
+    }
+
+    #[test]
+    fn trusted_host_does_not_relax_scheme_check() {
+        let trusted = vec!["192.168.0.12:7788".to_string()];
+        assert!(!is_safe_url_with_trusted(
+            "file:///etc/passwd",
+            &trusted
+        ));
+        assert!(!is_safe_url_with_trusted(
+            "javascript:alert(1)",
+            &trusted
+        ));
+        assert!(!is_safe_url_with_trusted(
+            "ftp://192.168.0.12:7788/x",
+            &trusted
+        ));
+    }
+
+    #[test]
+    fn trusted_list_match_is_case_insensitive_for_host() {
+        let trusted = vec!["MyServer.Local:7788".to_string()];
+        // Host comparison should be case-insensitive (DNS is case-insensitive).
+        assert!(is_safe_url_with_trusted(
+            "http://myserver.local:7788/opds",
+            &trusted
+        ));
+    }
+
+    #[test]
+    fn host_port_from_url_uses_default_ports() {
+        assert_eq!(
+            host_port_from_url("http://example.com/opds"),
+            Some("example.com:80".to_string())
+        );
+        assert_eq!(
+            host_port_from_url("https://example.com/opds"),
+            Some("example.com:443".to_string())
+        );
+        assert_eq!(
+            host_port_from_url("http://192.168.0.12:7788/opds"),
+            Some("192.168.0.12:7788".to_string())
+        );
+        assert_eq!(host_port_from_url("not a url"), None);
+        assert_eq!(host_port_from_url(""), None);
+    }
+
+    #[test]
+    fn is_user_addable_url_accepts_lan_hosts() {
+        // The whole point: users typing a LAN URL must be accepted.
+        assert!(is_user_addable_url("http://192.168.0.12:7788/opds"));
+        assert!(is_user_addable_url("http://10.0.0.1/opds"));
+        assert!(is_user_addable_url("http://localhost:7788/opds"));
+        assert!(is_user_addable_url("https://example.com/opds"));
+    }
+
+    #[test]
+    fn is_user_addable_url_rejects_non_http_and_malformed() {
+        assert!(!is_user_addable_url("file:///etc/passwd"));
+        assert!(!is_user_addable_url("javascript:alert(1)"));
+        assert!(!is_user_addable_url("ftp://example.com/"));
+        assert!(!is_user_addable_url("not a url"));
+        assert!(!is_user_addable_url(""));
+        // Empty authority is rejected by the url crate's parser
+        assert!(!is_user_addable_url("http://"));
+    }
+
+    #[test]
+    fn fetch_feed_returns_blocked_error_for_private_url() {
+        let err = fetch_feed("http://192.168.0.12:7788/opds").unwrap_err();
+        assert!(
+            err.to_string().contains("URL blocked"),
+            "expected blocked error, got: {err}"
+        );
+    }
+
+    #[test]
     fn parse_feed_enclosure_links_treated_as_acquisition() {
         let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
         <feed xmlns="http://www.w3.org/2005/Atom">
@@ -577,12 +774,18 @@ mod tests {
 /// Resolve a search URL — if it's an OpenSearch description XML, fetch it and
 /// extract the Atom/OPDS template URL. Otherwise return it as-is.
 pub fn resolve_search_url(url: &str) -> Option<String> {
+    resolve_search_url_with_trusted(url, &[])
+}
+
+/// Like [`resolve_search_url`], but allows URLs whose `host:port` matches a
+/// trusted entry.
+pub fn resolve_search_url_with_trusted(url: &str, trusted: &[String]) -> Option<String> {
     // If it already contains {searchTerms}, it's a direct template
     if url.contains("{searchTerms}") {
         return Some(url.to_string());
     }
     // Try fetching as OpenSearch description
-    if !is_safe_url(url) {
+    if !is_safe_url_with_trusted(url, trusted) {
         return None;
     }
     let client = http_client().ok()?;
@@ -646,7 +849,13 @@ pub fn url_encode(s: &str) -> String {
 
 /// Download a file from a URL to a local path.
 pub fn download_file(url: &str, dest: &str) -> FolioResult<()> {
-    if !is_safe_url(url) {
+    download_file_with_trusted(url, dest, &[])
+}
+
+/// Like [`download_file`], but allows URLs whose `host:port` matches a
+/// trusted entry — required for downloading from user-added LAN catalogs.
+pub fn download_file_with_trusted(url: &str, dest: &str, trusted: &[String]) -> FolioResult<()> {
+    if !is_safe_url_with_trusted(url, trusted) {
         return Err(FolioError::invalid(
             "URL blocked: only public HTTP/HTTPS URLs are allowed.",
         ));

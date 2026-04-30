@@ -2575,6 +2575,47 @@ const DEFAULT_CATALOGS: &[(&str, &str)] = &[
     ),
 ];
 
+/// Build the trusted-host list for OPDS network calls. Every catalog the user
+/// (or Folio's defaults) has configured contributes its `host:port`, which
+/// lets `is_safe_url_with_trusted` allow LAN/loopback servers the user
+/// explicitly added — without weakening SSRF protection on arbitrary
+/// feed-derived URLs from untrusted hosts.
+fn trusted_hosts_from_catalogs(catalogs: &[OpdsCatalogSource]) -> Vec<String> {
+    let mut hosts: Vec<String> = Vec::new();
+    for cat in catalogs {
+        if let Some(hp) = opds::host_port_from_url(&cat.url) {
+            if !hosts.iter().any(|h| h.eq_ignore_ascii_case(&hp)) {
+                hosts.push(hp);
+            }
+        }
+    }
+    hosts
+}
+
+/// Same as [`trusted_hosts_from_catalogs`] but reads directly from the DB
+/// connection so callers that don't already have the catalog list don't pay
+/// the cost of an extra `get_opds_catalogs` round-trip.
+fn trusted_hosts_from_db(conn: &rusqlite::Connection) -> Vec<String> {
+    let mut hosts: Vec<String> = DEFAULT_CATALOGS
+        .iter()
+        .filter_map(|(_, url)| opds::host_port_from_url(url))
+        .collect();
+    let custom_json = db::get_setting(conn, "opds_custom_catalogs")
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| "[]".to_string());
+    if let Ok(custom) = serde_json::from_str::<Vec<OpdsCatalogSource>>(&custom_json) {
+        for c in custom {
+            if let Some(hp) = opds::host_port_from_url(&c.url) {
+                if !hosts.iter().any(|h| h.eq_ignore_ascii_case(&hp)) {
+                    hosts.push(hp);
+                }
+            }
+        }
+    }
+    hosts
+}
+
 #[tauri::command]
 pub async fn get_opds_catalogs(state: State<'_, AppState>) -> FolioResult<Vec<OpdsCatalogSource>> {
     let conn = state.active_db()?.get()?;
@@ -2600,6 +2641,16 @@ pub async fn add_opds_catalog(
     url: String,
     state: State<'_, AppState>,
 ) -> FolioResult<()> {
+    // Permissive validation: accept LAN/loopback hosts (the user typed the
+    // URL, so SSRF protection isn't applicable here) but still reject
+    // non-HTTP schemes and malformed URLs. Trust is established by the
+    // user's deliberate add; subsequent fetches against this catalog's
+    // host:port use `is_safe_url_with_trusted`.
+    if !opds::is_user_addable_url(&url) {
+        return Err(FolioError::invalid(
+            "Invalid catalog URL — only http:// or https:// URLs are accepted.",
+        ));
+    }
     let conn = state.active_db()?.get()?;
     let custom_json =
         db::get_setting(&conn, "opds_custom_catalogs")?.unwrap_or_else(|| "[]".to_string());
@@ -2628,6 +2679,7 @@ pub async fn search_all_catalogs(
 ) -> FolioResult<Vec<opds::OpdsEntry>> {
     // Collect all catalog URLs
     let catalogs = get_opds_catalogs(state).await?;
+    let trusted = trusted_hosts_from_catalogs(&catalogs);
 
     // Fetch root feeds in parallel to discover search URLs
     let (result_tx, result_rx) = std::sync::mpsc::channel();
@@ -2638,9 +2690,10 @@ pub async fn search_all_catalogs(
         let q = query.clone();
         let tx = result_tx.clone();
         let cat_name = cat.name.clone();
+        let trusted = trusted.clone();
         tauri::async_runtime::spawn_blocking(move || {
             // 1. Fetch root feed to get searchUrl
-            let root = match opds::fetch_feed(&url) {
+            let root = match opds::fetch_feed_with_trusted(&url, &trusted) {
                 Ok(f) => f,
                 Err(_) => {
                     let _ = tx.send(Vec::new());
@@ -2655,7 +2708,7 @@ pub async fn search_all_catalogs(
                 }
             };
             // 2. Resolve OpenSearch description if needed, then search
-            let template = match opds::resolve_search_url(&raw_search_url) {
+            let template = match opds::resolve_search_url_with_trusted(&raw_search_url, &trusted) {
                 Some(t) => t,
                 None => {
                     let _ = tx.send(Vec::new());
@@ -2663,7 +2716,7 @@ pub async fn search_all_catalogs(
                 }
             };
             let search_url = template.replace("{searchTerms}", &opds::url_encode(&q));
-            let results = match opds::fetch_feed(&search_url) {
+            let results = match opds::fetch_feed_with_trusted(&search_url, &trusted) {
                 Ok(f) => f.entries,
                 Err(_) => Vec::new(),
             };
@@ -2721,6 +2774,7 @@ pub async fn get_discover_books(state: State<'_, AppState>) -> FolioResult<Vec<o
 
     // Cache miss or stale — fetch from catalogs in parallel
     let catalogs = get_opds_catalogs(state).await?;
+    let trusted = trusted_hosts_from_catalogs(&catalogs);
     let (result_tx, result_rx) = std::sync::mpsc::channel();
     let mut thread_count = 0;
 
@@ -2728,8 +2782,9 @@ pub async fn get_discover_books(state: State<'_, AppState>) -> FolioResult<Vec<o
         let url = cat.url.clone();
         let tx = result_tx.clone();
         let cat_name = cat.name.clone();
+        let trusted = trusted.clone();
         tauri::async_runtime::spawn_blocking(move || {
-            let entries = match opds::fetch_feed(&url) {
+            let entries = match opds::fetch_feed_with_trusted(&url, &trusted) {
                 Ok(feed) => feed
                     .entries
                     .into_iter()
@@ -2828,10 +2883,14 @@ fn opds_extension_from_mime(mime: &str) -> Option<&'static str> {
 }
 
 #[tauri::command]
-pub async fn browse_opds(url: String) -> FolioResult<opds::OpdsFeed> {
+pub async fn browse_opds(url: String, state: State<'_, AppState>) -> FolioResult<opds::OpdsFeed> {
+    let trusted = {
+        let conn = state.active_db()?.get()?;
+        trusted_hosts_from_db(&conn)
+    };
     let (tx, rx) = std::sync::mpsc::channel();
     tauri::async_runtime::spawn_blocking(move || {
-        let _ = tx.send(opds::fetch_feed(&url));
+        let _ = tx.send(opds::fetch_feed_with_trusted(&url, &trusted));
     });
     rx.recv()?
 }
@@ -2890,9 +2949,15 @@ pub async fn download_opds_book(
     {
         let dl_url = download_url.clone();
         let dl_dest = temp_str.clone();
+        let trusted = {
+            let conn = state.active_db()?.get()?;
+            trusted_hosts_from_db(&conn)
+        };
         let (tx, rx) = std::sync::mpsc::channel();
         tauri::async_runtime::spawn_blocking(move || {
-            let _ = tx.send(opds::download_file(&dl_url, &dl_dest));
+            let _ = tx.send(opds::download_file_with_trusted(
+                &dl_url, &dl_dest, &trusted,
+            ));
         });
         rx.recv()??;
     }
