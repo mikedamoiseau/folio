@@ -94,5 +94,13 @@
     "languages": ["en"],
     "categories": ["politics"],
     "description": "Anarchist political theory and history texts."
+  },
+  {
+    "id": "elephant-editions",
+    "name": "Elephant Editions",
+    "url": "https://www.elephanteditions.net/opds",
+    "languages": ["en"],
+    "categories": ["politics"],
+    "description": "Anarchist publishing house archives — own catalog plus adjacent texts."
   }
 ]
