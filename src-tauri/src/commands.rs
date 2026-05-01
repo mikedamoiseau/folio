@@ -2638,29 +2638,42 @@ pub async fn get_opds_catalogs(state: State<'_, AppState>) -> FolioResult<Vec<Op
     Ok(result)
 }
 
+/// Persistence body for `add_opds_catalog`, factored out so tests can
+/// exercise the exact code path the Tauri command runs without needing
+/// to construct a `tauri::State`. The URL validation lives at the
+/// command boundary, not here, so callers must validate first.
+fn add_opds_catalog_inner(
+    conn: &rusqlite::Connection,
+    name: String,
+    url: String,
+    preset_id: Option<String>,
+) -> FolioResult<()> {
+    let custom_json =
+        db::get_setting(conn, "opds_custom_catalogs")?.unwrap_or_else(|| "[]".to_string());
+    let mut custom: Vec<OpdsCatalogSource> = serde_json::from_str(&custom_json).unwrap_or_default();
+    custom.push(OpdsCatalogSource {
+        name,
+        url,
+        preset_id,
+    });
+    let json = serde_json::to_string(&custom)?;
+    Ok(db::set_setting(conn, "opds_custom_catalogs", &json)?)
+}
+
 #[tauri::command]
 pub async fn add_opds_catalog(
     name: String,
     url: String,
+    preset_id: Option<String>,
     state: State<'_, AppState>,
 ) -> FolioResult<()> {
-    // Permissive validation: accept LAN/loopback hosts (the user typed the
-    // URL, so SSRF protection isn't applicable here) but still reject
-    // non-HTTP schemes and malformed URLs. Trust is established by the
-    // user's deliberate add; subsequent fetches against this catalog's
-    // host:port use `is_safe_url_with_trusted`.
     if !opds::is_user_addable_url(&url) {
         return Err(FolioError::invalid(
             "Invalid catalog URL — only http:// or https:// URLs are accepted.",
         ));
     }
     let conn = state.active_db()?.get()?;
-    let custom_json =
-        db::get_setting(&conn, "opds_custom_catalogs")?.unwrap_or_else(|| "[]".to_string());
-    let mut custom: Vec<OpdsCatalogSource> = serde_json::from_str(&custom_json).unwrap_or_default();
-    custom.push(OpdsCatalogSource { name, url, preset_id: None });
-    let json = serde_json::to_string(&custom)?;
-    Ok(db::set_setting(&conn, "opds_custom_catalogs", &json)?)
+    add_opds_catalog_inner(&conn, name, url, preset_id)
 }
 
 #[tauri::command]
@@ -5470,6 +5483,60 @@ mod tests {
             !BACKUP_RUNNING.lock().unwrap().contains(&name),
             "profile must be released even though the function returned Err"
         );
+    }
+
+    fn get_custom_catalogs(conn: &rusqlite::Connection) -> Vec<OpdsCatalogSource> {
+        let custom_json = db::get_setting(conn, "opds_custom_catalogs")
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| "[]".to_string());
+        serde_json::from_str(&custom_json).unwrap_or_default()
+    }
+
+    #[test]
+    fn add_opds_catalog_persists_preset_id() {
+        let tmp = tempfile::tempdir().unwrap();
+        let pool = db::create_pool(&tmp.path().join("library.db")).unwrap();
+        let conn = pool.get().unwrap();
+
+        add_opds_catalog_inner(
+            &conn,
+            "Project Gutenberg".to_string(),
+            "https://m.gutenberg.org/ebooks.opds/".to_string(),
+            Some("project-gutenberg".to_string()),
+        )
+        .unwrap();
+
+        let cats = get_custom_catalogs(&conn);
+        let custom = cats
+            .iter()
+            .find(|c| c.url.contains("gutenberg") && c.preset_id.is_some());
+        assert_eq!(
+            custom.unwrap().preset_id.as_deref(),
+            Some("project-gutenberg")
+        );
+    }
+
+    #[test]
+    fn add_opds_catalog_with_no_preset_id_persists_none() {
+        let tmp = tempfile::tempdir().unwrap();
+        let pool = db::create_pool(&tmp.path().join("library.db")).unwrap();
+        let conn = pool.get().unwrap();
+
+        add_opds_catalog_inner(
+            &conn,
+            "Custom".to_string(),
+            "https://example.com/opds".to_string(),
+            None,
+        )
+        .unwrap();
+
+        let cats = get_custom_catalogs(&conn);
+        let custom = cats
+            .iter()
+            .find(|c| c.url == "https://example.com/opds")
+            .unwrap();
+        assert!(custom.preset_id.is_none());
     }
 }
 
