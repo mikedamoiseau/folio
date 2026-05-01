@@ -2,7 +2,7 @@
   {
     "id": "project-gutenberg",
     "name": "Project Gutenberg",
-    "url": "https://m.gutenberg.org/ebooks.opds/",
+    "url": "https://www.gutenberg.org/ebooks.opds/",
     "languages": ["en", "multi"],
     "categories": ["public-domain", "literature"],
     "description": "Public domain ebooks, 70k+ titles."
@@ -16,12 +16,12 @@
     "description": "Recently released curated, beautifully typeset public domain books."
   },
   {
-    "id": "internet-archive",
-    "name": "Internet Archive",
-    "url": "https://bookserver.archive.org/catalog/",
-    "languages": ["en", "multi"],
-    "categories": ["public-domain", "academic"],
-    "description": "Massive open-access library of books and documents."
+    "id": "wikisource-en",
+    "name": "Wikisource (English)",
+    "url": "https://ws-export.wmcloud.org/opds/en/Ready_for_export.xml",
+    "languages": ["en"],
+    "categories": ["public-domain", "literature"],
+    "description": "English-language Wikisource texts ready for export."
   },
   {
     "id": "feedbooks",
@@ -30,14 +30,6 @@
     "languages": ["en", "fr", "de", "es", "it", "multi"],
     "categories": ["public-domain", "fiction"],
     "description": "Free public domain titles in multiple languages."
-  },
-  {
-    "id": "wikisource-en",
-    "name": "Wikisource (English)",
-    "url": "https://ws-export.wmcloud.org/opds/en/Ready_for_export.xml",
-    "languages": ["en"],
-    "categories": ["public-domain", "literature"],
-    "description": "English-language Wikisource texts ready for export."
   },
   {
     "id": "gallica",
@@ -88,30 +80,6 @@
     "description": "Academic preprints in physics, math, and CS."
   },
   {
-    "id": "oreilly",
-    "name": "O'Reilly",
-    "url": "http://opds.oreilly.com/opds/",
-    "languages": ["en"],
-    "categories": ["tech", "commercial"],
-    "description": "Technology and professional reference books."
-  },
-  {
-    "id": "gitbook",
-    "name": "GitBook",
-    "url": "https://www.gitbook.com/api/opds/catalog.atom",
-    "languages": ["en"],
-    "categories": ["tech"],
-    "description": "Technical documentation and books."
-  },
-  {
-    "id": "pragpub",
-    "name": "PragPub Magazine",
-    "url": "https://pragprog.com/magazines.opds",
-    "languages": ["en"],
-    "categories": ["tech"],
-    "description": "Pragmatic Programmers technical magazine archive."
-  },
-  {
     "id": "mek-hu",
     "name": "Hungarian Electronic Library",
     "url": "https://bookserver.mek.oszk.hu",
@@ -134,21 +102,5 @@
     "languages": ["en"],
     "categories": ["politics"],
     "description": "Anarchist political theory and history texts."
-  },
-  {
-    "id": "mises",
-    "name": "Mises Institute",
-    "url": "https://mises.org/catalog/",
-    "languages": ["en"],
-    "categories": ["academic"],
-    "description": "Austrian economics and libertarian theory."
-  },
-  {
-    "id": "plough",
-    "name": "Plough Publishing",
-    "url": "https://www.plough.com/ploughCatalog_opds.xml",
-    "languages": ["en"],
-    "categories": ["religion"],
-    "description": "Christian thought, fiction, and biography."
   }
 ]

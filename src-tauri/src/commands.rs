@@ -2572,23 +2572,13 @@ pub struct OpdsCatalogSource {
 const DEFAULT_CATALOGS: &[(&str, &str, &str)] = &[
     (
         "Project Gutenberg",
-        "https://m.gutenberg.org/ebooks.opds/",
+        "https://www.gutenberg.org/ebooks.opds/",
         "project-gutenberg",
     ),
     (
         "Standard Ebooks (New Releases)",
         "https://standardebooks.org/feeds/atom/new-releases",
         "standard-ebooks-new",
-    ),
-    (
-        "Internet Archive",
-        "https://bookserver.archive.org/catalog/",
-        "internet-archive",
-    ),
-    (
-        "Feedbooks",
-        "https://www.feedbooks.com/catalog.atom",
-        "feedbooks",
     ),
     (
         "Wikisource (English)",
@@ -5559,8 +5549,11 @@ mod tests {
     }
 
     #[test]
-    fn default_catalogs_has_five_entries_each_with_preset_id() {
-        assert_eq!(DEFAULT_CATALOGS.len(), 5);
+    fn default_catalogs_each_has_https_url_and_preset_id() {
+        assert!(
+            !DEFAULT_CATALOGS.is_empty(),
+            "must ship at least one default catalog"
+        );
         for (name, url, preset_id) in DEFAULT_CATALOGS {
             assert!(!name.is_empty(), "default catalog has empty name");
             assert!(
@@ -5580,13 +5573,7 @@ mod tests {
     fn default_catalogs_include_expected_preset_ids() {
         let ids: std::collections::HashSet<&str> =
             DEFAULT_CATALOGS.iter().map(|(_, _, id)| *id).collect();
-        for expected in &[
-            "project-gutenberg",
-            "standard-ebooks-new",
-            "internet-archive",
-            "feedbooks",
-            "wikisource-en",
-        ] {
+        for expected in &["project-gutenberg", "standard-ebooks-new", "wikisource-en"] {
             assert!(
                 ids.contains(expected),
                 "missing default preset_id: {expected}"
@@ -5606,10 +5593,10 @@ mod tests {
                 preset_id: Some(preset_id.to_string()),
             })
             .collect();
-        assert_eq!(mapped.len(), 5);
+        assert!(!mapped.is_empty());
         let gutenberg = mapped
             .iter()
-            .find(|c| c.url == "https://m.gutenberg.org/ebooks.opds/")
+            .find(|c| c.url == "https://www.gutenberg.org/ebooks.opds/")
             .expect("default Project Gutenberg missing");
         assert_eq!(gutenberg.preset_id.as_deref(), Some("project-gutenberg"));
     }

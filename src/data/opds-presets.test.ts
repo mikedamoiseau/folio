@@ -61,13 +61,11 @@ describe("opds-presets.json", () => {
     }
   });
 
-  it("contains the 5 default-eligible preset ids", () => {
+  it("contains the default-eligible preset ids", () => {
     const ids = new Set(data.map((p) => p.id));
     for (const expected of [
       "project-gutenberg",
       "standard-ebooks-new",
-      "internet-archive",
-      "feedbooks",
       "wikisource-en",
     ]) {
       expect(ids.has(expected)).toBe(true);
