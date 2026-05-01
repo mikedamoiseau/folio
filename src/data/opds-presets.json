@@ -24,28 +24,12 @@
     "description": "English-language Wikisource texts ready for export."
   },
   {
-    "id": "feedbooks",
-    "name": "Feedbooks",
-    "url": "https://www.feedbooks.com/catalog.atom",
-    "languages": ["en", "fr", "de", "es", "it", "multi"],
-    "categories": ["public-domain", "fiction"],
-    "description": "Free public domain titles in multiple languages."
-  },
-  {
     "id": "gallica",
     "name": "Gallica",
     "url": "https://gallica.bnf.fr/opds",
     "languages": ["fr"],
     "categories": ["public-domain", "literature", "academic"],
     "description": "Bibliothèque nationale de France digital library."
-  },
-  {
-    "id": "atramenta",
-    "name": "Atramenta",
-    "url": "https://www.atramenta.net/opds/catalog.atom",
-    "languages": ["fr"],
-    "categories": ["literature"],
-    "description": "Free French literature, classic and contemporary."
   },
   {
     "id": "ebooks-libres-gratuits",
@@ -62,14 +46,6 @@
     "languages": ["fr"],
     "categories": ["academic"],
     "description": "French academic books and journals in humanities."
-  },
-  {
-    "id": "manybooks",
-    "name": "ManyBooks",
-    "url": "http://srv.manybooks.net/opds/index.php",
-    "languages": ["en"],
-    "categories": ["public-domain"],
-    "description": "Public domain ebooks, mirrors and originals."
   },
   {
     "id": "arxiv",
