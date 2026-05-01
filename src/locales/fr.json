@@ -456,7 +456,52 @@
     "searchThisCatalog": "Rechercher dans ce catalogue\u2026",
     "noEntries": "Aucune entr\u00e9e trouv\u00e9e.",
     "loadMore": "Charger plus\u2026",
-    "downloadFailed": "\u00c9chec du t\u00e9l\u00e9chargement de \u00ab\u00a0{{title}}\u00a0\u00bb\u00a0: {{error}}"
+    "downloadFailed": "\u00c9chec du t\u00e9l\u00e9chargement de \u00ab\u00a0{{title}}\u00a0\u00bb\u00a0: {{error}}",
+    "presets": {
+      "browseButton": "Parcourir les presets",
+      "title": "Parcourir les presets",
+      "searchPlaceholder": "Rechercher des presets\u2026",
+      "languageFilter": "Langue",
+      "categoryFilter": "Cat\u00e9gorie",
+      "allLanguages": "Toutes",
+      "allCategories": "Toutes",
+      "added": "Ajout\u00e9",
+      "add": "+ Ajouter",
+      "addError": "Impossible d'ajouter le catalogue",
+      "empty": "Aucun preset ne correspond \u00e0 vos filtres",
+      "clearFilters": "Effacer les filtres",
+      "suggest": "Vous ne trouvez pas ? Sugg\u00e9rer un catalogue",
+      "lang": {
+        "en": "Anglais",
+        "fr": "Fran\u00e7ais",
+        "de": "Allemand",
+        "es": "Espagnol",
+        "it": "Italien",
+        "pt": "Portugais",
+        "ja": "Japonais",
+        "zh": "Chinois",
+        "ru": "Russe",
+        "pl": "Polonais",
+        "nl": "N\u00e9erlandais",
+        "sv": "Su\u00e9dois",
+        "fi": "Finnois",
+        "da": "Danois",
+        "hu": "Hongrois",
+        "bg": "Bulgare",
+        "be": "Bi\u00e9lorusse",
+        "multi": "Multilingue"
+      },
+      "category": {
+        "public-domain": "Domaine public",
+        "literature": "Litt\u00e9rature",
+        "tech": "Technologie",
+        "academic": "Universitaire",
+        "fiction": "Fiction",
+        "religion": "Religion",
+        "politics": "Politique",
+        "commercial": "Commercial"
+      }
+    }
   },
 
   "editor": {
