@@ -2565,6 +2565,8 @@ pub async fn enrich_book_from_openlibrary(
 pub struct OpdsCatalogSource {
     pub name: String,
     pub url: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preset_id: Option<String>,
 }
 
 const DEFAULT_CATALOGS: &[(&str, &str)] = &[
@@ -2629,6 +2631,7 @@ pub async fn get_opds_catalogs(state: State<'_, AppState>) -> FolioResult<Vec<Op
         .map(|(name, url)| OpdsCatalogSource {
             name: name.to_string(),
             url: url.to_string(),
+            preset_id: None,
         })
         .collect();
     result.extend(custom);
@@ -2655,7 +2658,7 @@ pub async fn add_opds_catalog(
     let custom_json =
         db::get_setting(&conn, "opds_custom_catalogs")?.unwrap_or_else(|| "[]".to_string());
     let mut custom: Vec<OpdsCatalogSource> = serde_json::from_str(&custom_json).unwrap_or_default();
-    custom.push(OpdsCatalogSource { name, url });
+    custom.push(OpdsCatalogSource { name, url, preset_id: None });
     let json = serde_json::to_string(&custom)?;
     Ok(db::set_setting(&conn, "opds_custom_catalogs", &json)?)
 }
@@ -5355,6 +5358,50 @@ mod tests {
             opds_extension_from_url("https://example.com/book.epub/"),
             Some("epub")
         );
+    }
+
+    #[test]
+    fn opds_catalog_source_preset_id_roundtrip() {
+        let src = OpdsCatalogSource {
+            name: "Project Gutenberg".to_string(),
+            url: "https://m.gutenberg.org/ebooks.opds/".to_string(),
+            preset_id: Some("project-gutenberg".to_string()),
+        };
+        let json = serde_json::to_string(&src).unwrap();
+        let parsed: OpdsCatalogSource = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.preset_id.as_deref(), Some("project-gutenberg"));
+    }
+
+    #[test]
+    fn opds_catalog_source_legacy_blob_deserializes_with_none_preset_id() {
+        // Older builds wrote {name, url} only — must still parse.
+        let legacy = r#"{"name":"Custom","url":"https://example.com/opds"}"#;
+        let parsed: OpdsCatalogSource = serde_json::from_str(legacy).unwrap();
+        assert_eq!(parsed.name, "Custom");
+        assert!(parsed.preset_id.is_none());
+    }
+
+    #[test]
+    fn opds_catalog_source_serializes_camel_case_preset_id() {
+        // The TS frontend reads `presetId`, not `preset_id`.
+        let src = OpdsCatalogSource {
+            name: "x".to_string(),
+            url: "https://x".to_string(),
+            preset_id: Some("x".to_string()),
+        };
+        let json = serde_json::to_string(&src).unwrap();
+        assert!(json.contains("\"presetId\""), "expected camelCase: {json}");
+    }
+
+    #[test]
+    fn opds_catalog_source_omits_preset_id_when_none() {
+        let src = OpdsCatalogSource {
+            name: "x".to_string(),
+            url: "https://x".to_string(),
+            preset_id: None,
+        };
+        let json = serde_json::to_string(&src).unwrap();
+        assert!(!json.contains("preset"), "expected no preset key: {json}");
     }
 
     #[test]
