@@ -4,10 +4,12 @@ import { useTranslation } from "react-i18next";
 import { friendlyError } from "../lib/errors";
 import { pickSupportedOpdsLink } from "../lib/utils";
 import { FALLBACK_FORMATS, useSupportedFormats } from "../lib/supportedFormats";
+import OpdsPresetPicker from "./OpdsPresetPicker";
 
 interface OpdsCatalog {
   name: string;
   url: string;
+  presetId?: string | null;
 }
 
 interface OpdsLink {
@@ -56,6 +58,7 @@ export default function CatalogBrowser({ onClose, onBookImported }: CatalogBrows
 
   // Add catalog form
   const [showAddCatalog, setShowAddCatalog] = useState(false);
+  const [showPresetPicker, setShowPresetPicker] = useState(false);
   const [newCatalogName, setNewCatalogName] = useState("");
   const [newCatalogUrl, setNewCatalogUrl] = useState("");
 
@@ -225,6 +228,29 @@ export default function CatalogBrowser({ onClose, onBookImported }: CatalogBrows
               )}
             </div>
 
+            <div className="px-5 py-2 border-b border-warm-border flex gap-2 shrink-0">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowPresetPicker(true);
+                  setShowAddCatalog(false);
+                }}
+                className="flex-1 text-xs font-medium text-accent hover:bg-accent-light/50 rounded-lg px-3 py-1.5 transition-colors"
+              >
+                {t("catalog.presets.browseButton")}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowAddCatalog((v) => !v);
+                  setShowPresetPicker(false);
+                }}
+                className="flex-1 text-xs font-medium text-accent hover:bg-accent-light/50 rounded-lg px-3 py-1.5 transition-colors"
+              >
+                {t("catalog.addCustomCatalog")}
+              </button>
+            </div>
+
             <div className="flex-1 overflow-y-auto py-2 relative">
               {/* Loading overlay when browsing to a catalog */}
               {loading && !feed && (
@@ -235,8 +261,16 @@ export default function CatalogBrowser({ onClose, onBookImported }: CatalogBrows
                   </div>
                 </div>
               )}
-              {/* Unified search results */}
-              {unifiedLoading ? (
+              {/* Preset picker / Unified search results / Catalog list */}
+              {showPresetPicker && !unifiedLoading && !unifiedResults ? (
+                <OpdsPresetPicker
+                  currentCatalogs={catalogs}
+                  onClose={() => setShowPresetPicker(false)}
+                  onAdded={async () => {
+                    await loadCatalogs();
+                  }}
+                />
+              ) : unifiedLoading ? (
                 <div className="flex items-center justify-center py-12">
                   <p className="text-sm text-ink-muted">{t("catalog.searchingAll")}</p>
                 </div>
@@ -329,8 +363,8 @@ export default function CatalogBrowser({ onClose, onBookImported }: CatalogBrows
                 </button>
               ))}
 
-              {/* Add custom catalog */}
-              {showAddCatalog ? (
+              {/* Add custom catalog form */}
+              {showAddCatalog && (
                 <div className="px-5 py-3 space-y-2 border-t border-warm-border">
                   <input
                     type="text" value={newCatalogName} onChange={(e) => setNewCatalogName(e.target.value)}
@@ -354,14 +388,6 @@ export default function CatalogBrowser({ onClose, onBookImported }: CatalogBrows
                     </button>
                   </div>
                 </div>
-              ) : (
-                <button onClick={() => setShowAddCatalog(true)}
-                  className="w-full px-5 py-3 text-xs text-ink-muted hover:text-accent hover:bg-warm-subtle transition-colors text-left flex items-center gap-2 border-t border-warm-border">
-                  <svg width="12" height="12" viewBox="0 0 20 20" fill="none">
-                    <path d="M10 4v12M4 10h12" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-                  </svg>
-                  {t("catalog.addCustomCatalog")}
-                </button>
               )}
               </>
               )}
