@@ -58,7 +58,7 @@
   {
     "id": "ebooks-libres-gratuits",
     "name": "Ebooks libres et gratuits",
-    "url": "https://www.ebooksgratuits.com/",
+    "url": "https://www.ebooksgratuits.com/opds/",
     "languages": ["fr"],
     "categories": ["public-domain"],
     "description": "Free French public domain ebooks."
