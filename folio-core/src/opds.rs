@@ -8,6 +8,16 @@ use crate::error::{FolioError, FolioResult};
 /// Maximum time to wait for an OPDS HTTP response.
 const HTTP_TIMEOUT: Duration = Duration::from_secs(15);
 
+/// User-Agent for OPDS catalog fetches. Wrapped in `Mozilla/5.0
+/// (compatible; …)` because several legitimate public catalogs
+/// (OpenEdition, Atramenta, others) reject any UA that doesn't start
+/// with `Mozilla/`. The "compatible" pattern is the long-standing way
+/// for non-browser clients to identify themselves while still passing
+/// these filters — feedreaders like NewsBlur and Feedbin use the same
+/// shape. Server logs still see "Folio" so honest identification is
+/// preserved.
+const OPDS_USER_AGENT: &str = "Mozilla/5.0 (compatible; Folio/1.4; OPDS reader)";
+
 /// Maximum response body size (5 MB) to prevent DoS via large feeds.
 const MAX_RESPONSE_BYTES: usize = 5 * 1024 * 1024;
 
@@ -193,7 +203,7 @@ pub fn fetch_feed_with_trusted(url: &str, trusted: &[String]) -> FolioResult<Opd
     let client = http_client()?;
     let response = client
         .get(url)
-        .header("User-Agent", "Folio/1.2 (OPDS reader)")
+        .header("User-Agent", OPDS_USER_AGENT)
         .send()
         .map_err(|e| FolioError::network(format!("HTTP error: {e}")))?;
     if !response.status().is_success() {
@@ -861,7 +871,7 @@ pub fn resolve_search_url_with_trusted(url: &str, trusted: &[String]) -> Option<
     let client = http_client().ok()?;
     let response = client
         .get(url)
-        .header("User-Agent", "Folio/1.2 (OPDS reader)")
+        .header("User-Agent", OPDS_USER_AGENT)
         .send()
         .ok()?;
     if !response.status().is_success() {
