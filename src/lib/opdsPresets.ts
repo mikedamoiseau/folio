@@ -2,7 +2,8 @@ import presetsJson from "../data/opds-presets.json";
 import type { Preset, LanguageCode, Category } from "../types/opdsPreset";
 
 interface OpdsCatalogLike {
-  url: string;
+  name?: string;
+  url?: string;
   presetId?: string | null;
 }
 
