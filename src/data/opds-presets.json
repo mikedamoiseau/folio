@@ -48,6 +48,14 @@
     "description": "French academic books and journals in humanities."
   },
   {
+    "id": "manybooks",
+    "name": "ManyBooks",
+    "url": "https://manybooks.net/opds",
+    "languages": ["en"],
+    "categories": ["public-domain"],
+    "description": "Public domain ebooks, mirrors and originals."
+  },
+  {
     "id": "arxiv",
     "name": "arXiv",
     "url": "http://arxiv.maplepop.com/catalog/",
