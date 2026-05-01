@@ -136,7 +136,10 @@ pub fn is_user_addable_url(url: &str) -> bool {
     if !url.starts_with("http://") && !url.starts_with("https://") {
         return false;
     }
-    match url::Url::parse(url).ok().and_then(|u| u.host_str().map(str::to_string)) {
+    match url::Url::parse(url)
+        .ok()
+        .and_then(|u| u.host_str().map(str::to_string))
+    {
         Some(host) => !host.is_empty(),
         None => false,
     }
@@ -229,11 +232,7 @@ fn parse_feed(xml: &str, base_url: &str) -> FolioResult<OpdsFeed> {
 
 /// Parse OPDS/Atom XML; skip the `http://` → `https://` cover upgrade when
 /// the cover URL targets a trusted host (LAN servers don't speak TLS).
-fn parse_feed_with_trusted(
-    xml: &str,
-    base_url: &str,
-    trusted: &[String],
-) -> FolioResult<OpdsFeed> {
+fn parse_feed_with_trusted(xml: &str, base_url: &str, trusted: &[String]) -> FolioResult<OpdsFeed> {
     let mut reader = Reader::from_str(xml);
     reader.config_mut().trim_text(true);
 
@@ -708,14 +707,8 @@ mod tests {
     #[test]
     fn trusted_host_does_not_relax_scheme_check() {
         let trusted = vec!["192.168.0.12:7788".to_string()];
-        assert!(!is_safe_url_with_trusted(
-            "file:///etc/passwd",
-            &trusted
-        ));
-        assert!(!is_safe_url_with_trusted(
-            "javascript:alert(1)",
-            &trusted
-        ));
+        assert!(!is_safe_url_with_trusted("file:///etc/passwd", &trusted));
+        assert!(!is_safe_url_with_trusted("javascript:alert(1)", &trusted));
         assert!(!is_safe_url_with_trusted(
             "ftp://192.168.0.12:7788/x",
             &trusted
