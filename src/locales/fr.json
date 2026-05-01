@@ -357,6 +357,7 @@
     "fileCount": "{{count}} fichier",
     "filesCount": "{{count}} fichiers",
     "dontMoveFiles": "Ne pas d\u00e9placer les fichiers existants \u2014 utiliser le nouveau dossier uniquement pour les futurs imports",
+    "dontMoveFilesHint": "Les livres existants resteront \u00e0 leur emplacement actuel et ne se chargeront pas tant que vous ne les aurez pas copi\u00e9s ou d\u00e9plac\u00e9s vous-m\u00eame.",
     "moveAndUpdate": "D\u00e9placer et mettre \u00e0 jour",
     "changeFolder2": "Changer de dossier",
     "checkMissingFiles": "V\u00e9rifier les fichiers manquants",

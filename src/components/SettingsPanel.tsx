@@ -2050,8 +2050,15 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                   disabled={migrating}
                   className="mt-0.5 accent-accent"
                 />
-                <span className="text-sm text-ink leading-snug">
-                  {t("settings.dontMoveFiles")}
+                <span className="flex flex-col gap-1 leading-snug">
+                  <span className="text-sm text-ink">
+                    {t("settings.dontMoveFiles")}
+                  </span>
+                  {dontMoveFiles && (
+                    <span className="text-xs text-amber-700 dark:text-amber-400">
+                      {t("settings.dontMoveFilesHint")}
+                    </span>
+                  )}
                 </span>
               </label>
 

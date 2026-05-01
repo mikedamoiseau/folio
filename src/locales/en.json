@@ -357,6 +357,7 @@
     "fileCount": "{{count}} file",
     "filesCount": "{{count}} files",
     "dontMoveFiles": "Don\u2019t move existing files \u2014 only use new folder for future imports",
+    "dontMoveFilesHint": "Existing books stay at the old location and won\u2019t load until you copy or move them yourself.",
     "moveAndUpdate": "Move & Update",
     "changeFolder2": "Change Folder",
     "checkMissingFiles": "Check for missing files",
