@@ -24,6 +24,14 @@
     "description": "English-language Wikisource texts ready for export."
   },
   {
+    "id": "feedbooks",
+    "name": "Feedbooks",
+    "url": "https://www.feedbooks.com/catalog.atom",
+    "languages": ["en", "fr", "de", "es", "it", "multi"],
+    "categories": ["public-domain", "fiction"],
+    "description": "Free public domain titles in multiple languages."
+  },
+  {
     "id": "gallica",
     "name": "Gallica",
     "url": "https://gallica.bnf.fr/opds",
