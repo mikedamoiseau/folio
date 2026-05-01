@@ -2569,11 +2569,31 @@ pub struct OpdsCatalogSource {
     pub preset_id: Option<String>,
 }
 
-const DEFAULT_CATALOGS: &[(&str, &str)] = &[
-    ("Project Gutenberg", "https://m.gutenberg.org/ebooks.opds/"),
+const DEFAULT_CATALOGS: &[(&str, &str, &str)] = &[
+    (
+        "Project Gutenberg",
+        "https://m.gutenberg.org/ebooks.opds/",
+        "project-gutenberg",
+    ),
     (
         "Standard Ebooks (New Releases)",
         "https://standardebooks.org/feeds/atom/new-releases",
+        "standard-ebooks-new",
+    ),
+    (
+        "Internet Archive",
+        "https://bookserver.archive.org/catalog/",
+        "internet-archive",
+    ),
+    (
+        "Feedbooks",
+        "https://www.feedbooks.com/catalog.atom",
+        "feedbooks",
+    ),
+    (
+        "Wikisource (English)",
+        "https://ws-export.wmcloud.org/opds/en/Ready_for_export.xml",
+        "wikisource-en",
     ),
 ];
 
@@ -2600,7 +2620,7 @@ fn trusted_hosts_from_catalogs(catalogs: &[OpdsCatalogSource]) -> Vec<String> {
 fn trusted_hosts_from_db(conn: &rusqlite::Connection) -> Vec<String> {
     let mut hosts: Vec<String> = DEFAULT_CATALOGS
         .iter()
-        .filter_map(|(_, url)| opds::host_port_from_url(url))
+        .filter_map(|(_, url, _)| opds::host_port_from_url(url))
         .collect();
     let custom_json = db::get_setting(conn, "opds_custom_catalogs")
         .ok()
@@ -2621,17 +2641,16 @@ fn trusted_hosts_from_db(conn: &rusqlite::Connection) -> Vec<String> {
 #[tauri::command]
 pub async fn get_opds_catalogs(state: State<'_, AppState>) -> FolioResult<Vec<OpdsCatalogSource>> {
     let conn = state.active_db()?.get()?;
-    // Load custom catalogs from settings
     let custom_json =
         db::get_setting(&conn, "opds_custom_catalogs")?.unwrap_or_else(|| "[]".to_string());
     let custom: Vec<OpdsCatalogSource> = serde_json::from_str(&custom_json).unwrap_or_default();
 
     let mut result: Vec<OpdsCatalogSource> = DEFAULT_CATALOGS
         .iter()
-        .map(|(name, url)| OpdsCatalogSource {
+        .map(|(name, url, preset_id)| OpdsCatalogSource {
             name: name.to_string(),
             url: url.to_string(),
-            preset_id: None,
+            preset_id: Some(preset_id.to_string()),
         })
         .collect();
     result.extend(custom);
@@ -5537,6 +5556,62 @@ mod tests {
             .find(|c| c.url == "https://example.com/opds")
             .unwrap();
         assert!(custom.preset_id.is_none());
+    }
+
+    #[test]
+    fn default_catalogs_has_five_entries_each_with_preset_id() {
+        assert_eq!(DEFAULT_CATALOGS.len(), 5);
+        for (name, url, preset_id) in DEFAULT_CATALOGS {
+            assert!(!name.is_empty(), "default catalog has empty name");
+            assert!(
+                url.starts_with("https://"),
+                "default url must be https: {url}"
+            );
+            assert!(!preset_id.is_empty(), "preset_id must be set for {name}");
+        }
+        let ids: Vec<&str> = DEFAULT_CATALOGS.iter().map(|(_, _, id)| *id).collect();
+        let mut sorted = ids.clone();
+        sorted.sort();
+        sorted.dedup();
+        assert_eq!(sorted.len(), ids.len(), "preset_ids must be unique");
+    }
+
+    #[test]
+    fn default_catalogs_include_expected_preset_ids() {
+        let ids: std::collections::HashSet<&str> =
+            DEFAULT_CATALOGS.iter().map(|(_, _, id)| *id).collect();
+        for expected in &[
+            "project-gutenberg",
+            "standard-ebooks-new",
+            "internet-archive",
+            "feedbooks",
+            "wikisource-en",
+        ] {
+            assert!(
+                ids.contains(expected),
+                "missing default preset_id: {expected}"
+            );
+        }
+    }
+
+    #[test]
+    fn default_catalogs_can_map_to_opds_catalog_source_with_preset_id() {
+        // Mirror the mapping done inside get_opds_catalogs. If this test breaks
+        // because the tuple shape changed, get_opds_catalogs needs updating too.
+        let mapped: Vec<OpdsCatalogSource> = DEFAULT_CATALOGS
+            .iter()
+            .map(|(name, url, preset_id)| OpdsCatalogSource {
+                name: name.to_string(),
+                url: url.to_string(),
+                preset_id: Some(preset_id.to_string()),
+            })
+            .collect();
+        assert_eq!(mapped.len(), 5);
+        let gutenberg = mapped
+            .iter()
+            .find(|c| c.url == "https://m.gutenberg.org/ebooks.opds/")
+            .expect("default Project Gutenberg missing");
+        assert_eq!(gutenberg.preset_id.as_deref(), Some("project-gutenberg"));
     }
 }
 
