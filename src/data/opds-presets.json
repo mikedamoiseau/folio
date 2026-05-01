@@ -1,0 +1,106 @@
+[
+  {
+    "id": "project-gutenberg",
+    "name": "Project Gutenberg",
+    "url": "https://www.gutenberg.org/ebooks.opds/",
+    "languages": ["en", "multi"],
+    "categories": ["public-domain", "literature"],
+    "description": "Public domain ebooks, 70k+ titles."
+  },
+  {
+    "id": "standard-ebooks-new",
+    "name": "Standard Ebooks (New Releases)",
+    "url": "https://standardebooks.org/feeds/atom/new-releases",
+    "languages": ["en"],
+    "categories": ["public-domain", "literature"],
+    "description": "Recently released curated, beautifully typeset public domain books."
+  },
+  {
+    "id": "wikisource-en",
+    "name": "Wikisource (English)",
+    "url": "https://ws-export.wmcloud.org/opds/en/Ready_for_export.xml",
+    "languages": ["en"],
+    "categories": ["public-domain", "literature"],
+    "description": "English-language Wikisource texts ready for export."
+  },
+  {
+    "id": "feedbooks",
+    "name": "Feedbooks",
+    "url": "https://www.feedbooks.com/catalog.atom",
+    "languages": ["en", "fr", "de", "es", "it", "multi"],
+    "categories": ["public-domain", "fiction"],
+    "description": "Free public domain titles in multiple languages."
+  },
+  {
+    "id": "gallica",
+    "name": "Gallica",
+    "url": "https://gallica.bnf.fr/opds",
+    "languages": ["fr"],
+    "categories": ["public-domain", "literature", "academic"],
+    "description": "Bibliothèque nationale de France digital library."
+  },
+  {
+    "id": "ebooks-libres-gratuits",
+    "name": "Ebooks libres et gratuits",
+    "url": "https://www.ebooksgratuits.com/opds/",
+    "languages": ["fr"],
+    "categories": ["public-domain"],
+    "description": "Free French public domain ebooks."
+  },
+  {
+    "id": "openedition",
+    "name": "OpenEdition",
+    "url": "https://opds.openedition.org/",
+    "languages": ["fr"],
+    "categories": ["academic"],
+    "description": "French academic books and journals in humanities."
+  },
+  {
+    "id": "manybooks",
+    "name": "ManyBooks",
+    "url": "https://manybooks.net/opds",
+    "languages": ["en"],
+    "categories": ["public-domain"],
+    "description": "Public domain ebooks, mirrors and originals."
+  },
+  {
+    "id": "arxiv",
+    "name": "arXiv",
+    "url": "http://arxiv.maplepop.com/catalog/",
+    "languages": ["en"],
+    "categories": ["academic"],
+    "description": "Academic preprints in physics, math, and CS."
+  },
+  {
+    "id": "mek-hu",
+    "name": "Hungarian Electronic Library",
+    "url": "https://bookserver.mek.oszk.hu",
+    "languages": ["hu"],
+    "categories": ["public-domain"],
+    "description": "Hungarian National Library electronic collection."
+  },
+  {
+    "id": "chitanka-bg",
+    "name": "Читанка",
+    "url": "https://chitanka.info/catalog.opds",
+    "languages": ["bg"],
+    "categories": ["public-domain", "literature"],
+    "description": "Bulgarian free books and literature."
+  },
+  {
+    "id": "anarchist-library-en",
+    "name": "Anarchist Library",
+    "url": "https://theanarchistlibrary.org/opds",
+    "languages": ["en"],
+    "categories": ["politics"],
+    "description": "Anarchist political theory and history texts."
+  },
+  {
+    "id": "elephant-editions",
+    "name": "Elephant Editions",
+    "url": "https://www.elephanteditions.net/opds",
+    "languages": ["en"],
+    "categories": ["politics"],
+    "description": "Anarchist publishing house archives — own catalog plus adjacent texts."
+  }
+]

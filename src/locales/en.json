@@ -357,6 +357,7 @@
     "fileCount": "{{count}} file",
     "filesCount": "{{count}} files",
     "dontMoveFiles": "Don\u2019t move existing files \u2014 only use new folder for future imports",
+    "dontMoveFilesHint": "Existing books stay at the old location and won\u2019t load until you copy or move them yourself.",
     "moveAndUpdate": "Move & Update",
     "changeFolder2": "Change Folder",
     "checkMissingFiles": "Check for missing files",
@@ -456,7 +457,52 @@
     "searchThisCatalog": "Search this catalog\u2026",
     "noEntries": "No entries found.",
     "loadMore": "Load more\u2026",
-    "downloadFailed": "Failed to download \"{{title}}\": {{error}}"
+    "downloadFailed": "Failed to download \"{{title}}\": {{error}}",
+    "presets": {
+      "browseButton": "Browse presets",
+      "title": "Browse presets",
+      "searchPlaceholder": "Search presets…",
+      "languageFilter": "Language",
+      "categoryFilter": "Category",
+      "allLanguages": "All",
+      "allCategories": "All",
+      "added": "Added",
+      "add": "+ Add",
+      "addError": "Could not add catalog",
+      "empty": "No presets match your filters",
+      "clearFilters": "Clear filters",
+      "suggest": "Don't see what you need? Suggest a catalog",
+      "lang": {
+        "en": "English",
+        "fr": "French",
+        "de": "German",
+        "es": "Spanish",
+        "it": "Italian",
+        "pt": "Portuguese",
+        "ja": "Japanese",
+        "zh": "Chinese",
+        "ru": "Russian",
+        "pl": "Polish",
+        "nl": "Dutch",
+        "sv": "Swedish",
+        "fi": "Finnish",
+        "da": "Danish",
+        "hu": "Hungarian",
+        "bg": "Bulgarian",
+        "be": "Belarusian",
+        "multi": "Multilingual"
+      },
+      "category": {
+        "public-domain": "Public domain",
+        "literature": "Literature",
+        "tech": "Technology",
+        "academic": "Academic",
+        "fiction": "Fiction",
+        "religion": "Religion",
+        "politics": "Politics",
+        "commercial": "Commercial"
+      }
+    }
   },
 
   "editor": {

@@ -2565,48 +2565,124 @@ pub async fn enrich_book_from_openlibrary(
 pub struct OpdsCatalogSource {
     pub name: String,
     pub url: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preset_id: Option<String>,
 }
 
-const DEFAULT_CATALOGS: &[(&str, &str)] = &[
-    ("Project Gutenberg", "https://m.gutenberg.org/ebooks.opds/"),
+const DEFAULT_CATALOGS: &[(&str, &str, &str)] = &[
+    (
+        "Project Gutenberg",
+        "https://www.gutenberg.org/ebooks.opds/",
+        "project-gutenberg",
+    ),
     (
         "Standard Ebooks (New Releases)",
         "https://standardebooks.org/feeds/atom/new-releases",
+        "standard-ebooks-new",
+    ),
+    (
+        "Wikisource (English)",
+        "https://ws-export.wmcloud.org/opds/en/Ready_for_export.xml",
+        "wikisource-en",
     ),
 ];
+
+/// Build the trusted-host list for OPDS network calls. Every catalog the user
+/// (or Folio's defaults) has configured contributes its `host:port`, which
+/// lets `is_safe_url_with_trusted` allow LAN/loopback servers the user
+/// explicitly added — without weakening SSRF protection on arbitrary
+/// feed-derived URLs from untrusted hosts.
+fn trusted_hosts_from_catalogs(catalogs: &[OpdsCatalogSource]) -> Vec<String> {
+    let mut hosts: Vec<String> = Vec::new();
+    for cat in catalogs {
+        if let Some(hp) = opds::host_port_from_url(&cat.url) {
+            if !hosts.iter().any(|h| h.eq_ignore_ascii_case(&hp)) {
+                hosts.push(hp);
+            }
+        }
+    }
+    hosts
+}
+
+/// Same as [`trusted_hosts_from_catalogs`] but reads directly from the DB
+/// connection so callers that don't already have the catalog list don't pay
+/// the cost of an extra `get_opds_catalogs` round-trip.
+fn trusted_hosts_from_db(conn: &rusqlite::Connection) -> Vec<String> {
+    let mut hosts: Vec<String> = DEFAULT_CATALOGS
+        .iter()
+        .filter_map(|(_, url, _)| opds::host_port_from_url(url))
+        .collect();
+    let custom_json = db::get_setting(conn, "opds_custom_catalogs")
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| "[]".to_string());
+    if let Ok(custom) = serde_json::from_str::<Vec<OpdsCatalogSource>>(&custom_json) {
+        for c in custom {
+            if let Some(hp) = opds::host_port_from_url(&c.url) {
+                if !hosts.iter().any(|h| h.eq_ignore_ascii_case(&hp)) {
+                    hosts.push(hp);
+                }
+            }
+        }
+    }
+    hosts
+}
 
 #[tauri::command]
 pub async fn get_opds_catalogs(state: State<'_, AppState>) -> FolioResult<Vec<OpdsCatalogSource>> {
     let conn = state.active_db()?.get()?;
-    // Load custom catalogs from settings
     let custom_json =
         db::get_setting(&conn, "opds_custom_catalogs")?.unwrap_or_else(|| "[]".to_string());
     let custom: Vec<OpdsCatalogSource> = serde_json::from_str(&custom_json).unwrap_or_default();
 
     let mut result: Vec<OpdsCatalogSource> = DEFAULT_CATALOGS
         .iter()
-        .map(|(name, url)| OpdsCatalogSource {
+        .map(|(name, url, preset_id)| OpdsCatalogSource {
             name: name.to_string(),
             url: url.to_string(),
+            preset_id: Some(preset_id.to_string()),
         })
         .collect();
     result.extend(custom);
     Ok(result)
 }
 
+/// Persistence body for `add_opds_catalog`, factored out so tests can
+/// exercise the exact code path the Tauri command runs without needing
+/// to construct a `tauri::State`. The URL validation lives at the
+/// command boundary, not here, so callers must validate first.
+fn add_opds_catalog_inner(
+    conn: &rusqlite::Connection,
+    name: String,
+    url: String,
+    preset_id: Option<String>,
+) -> FolioResult<()> {
+    let custom_json =
+        db::get_setting(conn, "opds_custom_catalogs")?.unwrap_or_else(|| "[]".to_string());
+    let mut custom: Vec<OpdsCatalogSource> = serde_json::from_str(&custom_json).unwrap_or_default();
+    custom.push(OpdsCatalogSource {
+        name,
+        url,
+        preset_id,
+    });
+    let json = serde_json::to_string(&custom)?;
+    Ok(db::set_setting(conn, "opds_custom_catalogs", &json)?)
+}
+
 #[tauri::command]
 pub async fn add_opds_catalog(
     name: String,
     url: String,
+    preset_id: Option<String>,
     state: State<'_, AppState>,
 ) -> FolioResult<()> {
+    if !opds::is_user_addable_url(&url) {
+        return Err(FolioError::invalid(
+            "Invalid catalog URL — only http:// or https:// URLs are accepted.",
+        ));
+    }
     let conn = state.active_db()?.get()?;
-    let custom_json =
-        db::get_setting(&conn, "opds_custom_catalogs")?.unwrap_or_else(|| "[]".to_string());
-    let mut custom: Vec<OpdsCatalogSource> = serde_json::from_str(&custom_json).unwrap_or_default();
-    custom.push(OpdsCatalogSource { name, url });
-    let json = serde_json::to_string(&custom)?;
-    Ok(db::set_setting(&conn, "opds_custom_catalogs", &json)?)
+    add_opds_catalog_inner(&conn, name, url, preset_id)
 }
 
 #[tauri::command]
@@ -2628,6 +2704,7 @@ pub async fn search_all_catalogs(
 ) -> FolioResult<Vec<opds::OpdsEntry>> {
     // Collect all catalog URLs
     let catalogs = get_opds_catalogs(state).await?;
+    let trusted = trusted_hosts_from_catalogs(&catalogs);
 
     // Fetch root feeds in parallel to discover search URLs
     let (result_tx, result_rx) = std::sync::mpsc::channel();
@@ -2638,9 +2715,10 @@ pub async fn search_all_catalogs(
         let q = query.clone();
         let tx = result_tx.clone();
         let cat_name = cat.name.clone();
+        let trusted = trusted.clone();
         tauri::async_runtime::spawn_blocking(move || {
             // 1. Fetch root feed to get searchUrl
-            let root = match opds::fetch_feed(&url) {
+            let root = match opds::fetch_feed_with_trusted(&url, &trusted) {
                 Ok(f) => f,
                 Err(_) => {
                     let _ = tx.send(Vec::new());
@@ -2655,7 +2733,7 @@ pub async fn search_all_catalogs(
                 }
             };
             // 2. Resolve OpenSearch description if needed, then search
-            let template = match opds::resolve_search_url(&raw_search_url) {
+            let template = match opds::resolve_search_url_with_trusted(&raw_search_url, &trusted) {
                 Some(t) => t,
                 None => {
                     let _ = tx.send(Vec::new());
@@ -2663,7 +2741,7 @@ pub async fn search_all_catalogs(
                 }
             };
             let search_url = template.replace("{searchTerms}", &opds::url_encode(&q));
-            let results = match opds::fetch_feed(&search_url) {
+            let results = match opds::fetch_feed_with_trusted(&search_url, &trusted) {
                 Ok(f) => f.entries,
                 Err(_) => Vec::new(),
             };
@@ -2721,6 +2799,7 @@ pub async fn get_discover_books(state: State<'_, AppState>) -> FolioResult<Vec<o
 
     // Cache miss or stale — fetch from catalogs in parallel
     let catalogs = get_opds_catalogs(state).await?;
+    let trusted = trusted_hosts_from_catalogs(&catalogs);
     let (result_tx, result_rx) = std::sync::mpsc::channel();
     let mut thread_count = 0;
 
@@ -2728,8 +2807,9 @@ pub async fn get_discover_books(state: State<'_, AppState>) -> FolioResult<Vec<o
         let url = cat.url.clone();
         let tx = result_tx.clone();
         let cat_name = cat.name.clone();
+        let trusted = trusted.clone();
         tauri::async_runtime::spawn_blocking(move || {
-            let entries = match opds::fetch_feed(&url) {
+            let entries = match opds::fetch_feed_with_trusted(&url, &trusted) {
                 Ok(feed) => feed
                     .entries
                     .into_iter()
@@ -2828,10 +2908,14 @@ fn opds_extension_from_mime(mime: &str) -> Option<&'static str> {
 }
 
 #[tauri::command]
-pub async fn browse_opds(url: String) -> FolioResult<opds::OpdsFeed> {
+pub async fn browse_opds(url: String, state: State<'_, AppState>) -> FolioResult<opds::OpdsFeed> {
+    let trusted = {
+        let conn = state.active_db()?.get()?;
+        trusted_hosts_from_db(&conn)
+    };
     let (tx, rx) = std::sync::mpsc::channel();
     tauri::async_runtime::spawn_blocking(move || {
-        let _ = tx.send(opds::fetch_feed(&url));
+        let _ = tx.send(opds::fetch_feed_with_trusted(&url, &trusted));
     });
     rx.recv()?
 }
@@ -2890,9 +2974,15 @@ pub async fn download_opds_book(
     {
         let dl_url = download_url.clone();
         let dl_dest = temp_str.clone();
+        let trusted = {
+            let conn = state.active_db()?.get()?;
+            trusted_hosts_from_db(&conn)
+        };
         let (tx, rx) = std::sync::mpsc::channel();
         tauri::async_runtime::spawn_blocking(move || {
-            let _ = tx.send(opds::download_file(&dl_url, &dl_dest));
+            let _ = tx.send(opds::download_file_with_trusted(
+                &dl_url, &dl_dest, &trusted,
+            ));
         });
         rx.recv()??;
     }
@@ -5293,6 +5383,50 @@ mod tests {
     }
 
     #[test]
+    fn opds_catalog_source_preset_id_roundtrip() {
+        let src = OpdsCatalogSource {
+            name: "Project Gutenberg".to_string(),
+            url: "https://m.gutenberg.org/ebooks.opds/".to_string(),
+            preset_id: Some("project-gutenberg".to_string()),
+        };
+        let json = serde_json::to_string(&src).unwrap();
+        let parsed: OpdsCatalogSource = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.preset_id.as_deref(), Some("project-gutenberg"));
+    }
+
+    #[test]
+    fn opds_catalog_source_legacy_blob_deserializes_with_none_preset_id() {
+        // Older builds wrote {name, url} only — must still parse.
+        let legacy = r#"{"name":"Custom","url":"https://example.com/opds"}"#;
+        let parsed: OpdsCatalogSource = serde_json::from_str(legacy).unwrap();
+        assert_eq!(parsed.name, "Custom");
+        assert!(parsed.preset_id.is_none());
+    }
+
+    #[test]
+    fn opds_catalog_source_serializes_camel_case_preset_id() {
+        // The TS frontend reads `presetId`, not `preset_id`.
+        let src = OpdsCatalogSource {
+            name: "x".to_string(),
+            url: "https://x".to_string(),
+            preset_id: Some("x".to_string()),
+        };
+        let json = serde_json::to_string(&src).unwrap();
+        assert!(json.contains("\"presetId\""), "expected camelCase: {json}");
+    }
+
+    #[test]
+    fn opds_catalog_source_omits_preset_id_when_none() {
+        let src = OpdsCatalogSource {
+            name: "x".to_string(),
+            url: "https://x".to_string(),
+            preset_id: None,
+        };
+        let json = serde_json::to_string(&src).unwrap();
+        assert!(!json.contains("preset"), "expected no preset key: {json}");
+    }
+
+    #[test]
     fn opds_url_disambiguates_folio_acquisition_urls() {
         // Folio's own OPDS feed emits `/api/books/{id}/download/{id}.{ext}`
         // specifically so URL-based detection can disambiguate AZW from AZW3
@@ -5358,6 +5492,113 @@ mod tests {
             !BACKUP_RUNNING.lock().unwrap().contains(&name),
             "profile must be released even though the function returned Err"
         );
+    }
+
+    fn get_custom_catalogs(conn: &rusqlite::Connection) -> Vec<OpdsCatalogSource> {
+        let custom_json = db::get_setting(conn, "opds_custom_catalogs")
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| "[]".to_string());
+        serde_json::from_str(&custom_json).unwrap_or_default()
+    }
+
+    #[test]
+    fn add_opds_catalog_persists_preset_id() {
+        let tmp = tempfile::tempdir().unwrap();
+        let pool = db::create_pool(&tmp.path().join("library.db")).unwrap();
+        let conn = pool.get().unwrap();
+
+        add_opds_catalog_inner(
+            &conn,
+            "Project Gutenberg".to_string(),
+            "https://m.gutenberg.org/ebooks.opds/".to_string(),
+            Some("project-gutenberg".to_string()),
+        )
+        .unwrap();
+
+        let cats = get_custom_catalogs(&conn);
+        let custom = cats
+            .iter()
+            .find(|c| c.url.contains("gutenberg") && c.preset_id.is_some());
+        assert_eq!(
+            custom.unwrap().preset_id.as_deref(),
+            Some("project-gutenberg")
+        );
+    }
+
+    #[test]
+    fn add_opds_catalog_with_no_preset_id_persists_none() {
+        let tmp = tempfile::tempdir().unwrap();
+        let pool = db::create_pool(&tmp.path().join("library.db")).unwrap();
+        let conn = pool.get().unwrap();
+
+        add_opds_catalog_inner(
+            &conn,
+            "Custom".to_string(),
+            "https://example.com/opds".to_string(),
+            None,
+        )
+        .unwrap();
+
+        let cats = get_custom_catalogs(&conn);
+        let custom = cats
+            .iter()
+            .find(|c| c.url == "https://example.com/opds")
+            .unwrap();
+        assert!(custom.preset_id.is_none());
+    }
+
+    #[test]
+    fn default_catalogs_each_has_https_url_and_preset_id() {
+        assert!(
+            !DEFAULT_CATALOGS.is_empty(),
+            "must ship at least one default catalog"
+        );
+        for (name, url, preset_id) in DEFAULT_CATALOGS {
+            assert!(!name.is_empty(), "default catalog has empty name");
+            assert!(
+                url.starts_with("https://"),
+                "default url must be https: {url}"
+            );
+            assert!(!preset_id.is_empty(), "preset_id must be set for {name}");
+        }
+        let ids: Vec<&str> = DEFAULT_CATALOGS.iter().map(|(_, _, id)| *id).collect();
+        let mut sorted = ids.clone();
+        sorted.sort();
+        sorted.dedup();
+        assert_eq!(sorted.len(), ids.len(), "preset_ids must be unique");
+    }
+
+    #[test]
+    fn default_catalogs_include_expected_preset_ids() {
+        let ids: std::collections::HashSet<&str> =
+            DEFAULT_CATALOGS.iter().map(|(_, _, id)| *id).collect();
+        for expected in &["project-gutenberg", "standard-ebooks-new", "wikisource-en"] {
+            assert!(
+                ids.contains(expected),
+                "missing default preset_id: {expected}"
+            );
+        }
+    }
+
+    #[test]
+    fn default_catalogs_can_map_to_opds_catalog_source_with_preset_id() {
+        // Mirror the mapping done inside get_opds_catalogs. If this test breaks
+        // because the tuple shape changed, get_opds_catalogs needs updating too.
+        let mapped: Vec<OpdsCatalogSource> = DEFAULT_CATALOGS
+            .iter()
+            .map(|(name, url, preset_id)| OpdsCatalogSource {
+                name: name.to_string(),
+                url: url.to_string(),
+                preset_id: Some(preset_id.to_string()),
+            })
+            .collect();
+        assert!(!mapped.is_empty());
+        let gutenberg = mapped
+            .iter()
+            .find(|c| c.url == "https://www.gutenberg.org/ebooks.opds/")
+            .expect("default Project Gutenberg missing");
+        assert_eq!(gutenberg.preset_id.as_deref(), Some("project-gutenberg"));
     }
 }
 
