@@ -40,14 +40,6 @@
     "description": "Free French public domain ebooks."
   },
   {
-    "id": "openedition",
-    "name": "OpenEdition",
-    "url": "https://opds.openedition.org/",
-    "languages": ["fr"],
-    "categories": ["academic"],
-    "description": "French academic books and journals in humanities."
-  },
-  {
     "id": "arxiv",
     "name": "arXiv",
     "url": "http://arxiv.maplepop.com/catalog/",
