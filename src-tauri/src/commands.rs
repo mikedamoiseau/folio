@@ -4864,7 +4864,15 @@ pub async fn web_server_start(
         login_limiter: std::sync::Arc::new(crate::web_server::auth::RateLimiter::new(5, 300)),
     };
 
-    let handle = crate::web_server::start(web_state, port).await?;
+    let handle = crate::web_server::start(
+        web_state,
+        port,
+        crate::web_server::ServerModes {
+            web_ui: true,
+            opds: true,
+        },
+    )
+    .await?;
     let url = handle.url.clone();
 
     {

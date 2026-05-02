@@ -152,7 +152,16 @@ async fn toggle_web_server(app: &AppHandle) {
             login_limiter: std::sync::Arc::new(crate::web_server::auth::RateLimiter::new(5, 300)),
         };
 
-        if let Ok(handle) = crate::web_server::start(web_state, port).await {
+        if let Ok(handle) = crate::web_server::start(
+            web_state,
+            port,
+            crate::web_server::ServerModes {
+                web_ui: true,
+                opds: true,
+            },
+        )
+        .await
+        {
             let mut h = state.web_server_handle.lock().unwrap();
             *h = Some(handle);
             if let Ok(conn) = state.active_db().and_then(|p| p.get().map_err(Into::into)) {

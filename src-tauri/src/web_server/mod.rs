@@ -191,16 +191,14 @@ pub fn build_router(state: WebState, modes: ServerModes) -> Router {
 pub const DEFAULT_PORT: u16 = 7788;
 
 /// Start the web server on the given port. Returns a handle for shutdown.
-pub async fn start(state: WebState, port: u16) -> crate::error::FolioResult<WebServerHandle> {
+pub async fn start(
+    state: WebState,
+    port: u16,
+    modes: ServerModes,
+) -> crate::error::FolioResult<WebServerHandle> {
     use crate::error::FolioError;
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
-    let router = build_router(
-        state,
-        ServerModes {
-            web_ui: true,
-            opds: true,
-        },
-    );
+    let router = build_router(state, modes);
 
     let listener = tokio::net::TcpListener::bind(addr).await.map_err(|e| {
         if e.kind() == std::io::ErrorKind::AddrInUse {

@@ -213,7 +213,16 @@ pub fn run() {
                             5, 300,
                         )),
                     };
-                    if let Ok(handle) = web_server::start(web_state, port).await {
+                    if let Ok(handle) = web_server::start(
+                        web_state,
+                        port,
+                        web_server::ServerModes {
+                            web_ui: true,
+                            opds: true,
+                        },
+                    )
+                    .await
+                    {
                         {
                             let mut h = match state.web_server_handle.lock() {
                                 Ok(g) => g,
