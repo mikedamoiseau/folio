@@ -316,6 +316,12 @@
     "showDiscover": "Show Discover section",
     "showDiscoverHint": "Display popular and new books from catalogs on the library page",
     "remoteAccess": "Remote Access",
+    "remoteAccessDescriptions": {
+      "webUiCheckbox": "Web UI",
+      "webUiHint": "Browse your library from any phone or tablet.",
+      "opdsCheckbox": "OPDS",
+      "opdsHint": "Catalog feed for OPDS apps (Thorium, KOReader, …)."
+    },
     "pin": "PIN",
     "pinPlaceholder": "Set a PIN for web access",
     "savePin": "Save PIN",

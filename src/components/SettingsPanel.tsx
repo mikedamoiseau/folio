@@ -415,6 +415,8 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
   const [webServerQr, setWebServerQr] = useState<string | null>(null);
   const [webServerError, setWebServerError] = useState<string | null>(null);
   const [webServerLoading, setWebServerLoading] = useState(false);
+  const [webUiEnabled, setWebUiEnabled] = useState(false);
+  const [opdsEnabled, setOpdsEnabled] = useState(false);
   const [pinSaved, setPinSaved] = useState(false);
 
   // Custom fonts
@@ -556,6 +558,36 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
     } catch {}
   }, []);
 
+  const loadServerStatus = useCallback(async () => {
+    try {
+      const status = await invoke<{
+        running: boolean;
+        url: string | null;
+        port: number;
+        hasPin: boolean;
+        webUiEnabled: boolean;
+        opdsEnabled: boolean;
+      }>("web_server_status");
+      setWebServerRunning(status.running);
+      setWebServerUrl(status.url);
+      setWebServerPort(String(status.port));
+      setWebUiEnabled(status.webUiEnabled);
+      setOpdsEnabled(status.opdsEnabled);
+      if (status.running) {
+        try { const qr = await invoke<string>("web_server_get_qr"); setWebServerQr(qr); } catch {}
+      } else {
+        setWebServerQr(null);
+      }
+    } catch {}
+  }, []);
+
+  useEffect(() => {
+    if (!open) return;
+    const onFocus = () => { loadServerStatus(); };
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+  }, [open, loadServerStatus]);
+
   useEffect(() => {
     if (open) {
       loadLibraryFolder();
@@ -569,19 +601,10 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
         setAutoScanStartup(scanStartup === "true");
         const importModeVal = await invoke<string | null>("get_setting_value", { key: "import_mode" });
         if (importModeVal) setImportMode(importModeVal);
-        // Load web server status
-        try {
-          const status = await invoke<{ running: boolean; url: string | null; port: number; has_pin: boolean }>("web_server_status");
-          setWebServerRunning(status.running);
-          setWebServerUrl(status.url);
-          setWebServerPort(String(status.port));
-          if (status.running) {
-            try { const qr = await invoke<string>("web_server_get_qr"); setWebServerQr(qr); } catch {}
-          }
-        } catch {}
+        await loadServerStatus();
       })().catch(() => {});
     }
-  }, [open, loadLibraryFolder, loadBackupSettings, loadProviders, loadCacheInfo]);
+  }, [open, loadLibraryFolder, loadBackupSettings, loadProviders, loadCacheInfo, loadServerStatus]);
 
   useEffect(() => {
     if (!open) return;
@@ -643,6 +666,51 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
       // Clear failed
     }
   }, []);
+
+  const handleSetModes = useCallback(
+    async (next: { webUi?: boolean; opds?: boolean; port?: number }) => {
+      setWebServerError(null);
+      setWebServerLoading(true);
+      try {
+        const status = await invoke<{
+          running: boolean;
+          url: string | null;
+          port: number;
+          hasPin: boolean;
+          webUiEnabled: boolean;
+          opdsEnabled: boolean;
+        }>("web_server_set_modes", {
+          webUi: next.webUi ?? webUiEnabled,
+          opds: next.opds ?? opdsEnabled,
+          port: next.port ?? (parseInt(webServerPort, 10) || 7788),
+        });
+        setWebUiEnabled(status.webUiEnabled);
+        setOpdsEnabled(status.opdsEnabled);
+        setWebServerRunning(status.running);
+        setWebServerUrl(status.url ?? null);
+        if (status.running) {
+          try {
+            const qr = await invoke<string>("web_server_get_qr");
+            setWebServerQr(qr);
+          } catch {
+            // QR generation failed; non-fatal.
+          }
+        } else {
+          setWebServerQr(null);
+        }
+      } catch (e) {
+        setWebServerError(friendlyError(e, t));
+        // Settings were persisted before the start attempt — mirror that intent
+        // into local state so the checkboxes don't snap back to the previous
+        // values (which would mislead the user about what's saved).
+        if (next.webUi !== undefined) setWebUiEnabled(next.webUi);
+        if (next.opds !== undefined) setOpdsEnabled(next.opds);
+      } finally {
+        setWebServerLoading(false);
+      }
+    },
+    [webUiEnabled, opdsEnabled, webServerPort, t],
+  );
 
   const handleChangeFolder = async () => {
     try {
@@ -1691,46 +1759,48 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                   type="number"
                   value={webServerPort}
                   onChange={(e) => setWebServerPort(e.target.value)}
+                  onBlur={() => {
+                    const port = parseInt(webServerPort, 10);
+                    if (port && (webUiEnabled || opdsEnabled)) {
+                      handleSetModes({ port });
+                    }
+                  }}
                   className="w-full bg-transparent text-sm text-ink focus:outline-none"
                   id="web-server-port"
                   min={1024}
                   max={65535}
-                  disabled={webServerRunning}
                 />
               </div>
 
-              {/* R1-4: Loading state + R4-1: PIN guard */}
-              <button
-                type="button"
-                disabled={webServerLoading}
-                onClick={async () => {
-                  setWebServerError(null);
-                  setWebServerLoading(true);
-                  try {
-                    if (webServerRunning) {
-                      await invoke("web_server_stop");
-                      setWebServerRunning(false);
-                      setWebServerUrl(null);
-                      setWebServerQr(null);
-                    } else {
-                      const url = await invoke<string>("web_server_start", { port: parseInt(webServerPort) || 7788 });
-                      setWebServerRunning(true);
-                      setWebServerUrl(url);
-                      try { const qr = await invoke<string>("web_server_get_qr"); setWebServerQr(qr); } catch {}
-                    }
-                  } catch (e) { setWebServerError(friendlyError(e, t)); }
-                  setWebServerLoading(false);
-                }}
-                className={`w-full px-3 py-2 text-sm font-medium rounded-xl transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
-                  webServerRunning
-                    ? "bg-red-500/20 text-red-400 hover:bg-red-500/30"
-                    : "bg-accent/20 text-accent hover:bg-accent/30"
-                }`}
-              >
-                {webServerLoading
-                  ? (webServerRunning ? t("settings.stopping") : t("settings.starting"))
-                  : (webServerRunning ? t("settings.stopServer") : t("settings.startServer"))}
-              </button>
+              {/* Web UI / OPDS toggles. Server runs iff at least one is on. */}
+              <div className="space-y-2 px-1">
+                <label className="flex items-start gap-2.5 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={webUiEnabled}
+                    onChange={(e) => handleSetModes({ webUi: e.target.checked })}
+                    disabled={webServerLoading}
+                    className="mt-0.5 accent-accent"
+                  />
+                  <span className="flex flex-col gap-0.5">
+                    <span className="text-sm text-ink">{t("settings.remoteAccessDescriptions.webUiCheckbox")}</span>
+                    <span className="text-xs text-ink-muted">{t("settings.remoteAccessDescriptions.webUiHint")}</span>
+                  </span>
+                </label>
+                <label className="flex items-start gap-2.5 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={opdsEnabled}
+                    onChange={(e) => handleSetModes({ opds: e.target.checked })}
+                    disabled={webServerLoading}
+                    className="mt-0.5 accent-accent"
+                  />
+                  <span className="flex flex-col gap-0.5">
+                    <span className="text-sm text-ink">{t("settings.remoteAccessDescriptions.opdsCheckbox")}</span>
+                    <span className="text-xs text-ink-muted">{t("settings.remoteAccessDescriptions.opdsHint")}</span>
+                  </span>
+                </label>
+              </div>
               {/* Status + R1-5: Copy URL */}
               {webServerRunning && webServerUrl && (
                 <div className="bg-warm-subtle rounded-xl px-3 py-2.5 space-y-2">
