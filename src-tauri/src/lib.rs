@@ -344,8 +344,6 @@ pub fn run() {
             commands::clear_page_cache,
             commands::sync_pull_book,
             commands::sync_push_book,
-            commands::web_server_start,
-            commands::web_server_stop,
             commands::web_server_set_modes,
             commands::web_server_status,
             commands::web_server_set_pin,

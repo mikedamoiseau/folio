@@ -4833,73 +4833,6 @@ pub async fn bulk_update_metadata(
 
 // ── Web Server Commands ──────────────────────────────────────────────────────
 
-#[tauri::command]
-pub async fn web_server_start(
-    app: AppHandle,
-    port: Option<u16>,
-    state: State<'_, AppState>,
-) -> FolioResult<String> {
-    let port = port.unwrap_or(crate::web_server::DEFAULT_PORT);
-
-    // Check if already running
-    {
-        let handle = state.web_server_handle.lock()?;
-        if handle.is_some() {
-            return Err(FolioError::invalid("Web server is already running"));
-        }
-    }
-
-    // Sync the shared PIN hash from keychain before starting
-    {
-        let fresh = crate::web_server::auth::load_pin_hash();
-        let mut ph = state.shared_pin_hash.lock()?;
-        *ph = fresh;
-    }
-
-    let web_state = crate::web_server::WebState {
-        pool: state.shared_active_pool.clone(),
-        data_dir: state.data_dir.clone(),
-        pin_hash: state.shared_pin_hash.clone(),
-        sessions: std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
-        login_limiter: std::sync::Arc::new(crate::web_server::auth::RateLimiter::new(5, 300)),
-    };
-
-    let handle = crate::web_server::start(
-        web_state,
-        port,
-        crate::web_server::ServerModes {
-            web_ui: true,
-            opds: true,
-        },
-    )
-    .await?;
-    let url = handle.url.clone();
-
-    {
-        let mut h = state.web_server_handle.lock()?;
-        *h = Some(handle);
-    }
-
-    let conn = state.active_db()?.get()?;
-    log_activity(
-        &conn,
-        "web_server_started",
-        "system",
-        None,
-        Some(&url),
-        Some(&format!("port {port}")),
-    );
-
-    // Save enabled state + port for auto-start on next launch
-    let _ = db::set_setting(&conn, "web_server_enabled", "true");
-    let _ = db::set_setting(&conn, "web_server_port", &port.to_string());
-
-    // Rebuild tray menu to reflect server running state
-    let _ = crate::tray::rebuild_tray_menu(&app);
-
-    Ok(url)
-}
-
 /// One-shot migration of the legacy `web_server_enabled` setting to the
 /// new pair `web_ui_enabled` + `opds_enabled`. Idempotent: after the
 /// first run the legacy key is gone and subsequent calls are no-ops.
@@ -5000,27 +4933,6 @@ pub async fn web_server_set_modes(
     let _ = crate::tray::rebuild_tray_menu(&app);
 
     web_server_status(state).await
-}
-
-#[tauri::command]
-pub async fn web_server_stop(app: AppHandle, state: State<'_, AppState>) -> FolioResult<()> {
-    let handle = {
-        let mut h = state.web_server_handle.lock()?;
-        h.take()
-    };
-
-    match handle {
-        Some(h) => {
-            crate::web_server::stop(h);
-            let conn = state.active_db()?.get()?;
-            log_activity(&conn, "web_server_stopped", "system", None, None, None);
-            let _ = db::set_setting(&conn, "web_server_enabled", "false");
-            // Rebuild tray menu to reflect server stopped state
-            let _ = crate::tray::rebuild_tray_menu(&app);
-            Ok(())
-        }
-        None => Err(FolioError::not_found("Web server is not running")),
-    }
 }
 
 #[tauri::command]

@@ -6,24 +6,34 @@ use tauri::{
 
 use crate::commands::AppState;
 
-/// Build (or rebuild) the tray menu based on current web server state.
+/// Build (or rebuild) the tray menu showing both surface toggles.
 pub fn build_tray_menu(
     app: &AppHandle,
-    web_server_running: bool,
+    web_ui_enabled: bool,
+    opds_enabled: bool,
+    server_running: bool,
 ) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
     let show_item = MenuItemBuilder::with_id("show", "Show Folio").build(app)?;
 
     let open_webui = MenuItemBuilder::with_id("open_webui", "Open Web UI")
-        .enabled(web_server_running)
+        .enabled(server_running && web_ui_enabled)
         .build(app)?;
 
     let sep1 = PredefinedMenuItem::separator(app)?;
 
-    let web_toggle = if web_server_running {
-        MenuItemBuilder::with_id("web_toggle", "Stop Web Server").build(app)?
+    let web_ui_label = if web_ui_enabled {
+        "Web UI: ON"
     } else {
-        MenuItemBuilder::with_id("web_toggle", "Start Web Server").build(app)?
+        "Web UI: OFF"
     };
+    let web_ui_toggle = MenuItemBuilder::with_id("toggle_web_ui", web_ui_label).build(app)?;
+
+    let opds_label = if opds_enabled {
+        "OPDS: ON"
+    } else {
+        "OPDS: OFF"
+    };
+    let opds_toggle = MenuItemBuilder::with_id("toggle_opds", opds_label).build(app)?;
 
     let sep2 = PredefinedMenuItem::separator(app)?;
 
@@ -33,7 +43,8 @@ pub fn build_tray_menu(
         .item(&show_item)
         .item(&open_webui)
         .item(&sep1)
-        .item(&web_toggle)
+        .item(&web_ui_toggle)
+        .item(&opds_toggle)
         .item(&sep2)
         .item(&quit_item)
         .build()
@@ -41,13 +52,29 @@ pub fn build_tray_menu(
 
 /// Initialize the tray icon and attach menu event handlers.
 pub fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
-    let web_server_running = {
+    let (web_ui_enabled, opds_enabled, server_running) = {
         let state = app.state::<AppState>();
-        let handle = state.web_server_handle.lock().unwrap();
-        handle.is_some()
+        let server_running = state.web_server_handle.lock().unwrap().is_some();
+        let conn = state.active_db().and_then(|p| p.get().map_err(Into::into));
+        let (web_ui, opds) = match conn {
+            Ok(c) => (
+                crate::db::get_setting(&c, "web_ui_enabled")
+                    .ok()
+                    .flatten()
+                    .as_deref()
+                    == Some("true"),
+                crate::db::get_setting(&c, "opds_enabled")
+                    .ok()
+                    .flatten()
+                    .as_deref()
+                    == Some("true"),
+            ),
+            Err(_) => (false, false),
+        };
+        (web_ui, opds, server_running)
     };
 
-    let menu = build_tray_menu(app, web_server_running)?;
+    let menu = build_tray_menu(app, web_ui_enabled, opds_enabled, server_running)?;
 
     let _tray = TrayIconBuilder::with_id("main")
         .icon(app.default_window_icon().unwrap().clone())
@@ -77,10 +104,16 @@ pub fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
                     let _ = open::that(&url);
                 }
             }
-            "web_toggle" => {
+            "toggle_web_ui" => {
                 let app = app.clone();
                 tauri::async_runtime::spawn(async move {
-                    toggle_web_server(&app).await;
+                    toggle_mode(&app, ToggleWhich::WebUi).await;
+                });
+            }
+            "toggle_opds" => {
+                let app = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    toggle_mode(&app, ToggleWhich::Opds).await;
                 });
             }
             "quit" => {
@@ -110,40 +143,73 @@ pub fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
     Ok(())
 }
 
-/// Toggle the web server on/off from the tray menu.
-async fn toggle_web_server(app: &AppHandle) {
+#[derive(Clone, Copy)]
+enum ToggleWhich {
+    WebUi,
+    Opds,
+}
+
+/// Toggle one surface from the tray, mirroring the same start/stop
+/// machinery that the Settings panel triggers via `web_server_set_modes`.
+async fn toggle_mode(app: &AppHandle, which: ToggleWhich) {
     let state = app.state::<AppState>();
-    let is_running = {
-        let handle = state.web_server_handle.lock().unwrap();
-        handle.is_some()
+
+    let (current_web_ui, current_opds, current_port) = {
+        let conn = match state.active_db().and_then(|p| p.get().map_err(Into::into)) {
+            Ok(c) => c,
+            Err(_) => return,
+        };
+        let web_ui = crate::db::get_setting(&conn, "web_ui_enabled")
+            .ok()
+            .flatten()
+            .as_deref()
+            == Some("true");
+        let opds = crate::db::get_setting(&conn, "opds_enabled")
+            .ok()
+            .flatten()
+            .as_deref()
+            == Some("true");
+        let port = crate::db::get_setting(&conn, "web_server_port")
+            .ok()
+            .flatten()
+            .and_then(|s| s.parse::<u16>().ok())
+            .unwrap_or(crate::web_server::DEFAULT_PORT);
+        (web_ui, opds, port)
     };
 
-    if is_running {
-        let handle = {
-            let mut h = state.web_server_handle.lock().unwrap();
-            h.take()
-        };
-        if let Some(h) = handle {
-            crate::web_server::stop(h);
-            if let Ok(conn) = state.active_db().and_then(|p| p.get().map_err(Into::into)) {
-                let _ = crate::db::set_setting(&conn, "web_server_enabled", "false");
-            }
-        }
-    } else {
-        let port = {
-            let conn = state.active_db().and_then(|p| p.get().map_err(Into::into));
-            conn.ok()
-                .and_then(|c| crate::db::get_setting(&c, "web_server_port").ok().flatten())
-                .and_then(|s| s.parse::<u16>().ok())
-                .unwrap_or(crate::web_server::DEFAULT_PORT)
-        };
+    let (next_web_ui, next_opds) = match which {
+        ToggleWhich::WebUi => (!current_web_ui, current_opds),
+        ToggleWhich::Opds => (current_web_ui, !current_opds),
+    };
 
+    // Persist the flip.
+    {
+        let conn = match state.active_db().and_then(|p| p.get().map_err(Into::into)) {
+            Ok(c) => c,
+            Err(_) => return,
+        };
+        let _ = crate::db::set_setting(&conn, "web_ui_enabled", &next_web_ui.to_string());
+        let _ = crate::db::set_setting(&conn, "opds_enabled", &next_opds.to_string());
+    }
+
+    let modes = crate::web_server::ServerModes {
+        web_ui: next_web_ui,
+        opds: next_opds,
+    };
+
+    // Stop existing handle.
+    let prev = { state.web_server_handle.lock().unwrap().take() };
+    if let Some(h) = prev {
+        crate::web_server::stop(h);
+    }
+
+    // Restart if anything is on.
+    if modes.any() {
+        let pin_hash = crate::web_server::auth::load_pin_hash();
         {
-            let fresh = crate::web_server::auth::load_pin_hash();
             let mut ph = state.shared_pin_hash.lock().unwrap();
-            *ph = fresh;
+            *ph = pin_hash;
         }
-
         let web_state = crate::web_server::WebState {
             pool: state.shared_active_pool.clone(),
             data_dir: state.data_dir.clone(),
@@ -151,38 +217,40 @@ async fn toggle_web_server(app: &AppHandle) {
             sessions: std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             login_limiter: std::sync::Arc::new(crate::web_server::auth::RateLimiter::new(5, 300)),
         };
-
-        if let Ok(handle) = crate::web_server::start(
-            web_state,
-            port,
-            crate::web_server::ServerModes {
-                web_ui: true,
-                opds: true,
-            },
-        )
-        .await
-        {
+        if let Ok(handle) = crate::web_server::start(web_state, current_port, modes).await {
             let mut h = state.web_server_handle.lock().unwrap();
             *h = Some(handle);
-            if let Ok(conn) = state.active_db().and_then(|p| p.get().map_err(Into::into)) {
-                let _ = crate::db::set_setting(&conn, "web_server_enabled", "true");
-                let _ = crate::db::set_setting(&conn, "web_server_port", &port.to_string());
-            }
         }
     }
 
     let _ = rebuild_tray_menu(app);
 }
 
-/// Rebuild the tray menu to reflect the current web server state.
+/// Rebuild the tray menu to reflect the current state.
 pub fn rebuild_tray_menu(app: &AppHandle) -> tauri::Result<()> {
     let state = app.state::<AppState>();
-    let web_server_running = {
-        let handle = state.web_server_handle.lock().unwrap();
-        handle.is_some()
+    let server_running = state.web_server_handle.lock().unwrap().is_some();
+
+    let (web_ui_enabled, opds_enabled) = {
+        let conn = state.active_db().and_then(|p| p.get().map_err(Into::into));
+        match conn {
+            Ok(c) => (
+                crate::db::get_setting(&c, "web_ui_enabled")
+                    .ok()
+                    .flatten()
+                    .as_deref()
+                    == Some("true"),
+                crate::db::get_setting(&c, "opds_enabled")
+                    .ok()
+                    .flatten()
+                    .as_deref()
+                    == Some("true"),
+            ),
+            Err(_) => (false, false),
+        }
     };
 
-    let menu = build_tray_menu(app, web_server_running)?;
+    let menu = build_tray_menu(app, web_ui_enabled, opds_enabled, server_running)?;
 
     if let Some(tray) = app.tray_by_id("main") {
         tray.set_menu(Some(menu))?;
