@@ -558,6 +558,36 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
     } catch {}
   }, []);
 
+  const loadServerStatus = useCallback(async () => {
+    try {
+      const status = await invoke<{
+        running: boolean;
+        url: string | null;
+        port: number;
+        hasPin: boolean;
+        webUiEnabled: boolean;
+        opdsEnabled: boolean;
+      }>("web_server_status");
+      setWebServerRunning(status.running);
+      setWebServerUrl(status.url);
+      setWebServerPort(String(status.port));
+      setWebUiEnabled(status.webUiEnabled);
+      setOpdsEnabled(status.opdsEnabled);
+      if (status.running) {
+        try { const qr = await invoke<string>("web_server_get_qr"); setWebServerQr(qr); } catch {}
+      } else {
+        setWebServerQr(null);
+      }
+    } catch {}
+  }, []);
+
+  useEffect(() => {
+    if (!open) return;
+    const onFocus = () => { loadServerStatus(); };
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+  }, [open, loadServerStatus]);
+
   useEffect(() => {
     if (open) {
       loadLibraryFolder();
@@ -571,28 +601,10 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
         setAutoScanStartup(scanStartup === "true");
         const importModeVal = await invoke<string | null>("get_setting_value", { key: "import_mode" });
         if (importModeVal) setImportMode(importModeVal);
-        // Load web server status
-        try {
-          const status = await invoke<{
-            running: boolean;
-            url: string | null;
-            port: number;
-            hasPin: boolean;
-            webUiEnabled: boolean;
-            opdsEnabled: boolean;
-          }>("web_server_status");
-          setWebServerRunning(status.running);
-          setWebServerUrl(status.url);
-          setWebServerPort(String(status.port));
-          setWebUiEnabled(status.webUiEnabled);
-          setOpdsEnabled(status.opdsEnabled);
-          if (status.running) {
-            try { const qr = await invoke<string>("web_server_get_qr"); setWebServerQr(qr); } catch {}
-          }
-        } catch {}
+        await loadServerStatus();
       })().catch(() => {});
     }
-  }, [open, loadLibraryFolder, loadBackupSettings, loadProviders, loadCacheInfo]);
+  }, [open, loadLibraryFolder, loadBackupSettings, loadProviders, loadCacheInfo, loadServerStatus]);
 
   useEffect(() => {
     if (!open) return;
@@ -688,6 +700,11 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
         }
       } catch (e) {
         setWebServerError(friendlyError(e, t));
+        // Settings were persisted before the start attempt — mirror that intent
+        // into local state so the checkboxes don't snap back to the previous
+        // values (which would mislead the user about what's saved).
+        if (next.webUi !== undefined) setWebUiEnabled(next.webUi);
+        if (next.opds !== undefined) setOpdsEnabled(next.opds);
       } finally {
         setWebServerLoading(false);
       }
