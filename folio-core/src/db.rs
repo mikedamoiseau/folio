@@ -727,6 +727,13 @@ pub fn set_setting(conn: &Connection, key: &str, value: &str) -> Result<()> {
     Ok(())
 }
 
+/// Remove a key/value row from the `settings` table. No-op when the
+/// key is absent (counted rows = 0 is not an error).
+pub fn delete_setting(conn: &Connection, key: &str) -> Result<()> {
+    conn.execute("DELETE FROM settings WHERE key = ?1", [key])?;
+    Ok(())
+}
+
 pub fn get_or_create_device_id(conn: &Connection) -> Result<String> {
     if let Some(id) = get_setting(conn, "device_id")? {
         return Ok(id);
@@ -3243,5 +3250,22 @@ mod tests {
         assert!(assocs.contains(&("tag-b1".to_string(), "t1".to_string())));
         assert!(assocs.contains(&("tag-b1".to_string(), "t2".to_string())));
         assert!(assocs.contains(&("tag-b2".to_string(), "t1".to_string())));
+    }
+
+    #[test]
+    fn delete_setting_removes_key() {
+        let (_dir, conn) = setup();
+        set_setting(&conn, "to_remove", "x").unwrap();
+        assert_eq!(get_setting(&conn, "to_remove").unwrap().as_deref(), Some("x"));
+        delete_setting(&conn, "to_remove").unwrap();
+        assert!(get_setting(&conn, "to_remove").unwrap().is_none());
+    }
+
+    #[test]
+    fn delete_setting_no_op_when_key_missing() {
+        let (_dir, conn) = setup();
+        // Must not error when key is absent.
+        delete_setting(&conn, "never_existed").unwrap();
+        assert!(get_setting(&conn, "never_existed").unwrap().is_none());
     }
 }
