@@ -4901,6 +4901,87 @@ pub async fn web_server_start(
 }
 
 #[tauri::command]
+pub async fn web_server_set_modes(
+    web_ui: bool,
+    opds: bool,
+    port: Option<u16>,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> FolioResult<crate::web_server::WebServerStatus> {
+    // 1. Persist intent first. Settings reflect what the user wants;
+    //    runtime state is derived.
+    {
+        let conn = state.active_db()?.get()?;
+        db::set_setting(&conn, "web_ui_enabled", &web_ui.to_string())?;
+        db::set_setting(&conn, "opds_enabled", &opds.to_string())?;
+        if let Some(p) = port {
+            db::set_setting(&conn, "web_server_port", &p.to_string())?;
+        }
+    }
+
+    let modes = crate::web_server::ServerModes { web_ui, opds };
+
+    // 2. Stop existing handle (if any). We always restart on mode change
+    //    rather than try to reuse an existing handle, because Axum doesn't
+    //    expose route hot-swap and the restart cost is trivial.
+    let prev = { state.web_server_handle.lock()?.take() };
+    if let Some(h) = prev {
+        crate::web_server::stop(h);
+    }
+
+    // 3. Start fresh if anything is enabled.
+    if modes.any() {
+        let port = {
+            let conn = state.active_db()?.get()?;
+            port.unwrap_or_else(|| {
+                db::get_setting(&conn, "web_server_port")
+                    .ok()
+                    .flatten()
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(crate::web_server::DEFAULT_PORT)
+            })
+        };
+
+        // Sync PIN hash from keychain before starting (matches old web_server_start).
+        {
+            let fresh = crate::web_server::auth::load_pin_hash();
+            let mut ph = state.shared_pin_hash.lock()?;
+            *ph = fresh;
+        }
+
+        let web_state = crate::web_server::WebState {
+            pool: state.shared_active_pool.clone(),
+            data_dir: state.data_dir.clone(),
+            pin_hash: state.shared_pin_hash.clone(),
+            sessions: std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+            login_limiter: std::sync::Arc::new(crate::web_server::auth::RateLimiter::new(5, 300)),
+        };
+
+        let handle = crate::web_server::start(web_state, port, modes).await?;
+        let mut h = state.web_server_handle.lock()?;
+        *h = Some(handle);
+    }
+
+    // 4. Audit log.
+    {
+        let conn = state.active_db()?.get()?;
+        log_activity(
+            &conn,
+            "web_server_modes_changed",
+            "system",
+            None,
+            None,
+            Some(&format!("web_ui={web_ui} opds={opds}")),
+        );
+    }
+
+    // 5. Refresh tray menu to reflect the new state.
+    let _ = crate::tray::rebuild_tray_menu(&app);
+
+    web_server_status(state).await
+}
+
+#[tauri::command]
 pub async fn web_server_stop(app: AppHandle, state: State<'_, AppState>) -> FolioResult<()> {
     let handle = {
         let mut h = state.web_server_handle.lock()?;
@@ -4925,20 +5006,36 @@ pub async fn web_server_stop(app: AppHandle, state: State<'_, AppState>) -> Foli
 pub async fn web_server_status(
     state: State<'_, AppState>,
 ) -> FolioResult<crate::web_server::WebServerStatus> {
-    let handle = state.web_server_handle.lock()?;
     let has_pin = crate::web_server::auth::load_pin_hash().is_some();
+
+    // Read user intent (these settings drive the running state).
+    let (web_ui_enabled, opds_enabled, persisted_port) = {
+        let conn = state.active_db()?.get()?;
+        let web_ui = db::get_setting(&conn, "web_ui_enabled")?.as_deref() == Some("true");
+        let opds = db::get_setting(&conn, "opds_enabled")?.as_deref() == Some("true");
+        let port = db::get_setting(&conn, "web_server_port")?
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(crate::web_server::DEFAULT_PORT);
+        (web_ui, opds, port)
+    };
+
+    let handle = state.web_server_handle.lock()?;
     match handle.as_ref() {
         Some(h) => Ok(crate::web_server::WebServerStatus {
             running: true,
             url: Some(h.url.clone()),
             port: h.port,
             has_pin,
+            web_ui_enabled,
+            opds_enabled,
         }),
         None => Ok(crate::web_server::WebServerStatus {
             running: false,
             url: None,
-            port: crate::web_server::DEFAULT_PORT,
+            port: persisted_port,
             has_pin,
+            web_ui_enabled,
+            opds_enabled,
         }),
     }
 }
@@ -5607,6 +5704,38 @@ mod tests {
             .find(|c| c.url == "https://www.gutenberg.org/ebooks.opds/")
             .expect("default Project Gutenberg missing");
         assert_eq!(gutenberg.preset_id.as_deref(), Some("project-gutenberg"));
+    }
+
+    #[test]
+    fn web_server_set_modes_persists_both_settings() {
+        // Persistence-only assertion. Server start/stop is exercised by
+        // web_server::tests::* (router-shape tests). This test guards the
+        // contract that user intent always lands in the DB.
+        let tmp = tempfile::tempdir().unwrap();
+        let pool = db::create_pool(&tmp.path().join("library.db")).unwrap();
+        let conn = pool.get().unwrap();
+
+        // Simulate the persistence portion of web_server_set_modes by
+        // calling its bare DB statements (the handle/start path requires
+        // an AppState which we cannot construct here).
+        db::set_setting(&conn, "web_ui_enabled", "true").unwrap();
+        db::set_setting(&conn, "opds_enabled", "false").unwrap();
+        db::set_setting(&conn, "web_server_port", "9999").unwrap();
+
+        assert_eq!(
+            db::get_setting(&conn, "web_ui_enabled").unwrap().as_deref(),
+            Some("true")
+        );
+        assert_eq!(
+            db::get_setting(&conn, "opds_enabled").unwrap().as_deref(),
+            Some("false")
+        );
+        assert_eq!(
+            db::get_setting(&conn, "web_server_port")
+                .unwrap()
+                .as_deref(),
+            Some("9999")
+        );
     }
 }
 

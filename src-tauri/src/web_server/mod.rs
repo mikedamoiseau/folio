@@ -116,11 +116,14 @@ impl ServerModes {
 
 /// Status returned to the frontend.
 #[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct WebServerStatus {
     pub running: bool,
     pub url: Option<String>,
     pub port: u16,
     pub has_pin: bool,
+    pub web_ui_enabled: bool,
+    pub opds_enabled: bool,
 }
 
 /// Detect the local LAN IP address.
