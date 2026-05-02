@@ -100,6 +100,20 @@ pub struct WebServerHandle {
     pub port: u16,
 }
 
+/// Which user-facing surfaces the embedded HTTP server exposes.
+#[derive(Debug, Clone, Copy)]
+pub struct ServerModes {
+    pub web_ui: bool,
+    pub opds: bool,
+}
+
+impl ServerModes {
+    /// Whether the server should run at all.
+    pub fn any(&self) -> bool {
+        self.web_ui || self.opds
+    }
+}
+
 /// Status returned to the frontend.
 #[derive(serde::Serialize)]
 pub struct WebServerStatus {
@@ -146,15 +160,25 @@ async fn security_headers_middleware(
 }
 
 /// Build the full axum router with all routes and middleware.
-pub fn build_router(state: WebState) -> Router {
-    let api_routes = api::routes(state.clone());
-    let opds_routes = opds_feed::routes(state.clone());
-    let ui_routes = web_ui::routes();
+/// Routes are conditionally mounted based on `modes`. Calling with
+/// `ServerModes { web_ui: false, opds: false }` returns a router that
+/// 404s every path — safe to call but the reconciler in commands.rs
+/// short-circuits before reaching this state in production.
+pub fn build_router(state: WebState, modes: ServerModes) -> Router {
+    let mut router = Router::new();
 
-    Router::new()
-        .nest("/api", api_routes)
-        .nest("/opds", opds_routes)
-        .merge(ui_routes)
+    if modes.web_ui {
+        // Web UI consumes /api, so /api lives alongside web_ui mode.
+        // Without web_ui there's no consumer for /api.
+        let api_routes = api::routes(state.clone());
+        router = router.nest("/api", api_routes).merge(web_ui::routes());
+    }
+    if modes.opds {
+        let opds_routes = opds_feed::routes(state.clone());
+        router = router.nest("/opds", opds_routes);
+    }
+
+    router
         .layer(middleware::from_fn_with_state(
             state.clone(),
             auth::auth_middleware,
@@ -170,7 +194,13 @@ pub const DEFAULT_PORT: u16 = 7788;
 pub async fn start(state: WebState, port: u16) -> crate::error::FolioResult<WebServerHandle> {
     use crate::error::FolioError;
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
-    let router = build_router(state);
+    let router = build_router(
+        state,
+        ServerModes {
+            web_ui: true,
+            opds: true,
+        },
+    );
 
     let listener = tokio::net::TcpListener::bind(addr).await.map_err(|e| {
         if e.kind() == std::io::ErrorKind::AddrInUse {
@@ -263,7 +293,13 @@ mod tests {
         let state = test_state();
         // Use port 0 to let the OS assign a free port
         let addr = SocketAddr::from(([127, 0, 0, 1], 0));
-        let router = build_router(state);
+        let router = build_router(
+            state,
+            ServerModes {
+                web_ui: true,
+                opds: true,
+            },
+        );
         let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
         let actual_port = listener.local_addr().unwrap().port();
 
@@ -302,7 +338,13 @@ mod tests {
         *state.pin_hash.lock().unwrap() = Some(auth::hash_pin("1234"));
 
         let addr = SocketAddr::from(([127, 0, 0, 1], 0));
-        let router = build_router(state);
+        let router = build_router(
+            state,
+            ServerModes {
+                web_ui: true,
+                opds: true,
+            },
+        );
         let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
         let actual_port = listener.local_addr().unwrap().port();
 
@@ -348,7 +390,13 @@ mod tests {
         *state.pin_hash.lock().unwrap() = Some(pin_hash);
 
         let addr = SocketAddr::from(([127, 0, 0, 1], 0));
-        let router = build_router(state);
+        let router = build_router(
+            state,
+            ServerModes {
+                web_ui: true,
+                opds: true,
+            },
+        );
         let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
         let actual_port = listener.local_addr().unwrap().port();
 
@@ -398,7 +446,13 @@ mod tests {
         *state.pin_hash.lock().unwrap() = Some(auth::hash_pin("1234"));
 
         let addr = SocketAddr::from(([127, 0, 0, 1], 0));
-        let router = build_router(state);
+        let router = build_router(
+            state,
+            ServerModes {
+                web_ui: true,
+                opds: true,
+            },
+        );
         let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
         let port = listener.local_addr().unwrap().port();
         let (tx, rx) = oneshot::channel::<()>();
@@ -442,7 +496,13 @@ mod tests {
         *state.pin_hash.lock().unwrap() = Some(auth::hash_pin("5555"));
 
         let addr = SocketAddr::from(([127, 0, 0, 1], 0));
-        let router = build_router(state);
+        let router = build_router(
+            state,
+            ServerModes {
+                web_ui: true,
+                opds: true,
+            },
+        );
         let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
         let port = listener.local_addr().unwrap().port();
         let (tx, rx) = oneshot::channel::<()>();
@@ -491,7 +551,13 @@ mod tests {
         *state.pin_hash.lock().unwrap() = Some(auth::hash_pin("7777"));
 
         let addr = SocketAddr::from(([127, 0, 0, 1], 0));
-        let router = build_router(state);
+        let router = build_router(
+            state,
+            ServerModes {
+                web_ui: true,
+                opds: true,
+            },
+        );
         let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
         let port = listener.local_addr().unwrap().port();
         let (tx, rx) = oneshot::channel::<()>();
@@ -538,7 +604,13 @@ mod tests {
         // pin_hash is None — no PIN set, should allow open access
 
         let addr = SocketAddr::from(([127, 0, 0, 1], 0));
-        let router = build_router(state);
+        let router = build_router(
+            state,
+            ServerModes {
+                web_ui: true,
+                opds: true,
+            },
+        );
         let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
         let port = listener.local_addr().unwrap().port();
         let (tx, rx) = oneshot::channel::<()>();
@@ -576,7 +648,13 @@ mod tests {
     async fn test_responses_have_security_headers() {
         let state = test_state();
         let addr = SocketAddr::from(([127, 0, 0, 1], 0));
-        let router = build_router(state);
+        let router = build_router(
+            state,
+            ServerModes {
+                web_ui: true,
+                opds: true,
+            },
+        );
         let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
         let port = listener.local_addr().unwrap().port();
         let (tx, rx) = oneshot::channel::<()>();
@@ -602,6 +680,182 @@ mod tests {
         assert!(resp.headers().contains_key("x-content-type-options"));
         assert!(resp.headers().contains_key("x-frame-options"));
         assert!(resp.headers().contains_key("content-security-policy"));
+
+        let _ = tx.send(());
+    }
+
+    #[tokio::test]
+    async fn build_router_web_ui_only_serves_root_not_opds() {
+        let state = test_state();
+        let modes = ServerModes {
+            web_ui: true,
+            opds: false,
+        };
+        let router = build_router(state, modes);
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (tx, rx) = oneshot::channel::<()>();
+        tokio::spawn(async move {
+            axum::serve(
+                listener,
+                router.into_make_service_with_connect_info::<SocketAddr>(),
+            )
+            .with_graceful_shutdown(async {
+                let _ = rx.await;
+            })
+            .await
+            .ok();
+        });
+
+        let client = reqwest::Client::new();
+        // / → 200 (HTML UI)
+        let resp = client
+            .get(format!("http://127.0.0.1:{port}/"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+        // /opds → 404 (not mounted)
+        let resp = client
+            .get(format!("http://127.0.0.1:{port}/opds"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 404);
+
+        let _ = tx.send(());
+    }
+
+    #[tokio::test]
+    async fn build_router_opds_only_serves_opds_not_root() {
+        let state = test_state();
+        let modes = ServerModes {
+            web_ui: false,
+            opds: true,
+        };
+        let router = build_router(state, modes);
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (tx, rx) = oneshot::channel::<()>();
+        tokio::spawn(async move {
+            axum::serve(
+                listener,
+                router.into_make_service_with_connect_info::<SocketAddr>(),
+            )
+            .with_graceful_shutdown(async {
+                let _ = rx.await;
+            })
+            .await
+            .ok();
+        });
+
+        let client = reqwest::Client::new();
+        // /opds → 200
+        let resp = client
+            .get(format!("http://127.0.0.1:{port}/opds"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+        // / → 404 (web UI not mounted)
+        let resp = client
+            .get(format!("http://127.0.0.1:{port}/"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 404);
+        // /api/* → 404 (api lives with web_ui)
+        let resp = client
+            .get(format!("http://127.0.0.1:{port}/api/health"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 404);
+
+        let _ = tx.send(());
+    }
+
+    #[tokio::test]
+    async fn build_router_both_serves_root_and_opds() {
+        let state = test_state();
+        let modes = ServerModes {
+            web_ui: true,
+            opds: true,
+        };
+        let router = build_router(state, modes);
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (tx, rx) = oneshot::channel::<()>();
+        tokio::spawn(async move {
+            axum::serve(
+                listener,
+                router.into_make_service_with_connect_info::<SocketAddr>(),
+            )
+            .with_graceful_shutdown(async {
+                let _ = rx.await;
+            })
+            .await
+            .ok();
+        });
+
+        let client = reqwest::Client::new();
+        let r1 = client
+            .get(format!("http://127.0.0.1:{port}/"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(r1.status(), 200);
+        let r2 = client
+            .get(format!("http://127.0.0.1:{port}/opds"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(r2.status(), 200);
+
+        let _ = tx.send(());
+    }
+
+    #[tokio::test]
+    async fn build_router_neither_serves_nothing() {
+        let state = test_state();
+        let modes = ServerModes {
+            web_ui: false,
+            opds: false,
+        };
+        // Must not panic. Every request 404s.
+        let router = build_router(state, modes);
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (tx, rx) = oneshot::channel::<()>();
+        tokio::spawn(async move {
+            axum::serve(
+                listener,
+                router.into_make_service_with_connect_info::<SocketAddr>(),
+            )
+            .with_graceful_shutdown(async {
+                let _ = rx.await;
+            })
+            .await
+            .ok();
+        });
+
+        let client = reqwest::Client::new();
+        let resp = client
+            .get(format!("http://127.0.0.1:{port}/"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 404);
+        let resp = client
+            .get(format!("http://127.0.0.1:{port}/opds"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 404);
 
         let _ = tx.send(());
     }
