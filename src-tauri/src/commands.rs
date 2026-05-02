@@ -4900,6 +4900,27 @@ pub async fn web_server_start(
     Ok(url)
 }
 
+/// One-shot migration of the legacy `web_server_enabled` setting to the
+/// new pair `web_ui_enabled` + `opds_enabled`. Idempotent: after the
+/// first run the legacy key is gone and subsequent calls are no-ops.
+/// New settings are only written when they are absent, so a user who
+/// adjusted the new settings between two migration runs keeps their
+/// changes.
+pub fn migrate_web_server_setting(conn: &rusqlite::Connection) -> FolioResult<()> {
+    let Some(old) = db::get_setting(conn, "web_server_enabled")? else {
+        return Ok(());
+    };
+    let was_on = old == "true";
+    if db::get_setting(conn, "web_ui_enabled")?.is_none() {
+        db::set_setting(conn, "web_ui_enabled", &was_on.to_string())?;
+    }
+    if db::get_setting(conn, "opds_enabled")?.is_none() {
+        db::set_setting(conn, "opds_enabled", &was_on.to_string())?;
+    }
+    db::delete_setting(conn, "web_server_enabled")?;
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn web_server_set_modes(
     web_ui: bool,
@@ -5735,6 +5756,80 @@ mod tests {
                 .unwrap()
                 .as_deref(),
             Some("9999")
+        );
+    }
+
+    #[test]
+    fn migrate_web_server_setting_true_sets_both_new_settings() {
+        let tmp = tempfile::tempdir().unwrap();
+        let pool = db::create_pool(&tmp.path().join("library.db")).unwrap();
+        let conn = pool.get().unwrap();
+        db::set_setting(&conn, "web_server_enabled", "true").unwrap();
+
+        migrate_web_server_setting(&conn).unwrap();
+
+        assert_eq!(
+            db::get_setting(&conn, "web_ui_enabled").unwrap().as_deref(),
+            Some("true")
+        );
+        assert_eq!(
+            db::get_setting(&conn, "opds_enabled").unwrap().as_deref(),
+            Some("true")
+        );
+        assert!(db::get_setting(&conn, "web_server_enabled")
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn migrate_web_server_setting_false_sets_both_false() {
+        let tmp = tempfile::tempdir().unwrap();
+        let pool = db::create_pool(&tmp.path().join("library.db")).unwrap();
+        let conn = pool.get().unwrap();
+        db::set_setting(&conn, "web_server_enabled", "false").unwrap();
+
+        migrate_web_server_setting(&conn).unwrap();
+
+        assert_eq!(
+            db::get_setting(&conn, "web_ui_enabled").unwrap().as_deref(),
+            Some("false")
+        );
+        assert_eq!(
+            db::get_setting(&conn, "opds_enabled").unwrap().as_deref(),
+            Some("false")
+        );
+        assert!(db::get_setting(&conn, "web_server_enabled")
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn migrate_web_server_setting_no_op_when_absent() {
+        let tmp = tempfile::tempdir().unwrap();
+        let pool = db::create_pool(&tmp.path().join("library.db")).unwrap();
+        let conn = pool.get().unwrap();
+        // No legacy key set.
+        migrate_web_server_setting(&conn).unwrap();
+        assert!(db::get_setting(&conn, "web_ui_enabled").unwrap().is_none());
+        assert!(db::get_setting(&conn, "opds_enabled").unwrap().is_none());
+    }
+
+    #[test]
+    fn migrate_web_server_setting_idempotent() {
+        let tmp = tempfile::tempdir().unwrap();
+        let pool = db::create_pool(&tmp.path().join("library.db")).unwrap();
+        let conn = pool.get().unwrap();
+        db::set_setting(&conn, "web_server_enabled", "true").unwrap();
+
+        migrate_web_server_setting(&conn).unwrap();
+        // Simulate user later turning Web UI off; migration must not undo that.
+        db::set_setting(&conn, "web_ui_enabled", "false").unwrap();
+        migrate_web_server_setting(&conn).unwrap();
+
+        assert_eq!(
+            db::get_setting(&conn, "web_ui_enabled").unwrap().as_deref(),
+            Some("false"),
+            "migration must not clobber user changes after first migration"
         );
     }
 }

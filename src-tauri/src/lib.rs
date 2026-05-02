@@ -161,81 +161,87 @@ pub fn run() {
                 log::error!("Failed to initialize tray: {}", e);
             }
 
-            // Auto-start web server if previously enabled
+            // Auto-start web server based on persisted modes. Runs the legacy
+            // migration on first launch with new code so existing users with
+            // web_server_enabled=true keep getting Both mode.
             let app_handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 let state = app_handle.state::<AppState>();
-                let auto_start = {
+
+                // Migrate legacy setting if present.
+                {
                     let conn = match state.active_db().and_then(|p| p.get().map_err(Into::into)) {
                         Ok(c) => c,
                         Err(_) => return,
                     };
-                    db::get_setting(&conn, "web_server_enabled")
+                    let _ = commands::migrate_web_server_setting(&conn);
+                }
+
+                // Read the new settings.
+                let modes = {
+                    let conn = match state.active_db().and_then(|p| p.get().map_err(Into::into)) {
+                        Ok(c) => c,
+                        Err(_) => return,
+                    };
+                    let web_ui = db::get_setting(&conn, "web_ui_enabled")
                         .ok()
                         .flatten()
                         .as_deref()
-                        == Some("true")
+                        == Some("true");
+                    let opds = db::get_setting(&conn, "opds_enabled")
+                        .ok()
+                        .flatten()
+                        .as_deref()
+                        == Some("true");
+                    web_server::ServerModes { web_ui, opds }
                 };
-                if auto_start {
-                    let port = {
-                        let conn = match state.active_db().and_then(|p| p.get().map_err(Into::into))
-                        {
-                            Ok(c) => c,
-                            Err(_) => return,
-                        };
-                        db::get_setting(&conn, "web_server_port")
-                            .ok()
-                            .flatten()
-                            .and_then(|s| s.parse::<u16>().ok())
-                            .unwrap_or(web_server::DEFAULT_PORT)
+
+                if !modes.any() {
+                    return;
+                }
+
+                let port = {
+                    let conn = match state.active_db().and_then(|p| p.get().map_err(Into::into)) {
+                        Ok(c) => c,
+                        Err(_) => return,
                     };
-                    let pin_hash = web_server::auth::load_pin_hash();
-                    {
-                        let mut ph = match state.shared_pin_hash.lock() {
-                            Ok(g) => g,
-                            Err(_) => {
-                                log::error!(
-                                    "pin-hash mutex poisoned; skipping web-server auto-start"
-                                );
-                                return;
-                            }
-                        };
-                        *ph = pin_hash;
-                    }
-                    let web_state = web_server::WebState {
-                        pool: state.shared_active_pool.clone(),
-                        data_dir: state.data_dir.clone(),
-                        pin_hash: state.shared_pin_hash.clone(),
-                        sessions: std::sync::Arc::new(std::sync::Mutex::new(
-                            std::collections::HashMap::new(),
-                        )),
-                        login_limiter: std::sync::Arc::new(web_server::auth::RateLimiter::new(
-                            5, 300,
-                        )),
-                    };
-                    if let Ok(handle) = web_server::start(
-                        web_state,
-                        port,
-                        web_server::ServerModes {
-                            web_ui: true,
-                            opds: true,
-                        },
-                    )
-                    .await
-                    {
-                        {
-                            let mut h = match state.web_server_handle.lock() {
-                                Ok(g) => g,
-                                Err(_) => {
-                                    log::error!("web-server handle mutex poisoned");
-                                    return;
-                                }
-                            };
-                            *h = Some(handle);
+                    db::get_setting(&conn, "web_server_port")
+                        .ok()
+                        .flatten()
+                        .and_then(|s| s.parse::<u16>().ok())
+                        .unwrap_or(web_server::DEFAULT_PORT)
+                };
+                let pin_hash = web_server::auth::load_pin_hash();
+                {
+                    let mut ph = match state.shared_pin_hash.lock() {
+                        Ok(g) => g,
+                        Err(_) => {
+                            log::error!("pin-hash mutex poisoned; skipping web-server auto-start");
+                            return;
                         }
-                        // Update tray menu to show "Stop Web Server"
-                        let _ = tray::rebuild_tray_menu(&app_handle);
-                    }
+                    };
+                    *ph = pin_hash;
+                }
+                let web_state = web_server::WebState {
+                    pool: state.shared_active_pool.clone(),
+                    data_dir: state.data_dir.clone(),
+                    pin_hash: state.shared_pin_hash.clone(),
+                    sessions: std::sync::Arc::new(std::sync::Mutex::new(
+                        std::collections::HashMap::new(),
+                    )),
+                    login_limiter: std::sync::Arc::new(web_server::auth::RateLimiter::new(5, 300)),
+                };
+                if let Ok(handle) = web_server::start(web_state, port, modes).await {
+                    let mut h = match state.web_server_handle.lock() {
+                        Ok(g) => g,
+                        Err(_) => {
+                            log::error!("web-server handle mutex poisoned");
+                            return;
+                        }
+                    };
+                    *h = Some(handle);
+                    // Update tray menu to show "Stop Web Server"
+                    let _ = tray::rebuild_tray_menu(&app_handle);
                 }
             });
 
