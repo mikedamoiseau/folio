@@ -3256,7 +3256,10 @@ mod tests {
     fn delete_setting_removes_key() {
         let (_dir, conn) = setup();
         set_setting(&conn, "to_remove", "x").unwrap();
-        assert_eq!(get_setting(&conn, "to_remove").unwrap().as_deref(), Some("x"));
+        assert_eq!(
+            get_setting(&conn, "to_remove").unwrap().as_deref(),
+            Some("x")
+        );
         delete_setting(&conn, "to_remove").unwrap();
         assert!(get_setting(&conn, "to_remove").unwrap().is_none());
     }
