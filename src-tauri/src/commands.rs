@@ -4875,17 +4875,15 @@ pub async fn web_server_set_modes(
 
     let modes = crate::web_server::ServerModes { web_ui, opds };
 
-    // 2. Stop existing handle (if any). We always restart on mode change
-    //    rather than try to reuse an existing handle, because Axum doesn't
-    //    expose route hot-swap and the restart cost is trivial.
+    // 2. Stop existing handle (if any).
     let prev = { state.web_server_handle.lock()?.take() };
     if let Some(h) = prev {
         crate::web_server::stop(h);
     }
 
     // 3. Start fresh if anything is enabled.
-    if modes.any() {
-        let port = {
+    let (running, url, port_used) = if modes.any() {
+        let port_used = {
             let conn = state.active_db()?.get()?;
             port.unwrap_or_else(|| {
                 db::get_setting(&conn, "web_server_port")
@@ -4896,7 +4894,7 @@ pub async fn web_server_set_modes(
             })
         };
 
-        // Sync PIN hash from keychain before starting (matches old web_server_start).
+        // Sync PIN hash from keychain before starting.
         {
             let fresh = crate::web_server::auth::load_pin_hash();
             let mut ph = state.shared_pin_hash.lock()?;
@@ -4911,10 +4909,29 @@ pub async fn web_server_set_modes(
             login_limiter: std::sync::Arc::new(crate::web_server::auth::RateLimiter::new(5, 300)),
         };
 
-        let handle = crate::web_server::start(web_state, port, modes).await?;
-        let mut h = state.web_server_handle.lock()?;
-        *h = Some(handle);
-    }
+        let handle = crate::web_server::start(web_state, port_used, modes).await?;
+        let url = handle.url.clone();
+        {
+            let mut h = state.web_server_handle.lock()?;
+            *h = Some(handle);
+        }
+        (true, Some(url), port_used)
+    } else {
+        // Server is now stopped. Pick the persisted port for the response.
+        let port_used = {
+            let conn = state.active_db()?.get()?;
+            port.unwrap_or_else(|| {
+                db::get_setting(&conn, "web_server_port")
+                    .ok()
+                    .flatten()
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(crate::web_server::DEFAULT_PORT)
+            })
+        };
+        (false, None, port_used)
+    };
+
+    let has_pin = crate::web_server::auth::load_pin_hash().is_some();
 
     // 4. Audit log.
     {
@@ -4929,10 +4946,20 @@ pub async fn web_server_set_modes(
         );
     }
 
-    // 5. Refresh tray menu to reflect the new state.
+    // 5. Refresh tray menu.
     let _ = crate::tray::rebuild_tray_menu(&app);
 
-    web_server_status(state).await
+    // Build status directly instead of recursing into web_server_status —
+    // calling another #[tauri::command] async fn from within a command can
+    // hang in Tauri v2 when the State borrow is reused after an await.
+    Ok(crate::web_server::WebServerStatus {
+        running,
+        url,
+        port: port_used,
+        has_pin,
+        web_ui_enabled: web_ui,
+        opds_enabled: opds,
+    })
 }
 
 #[tauri::command]

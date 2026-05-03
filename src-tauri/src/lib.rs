@@ -232,15 +232,18 @@ pub fn run() {
                     login_limiter: std::sync::Arc::new(web_server::auth::RateLimiter::new(5, 300)),
                 };
                 if let Ok(handle) = web_server::start(web_state, port, modes).await {
-                    let mut h = match state.web_server_handle.lock() {
-                        Ok(g) => g,
-                        Err(_) => {
-                            log::error!("web-server handle mutex poisoned");
-                            return;
-                        }
-                    };
-                    *h = Some(handle);
-                    // Update tray menu to show "Stop Web Server"
+                    {
+                        let mut h = match state.web_server_handle.lock() {
+                            Ok(g) => g,
+                            Err(_) => {
+                                log::error!("web-server handle mutex poisoned");
+                                return;
+                            }
+                        };
+                        *h = Some(handle);
+                    }
+                    // Drop the guard before rebuild_tray_menu (which locks
+                    // the same mutex) — otherwise we deadlock at boot.
                     let _ = tray::rebuild_tray_menu(&app_handle);
                 }
             });
