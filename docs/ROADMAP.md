@@ -95,8 +95,10 @@ Expand where books come from and how they persist.
 - Google Drive, Dropbox integration (OAuth flows)
 - ~~Direct URL import (paste a link, app downloads the file)~~
 - ~~OPDS catalog browsing (many free ebook sources use this protocol)~~
-  - ~~Built-in catalogs: Project Gutenberg, Standard Ebooks~~
-  - ~~Add custom OPDS catalog URLs (self-hosted Calibre servers, etc.)~~
+  - ~~Built-in defaults: Project Gutenberg, Standard Ebooks (New Releases), Wikisource~~
+  - ~~Curated **preset picker**: 13+ vetted catalogs (multilingual: French, Hungarian, Bulgarian, English) addable in one click~~
+  - ~~Add custom OPDS catalog URLs (self-hosted Calibre servers, LAN-hosted Folio instances, etc.)~~
+  - ~~LAN/loopback host support: SSRF guard relaxed for user-added catalogs so Folio's own embedded server is reachable from another Folio instance~~
   - ~~Browse, search, navigate sub-catalogs, pagination~~
   - ~~One-click download & import into library~~
 - ~~Downloads into the library folder from Phase 1~~
@@ -154,8 +156,9 @@ Expand where books come from and how they persist.
 - ~~Unified search: search by title/author across all configured catalogs at once~~
 - ~~One-click download & import: book goes straight into the library folder~~
 - ~~Built on OPDS — the standard protocol used by most free ebook sources~~
-- ~~Known OPDS-compatible sources: Project Gutenberg, Standard Ebooks~~
-- ~~Allow users to add custom OPDS catalog URLs (for self-hosted Calibre servers, etc.)~~
+- ~~Curated preset picker (13+ catalogs) with search + language + category filters~~
+- ~~Known OPDS-compatible sources: Project Gutenberg, Standard Ebooks, Wikisource, Gallica, OpenEdition, ManyBooks, arXiv, Elephant Editions, others~~
+- ~~Allow users to add custom OPDS catalog URLs (for self-hosted Calibre servers, LAN Folio instances, etc.)~~
 - ~~Show available formats per result, prefer EPUB when available~~
 
 ### 15. Reading Position Sync / Multi-Device Sync — **Done**
@@ -266,26 +269,29 @@ Expand where books come from and how they persist.
 ~~Embed a lightweight HTTP server so the library can be accessed from any device on the local network via a web browser.~~
 
 **Core features:**
-- Toggle in settings: "Enable remote access" (off by default)
-- Starts a web server on a configurable port (e.g., `http://192.168.x.x:8080`)
-- PIN/password protection (required to connect)
-- Read-only web UI: browse library, view covers/metadata, read books in-browser
-- Display the access URL + QR code in settings for easy connection from phones/tablets
-- LAN only (no internet tunneling or port forwarding)
+- ~~Two independent toggles in settings: **Web UI** and **OPDS** (server runs iff at least one is on; no separate Start/Stop button)~~
+- ~~Configurable port (default `7788`); editable while running~~
+- ~~PIN/password protection (required to connect)~~
+- ~~Read-only web UI: browse library, view covers/metadata, read books in-browser~~
+- ~~Display the access URL + QR code in settings for easy connection from phones/tablets~~
+- ~~LAN only (no internet tunneling or port forwarding)~~
 
 **OPDS server endpoint:**
-- Serve the library as an OPDS catalog at `/opds` (e.g., `http://192.168.x.x:8080/opds`)
-- Any OPDS-compatible reader app (KOReader, Calibre, Moon+ Reader, etc.) can connect and browse/download books
-- Low additional effort — reuses existing `OpdsEntry`/`OpdsFeed` structs from `opds.rs`, just generates XML instead of parsing it
-- Supports navigation feeds (by author, collection, format) and acquisition feeds (download links)
-- Search endpoint via OpenSearch template
+- ~~Serve the library as an OPDS catalog at `/opds` (e.g., `http://192.168.x.x:7788/opds`)~~
+- ~~Any OPDS-compatible reader app (KOReader, Thorium, Calibre, Moon+ Reader, etc.) can connect and browse/download books~~
+- ~~Reuses `OpdsEntry`/`OpdsFeed` structs from `opds.rs`, generating Atom XML at the response boundary~~
+- ~~Supports navigation feeds (root, all books, new, collections) and acquisition feeds (EPUB / PDF / CBZ / CBR / MOBI / AZW / AZW3 with cover thumbnails)~~
+- ~~Search endpoint via OpenSearch template~~
+- ~~OPDS-only mode (no Web UI mounted): smaller attack surface for users who only use external OPDS clients~~
 
 **Implementation notes:**
-- Use `axum` or `warp` (async Rust web frameworks) — `tokio` is already a dependency
-- Book content served via the same parsing logic used by the Tauri commands (EPUB chapters, PDF page images, comic pages)
-- Cover images served from the existing `{app_data_dir}/covers/` directory
-- Per-profile: each profile's server runs independently with its own library
-- Desktop-only feature (not applicable to mobile builds from Phase 7)
+- ~~Built on `axum` (async Rust web framework)~~
+- ~~Book content served via the same parsing logic used by the Tauri commands (EPUB chapters, PDF page images, comic pages)~~
+- ~~Cover images served from the existing `{app_data_dir}/covers/` directory~~
+- ~~Per-profile: each profile's server runs independently with its own library~~
+- ~~Desktop-only feature (not applicable to mobile builds from Phase 7)~~
+- ~~Tray menu mirrors the two toggles (Web UI: ON/OFF, OPDS: ON/OFF)~~
+- ~~User-Agent `Mozilla/5.0 (compatible; Folio/1.4; OPDS reader)` so legitimate public catalogs (OpenEdition, etc.) accept us as a client~~
 
 **Out of scope (for now):**
 - Internet/WAN access (port forwarding, tunnels, relay servers)

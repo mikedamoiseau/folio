@@ -330,7 +330,7 @@ Comics (CBZ and CBR) get metadata from two sources:
 
 ## 7. Catalog Browsing (OPDS)
 
-Folio can browse online book catalogs that use the OPDS protocol (Open Publication Distribution System). This includes sources like Project Gutenberg, Standard Ebooks, and self-hosted Calibre servers.
+Folio can browse online book catalogs that use the OPDS protocol (Open Publication Distribution System). Three default catalogs ship out of the box — Project Gutenberg, Standard Ebooks (New Releases), and Wikisource — and you can add more from a curated preset list or by entering any OPDS URL by hand.
 
 ### Browsing
 
@@ -346,11 +346,16 @@ Open the catalog browser from the library. Pick a catalog to browse its categori
 
 ### Downloading
 
-Click a download link to grab a book (EPUB or PDF) and import it directly into your library.
+Click a download link to grab a book (EPUB, PDF, CBZ, CBR, or MOBI/AZW/AZW3) and import it directly into your library.
 
-### Custom catalogs
+### Adding more catalogs
 
-Add your own OPDS catalog by URL (useful for self-hosted Calibre or COPS servers). Custom catalogs can be removed at any time.
+Two paths from the catalog list view:
+
+- **Browse presets** — opens an inline picker with a curated list of OPDS catalogs (Gallica, OpenEdition, ManyBooks, arXiv, Elephant Editions, Hungarian / Bulgarian libraries, Anarchist Library, others). Filter by language, by category, or with the search box. Click **+ Add** on any row to install it. Already-added presets show an "Added" badge.
+- **Add custom URL** — enter the OPDS root URL of any catalog, including self-hosted Calibre/COPS servers and other Folio instances on your LAN (e.g. `http://192.168.0.12:7788/opds`).
+
+Custom catalogs can be removed at any time.
 
 ---
 
@@ -644,20 +649,25 @@ Stats are tracked automatically — reading sessions are recorded when you open 
 
 ## 12. Remote Access
 
-Browse and read your library from any device on the same WiFi network — phone, tablet, or another computer — without installing anything.
+Browse and read your library from any device on the same WiFi network — phone, tablet, or another computer — without installing anything. Two surfaces are available, toggled independently:
+
+- **Web UI** — an HTML library browser for phones, tablets, and other computers
+- **OPDS** — an Atom catalog feed for ebook reader apps (KOReader, Thorium, Calibre, Moon+ Reader, …)
+
+The server runs whenever at least one toggle is on. Turn both off to stop the server entirely.
 
 ### Setting up
 
 1. Open **Settings** and scroll to the **Remote Access** section
 2. Enter a **PIN** (this is the password for web access) and click **Save PIN**
-3. Click **Start Server**
+3. Tick **Web UI**, **OPDS**, or both
 4. A URL and QR code appear — scan the QR code with your phone or type the URL in any browser
 
-The server runs on port 7788 by default. You can change the port before starting.
+The server runs on port 7788 by default. The port input is editable while the server is running — change the value and click outside the field to apply.
 
 ### Using the web interface
 
-On your phone or tablet, open the URL in a browser. You'll see:
+When **Web UI** is enabled, open the URL in a browser. You'll see:
 
 - **Login screen** — enter the PIN you set in the desktop app
 - **Library** — a grid of book covers with a search bar. Tap any book to see its details.
@@ -668,16 +678,22 @@ The web interface works entirely on your local network. No internet connection n
 
 ### OPDS for reader apps
 
-If you use an ebook reader app that supports OPDS (KOReader, Calibre, Moon+ Reader, etc.), you can connect it directly:
+When **OPDS** is enabled, ebook reader apps can connect directly:
 
 1. In the reader app, add a new OPDS catalog
 2. Enter the URL: `http://<your-ip>:7788/opds`
 3. For authentication, use HTTP Basic Auth with any username and your PIN as the password
 4. Browse your library and download books directly into the reader app
 
+You can run **OPDS without the Web UI** if you only use external reader apps — smaller surface, no HTML pages exposed.
+
 ### Auto-start
 
-If the server was running when you last closed Folio, it starts automatically next time you open the app. Stop the server from Settings to disable auto-start.
+Whatever surfaces were enabled when you last closed Folio start automatically the next time you open the app. Untick both checkboxes to disable auto-start.
+
+### Tray menu
+
+The system tray shows the same two toggles (Web UI: ON/OFF, OPDS: ON/OFF). Click either to flip its state without opening Settings.
 
 ### Security
 
@@ -689,7 +705,7 @@ If the server was running when you last closed Folio, it starts automatically ne
 
 ### Stopping the server
 
-Click **Stop Server** in Settings. The server also stops automatically when you close the Folio app.
+Untick both checkboxes (or use the tray menu). The server also stops automatically when you close the Folio app.
 
 ---
 
