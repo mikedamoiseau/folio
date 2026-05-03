@@ -235,12 +235,13 @@ suite stays green on fresh clones.
 
 ## Project structure
 
-- `src/` - React frontend
-- `src-tauri/src/commands.rs` - Tauri command handlers / IPC surface
-- `src-tauri/src/db.rs` - SQLite access layer
-- `src-tauri/src/models.rs` - shared data models
-- `src-tauri/src/epub.rs`, `pdf.rs`, `cbz.rs`, `cbr.rs` - format-specific parsing
-- `docs/` - user-facing docs and roadmap
+- `src/` — React frontend
+- `src-tauri/src/commands.rs` — Tauri command handlers / IPC surface
+- `src-tauri/src/lib.rs`, `main.rs` — app setup and command registration
+- `src-tauri/src/tray.rs` — system tray + menu
+- `src-tauri/src/web_server/` — embedded HTTP server, OPDS feed, web UI
+- `folio-core/src/` — reusable Rust crate: `db`, `models`, `error`, `paths`, parsers (`epub`, `pdf`, `cbz`, `cbr`, `mobi`), `page_cache`, `enrichment`, providers, `opds`, `openlibrary`, `backup`, `sync`, `storage`, `search`
+- `docs/` — user-facing docs and roadmap
 
 ## CI
 

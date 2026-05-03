@@ -5,13 +5,39 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-05-03
+
+A milestone release. The 1.x line shipped the reader and the library; 2.0 is the platform underneath it. The desktop app now sits on top of `folio-core`, a separately-tested Rust crate with a pluggable `Storage` trait and structured errors — the same machinery that powers the embedded web server. New formats (MOBI / AZW / AZW3), a back/forward navigation stack, a curated OPDS preset picker, and a refactored remote-access toggle round out the user-facing additions. UX has had a measurable consistency pass (4 px spacing grid, clustered animation durations, normalized icon strokes, codified error surfaces).
+
+### Added
+- **MOBI / AZW / AZW3 reading** (ROADMAP #34) — Mobipocket and Kindle formats via libmobi, with a parsed-book in-memory cache, capped memory, and word-count metadata. Available on Linux, arm64 macOS, and Windows (statically linked, no separate libmobi install). Intel macOS remains unsupported.
+- **Navigation history** (ROADMAP #36) — back/forward stack across the HTML reader (EPUB / MOBI) and the image/PDF reader. Same-position pushes truncate the forward branch correctly; same-chapter and search-driven jumps stamp history; state resets on book switch so navigation cannot leak between books.
+- **OPDS preset picker** — curated catalog of 13+ vetted OPDS feeds (multilingual: English, French, Hungarian, Bulgarian) addable in one click from an inline picker in the catalog browser. Includes Project Gutenberg, Standard Ebooks, Wikisource, Elephant Editions, Feedbooks, ManyBooks, ebooksgratuits, and others. Pure preset filter and facet helpers behind the UI.
+- **Independent Web UI / OPDS toggles** — the Remote Access settings replace the single start/stop button with two checkboxes. Web UI and OPDS can be enabled independently and the embedded server reconciles itself accordingly. Existing single-toggle settings auto-migrate on first launch.
+- **Library section toggles + collapsible series groups** — Continue Reading and Discover sections can each be hidden, and grouped series are collapsible.
+
 ### Changed
-- **Structured error types across the Rust backend** (ROADMAP #55) — every Tauri command now returns a typed `FolioError` enum (`NotFound`, `PermissionDenied`, `InvalidInput`, `Network`, `Database`, `Io`, `Serialization`, `Internal`) that serializes at the IPC boundary as `{kind, message}`. The frontend's `friendlyError()` helper now routes errors by `kind` first, translating all 8 categories via `errors.*` i18n keys in English and French. HTTP handlers in the embedded web server now map error kinds to the correct HTTP status (404/403/400/502/500) instead of always returning 500. Unblocks the upcoming `folio-core` crate extraction (#63).
+- **`folio-core` crate extraction** (ROADMAP #63) — `db`, `models`, `error`, `paths`, the format parsers (EPUB / PDF / CBZ / CBR / MOBI), `page_cache`, `enrichment`, providers, `opds`, `openlibrary`, `backup`, and `sync` now live in a separately-tested crate. The Tauri layer (`src-tauri/`) owns commands, the tray, and the embedded web server; everything else is reusable Rust.
+- **Pluggable `Storage` trait** (ROADMAP #64) — book file I/O, cover images, page cache, EPUB inline images, and backup file reads all go through a `Storage` trait with atomic overwrites and key-validation guards. The DB `file_path` column now stores storage keys rather than raw paths. Foundation for cloud-backed storage backends without touching command handlers.
+- **Structured error types across the Rust backend** (ROADMAP #55) — every Tauri command returns a typed `FolioError` enum (`NotFound`, `PermissionDenied`, `InvalidInput`, `Network`, `Database`, `Io`, `Serialization`, `Internal`) serialized at the IPC boundary as `{kind, message}`. `friendlyError()` routes by `kind` first, with all 8 categories translated in English and French. Web-server HTTP handlers map error kinds to correct status codes (404 / 403 / 400 / 502 / 500) instead of always returning 500.
+- **UX consistency pass** — spacing locked to a 4 px grid (scanner test), SVG `strokeWidth` normalized to 1.5 / 2 (spinner exempt), Tailwind animation durations clustered at 150 / 200 / 300 ms, toast / inline / dialog error surfaces codified, dark-mode coverage scanner with Library red-banner fixes.
+- **Settings reorg** — orphan Activity Log launcher folded into the Library section.
+- **macOS tray responsiveness** — closing the window now minimizes instead of hiding so the macOS event loop stays alive and the tray menu remains responsive. `ExitRequested` handler prevents auto-exit when autostart and tray are enabled. The tray *Show* action recreates the window if destroyed.
+- **Backup running flag via RAII guard** — `BACKUP_RUNNING` is now released through a guard so an early return or panic cannot leave the flag stuck.
 
 ### Fixed
+- **Web server deadlock on auto-start** — the auto-start path held the `web_server_handle` mutex while calling `rebuild_tray_menu`, which also locks the same mutex. Since `std::sync::Mutex` is not reentrant, this deadlocked on every launch with the web server enabled, hanging all web-server IPC calls.
 - **App no longer panics on startup DB failures** — database initialisation errors now propagate through the Tauri setup closure instead of crashing via `.expect()`.
-- **Web-server auto-start survives poisoned locks** — if a mutex is poisoned on launch, the app logs a warning and skips web-server auto-start rather than crashing.
-- **Correct translations for archive corruption, chapter loading, keychain failures, JSON parse errors** — several mis-wired error kinds and translation keys were silently falling through to raw English messages. Users (especially on French locale) now see localised error copy for these paths.
+- **Web-server auto-start survives poisoned locks** — a poisoned mutex at launch logs a warning and skips web-server auto-start rather than crashing.
+- **Correct translations for archive corruption, chapter loading, keychain failures, JSON parse errors** — several mis-wired error kinds and translation keys were silently falling through to raw English messages. French-locale users now see localised copy for these paths.
+- **External EPUB links open in the default browser** — previously they tried to navigate inside the reader iframe.
+- **OPDS catalogs over LAN / loopback** — user-added catalogs are trusted so cover images render correctly from LAN / loopback hosts; UA now uses a Mozilla-prefixed string accepted by legitimate catalog servers.
+- **OPDS preset URL hygiene** — broken / unreachable presets pruned, working ones (Feedbooks, ManyBooks) restored once verified end-to-end.
+- **MOBI hardening** — cache memory cap honored, OPDS cover MIME tightened to webp, MSVC build fixed by casting `MOBIFiletype` enum tail through `u32`, word-count error mapping corrected.
+- **Library multi-select state visibility** — selection mode now shows clearly; missing i18n key added; series sections refresh live after edits.
+- **Settings server status sync** — server status refreshes on focus and the checkbox state syncs back on a failed start.
+- **Library file migration warning** — opting out of file migration when changing the library folder now warns the user before proceeding.
+- **EPUB inline image keys disambiguated** — inline images from different EPUBs no longer collide in the cache; keys now hash the resolved zip path.
 
 ## [1.4.1] - 2026-04-15
 
