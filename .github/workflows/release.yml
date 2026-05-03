@@ -43,7 +43,7 @@ jobs:
           # `--features mobi` is on, so a hypothetical non-mobi Linux
           # build would ship honest metadata (no unneeded depends).
           - platform: ubuntu-latest
-            args: '--config tauri.linux.mobi.conf.json --features mobi'
+            args: '--config src-tauri/tauri.linux.mobi.conf.json --features mobi'
             pdfium_archive: pdfium-linux-x64.tgz
             pdfium_lib: libpdfium.so
           - platform: macos-latest
