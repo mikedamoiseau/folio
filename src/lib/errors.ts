@@ -104,6 +104,15 @@ export const MESSAGE_KEYS: Record<string, string> = {
  * Intentionally excludes generic NotFound (missing TOC entry, missing page)
  * which the backend also raises with that kind.
  */
+/**
+ * Narrow predicate: only the on-disk book file being absent. Gates the
+ * destructive "Remove from library" recovery dialog in Reader.
+ */
+export function isBookFileMissing(raw: unknown): boolean {
+  const { message } = toFolioError(raw);
+  return message.toLowerCase().includes("book file not found");
+}
+
 export function isBookFileError(raw: unknown): boolean {
   const { kind, message } = toFolioError(raw);
   if (kind === "PermissionDenied") return true;

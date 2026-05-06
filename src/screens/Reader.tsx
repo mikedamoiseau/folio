@@ -11,7 +11,7 @@ import BookmarksPanel from "../components/BookmarksPanel";
 import BookmarkToast from "../components/BookmarkToast";
 import LanguageSwitcher from "../components/LanguageSwitcher";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { friendlyError, isBookFileError } from "../lib/errors";
+import { friendlyError, isBookFileMissing } from "../lib/errors";
 import { useToast } from "../components/Toast";
 import { resolveBookmarkScrollTop, isExternalUrl } from "../lib/utils";
 import {
@@ -149,9 +149,7 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
   } | null>(null);
   const userHasInteracted = useRef(false);
 
-  // Alias for the extracted utility — covers file-not-found, permission
-  // denied, locked, and drive-ejected errors (see errors.ts).
-  const isFileNotFound = isBookFileError;
+  const isFileNotFound = isBookFileMissing;
 
   // ---- Reset in-session state when switching books ----
   // Reader stays mounted across `/reader/:bookId` changes (no route key), so

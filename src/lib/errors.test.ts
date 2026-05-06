@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import type { TFunction } from "i18next";
-import { friendlyError, toFolioError, isBookFileError } from "./errors";
+import { friendlyError, toFolioError, isBookFileError, isBookFileMissing } from "./errors";
 
 const mockT = ((key: string) => key) as TFunction;
 
@@ -162,5 +162,32 @@ describe("isBookFileError", () => {
     it("handles null and undefined gracefully", () => {
         expect(isBookFileError(null)).toBe(false);
         expect(isBookFileError(undefined)).toBe(false);
+    });
+});
+
+describe("isBookFileMissing", () => {
+    it("matches 'book file not found' string errors", () => {
+        expect(isBookFileMissing("Book file not found at '/path/to/book.epub'")).toBe(true);
+    });
+
+    it("matches structured error with 'book file not found' message", () => {
+        expect(isBookFileMissing({ kind: "NotFound", message: "Book file not found at '/x.epub'" })).toBe(true);
+    });
+
+    it("does NOT match permission denied (file still exists)", () => {
+        expect(isBookFileMissing({ kind: "PermissionDenied", message: "Access denied" })).toBe(false);
+        expect(isBookFileMissing("permission denied: /path/to/book.epub")).toBe(false);
+    });
+
+    it("does NOT match locked file (file still exists)", () => {
+        expect(isBookFileMissing("file is locked: /path/to/book.epub")).toBe(false);
+    });
+
+    it("does NOT match resource busy (file still exists)", () => {
+        expect(isBookFileMissing("resource busy: /Volumes/USB/book.epub")).toBe(false);
+    });
+
+    it("does NOT match generic NotFound (missing TOC entry)", () => {
+        expect(isBookFileMissing({ kind: "NotFound", message: "Entry missing in archive" })).toBe(false);
     });
 });
