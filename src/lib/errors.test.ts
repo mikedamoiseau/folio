@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import type { TFunction } from "i18next";
-import { friendlyError, toFolioError } from "./errors";
+import { friendlyError, toFolioError, isBookFileError } from "./errors";
 
 const mockT = ((key: string) => key) as TFunction;
 
@@ -118,5 +118,49 @@ describe("friendlyError", () => {
             expect(toFolioError(null).message).toBeTruthy();
             expect(toFolioError(undefined).message).toBeTruthy();
         });
+    });
+});
+
+describe("isBookFileError", () => {
+    it("matches 'book file not found' string errors", () => {
+        expect(isBookFileError("Book file not found at '/path/to/book.epub'")).toBe(true);
+    });
+
+    it("matches structured NotFound with 'book file not found' message", () => {
+        expect(isBookFileError({ kind: "NotFound", message: "Book file not found at '/x.epub'" })).toBe(true);
+    });
+
+    it("matches structured PermissionDenied errors", () => {
+        expect(isBookFileError({ kind: "PermissionDenied", message: "Access denied to /path/to/book.epub" })).toBe(true);
+    });
+
+    it("matches 'permission denied' in message string", () => {
+        expect(isBookFileError("permission denied: /path/to/book.epub")).toBe(true);
+    });
+
+    it("matches locked file errors", () => {
+        expect(isBookFileError("file is locked: /path/to/book.epub")).toBe(true);
+    });
+
+    it("matches 'resource busy' errors (drive ejected mid-read)", () => {
+        expect(isBookFileError("resource busy: /Volumes/USB/book.epub")).toBe(true);
+    });
+
+    it("does NOT match generic NotFound errors (missing TOC entry, etc.)", () => {
+        expect(isBookFileError({ kind: "NotFound", message: "Entry missing in archive" })).toBe(false);
+    });
+
+    it("does NOT match unrelated errors", () => {
+        expect(isBookFileError("invalid format")).toBe(false);
+        expect(isBookFileError({ kind: "Network", message: "timeout" })).toBe(false);
+    });
+
+    it("handles Error instances", () => {
+        expect(isBookFileError(new Error("Book file not found at '/x.epub'"))).toBe(true);
+    });
+
+    it("handles null and undefined gracefully", () => {
+        expect(isBookFileError(null)).toBe(false);
+        expect(isBookFileError(undefined)).toBe(false);
     });
 });

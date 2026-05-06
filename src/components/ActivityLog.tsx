@@ -2,6 +2,8 @@ import { useState, useEffect, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useTranslation } from "react-i18next";
 import { useFocusTrap } from "../lib/useFocusTrap";
+import { friendlyError } from "../lib/errors";
+import { useToast } from "./Toast";
 
 interface ActivityEntry {
   id: string;
@@ -51,6 +53,7 @@ const LIMIT = 50;
 
 export default function ActivityLog({ onClose }: ActivityLogProps) {
   const { t } = useTranslation();
+  const { addToast } = useToast();
   const dialogRef = useFocusTrap(onClose);
   const [entries, setEntries] = useState<ActivityEntry[]>([]);
   const [loading, setLoading] = useState(true);
@@ -103,12 +106,12 @@ export default function ActivityLog({ onClose }: ActivityLogProps) {
         }
         setHasMore(results.length === LIMIT);
       } catch (e) {
-        console.error("Failed to load activity log:", e);
+        addToast(friendlyError(e, t), "error");
       } finally {
         setLoading(false);
       }
     },
-    []
+    [addToast, t]
   );
 
   useEffect(() => {

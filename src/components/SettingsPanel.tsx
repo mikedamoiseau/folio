@@ -6,6 +6,7 @@ import { open as openFilePicker } from "@tauri-apps/plugin-dialog";
 import { useTranslation } from "react-i18next";
 import { useTheme, MIN_FONT_SIZE, MAX_FONT_SIZE, type ColorTokens } from "../context/ThemeContext";
 import { friendlyError } from "../lib/errors";
+import { useToast } from "./Toast";
 import {
   SEPIA_TOKENS,
   LIGHT_TOKENS,
@@ -288,6 +289,7 @@ function formatBytes(bytes: number): string {
 
 export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
   const { t } = useTranslation();
+  const { addToast } = useToast();
   const { mode, setMode, customColors, setCustomColors, fontSize, setFontSize, fontFamily, setFontFamily, scrollMode, setScrollMode, typography, setTypography, customCss, setCustomCss, dualPage, setDualPage, mangaMode, setMangaMode, pageAnimation, setPageAnimation, loadTheme } =
     useTheme();
   const [openSection, setOpenSection] = useState<string | null>("appearance");
@@ -503,7 +505,7 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
       const info = await invoke<LibraryFolderInfo>("get_library_folder_info");
       setLibraryInfo(info);
     } catch (e) {
-      console.error('Failed to load library folder:', e);
+      addToast(friendlyError(e, t), "error");
     }
   }, []);
 
@@ -547,7 +549,7 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
         setLastSyncError(null);
       }
     } catch (e) {
-      console.error('Failed to load backup settings:', e);
+      addToast(friendlyError(e, t), "error");
     }
   }, []);
 

@@ -11,7 +11,8 @@ import BookmarksPanel from "../components/BookmarksPanel";
 import BookmarkToast from "../components/BookmarkToast";
 import LanguageSwitcher from "../components/LanguageSwitcher";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { friendlyError, toFolioError } from "../lib/errors";
+import { friendlyError, isBookFileError } from "../lib/errors";
+import { useToast } from "../components/Toast";
 import { resolveBookmarkScrollTop, isExternalUrl } from "../lib/utils";
 import {
   emptyHistory,
@@ -63,6 +64,7 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
   const { bookId } = useParams<{ bookId: string }>();
   const navigate = useNavigate();
   const { t } = useTranslation();
+  const { addToast } = useToast();
   const { fontSize, setFontSize, fontFamily, scrollMode, typography, customCss, dualPage, setDualPage, mangaMode, setMangaMode, pageAnimation } = useTheme();
 
   const [bookTitle, setBookTitle] = useState("");
@@ -147,14 +149,9 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
   } | null>(null);
   const userHasInteracted = useRef(false);
 
-  const isFileNotFound = (err: unknown): boolean => {
-    // Narrow: only the on-disk book file being absent should trigger the
-    // "reconnect drive" recovery dialog. NotFound is used broadly in the
-    // backend error system (missing EPUB entries, missing pages, missing
-    // profiles, …) and must not trigger this flow.
-    const { message } = toFolioError(err);
-    return message.toLowerCase().includes("book file not found");
-  };
+  // Alias for the extracted utility — covers file-not-found, permission
+  // denied, locked, and drive-ejected errors (see errors.ts).
+  const isFileNotFound = isBookFileError;
 
   // ---- Reset in-session state when switching books ----
   // Reader stays mounted across `/reader/:bookId` changes (no route key), so
@@ -760,7 +757,7 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
 
       if (isExternalUrl(href)) {
         e.preventDefault();
-        openUrl(href).catch((err) => console.error("Failed to open external link:", err));
+        openUrl(href).catch((err) => addToast(friendlyError(err, t), "error"));
         return;
       }
 
@@ -775,7 +772,7 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
 
     container.addEventListener("click", handleClick);
     return () => container.removeEventListener("click", handleClick);
-  }, [chapterHtml, allChaptersLoaded, isContinuous]);
+  }, [chapterHtml, allChaptersLoaded, isContinuous, addToast, t]);
 
   // Apply search term highlighting on top of existing highlights
   const searchHighlightedHtml = useMemo(() => {
@@ -825,9 +822,9 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
       window.getSelection()?.removeAllRanges();
       await loadHighlights();
     } catch (err) {
-      console.error("Failed to create highlight:", err);
+      addToast(friendlyError(err, t), "error");
     }
-  }, [bookId, chapterIndex, selectionPopup, loadHighlights]);
+  }, [bookId, chapterIndex, selectionPopup, loadHighlights, addToast, t]);
 
   const handleClearHighlight = useCallback(async () => {
     if (!bookId || !selectionPopup) return;
@@ -843,9 +840,9 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
       window.getSelection()?.removeAllRanges();
       await loadHighlights();
     } catch (err) {
-      console.error("Failed to clear highlight:", err);
+      addToast(friendlyError(err, t), "error");
     }
-  }, [bookId, selectionPopup, highlights, loadHighlights]);
+  }, [bookId, selectionPopup, highlights, loadHighlights, addToast, t]);
 
   // ---- Navigation ----
 
