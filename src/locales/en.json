@@ -55,6 +55,8 @@
     "adjustFilters": "Try adjusting your sort, format, or status filters.",
     "clearAllFilters": "Clear all filters",
     "importingProgress": "Processing {{current}} of {{total}}\u2026",
+    "scanningFolder": "Scanning {{folder}}\u2026 {{count}} files found",
+    "importingFile": "Importing {{filename}}",
     "dropToAdd": "Drop to add books",
     "noSupportedFiles": "No supported book files (.epub, .pdf, .cbz, .cbr) found in that folder.",
     "imported": "{{count}} imported",

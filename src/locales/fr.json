@@ -55,6 +55,8 @@
     "adjustFilters": "Essayez d\u2019ajuster vos filtres de tri, format ou statut.",
     "clearAllFilters": "Effacer tous les filtres",
     "importingProgress": "Traitement de {{current}} sur {{total}}\u2026",
+    "scanningFolder": "Analyse de {{folder}}\u2026 {{count}} fichiers trouv\u00e9s",
+    "importingFile": "Importation de {{filename}}",
     "dropToAdd": "D\u00e9poser pour ajouter des livres",
     "noSupportedFiles": "Aucun fichier de livre pris en charge (.epub, .pdf, .cbz, .cbr) trouv\u00e9 dans ce dossier.",
     "imported": "{{count}} import\u00e9(s)",
