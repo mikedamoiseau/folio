@@ -62,11 +62,14 @@ panels or shimmer placeholders forever.
 `friendlyError()` exists but coverage is uneven. Some flows still show raw
 backend strings.
 
-- [ ] **Audit `friendlyError()` callers** — every `setError` / toast call
-  should go through it. Grep for any that don't.
-- [ ] **Missing-file dialog polish** — already in Reader; verify it
-  triggers cleanly for *all* filesystem-error cases (locked file, denied
-  permission, drive ejected mid-read), not just absent files
+- [x] **Audit `friendlyError()` callers** — `BulkEditDialog` raw `String(e)`
+  swapped for `friendlyError`; highlight create/clear, external-link,
+  settings-load, and activity-log error paths now route through
+  `friendlyError` + toast (PR #39)
+- [x] **Missing-file dialog polish** — `isBookFileError` broadened in
+  `src/lib/errors.ts` to also match permission-denied, locked-file, and
+  drive-ejected errors; narrow `isBookFileMissing` retained as the gate
+  for the destructive "Remove from library" dialog (PR #39)
 - [ ] **Backup destination unreachable** — S3 401, FTP timeout, WebDAV
   5xx. Friendly recovery suggestion ("Check credentials in Settings →
   Backup")
@@ -75,11 +78,11 @@ backend strings.
 - [ ] **Bulk import failures summary** — when 50 books are imported and 3
   fail, show *which* failed and why (verify edge cases:
   password-protected zips, corrupt EPUBs)
-- [ ] **Console error sweep** — 4 `console.error`/`warn` calls in
-  `Reader.tsx` swallow user-facing context. Decide per-callsite: surface
-  as toast or accept as silent (and document why)
+- [x] **Console error sweep** — down from 4 to 2 remaining `console.warn`
+  calls (`Reader.tsx:203` cache-prep fallback, `PageViewer.tsx:16` debug
+  helper); both intentional and non-user-facing
 
-**Sizing:** ~1.5–2 days.
+**Sizing:** ~1 day remaining (backup + OPDS + bulk-import summaries).
 
 ---
 
