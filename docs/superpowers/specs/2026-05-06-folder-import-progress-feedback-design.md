@@ -204,7 +204,7 @@ Existing `library.importingProgress` is untouched.
 ## Files touched
 
 - `src-tauri/src/commands.rs` — `scan_folder_for_books` signature and
-  `walk()` body, new `ScanProgress` struct.
+  `walk()` body, new `FolderScanProgress` struct.
 - `src/screens/Library.tsx` — `scanProgress` state, `importProgress`
   shape extension, listener wiring, overlay rendering.
 - `src/locales/en.json`, `src/locales/fr.json` — two new keys each.
