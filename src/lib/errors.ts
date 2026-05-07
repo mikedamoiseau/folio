@@ -97,6 +97,34 @@ export const MESSAGE_KEYS: Record<string, string> = {
  *   2. Fallback to `kind` → default key (NotFound, PermissionDenied, Network)
  *   3. Raw message (better than a generic "Something went wrong")
  */
+/**
+ * Detect file-system errors that should trigger the missing-file recovery
+ * dialog: book not found, permission denied, locked, or drive ejected.
+ *
+ * Intentionally excludes generic NotFound (missing TOC entry, missing page)
+ * which the backend also raises with that kind.
+ */
+/**
+ * Narrow predicate: only the on-disk book file being absent. Gates the
+ * destructive "Remove from library" recovery dialog in Reader.
+ */
+export function isBookFileMissing(raw: unknown): boolean {
+  const { message } = toFolioError(raw);
+  return message.toLowerCase().includes("book file not found");
+}
+
+export function isBookFileError(raw: unknown): boolean {
+  const { kind, message } = toFolioError(raw);
+  if (kind === "PermissionDenied") return true;
+  const lower = message.toLowerCase();
+  return (
+    lower.includes("book file not found") ||
+    lower.includes("permission denied") ||
+    lower.includes("file is locked") ||
+    lower.includes("resource busy")
+  );
+}
+
 export function friendlyError(raw: unknown, t: TFunction): string {
   const { kind, message } = toFolioError(raw);
   const lower = message.toLowerCase();

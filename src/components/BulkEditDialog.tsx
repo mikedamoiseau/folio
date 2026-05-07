@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useTranslation } from "react-i18next";
+import { friendlyError } from "../lib/errors";
 import type { BookGridItem } from "../types";
 
 interface BulkEditDialogProps {
@@ -88,7 +89,7 @@ export default function BulkEditDialog({
       const count = await invoke<number>("bulk_update_metadata", { bookIds, fields });
       onSave(count);
     } catch (e) {
-      setError(String(e));
+      setError(friendlyError(e, t));
     } finally {
       setSaving(false);
     }
