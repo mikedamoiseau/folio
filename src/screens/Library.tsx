@@ -92,7 +92,8 @@ export default function Library() {
   const [error, setError] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
   const [loaded, setLoaded] = useState(false);
-  const [importProgress, setImportProgress] = useState<{ current: number; total: number } | null>(null);
+  const [importProgress, setImportProgress] = useState<{ current: number; total: number; filename: string } | null>(null);
+  const [folderScanProgress, setFolderScanProgress] = useState<{ folder: string; filesFound: number } | null>(null);
   const importCancelledRef = useRef(false);
   const [editingBook, setEditingBook] = useState<Book | null>(null);
   const [detailBook, setDetailBook] = useState<Book | null>(null);
@@ -336,7 +337,8 @@ export default function Library() {
     try {
       for (let i = 0; i < paths.length; i++) {
         if (importCancelledRef.current) break;
-        setImportProgress({ current: i + 1, total: paths.length });
+        const filename = paths[i].split(/[\\/]/).pop() ?? paths[i];
+        setImportProgress({ current: i + 1, total: paths.length, filename });
         try {
           await invoke("import_book", { filePath: paths[i] });
           results.imported++;
@@ -374,6 +376,7 @@ export default function Library() {
   }, [loadBooks]);
 
   const handleImportFolder = useCallback(async () => {
+    let unlisten: (() => void) | undefined;
     try {
       const selected = await open({
         directory: true,
@@ -384,6 +387,14 @@ export default function Library() {
       if (!folderPath) return;
       setImporting(true);
       setError(null);
+      unlisten = await listen<{ folder: string; files_found: number }>(
+        "folder-scan-progress",
+        (e) =>
+          setFolderScanProgress({
+            folder: e.payload.folder,
+            filesFound: e.payload.files_found,
+          })
+      );
       const files = await invoke<string[]>("scan_folder_for_books", { folderPath });
       if (files.length === 0) {
         setError(t("library.noSupportedFiles"));
@@ -394,8 +405,11 @@ export default function Library() {
     } catch (err) {
       setError(friendlyError(err, t));
       setImporting(false);
+    } finally {
+      unlisten?.();
+      setFolderScanProgress(null);
     }
-  }, [importFiles]);
+  }, [importFiles, t]);
 
   const handleImport = useCallback(async () => {
     try {
@@ -1306,32 +1320,58 @@ export default function Library() {
       </div>
 
       {/* Import progress overlay */}
-      {importing && importProgress && (
+      {importing && (importProgress || folderScanProgress) && (
         <div className="absolute inset-x-0 bottom-0 z-30 bg-surface border-t border-warm-border px-6 py-4 shadow-[0_-4px_24px_-4px_rgba(44,34,24,0.10)]">
           <div className="flex items-center gap-4">
             <div className="flex-1 min-w-0">
-              <div className="flex items-center justify-between mb-1.5">
-                <span className="text-sm font-medium text-ink">
-                  {t("library.importingProgress", { current: importProgress.current, total: importProgress.total })}
-                </span>
-                <span className="text-xs text-ink-muted tabular-nums">
-                  {Math.round((importProgress.current / importProgress.total) * 100)}%
-                </span>
-              </div>
-              <div className="h-2 bg-warm-subtle rounded-full overflow-hidden">
-                <div
-                  className="h-full bg-accent rounded-full transition-all duration-300"
-                  style={{ width: `${(importProgress.current / importProgress.total) * 100}%` }}
-                />
-              </div>
+              {importProgress ? (
+                <>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <span className="text-sm font-medium text-ink">
+                      {t("library.importingProgress", { current: importProgress.current, total: importProgress.total })}
+                    </span>
+                    <span className="text-xs text-ink-muted tabular-nums">
+                      {Math.round((importProgress.current / importProgress.total) * 100)}%
+                    </span>
+                  </div>
+                  <div className="h-2 bg-warm-subtle rounded-full overflow-hidden">
+                    <div
+                      className="h-full bg-accent rounded-full transition-all duration-300"
+                      style={{ width: `${(importProgress.current / importProgress.total) * 100}%` }}
+                    />
+                  </div>
+                  <div
+                    className="mt-1.5 text-xs text-ink-muted truncate"
+                    style={{ direction: "rtl", textAlign: "left" }}
+                    title={importProgress.filename}
+                  >
+                    {t("library.importingFile", { filename: importProgress.filename })}
+                  </div>
+                </>
+              ) : folderScanProgress ? (
+                <>
+                  <div
+                    className="text-sm font-medium text-ink truncate mb-1.5"
+                    style={{ direction: "rtl", textAlign: "left" }}
+                    title={folderScanProgress.folder}
+                  >
+                    {t("library.scanningFolder", { folder: folderScanProgress.folder, count: folderScanProgress.filesFound })}
+                  </div>
+                  <div className="h-2 bg-warm-subtle rounded-full overflow-hidden">
+                    <div className="h-full w-1/3 bg-accent rounded-full animate-pulse" />
+                  </div>
+                </>
+              ) : null}
             </div>
-            <button
-              type="button"
-              onClick={() => { importCancelledRef.current = true; }}
-              className="shrink-0 px-3 py-1.5 text-sm text-ink-muted hover:text-red-600 dark:hover:text-red-400 bg-warm-subtle hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition-colors"
-            >
-              {t("common.cancel")}
-            </button>
+            {importProgress && (
+              <button
+                type="button"
+                onClick={() => { importCancelledRef.current = true; }}
+                className="shrink-0 px-3 py-1.5 text-sm text-ink-muted hover:text-red-600 dark:hover:text-red-400 bg-warm-subtle hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition-colors"
+              >
+                {t("common.cancel")}
+              </button>
+            )}
           </div>
         </div>
       )}
