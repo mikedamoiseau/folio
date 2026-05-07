@@ -1142,8 +1142,17 @@ pub async fn get_book(book_id: String, state: State<'_, AppState>) -> FolioResul
 
 // --- Folder Scan ---
 
+#[derive(Clone, serde::Serialize)]
+struct FolderScanProgress {
+    folder: String,
+    files_found: usize,
+}
+
 #[tauri::command]
-pub async fn scan_folder_for_books(folder_path: String) -> FolioResult<Vec<String>> {
+pub async fn scan_folder_for_books(
+    folder_path: String,
+    app: AppHandle,
+) -> FolioResult<Vec<String>> {
     let dir = std::path::Path::new(&folder_path);
     if !dir.is_dir() {
         return Err(FolioError::invalid(format!(
@@ -1164,7 +1173,19 @@ pub async fn scan_folder_for_books(folder_path: String) -> FolioResult<Vec<Strin
     };
     let mut found = Vec::new();
 
-    fn walk(dir: &std::path::Path, extensions: &[&str], results: &mut Vec<String>) {
+    fn walk(
+        dir: &std::path::Path,
+        extensions: &[&str],
+        results: &mut Vec<String>,
+        app: &AppHandle,
+    ) {
+        let _ = app.emit(
+            "folder-scan-progress",
+            FolderScanProgress {
+                folder: dir.to_string_lossy().to_string(),
+                files_found: results.len(),
+            },
+        );
         let entries = match std::fs::read_dir(dir) {
             Ok(e) => e,
             Err(_) => return,
@@ -1174,7 +1195,7 @@ pub async fn scan_folder_for_books(folder_path: String) -> FolioResult<Vec<Strin
             if path.is_dir() {
                 if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
                     if !name.starts_with('.') && name != "__MACOSX" {
-                        walk(&path, extensions, results);
+                        walk(&path, extensions, results, app);
                     }
                 }
             } else if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
@@ -1186,7 +1207,7 @@ pub async fn scan_folder_for_books(folder_path: String) -> FolioResult<Vec<Strin
         }
     }
 
-    walk(dir, supported, &mut found);
+    walk(dir, supported, &mut found, &app);
     found.sort();
     Ok(found)
 }
