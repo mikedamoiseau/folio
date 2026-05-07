@@ -396,6 +396,7 @@ export default function Library() {
           })
       );
       const files = await invoke<string[]>("scan_folder_for_books", { folderPath });
+      setFolderScanProgress(null);
       if (files.length === 0) {
         setError(t("library.noSupportedFiles"));
         setImporting(false);
