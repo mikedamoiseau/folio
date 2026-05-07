@@ -31,7 +31,7 @@ Two phases, two signals:
 
 | Phase  | Trigger                           | Signal                                                                                                |
 | ------ | --------------------------------- | ----------------------------------------------------------------------------------------------------- |
-| Scan   | Backend recurses into a directory | `scan_progress` Tauri event with `{ folder, files_found }`                                            |
+| Scan   | Backend recurses into a directory | `folder-scan-progress` Tauri event with `{ folder, files_found }`                                     |
 | Import | Frontend loop iterates a path     | Existing `importProgress` state extended to `{ current, total, filename }` (no event needed)          |
 
 The bottom overlay in `Library.tsx` gains two visual states keyed off the
@@ -47,11 +47,12 @@ state combination:
 `scan_folder_for_books` is currently a leaf command with no `AppHandle`.
 Add the handle so the function can emit events.
 
-New struct in the same module:
+New struct in the same module (note: name avoids collision with the
+existing `ScanProgress` used by metadata enrichment in the same file):
 
 ```rust
 #[derive(Clone, serde::Serialize)]
-struct ScanProgress {
+struct FolderScanProgress {
     folder: String,
     files_found: usize,
 }
@@ -71,13 +72,14 @@ pub async fn scan_folder_for_books(
 directory entry:
 
 ```rust
-app.emit("scan_progress", ScanProgress {
+let _ = app.emit("folder-scan-progress", FolderScanProgress {
     folder: dir.to_string_lossy().to_string(),
     files_found: results.len(),
-}).ok();
+});
 ```
 
-The emit is `.ok()`-discarded — a failed emit must not abort the scan.
+The emit result is discarded with `let _ =` (matches existing pattern at
+commands.rs:3836) — a failed emit must not abort the scan.
 
 `lib.rs` already registers the command in `invoke_handler`; no change.
 
@@ -101,12 +103,12 @@ const [importProgress, setImportProgress] = useState<{
 
 ### Listener wiring
 
-`handleImportFolder` registers `scan_progress` listener BEFORE calling
-`scan_folder_for_books` and unsubscribes after:
+`handleImportFolder` registers `folder-scan-progress` listener BEFORE
+calling `scan_folder_for_books` and unsubscribes after:
 
 ```ts
 const unlisten = await listen<{ folder: string; files_found: number }>(
-    "scan_progress",
+    "folder-scan-progress",
     (e) => setScanProgress({
         folder: e.payload.folder,
         filesFound: e.payload.files_found,
