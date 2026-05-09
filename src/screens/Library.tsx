@@ -1553,15 +1553,6 @@ export default function Library() {
           }
         }}
       />
-      {importing && (
-        <div className="fixed inset-0 bg-ink/20 backdrop-blur-sm flex items-center justify-center z-50">
-          <div className="bg-white dark:bg-gray-800 rounded-lg p-6 shadow-lg flex flex-col items-center gap-3">
-            <div className="animate-spin h-8 w-8 border-2 border-blue-500 border-t-transparent rounded-full" />
-            <p className="text-sm text-gray-600 dark:text-gray-300">{t("import.importing")}</p>
-          </div>
-        </div>
-      )}
-
       {/* Scan toast */}
       {fileNotAvailableBookId && (
         <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 bg-red-900/90 text-white px-4 py-3 rounded-xl shadow-lg flex items-center gap-3 text-sm">
