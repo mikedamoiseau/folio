@@ -4145,17 +4145,22 @@ pub async fn start_folder_import(
                 errors: 0,
             },
         );
-        // Re-verify the root inside the spawn. The IPC handler already checked
-        // it, but in the gap between that check and now the mount may have
-        // vanished or permissions may have changed. The walker silently skips
+        // The walker's own canonicalize/read_dir on the root IS the
+        // authoritative traversal check — if it fails here we surface a real
+        // error instead of falling through to the "empty" branch, which would
+        // misdiagnose a vanished mount or permission change as "no supported
+        // files". Recursive calls inside the walker still silently skip
         // unreadable nested directories (intended for partial-permission
-        // trees), so without this check a root failure here would be
-        // indistinguishable from "no supported files" — exactly the misdiagnosis
-        // we are fixing.
-        let root_path = std::path::Path::new(&folder_path);
-        if let Err(e) =
-            std::fs::canonicalize(root_path).and_then(|_| std::fs::read_dir(root_path).map(|_| ()))
-        {
+        // trees).
+        let mut files = Vec::new();
+        let mut visited: std::collections::HashSet<std::path::PathBuf> =
+            std::collections::HashSet::new();
+        if let Err(e) = walk_folder_for_import(
+            std::path::Path::new(&folder_path),
+            &mut files,
+            &mut visited,
+            &app_clone,
+        ) {
             let _ = app_clone.emit(
                 "import-progress",
                 ImportProgressEvent {
@@ -4173,15 +4178,6 @@ pub async fn start_folder_import(
             IMPORT_RUNNING.store(false, Ordering::SeqCst);
             return;
         }
-        let mut files = Vec::new();
-        let mut visited: std::collections::HashSet<std::path::PathBuf> =
-            std::collections::HashSet::new();
-        walk_folder_for_import(
-            std::path::Path::new(&folder_path),
-            &mut files,
-            &mut visited,
-            &app_clone,
-        );
         files.sort();
         if files.is_empty() {
             // Distinguish a user-cancelled scan (walker bailed early via
@@ -4255,20 +4251,22 @@ fn walk_folder_for_import(
     results: &mut Vec<String>,
     visited: &mut std::collections::HashSet<std::path::PathBuf>,
     app: &AppHandle,
-) {
+) -> std::io::Result<()> {
     if IMPORT_CANCEL.load(Ordering::SeqCst) {
-        return;
+        return Ok(());
     }
     // Cycle guard: resolve the directory's canonical path and skip if we've
     // already walked it. Symlink loops (`books/back -> ..`) would otherwise
-    // recurse forever and wedge the IMPORT_RUNNING slot. If canonicalize
-    // fails, skip rather than risk an unbounded walk.
-    let canonical = match std::fs::canonicalize(dir) {
-        Ok(p) => p,
-        Err(_) => return,
-    };
+    // recurse forever and wedge the IMPORT_RUNNING slot.
+    //
+    // Errors from canonicalize/read_dir bubble up as `Err`. The top-level
+    // caller surfaces that as an error event so the user sees a real
+    // diagnostic; recursive callers below intentionally swallow the error
+    // (`let _ = ...`) so partial-permission trees still walk past
+    // unreadable nested dirs.
+    let canonical = std::fs::canonicalize(dir)?;
     if !visited.insert(canonical) {
-        return;
+        return Ok(());
     }
     let _ = app.emit(
         "import-progress",
@@ -4283,13 +4281,10 @@ fn walk_folder_for_import(
         },
     );
     let supported = supported_import_extensions();
-    let entries = match std::fs::read_dir(dir) {
-        Ok(e) => e,
-        Err(_) => return,
-    };
+    let entries = std::fs::read_dir(dir)?;
     for entry in entries.flatten() {
         if IMPORT_CANCEL.load(Ordering::SeqCst) {
-            return;
+            return Ok(());
         }
         let file_type = match entry.file_type() {
             Ok(t) => t,
@@ -4308,7 +4303,8 @@ fn walk_folder_for_import(
         if is_dir {
             if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
                 if !name.starts_with('.') && name != "__MACOSX" {
-                    walk_folder_for_import(&path, results, visited, app);
+                    // Silently skip unreadable nested dirs.
+                    let _ = walk_folder_for_import(&path, results, visited, app);
                 }
             }
         } else if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
@@ -4318,6 +4314,7 @@ fn walk_folder_for_import(
             }
         }
     }
+    Ok(())
 }
 
 fn run_import_task(app: AppHandle, paths: Vec<String>, resources: ImportResources) {
