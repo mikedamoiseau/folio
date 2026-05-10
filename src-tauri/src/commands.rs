@@ -500,6 +500,30 @@ pub async fn import_book(
     state: State<'_, AppState>,
     _app: AppHandle,
 ) -> FolioResult<Book> {
+    let db_pool = state.active_db()?;
+    let storage = state.active_storage()?;
+    let covers_storage = state.covers_storage()?;
+    let import_mode = {
+        let conn = db_pool.get()?;
+        db::get_setting(&conn, "import_mode")
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| "import".to_string())
+    };
+    import_book_inner(file_path, db_pool, storage, covers_storage, &import_mode)
+}
+
+/// Body of [`import_book`], extracted so background tasks can call it without
+/// going through Tauri's `State`/`invoke` machinery. All resources that the
+/// importer touches are passed in explicitly so the same code runs from the
+/// IPC handler and from a `spawn_blocking` background loop.
+pub(crate) fn import_book_inner(
+    file_path: String,
+    db_pool: DbPool,
+    storage: std::sync::Arc<dyn folio_core::storage::Storage>,
+    covers_storage: std::sync::Arc<dyn folio_core::storage::Storage>,
+    import_mode: &str,
+) -> FolioResult<Book> {
     // Step 1: single stat — used for size guard, mode-dependent dedup, and to
     // avoid extra round trips on slow filesystems (network shares).
     const MAX_IMPORT_SIZE_BYTES: u64 = 500 * 1024 * 1024;
@@ -512,15 +536,7 @@ pub async fn import_book(
         )));
     }
 
-    // Step 2: resolve import mode early. URL imports always copy (file lives
-    // in a temp dir).
-    let import_mode = {
-        let conn = state.active_db()?.get()?;
-        db::get_setting(&conn, "import_mode")
-            .ok()
-            .flatten()
-            .unwrap_or_else(|| "import".to_string())
-    };
+    // Step 2: URL imports always copy (file lives in a temp dir).
     let is_url_import = file_path.starts_with("http://") || file_path.starts_with("https://");
     let should_copy = import_mode != "link" || is_url_import;
 
@@ -545,7 +561,7 @@ pub async fn import_book(
         }
         let computed = format!("{:x}", hasher.finalize());
         {
-            let conn = state.active_db()?.get()?;
+            let conn = db_pool.get()?;
             if let Some(existing) = db::get_book_by_file_hash(&conn, &computed)? {
                 return Ok(existing);
             }
@@ -610,11 +626,6 @@ pub async fn import_book(
         .map(|s| s.to_string_lossy().to_string())
         .unwrap_or_else(|| "Unknown".to_string());
 
-    // Step 3: Resolve library storage (#64 M2). `active_storage` creates
-    // the library folder on first use and returns a `LocalStorage` handle
-    // rooted there.
-    let storage = state.active_storage()?;
-
     // Step 4: Copy source file into library folder as {book_id}.{ext},
     // or keep original path if import_mode is "link".
     //
@@ -643,7 +654,6 @@ pub async fn import_book(
     // directly to `{data_dir}/covers/…`. `cover_saved` tracks whether we
     // persisted any cover artifact so the error-cleanup paths below can
     // tear them back out via `delete_book_covers`.
-    let covers_storage = state.covers_storage()?;
     let mut cover_saved = false;
 
     let book = match format {
@@ -982,7 +992,7 @@ pub async fn import_book(
         }
     };
 
-    let mut conn = state.active_db()?.get()?;
+    let mut conn = db_pool.get()?;
     let tx = conn.transaction()?;
     if let Err(e) = db::insert_book(&tx, &book) {
         // If the insert failed due to a duplicate hash, clean up the new copy
