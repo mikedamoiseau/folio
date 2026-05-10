@@ -4073,7 +4073,14 @@ pub async fn start_folder_import(
             },
         );
         let mut files = Vec::new();
-        walk_folder_for_import(std::path::Path::new(&folder_path), &mut files, &app_clone);
+        let mut visited: std::collections::HashSet<std::path::PathBuf> =
+            std::collections::HashSet::new();
+        walk_folder_for_import(
+            std::path::Path::new(&folder_path),
+            &mut files,
+            &mut visited,
+            &app_clone,
+        );
         files.sort();
         run_import_task(app_clone, files, resources);
     });
@@ -4117,8 +4124,24 @@ fn acquire_import_slot(state: &State<'_, AppState>) -> FolioResult<ImportResourc
     result
 }
 
-fn walk_folder_for_import(dir: &std::path::Path, results: &mut Vec<String>, app: &AppHandle) {
+fn walk_folder_for_import(
+    dir: &std::path::Path,
+    results: &mut Vec<String>,
+    visited: &mut std::collections::HashSet<std::path::PathBuf>,
+    app: &AppHandle,
+) {
     if IMPORT_CANCEL.load(Ordering::SeqCst) {
+        return;
+    }
+    // Cycle guard: resolve the directory's canonical path and skip if we've
+    // already walked it. Symlink loops (`books/back -> ..`) would otherwise
+    // recurse forever and wedge the IMPORT_RUNNING slot. If canonicalize
+    // fails, skip rather than risk an unbounded walk.
+    let canonical = match std::fs::canonicalize(dir) {
+        Ok(p) => p,
+        Err(_) => return,
+    };
+    if !visited.insert(canonical) {
         return;
     }
     let _ = app.emit(
@@ -4158,7 +4181,7 @@ fn walk_folder_for_import(dir: &std::path::Path, results: &mut Vec<String>, app:
         if is_dir {
             if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
                 if !name.starts_with('.') && name != "__MACOSX" {
-                    walk_folder_for_import(&path, results, app);
+                    walk_folder_for_import(&path, results, visited, app);
                 }
             }
         } else if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
