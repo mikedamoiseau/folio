@@ -4145,6 +4145,34 @@ pub async fn start_folder_import(
                 errors: 0,
             },
         );
+        // Re-verify the root inside the spawn. The IPC handler already checked
+        // it, but in the gap between that check and now the mount may have
+        // vanished or permissions may have changed. The walker silently skips
+        // unreadable nested directories (intended for partial-permission
+        // trees), so without this check a root failure here would be
+        // indistinguishable from "no supported files" — exactly the misdiagnosis
+        // we are fixing.
+        let root_path = std::path::Path::new(&folder_path);
+        if let Err(e) =
+            std::fs::canonicalize(root_path).and_then(|_| std::fs::read_dir(root_path).map(|_| ()))
+        {
+            let _ = app_clone.emit(
+                "import-progress",
+                ImportProgressEvent {
+                    phase: "error".into(),
+                    current: 0,
+                    total: 0,
+                    // Frontend renders this string verbatim via the
+                    // `library.importBackgroundError` template.
+                    filename: format!("Cannot read folder: {e}"),
+                    imported: 0,
+                    duplicates: 0,
+                    errors: 0,
+                },
+            );
+            IMPORT_RUNNING.store(false, Ordering::SeqCst);
+            return;
+        }
         let mut files = Vec::new();
         let mut visited: std::collections::HashSet<std::path::PathBuf> =
             std::collections::HashSet::new();

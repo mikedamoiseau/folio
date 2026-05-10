@@ -17,7 +17,8 @@ export type ImportPhase =
   | "importing"
   | "done"
   | "cancelled"
-  | "empty";
+  | "empty"
+  | "error";
 
 export interface ImportProgress {
   phase: ImportPhase;
@@ -68,6 +69,7 @@ function normalizePhase(phase: string): ImportPhase {
     case "done":
     case "cancelled":
     case "empty":
+    case "error":
       return phase;
     default:
       return "idle";
@@ -96,11 +98,17 @@ export function ImportProvider({ children }: { children: ReactNode }) {
         errors: event.payload.errors,
       };
       setProgress(next);
-      if (phase === "done" || phase === "cancelled" || phase === "empty") {
+      if (
+        phase === "done" ||
+        phase === "cancelled" ||
+        phase === "empty" ||
+        phase === "error"
+      ) {
         setRunning(false);
-        // `empty` means no books were processed, so the grid did not change —
-        // skip the `lastCompletedAt` bump that triggers `loadBooks` in Library.
-        if (phase !== "empty") {
+        // `empty`/`error` mean no books were processed, so the grid did not
+        // change — skip the `lastCompletedAt` bump that triggers `loadBooks`
+        // in Library.
+        if (phase !== "empty" && phase !== "error") {
           setLastCompletedAt(Date.now());
         }
         // Keep the final phase visible briefly so the user sees the totals,

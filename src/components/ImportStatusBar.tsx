@@ -22,13 +22,21 @@ export default function ImportStatusBar() {
     primary = t("library.importBackgroundDone", { imported, duplicates, errors });
   } else if (phase === "empty") {
     primary = t("library.noSupportedFiles");
+  } else if (phase === "error") {
+    // Backend stuffs the error string into `filename` for the error phase
+    // (the event shape has no dedicated message field).
+    primary = t("library.importBackgroundError", { error: filename });
   } else {
     primary = "";
   }
 
   const percent = total > 0 ? Math.round((current / total) * 100) : 0;
   const showCancel =
-    running && phase !== "cancelled" && phase !== "done" && phase !== "empty";
+    running &&
+    phase !== "cancelled" &&
+    phase !== "done" &&
+    phase !== "empty" &&
+    phase !== "error";
 
   return (
     <div
