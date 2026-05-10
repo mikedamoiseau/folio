@@ -37,7 +37,7 @@ Two phases, two signals:
 The bottom overlay in `Library.tsx` gains two visual states keyed off the
 state combination:
 
-- `importing && scanProgress && !importProgress` → scan UI (folder +
+- `importing && folderScanProgress && !importProgress` → scan UI (folder +
   running count, indeterminate bar).
 - `importing && importProgress` → import UI (existing count + percent +
   current filename).
@@ -88,7 +88,7 @@ commands.rs:3836) — a failed emit must not abort the scan.
 ### State
 
 ```ts
-const [scanProgress, setScanProgress] = useState<{
+const [folderScanProgress, setFolderScanProgress] = useState<{
     folder: string;
     filesFound: number;
 } | null>(null);
@@ -109,7 +109,7 @@ calling `scan_folder_for_books` and unsubscribes after:
 ```ts
 const unlisten = await listen<{ folder: string; files_found: number }>(
     "folder-scan-progress",
-    (e) => setScanProgress({
+    (e) => setFolderScanProgress({
         folder: e.payload.folder,
         filesFound: e.payload.files_found,
     })
@@ -119,7 +119,7 @@ try {
     // ...
 } finally {
     unlisten();
-    setScanProgress(null);
+    setFolderScanProgress(null);
 }
 ```
 
@@ -171,7 +171,7 @@ Existing `library.importingProgress` is untouched.
 
 ## Edge cases
 
-- **Empty folder**: scan ends, no events, `scanProgress` stays null,
+- **Empty folder**: scan ends, no events, `folderScanProgress` stays null,
   flow falls through to existing `noSupportedFiles` error. Unchanged.
 - **Drag-drop import**: bypasses `scan_folder_for_books`. Scan overlay
   never appears; filename in import overlay still works because the
@@ -205,7 +205,7 @@ Existing `library.importingProgress` is untouched.
 
 - `src-tauri/src/commands.rs` — `scan_folder_for_books` signature and
   `walk()` body, new `FolderScanProgress` struct.
-- `src/screens/Library.tsx` — `scanProgress` state, `importProgress`
+- `src/screens/Library.tsx` — `folderScanProgress` state, `importProgress`
   shape extension, listener wiring, overlay rendering.
 - `src/locales/en.json`, `src/locales/fr.json` — two new keys each.
 
