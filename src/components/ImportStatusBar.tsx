@@ -7,7 +7,7 @@ export default function ImportStatusBar() {
 
   if (!progress) return null;
 
-  const { phase, current, total, filename, imported, errors } = progress;
+  const { phase, current, total, filename, imported, duplicates, errors } = progress;
 
   let primary: string;
   if (phase === "scanning") {
@@ -17,15 +17,18 @@ export default function ImportStatusBar() {
       ? t("library.importingProgress", { current, total })
       : t("library.importing");
   } else if (phase === "cancelled") {
-    primary = t("library.importBackgroundCancelled", { imported, errors });
+    primary = t("library.importBackgroundCancelled", { imported, duplicates, errors });
   } else if (phase === "done") {
-    primary = t("library.importBackgroundDone", { imported, errors });
+    primary = t("library.importBackgroundDone", { imported, duplicates, errors });
+  } else if (phase === "empty") {
+    primary = t("library.noSupportedFiles");
   } else {
     primary = "";
   }
 
   const percent = total > 0 ? Math.round((current / total) * 100) : 0;
-  const showCancel = running && phase !== "cancelled" && phase !== "done";
+  const showCancel =
+    running && phase !== "cancelled" && phase !== "done" && phase !== "empty";
 
   return (
     <div
@@ -51,17 +54,22 @@ export default function ImportStatusBar() {
               {t("library.importingFile", { filename })}
             </div>
           )}
-          {(phase === "importing" || phase === "scanning") && (imported > 0 || errors > 0) && (
-            <div className="text-xs text-ink-muted mt-0.5">
-              {imported > 0 && (
-                <span>{t("library.imported", { count: imported })}</span>
-              )}
-              {imported > 0 && errors > 0 && <span> · </span>}
-              {errors > 0 && (
-                <span>{t("library.failed", { count: errors })}</span>
-              )}
-            </div>
-          )}
+          {(phase === "importing" || phase === "scanning") &&
+            (imported > 0 || duplicates > 0 || errors > 0) && (
+              <div className="text-xs text-ink-muted mt-0.5">
+                {imported > 0 && (
+                  <span>{t("library.imported", { count: imported })}</span>
+                )}
+                {imported > 0 && (duplicates > 0 || errors > 0) && <span> · </span>}
+                {duplicates > 0 && (
+                  <span>{t("library.skipped", { count: duplicates })}</span>
+                )}
+                {duplicates > 0 && errors > 0 && <span> · </span>}
+                {errors > 0 && (
+                  <span>{t("library.failed", { count: errors })}</span>
+                )}
+              </div>
+            )}
         </div>
         {showCancel && (
           <button

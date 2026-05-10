@@ -42,6 +42,7 @@ describe("ImportStatusBar", () => {
         total: 10,
         filename: "book.epub",
         imported: 2,
+        duplicates: 0,
         errors: 1,
       },
       lastCompletedAt: null,
@@ -57,6 +58,27 @@ describe("ImportStatusBar", () => {
     expect(html).toContain("common.cancel");
   });
 
+  it("renders skipped count when duplicates were detected", () => {
+    useImportMock.mockReturnValue({
+      running: true,
+      progress: {
+        phase: "importing",
+        current: 6,
+        total: 10,
+        filename: "book.epub",
+        imported: 4,
+        duplicates: 2,
+        errors: 0,
+      },
+      lastCompletedAt: null,
+      startFolder: vi.fn(),
+      startFiles: vi.fn(),
+      cancel: vi.fn(),
+    });
+    const html = renderToString(<ImportStatusBar />);
+    expect(html).toContain("library.skipped");
+  });
+
   it("renders the done summary without a Cancel button after completion", () => {
     useImportMock.mockReturnValue({
       running: false,
@@ -66,6 +88,7 @@ describe("ImportStatusBar", () => {
         total: 5,
         filename: "",
         imported: 4,
+        duplicates: 0,
         errors: 1,
       },
       lastCompletedAt: 12345,
@@ -75,6 +98,28 @@ describe("ImportStatusBar", () => {
     });
     const html = renderToString(<ImportStatusBar />);
     expect(html).toContain("library.importBackgroundDone");
+    expect(html).not.toContain("common.cancel");
+  });
+
+  it("renders 'no supported files' message on empty terminal phase", () => {
+    useImportMock.mockReturnValue({
+      running: false,
+      progress: {
+        phase: "empty",
+        current: 0,
+        total: 0,
+        filename: "/some/folder",
+        imported: 0,
+        duplicates: 0,
+        errors: 0,
+      },
+      lastCompletedAt: null,
+      startFolder: vi.fn(),
+      startFiles: vi.fn(),
+      cancel: vi.fn(),
+    });
+    const html = renderToString(<ImportStatusBar />);
+    expect(html).toContain("library.noSupportedFiles");
     expect(html).not.toContain("common.cancel");
   });
 });

@@ -511,6 +511,24 @@ pub async fn import_book(
             .unwrap_or_else(|| "import".to_string())
     };
     import_book_inner(file_path, db_pool, storage, covers_storage, &import_mode)
+        .map(ImportOutcome::into_book)
+}
+
+/// Distinguishes a freshly-imported book from one that already existed in the
+/// library (matched by content hash). The IPC `import_book` handler flattens
+/// both into the existing `Book` contract; the background importer needs the
+/// distinction to report accurate "added" vs. "skipped" counts.
+pub(crate) enum ImportOutcome {
+    Imported(Book),
+    Duplicate(Book),
+}
+
+impl ImportOutcome {
+    pub(crate) fn into_book(self) -> Book {
+        match self {
+            ImportOutcome::Imported(b) | ImportOutcome::Duplicate(b) => b,
+        }
+    }
 }
 
 /// Body of [`import_book`], extracted so background tasks can call it without
@@ -523,7 +541,7 @@ pub(crate) fn import_book_inner(
     storage: std::sync::Arc<dyn folio_core::storage::Storage>,
     covers_storage: std::sync::Arc<dyn folio_core::storage::Storage>,
     import_mode: &str,
-) -> FolioResult<Book> {
+) -> FolioResult<ImportOutcome> {
     // Step 1: single stat — used for size guard, mode-dependent dedup, and to
     // avoid extra round trips on slow filesystems (network shares).
     const MAX_IMPORT_SIZE_BYTES: u64 = 500 * 1024 * 1024;
@@ -563,7 +581,7 @@ pub(crate) fn import_book_inner(
         {
             let conn = db_pool.get()?;
             if let Some(existing) = db::get_book_by_file_hash(&conn, &computed)? {
-                return Ok(existing);
+                return Ok(ImportOutcome::Duplicate(existing));
             }
         }
         Some(computed)
@@ -1008,7 +1026,7 @@ pub(crate) fn import_book_inner(
             if cover_saved {
                 let _ = delete_book_covers(&*covers_storage, &book.id);
             }
-            return Ok(existing);
+            return Ok(ImportOutcome::Duplicate(existing));
         }
         if should_copy {
             let _ = std::fs::remove_file(&final_path);
@@ -1039,7 +1057,7 @@ pub(crate) fn import_book_inner(
         e.to_string()
     })?;
 
-    Ok(book)
+    Ok(ImportOutcome::Imported(book))
 }
 
 #[tauri::command]
@@ -4017,13 +4035,15 @@ const IMPORT_WORKER_COUNT: usize = 6;
 #[derive(Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ImportProgressEvent {
-    /// "scanning" while walking the folder, "importing" per file, "done" or
-    /// "cancelled" once the task exits.
+    /// "scanning" while walking the folder, "importing" per file, "empty"
+    /// when no supported files were found, "done" or "cancelled" once the
+    /// task exits.
     phase: String,
     current: u32,
     total: u32,
     filename: String,
     imported: u32,
+    duplicates: u32,
     errors: u32,
 }
 
@@ -4058,6 +4078,17 @@ pub async fn start_folder_import(
     state: State<'_, AppState>,
     app: AppHandle,
 ) -> FolioResult<()> {
+    // Validate the root folder up front so the IPC call surfaces obvious
+    // mistakes (typo, deleted folder, file picked instead of directory)
+    // instead of silently spawning a background task that emits "done"
+    // with zero files.
+    let root = std::path::Path::new(&folder_path);
+    let root_meta = std::fs::metadata(root)
+        .map_err(|e| FolioError::invalid(format!("Cannot read folder: {e}")))?;
+    if !root_meta.is_dir() {
+        return Err(FolioError::invalid("Selected path is not a folder"));
+    }
+
     let resources = acquire_import_slot(&state)?;
     let app_clone = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
@@ -4069,6 +4100,7 @@ pub async fn start_folder_import(
                 total: 0,
                 filename: folder_path.clone(),
                 imported: 0,
+                duplicates: 0,
                 errors: 0,
             },
         );
@@ -4082,6 +4114,25 @@ pub async fn start_folder_import(
             &app_clone,
         );
         files.sort();
+        if files.is_empty() {
+            // No supported files anywhere under the root — emit a dedicated
+            // terminal event so the UI can show "no supported files" rather
+            // than a misleading "Import finished — 0 added".
+            let _ = app_clone.emit(
+                "import-progress",
+                ImportProgressEvent {
+                    phase: "empty".into(),
+                    current: 0,
+                    total: 0,
+                    filename: folder_path.clone(),
+                    imported: 0,
+                    duplicates: 0,
+                    errors: 0,
+                },
+            );
+            IMPORT_RUNNING.store(false, Ordering::SeqCst);
+            return;
+        }
         run_import_task(app_clone, files, resources);
     });
     Ok(())
@@ -4152,6 +4203,7 @@ fn walk_folder_for_import(
             total: 0,
             filename: dir.to_string_lossy().to_string(),
             imported: 0,
+            duplicates: 0,
             errors: 0,
         },
     );
@@ -4201,6 +4253,7 @@ fn run_import_task(app: AppHandle, paths: Vec<String>, resources: ImportResource
     let total = paths.len() as u32;
     let queue: Mutex<VecDeque<String>> = Mutex::new(paths.into());
     let imported = AtomicU32::new(0);
+    let duplicates = AtomicU32::new(0);
     let errors = AtomicU32::new(0);
     let completed = AtomicU32::new(0);
 
@@ -4216,6 +4269,7 @@ fn run_import_task(app: AppHandle, paths: Vec<String>, resources: ImportResource
             for _ in 0..IMPORT_WORKER_COUNT {
                 let queue = &queue;
                 let imported = &imported;
+                let duplicates = &duplicates;
                 let errors = &errors;
                 let completed = &completed;
                 let db_pool = db_pool.clone();
@@ -4246,8 +4300,11 @@ fn run_import_task(app: AppHandle, paths: Vec<String>, resources: ImportResource
                         covers_storage.clone(),
                         &import_mode,
                     ) {
-                        Ok(_) => {
+                        Ok(ImportOutcome::Imported(_)) => {
                             imported.fetch_add(1, Ordering::SeqCst);
+                        }
+                        Ok(ImportOutcome::Duplicate(_)) => {
+                            duplicates.fetch_add(1, Ordering::SeqCst);
                         }
                         Err(e) => {
                             log::warn!("import failed for {path}: {e}");
@@ -4263,6 +4320,7 @@ fn run_import_task(app: AppHandle, paths: Vec<String>, resources: ImportResource
                             total,
                             filename: filename.clone(),
                             imported: imported.load(Ordering::SeqCst),
+                            duplicates: duplicates.load(Ordering::SeqCst),
                             errors: errors.load(Ordering::SeqCst),
                         },
                     );
@@ -4284,6 +4342,7 @@ fn run_import_task(app: AppHandle, paths: Vec<String>, resources: ImportResource
             total,
             filename: String::new(),
             imported: imported.load(Ordering::SeqCst),
+            duplicates: duplicates.load(Ordering::SeqCst),
             errors: errors.load(Ordering::SeqCst),
         },
     );

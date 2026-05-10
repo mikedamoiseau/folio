@@ -11,7 +11,13 @@ import {
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 
-export type ImportPhase = "idle" | "scanning" | "importing" | "done" | "cancelled";
+export type ImportPhase =
+  | "idle"
+  | "scanning"
+  | "importing"
+  | "done"
+  | "cancelled"
+  | "empty";
 
 export interface ImportProgress {
   phase: ImportPhase;
@@ -19,6 +25,7 @@ export interface ImportProgress {
   total: number;
   filename: string;
   imported: number;
+  duplicates: number;
   errors: number;
 }
 
@@ -38,6 +45,7 @@ const IDLE: ImportProgress = {
   total: 0,
   filename: "",
   imported: 0,
+  duplicates: 0,
   errors: 0,
 };
 
@@ -49,6 +57,7 @@ interface BackendImportProgress {
   total: number;
   filename: string;
   imported: number;
+  duplicates: number;
   errors: number;
 }
 
@@ -58,6 +67,7 @@ function normalizePhase(phase: string): ImportPhase {
     case "importing":
     case "done":
     case "cancelled":
+    case "empty":
       return phase;
     default:
       return "idle";
@@ -82,12 +92,17 @@ export function ImportProvider({ children }: { children: ReactNode }) {
         total: event.payload.total,
         filename: event.payload.filename,
         imported: event.payload.imported,
+        duplicates: event.payload.duplicates,
         errors: event.payload.errors,
       };
       setProgress(next);
-      if (phase === "done" || phase === "cancelled") {
+      if (phase === "done" || phase === "cancelled" || phase === "empty") {
         setRunning(false);
-        setLastCompletedAt(Date.now());
+        // `empty` means no books were processed, so the grid did not change —
+        // skip the `lastCompletedAt` bump that triggers `loadBooks` in Library.
+        if (phase !== "empty") {
+          setLastCompletedAt(Date.now());
+        }
         // Keep the final phase visible briefly so the user sees the totals,
         // then clear the bar.
         if (clearTimerRef.current !== null) {
