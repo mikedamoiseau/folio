@@ -125,18 +125,38 @@ export function ImportProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
+  const rollbackOptimistic = useCallback(async () => {
+    setProgress(null);
+    try {
+      const stillRunning = await invoke<boolean>("is_import_running");
+      setRunning(stillRunning);
+    } catch {
+      setRunning(false);
+    }
+  }, []);
+
   const startFolder = useCallback(async (folderPath: string) => {
     setProgress({ ...IDLE, phase: "scanning", filename: folderPath });
     setRunning(true);
-    await invoke("start_folder_import", { folderPath });
-  }, []);
+    try {
+      await invoke("start_folder_import", { folderPath });
+    } catch (err) {
+      await rollbackOptimistic();
+      throw err;
+    }
+  }, [rollbackOptimistic]);
 
   const startFiles = useCallback(async (paths: string[]) => {
     if (paths.length === 0) return;
     setProgress({ ...IDLE, phase: "importing", total: paths.length });
     setRunning(true);
-    await invoke("start_files_import", { paths });
-  }, []);
+    try {
+      await invoke("start_files_import", { paths });
+    } catch (err) {
+      await rollbackOptimistic();
+      throw err;
+    }
+  }, [rollbackOptimistic]);
 
   const cancel = useCallback(async () => {
     await invoke("cancel_import");

@@ -4146,7 +4146,16 @@ fn walk_folder_for_import(dir: &std::path::Path, results: &mut Vec<String>, app:
             Err(_) => continue,
         };
         let path = entry.path();
-        if file_type.is_dir() {
+        // `file_type()` does not follow symlinks. For symlink entries, stat
+        // the target so symlinked subdirectories still get walked.
+        let is_dir = if file_type.is_symlink() {
+            std::fs::metadata(&path)
+                .map(|m| m.is_dir())
+                .unwrap_or(false)
+        } else {
+            file_type.is_dir()
+        };
+        if is_dir {
             if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
                 if !name.starts_with('.') && name != "__MACOSX" {
                     walk_folder_for_import(&path, results, app);
