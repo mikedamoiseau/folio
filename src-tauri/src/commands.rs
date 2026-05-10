@@ -4110,15 +4110,25 @@ pub async fn start_folder_import(
     app: AppHandle,
 ) -> FolioResult<()> {
     // Validate the root folder up front so the IPC call surfaces obvious
-    // mistakes (typo, deleted folder, file picked instead of directory)
-    // instead of silently spawning a background task that emits "done"
-    // with zero files.
+    // mistakes (typo, deleted folder, file picked instead of directory,
+    // permission denied, vanished network mount) instead of silently
+    // spawning a background task that emits "empty" with zero files —
+    // which would tell the user "no supported files" when the real cause
+    // is that the folder cannot be traversed at all.
     let root = std::path::Path::new(&folder_path);
     let root_meta = std::fs::metadata(root)
         .map_err(|e| FolioError::invalid(format!("Cannot read folder: {e}")))?;
     if !root_meta.is_dir() {
         return Err(FolioError::invalid("Selected path is not a folder"));
     }
+    std::fs::canonicalize(root)
+        .map_err(|e| FolioError::invalid(format!("Cannot resolve folder: {e}")))?;
+    // Drop the iterator immediately — we only care that opening the
+    // directory succeeds. The walker will re-open it inside the spawned
+    // task and silently skip nested dirs that fail to read, which is the
+    // intended behavior for partial-permission trees.
+    let _ = std::fs::read_dir(root)
+        .map_err(|e| FolioError::invalid(format!("Cannot read folder: {e}")))?;
 
     let resources = acquire_import_slot(&state)?;
     let app_clone = app.clone();
