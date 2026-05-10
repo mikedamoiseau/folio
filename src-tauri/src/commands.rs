@@ -4115,13 +4115,19 @@ pub async fn start_folder_import(
         );
         files.sort();
         if files.is_empty() {
-            // No supported files anywhere under the root — emit a dedicated
-            // terminal event so the UI can show "no supported files" rather
-            // than a misleading "Import finished — 0 added".
+            // Distinguish a user-cancelled scan (walker bailed early via
+            // IMPORT_CANCEL) from an actually empty folder. Emitting "empty"
+            // for a cancel would tell the user the folder had no supported
+            // files when they just hit Cancel.
+            let phase = if IMPORT_CANCEL.load(Ordering::SeqCst) {
+                "cancelled"
+            } else {
+                "empty"
+            };
             let _ = app_clone.emit(
                 "import-progress",
                 ImportProgressEvent {
-                    phase: "empty".into(),
+                    phase: phase.into(),
                     current: 0,
                     total: 0,
                     filename: folder_path.clone(),
