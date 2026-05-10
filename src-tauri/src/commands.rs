@@ -500,11 +500,38 @@ pub async fn import_book(
     state: State<'_, AppState>,
     _app: AppHandle,
 ) -> FolioResult<Book> {
-    use sha2::{Digest, Sha256};
-    use std::io::Read;
+    // Step 1: single stat — used for size guard, mode-dependent dedup, and to
+    // avoid extra round trips on slow filesystems (network shares).
+    const MAX_IMPORT_SIZE_BYTES: u64 = 500 * 1024 * 1024;
+    let source_metadata =
+        std::fs::metadata(&file_path).map_err(|e| format!("Cannot stat file: {e}"))?;
+    if source_metadata.len() > MAX_IMPORT_SIZE_BYTES {
+        let size_mb = source_metadata.len() / (1024 * 1024);
+        return Err(FolioError::invalid(format!(
+            "File is too large ({size_mb} MB). Maximum supported import size is 500 MB."
+        )));
+    }
 
-    // Step 1: Compute SHA-256 hash of source file.
-    let hash = {
+    // Step 2: resolve import mode early so the dedup strategy can match it.
+    // URL imports always copy (file lives in a temp dir).
+    let import_mode = {
+        let conn = state.active_db()?.get()?;
+        db::get_setting(&conn, "import_mode")
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| "import".to_string())
+    };
+    let is_url_import = file_path.starts_with("http://") || file_path.starts_with("https://");
+    let should_copy = import_mode != "link" || is_url_import;
+
+    // Step 3: dedup + hash strategy.
+    // - copy mode: full SHA-256 of contents (content-dedup, survives path changes).
+    // - link mode: dedup by absolute path (file_path column is UNIQUE). Skip the
+    //   full-file read so importing from a network share doesn't transfer every
+    //   byte just to compute an identity hash.
+    let hash: Option<String> = if should_copy {
+        use sha2::{Digest, Sha256};
+        use std::io::Read;
         let mut hasher = Sha256::new();
         let mut file =
             std::fs::File::open(&file_path).map_err(|e| format!("Cannot open file: {e}"))?;
@@ -516,30 +543,21 @@ pub async fn import_book(
             }
             hasher.update(&buf[..n]);
         }
-        format!("{:x}", hasher.finalize())
-    };
-
-    // Step 2: Hash-based duplicate check — return existing book if already imported.
-    {
+        let computed = format!("{:x}", hasher.finalize());
+        {
+            let conn = state.active_db()?.get()?;
+            if let Some(existing) = db::get_book_by_file_hash(&conn, &computed)? {
+                return Ok(existing);
+            }
+        }
+        Some(computed)
+    } else {
         let conn = state.active_db()?.get()?;
-        if let Some(existing) = db::get_book_by_file_hash(&conn, &hash)? {
+        if let Some(existing) = db::get_book_by_file_path(&conn, &file_path)? {
             return Ok(existing);
         }
-    }
-
-    // Step 2b: File size guard — reject files over 500 MB to prevent indefinite hangs
-    // caused by corrupted or pathologically large archives.
-    {
-        const MAX_IMPORT_SIZE_BYTES: u64 = 500 * 1024 * 1024;
-        let metadata =
-            std::fs::metadata(&file_path).map_err(|e| format!("Cannot stat file: {e}"))?;
-        if metadata.len() > MAX_IMPORT_SIZE_BYTES {
-            let size_mb = metadata.len() / (1024 * 1024);
-            return Err(FolioError::invalid(format!(
-                "File is too large ({size_mb} MB). Maximum supported import size is 500 MB."
-            )));
-        }
-    }
+        None
+    };
 
     // Detect format from file extension, with magic-byte fallback for
     // mislabeled archives (e.g., RAR files saved as .cbz).
@@ -604,18 +622,9 @@ pub async fn import_book(
     let storage = state.active_storage()?;
 
     // Step 4: Copy source file into library folder as {book_id}.{ext},
-    // or keep original path if import_mode is "link".
-    // URL imports always copy (file was downloaded to a temp location).
-    let import_mode = {
-        let conn = state.active_db()?.get()?;
-        db::get_setting(&conn, "import_mode")
-            .ok()
-            .flatten()
-            .unwrap_or_else(|| "import".to_string())
-    };
-    let is_url_import = file_path.starts_with("http://") || file_path.starts_with("https://");
-    let should_copy = import_mode != "link" || is_url_import;
-
+    // or keep original path if import_mode is "link". `should_copy` was
+    // resolved up front so the dedup strategy could match it.
+    //
     // #64 M4: imported books now store the storage *key* in `file_path`,
     // not the absolute filesystem path. Parsers still need a real path,
     // so we materialize one (`parser_path`) locally while recording the
@@ -718,7 +727,7 @@ pub async fn import_book(
                     .unwrap_or_default()
                     .as_secs() as i64,
                 format,
-                file_hash: Some(hash),
+                file_hash: hash.clone(),
                 description: metadata.description,
                 genres: if metadata.genres.is_empty() {
                     None
@@ -765,7 +774,7 @@ pub async fn import_book(
                     .unwrap_or_default()
                     .as_secs() as i64,
                 format,
-                file_hash: Some(hash),
+                file_hash: hash.clone(),
                 description: meta.summary,
                 genres: meta.genre.map(|g| {
                     let genres: Vec<String> = g
@@ -815,7 +824,7 @@ pub async fn import_book(
                     .unwrap_or_default()
                     .as_secs() as i64,
                 format,
-                file_hash: Some(hash),
+                file_hash: hash.clone(),
                 description: meta.summary,
                 genres: meta.genre.map(|g| {
                     let genres: Vec<String> = g
@@ -876,7 +885,7 @@ pub async fn import_book(
                     .unwrap_or_default()
                     .as_secs() as i64,
                 format,
-                file_hash: Some(hash),
+                file_hash: hash.clone(),
                 description: None,
                 genres: None,
                 rating: None,
@@ -946,7 +955,7 @@ pub async fn import_book(
                         .unwrap_or_default()
                         .as_secs() as i64,
                     format,
-                    file_hash: Some(hash),
+                    file_hash: hash.clone(),
                     description: meta.description,
                     genres: if meta.genres.is_empty() {
                         None

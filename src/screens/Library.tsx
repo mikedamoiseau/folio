@@ -335,22 +335,42 @@ export default function Library() {
     setError(null);
     const results = { imported: 0, duplicates: 0, errors: [] as string[] };
     try {
-      for (let i = 0; i < paths.length; i++) {
-        if (importCancelledRef.current) break;
-        const filename = paths[i].split(/[\\/]/).pop() ?? paths[i];
-        setImportProgress({ current: i + 1, total: paths.length, filename });
-        try {
-          await invoke("import_book", { filePath: paths[i] });
-          results.imported++;
-        } catch (err) {
-          const msg = String(err);
-          if (msg.includes("duplicate") || msg.includes("already")) {
-            results.duplicates++;
-          } else {
-            results.errors.push(`${paths[i].split("/").pop()}: ${friendlyError(err, t)}`);
+      // Latency-bound work (especially on network shares) parallelizes well.
+      // A small worker pool keeps the DB pool from saturating while still
+      // overlapping per-file network round trips.
+      const CONCURRENCY = 6;
+      let nextIndex = 0;
+      let completed = 0;
+      const total = paths.length;
+
+      const worker = async () => {
+        while (true) {
+          if (importCancelledRef.current) return;
+          const i = nextIndex++;
+          if (i >= total) return;
+          const path = paths[i];
+          const filename = path.split(/[\\/]/).pop() ?? path;
+          setImportProgress({ current: completed + 1, total, filename });
+          try {
+            await invoke("import_book", { filePath: path });
+            results.imported++;
+          } catch (err) {
+            const msg = String(err);
+            if (msg.includes("duplicate") || msg.includes("already")) {
+              results.duplicates++;
+            } else {
+              results.errors.push(`${filename}: ${friendlyError(err, t)}`);
+            }
+          } finally {
+            completed++;
+            setImportProgress({ current: completed, total, filename });
           }
         }
-      }
+      };
+
+      await Promise.all(
+        Array.from({ length: Math.min(CONCURRENCY, total) }, () => worker())
+      );
       await loadBooks(activeCollectionIdRef.current);
       await loadRecentlyRead();
       const parts: string[] = [];
