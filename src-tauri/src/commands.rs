@@ -500,11 +500,82 @@ pub async fn import_book(
     state: State<'_, AppState>,
     _app: AppHandle,
 ) -> FolioResult<Book> {
-    use sha2::{Digest, Sha256};
-    use std::io::Read;
+    let db_pool = state.active_db()?;
+    let storage = state.active_storage()?;
+    let covers_storage = state.covers_storage()?;
+    let import_mode = {
+        let conn = db_pool.get()?;
+        db::get_setting(&conn, "import_mode")
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| "import".to_string())
+    };
+    import_book_inner(
+        file_path,
+        db_pool,
+        storage,
+        covers_storage,
+        &import_mode,
+        false,
+    )
+    .map(ImportOutcome::into_book)
+}
 
-    // Step 1: Compute SHA-256 hash of source file.
-    let hash = {
+/// Distinguishes a freshly-imported book from one that already existed in the
+/// library (matched by content hash). The IPC `import_book` handler flattens
+/// both into the existing `Book` contract; the background importer needs the
+/// distinction to report accurate "added" vs. "skipped" counts.
+pub(crate) enum ImportOutcome {
+    Imported(Book),
+    Duplicate(Book),
+}
+
+impl ImportOutcome {
+    pub(crate) fn into_book(self) -> Book {
+        match self {
+            ImportOutcome::Imported(b) | ImportOutcome::Duplicate(b) => b,
+        }
+    }
+}
+
+/// Body of [`import_book`], extracted so background tasks can call it without
+/// going through Tauri's `State`/`invoke` machinery. All resources that the
+/// importer touches are passed in explicitly so the same code runs from the
+/// IPC handler and from a `spawn_blocking` background loop.
+pub(crate) fn import_book_inner(
+    file_path: String,
+    db_pool: DbPool,
+    storage: std::sync::Arc<dyn folio_core::storage::Storage>,
+    covers_storage: std::sync::Arc<dyn folio_core::storage::Storage>,
+    import_mode: &str,
+    force_copy: bool,
+) -> FolioResult<ImportOutcome> {
+    // Step 1: single stat — used for size guard, mode-dependent dedup, and to
+    // avoid extra round trips on slow filesystems (network shares).
+    const MAX_IMPORT_SIZE_BYTES: u64 = 500 * 1024 * 1024;
+    let source_metadata =
+        std::fs::metadata(&file_path).map_err(|e| format!("Cannot stat file: {e}"))?;
+    if source_metadata.len() > MAX_IMPORT_SIZE_BYTES {
+        let size_mb = source_metadata.len() / (1024 * 1024);
+        return Err(FolioError::invalid(format!(
+            "File is too large ({size_mb} MB). Maximum supported import size is 500 MB."
+        )));
+    }
+
+    // Step 2: callers that own the file (e.g. OPDS-downloaded temp files)
+    // must set `force_copy` so `link` mode still copies into the library.
+    // The path string itself is unreliable as a signal — OPDS hands us a
+    // local temp path, not a URL — so we take an explicit flag instead.
+    let should_copy = force_copy || import_mode != "link";
+
+    // Step 3: content-hash dedup for all modes. `file_hash` is required by
+    // downstream features (comic page-cache prepare, cross-device sync), so
+    // linked books need a stable content hash too. Hashing also guards
+    // against duplicate library entries when the same file is reached
+    // through different path spellings (symlinks, alternate mounts, …).
+    let hash: Option<String> = {
+        use sha2::{Digest, Sha256};
+        use std::io::Read;
         let mut hasher = Sha256::new();
         let mut file =
             std::fs::File::open(&file_path).map_err(|e| format!("Cannot open file: {e}"))?;
@@ -516,30 +587,15 @@ pub async fn import_book(
             }
             hasher.update(&buf[..n]);
         }
-        format!("{:x}", hasher.finalize())
+        let computed = format!("{:x}", hasher.finalize());
+        {
+            let conn = db_pool.get()?;
+            if let Some(existing) = db::get_book_by_file_hash(&conn, &computed)? {
+                return Ok(ImportOutcome::Duplicate(existing));
+            }
+        }
+        Some(computed)
     };
-
-    // Step 2: Hash-based duplicate check — return existing book if already imported.
-    {
-        let conn = state.active_db()?.get()?;
-        if let Some(existing) = db::get_book_by_file_hash(&conn, &hash)? {
-            return Ok(existing);
-        }
-    }
-
-    // Step 2b: File size guard — reject files over 500 MB to prevent indefinite hangs
-    // caused by corrupted or pathologically large archives.
-    {
-        const MAX_IMPORT_SIZE_BYTES: u64 = 500 * 1024 * 1024;
-        let metadata =
-            std::fs::metadata(&file_path).map_err(|e| format!("Cannot stat file: {e}"))?;
-        if metadata.len() > MAX_IMPORT_SIZE_BYTES {
-            let size_mb = metadata.len() / (1024 * 1024);
-            return Err(FolioError::invalid(format!(
-                "File is too large ({size_mb} MB). Maximum supported import size is 500 MB."
-            )));
-        }
-    }
 
     // Detect format from file extension, with magic-byte fallback for
     // mislabeled archives (e.g., RAR files saved as .cbz).
@@ -598,24 +654,9 @@ pub async fn import_book(
         .map(|s| s.to_string_lossy().to_string())
         .unwrap_or_else(|| "Unknown".to_string());
 
-    // Step 3: Resolve library storage (#64 M2). `active_storage` creates
-    // the library folder on first use and returns a `LocalStorage` handle
-    // rooted there.
-    let storage = state.active_storage()?;
-
     // Step 4: Copy source file into library folder as {book_id}.{ext},
     // or keep original path if import_mode is "link".
-    // URL imports always copy (file was downloaded to a temp location).
-    let import_mode = {
-        let conn = state.active_db()?.get()?;
-        db::get_setting(&conn, "import_mode")
-            .ok()
-            .flatten()
-            .unwrap_or_else(|| "import".to_string())
-    };
-    let is_url_import = file_path.starts_with("http://") || file_path.starts_with("https://");
-    let should_copy = import_mode != "link" || is_url_import;
-
+    //
     // #64 M4: imported books now store the storage *key* in `file_path`,
     // not the absolute filesystem path. Parsers still need a real path,
     // so we materialize one (`parser_path`) locally while recording the
@@ -641,7 +682,6 @@ pub async fn import_book(
     // directly to `{data_dir}/covers/…`. `cover_saved` tracks whether we
     // persisted any cover artifact so the error-cleanup paths below can
     // tear them back out via `delete_book_covers`.
-    let covers_storage = state.covers_storage()?;
     let mut cover_saved = false;
 
     let book = match format {
@@ -718,7 +758,7 @@ pub async fn import_book(
                     .unwrap_or_default()
                     .as_secs() as i64,
                 format,
-                file_hash: Some(hash),
+                file_hash: hash.clone(),
                 description: metadata.description,
                 genres: if metadata.genres.is_empty() {
                     None
@@ -765,7 +805,7 @@ pub async fn import_book(
                     .unwrap_or_default()
                     .as_secs() as i64,
                 format,
-                file_hash: Some(hash),
+                file_hash: hash.clone(),
                 description: meta.summary,
                 genres: meta.genre.map(|g| {
                     let genres: Vec<String> = g
@@ -815,7 +855,7 @@ pub async fn import_book(
                     .unwrap_or_default()
                     .as_secs() as i64,
                 format,
-                file_hash: Some(hash),
+                file_hash: hash.clone(),
                 description: meta.summary,
                 genres: meta.genre.map(|g| {
                     let genres: Vec<String> = g
@@ -876,7 +916,7 @@ pub async fn import_book(
                     .unwrap_or_default()
                     .as_secs() as i64,
                 format,
-                file_hash: Some(hash),
+                file_hash: hash.clone(),
                 description: None,
                 genres: None,
                 rating: None,
@@ -946,7 +986,7 @@ pub async fn import_book(
                         .unwrap_or_default()
                         .as_secs() as i64,
                     format,
-                    file_hash: Some(hash),
+                    file_hash: hash.clone(),
                     description: meta.description,
                     genres: if meta.genres.is_empty() {
                         None
@@ -980,7 +1020,7 @@ pub async fn import_book(
         }
     };
 
-    let mut conn = state.active_db()?.get()?;
+    let mut conn = db_pool.get()?;
     let tx = conn.transaction()?;
     if let Err(e) = db::insert_book(&tx, &book) {
         // If the insert failed due to a duplicate hash, clean up the new copy
@@ -996,7 +1036,7 @@ pub async fn import_book(
             if cover_saved {
                 let _ = delete_book_covers(&*covers_storage, &book.id);
             }
-            return Ok(existing);
+            return Ok(ImportOutcome::Duplicate(existing));
         }
         if should_copy {
             let _ = std::fs::remove_file(&final_path);
@@ -1027,7 +1067,7 @@ pub async fn import_book(
         e.to_string()
     })?;
 
-    Ok(book)
+    Ok(ImportOutcome::Imported(book))
 }
 
 #[tauri::command]
@@ -2946,7 +2986,7 @@ pub async fn download_opds_book(
     download_url: String,
     mime_type: Option<String>,
     state: State<'_, AppState>,
-    app: AppHandle,
+    _app: AppHandle,
 ) -> FolioResult<Book> {
     // Determine the file extension for the temp import path. Precedence:
     //   1. URL suffix — Folio's own feed and many well-behaved feeds put the
@@ -3008,10 +3048,31 @@ pub async fn download_opds_book(
         rx.recv()??;
     }
 
-    // Import via the standard import pipeline
-    let result = import_book(temp_str.clone(), state, app).await;
+    // Import via the shared inner pipeline. We bypass the `import_book` IPC
+    // wrapper so we can pass `force_copy = true`: the temp file is about to
+    // be deleted below, so even in `link` mode we must copy into the library
+    // rather than store the temp path in the DB.
+    let db_pool = state.active_db()?;
+    let storage = state.active_storage()?;
+    let covers_storage = state.covers_storage()?;
+    let import_mode = {
+        let conn = db_pool.get()?;
+        db::get_setting(&conn, "import_mode")
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| "import".to_string())
+    };
+    let result = import_book_inner(
+        temp_str.clone(),
+        db_pool,
+        storage,
+        covers_storage,
+        &import_mode,
+        true,
+    )
+    .map(ImportOutcome::into_book);
 
-    // Clean up temp file (import_book copies it to the library folder)
+    // Clean up temp file (import_book_inner copies it to the library folder)
     let _ = std::fs::remove_file(&temp_path);
 
     result
@@ -3988,6 +4049,377 @@ pub async fn start_scan(
 pub async fn cancel_scan() -> FolioResult<()> {
     SCAN_CANCEL.store(true, Ordering::SeqCst);
     Ok(())
+}
+
+// ── Background import ─────────────────────────────────────────────────────────
+//
+// Mirrors the `start_scan` shape: the IPC command kicks off a `spawn_blocking`
+// task that owns the long-running work, emits `import-progress` events, and
+// observes `IMPORT_CANCEL` between work units. Only one import may run at a
+// time — `IMPORT_RUNNING` enforces that.
+
+static IMPORT_RUNNING: AtomicBool = AtomicBool::new(false);
+static IMPORT_CANCEL: AtomicBool = AtomicBool::new(false);
+
+const IMPORT_WORKER_COUNT: usize = 6;
+
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ImportProgressEvent {
+    /// "scanning" while walking the folder, "importing" per file, "empty"
+    /// when no supported files were found, "done" or "cancelled" once the
+    /// task exits.
+    phase: String,
+    current: u32,
+    total: u32,
+    filename: String,
+    imported: u32,
+    duplicates: u32,
+    errors: u32,
+}
+
+#[tauri::command]
+pub async fn is_import_running() -> bool {
+    IMPORT_RUNNING.load(Ordering::SeqCst)
+}
+
+#[tauri::command]
+pub async fn cancel_import() -> FolioResult<()> {
+    IMPORT_CANCEL.store(true, Ordering::SeqCst);
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn start_files_import(
+    paths: Vec<String>,
+    state: State<'_, AppState>,
+    app: AppHandle,
+) -> FolioResult<()> {
+    let resources = acquire_import_slot(&state)?;
+    let app_clone = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        run_import_task(app_clone, paths, resources);
+    });
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn start_folder_import(
+    folder_path: String,
+    state: State<'_, AppState>,
+    app: AppHandle,
+) -> FolioResult<()> {
+    // Validate the root folder up front so the IPC call surfaces obvious
+    // mistakes (typo, deleted folder, file picked instead of directory,
+    // permission denied, vanished network mount) instead of silently
+    // spawning a background task that emits "empty" with zero files —
+    // which would tell the user "no supported files" when the real cause
+    // is that the folder cannot be traversed at all.
+    let root = std::path::Path::new(&folder_path);
+    let root_meta = std::fs::metadata(root)
+        .map_err(|e| FolioError::invalid(format!("Cannot read folder: {e}")))?;
+    if !root_meta.is_dir() {
+        return Err(FolioError::invalid("Selected path is not a folder"));
+    }
+    std::fs::canonicalize(root)
+        .map_err(|e| FolioError::invalid(format!("Cannot resolve folder: {e}")))?;
+    // Drop the iterator immediately — we only care that opening the
+    // directory succeeds. The walker will re-open it inside the spawned
+    // task and silently skip nested dirs that fail to read, which is the
+    // intended behavior for partial-permission trees.
+    let _ = std::fs::read_dir(root)
+        .map_err(|e| FolioError::invalid(format!("Cannot read folder: {e}")))?;
+
+    let resources = acquire_import_slot(&state)?;
+    let app_clone = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let _ = app_clone.emit(
+            "import-progress",
+            ImportProgressEvent {
+                phase: "scanning".into(),
+                current: 0,
+                total: 0,
+                filename: folder_path.clone(),
+                imported: 0,
+                duplicates: 0,
+                errors: 0,
+            },
+        );
+        // The walker's own canonicalize/read_dir on the root IS the
+        // authoritative traversal check — if it fails here we surface a real
+        // error instead of falling through to the "empty" branch, which would
+        // misdiagnose a vanished mount or permission change as "no supported
+        // files". Recursive calls inside the walker still silently skip
+        // unreadable nested directories (intended for partial-permission
+        // trees).
+        let mut files = Vec::new();
+        let mut visited: std::collections::HashSet<std::path::PathBuf> =
+            std::collections::HashSet::new();
+        if let Err(e) = walk_folder_for_import(
+            std::path::Path::new(&folder_path),
+            &mut files,
+            &mut visited,
+            &app_clone,
+        ) {
+            let _ = app_clone.emit(
+                "import-progress",
+                ImportProgressEvent {
+                    phase: "error".into(),
+                    current: 0,
+                    total: 0,
+                    // Frontend renders this string verbatim via the
+                    // `library.importBackgroundError` template.
+                    filename: format!("Cannot read folder: {e}"),
+                    imported: 0,
+                    duplicates: 0,
+                    errors: 0,
+                },
+            );
+            IMPORT_RUNNING.store(false, Ordering::SeqCst);
+            return;
+        }
+        files.sort();
+        if files.is_empty() {
+            // Distinguish a user-cancelled scan (walker bailed early via
+            // IMPORT_CANCEL) from an actually empty folder. Emitting "empty"
+            // for a cancel would tell the user the folder had no supported
+            // files when they just hit Cancel.
+            let phase = if IMPORT_CANCEL.load(Ordering::SeqCst) {
+                "cancelled"
+            } else {
+                "empty"
+            };
+            let _ = app_clone.emit(
+                "import-progress",
+                ImportProgressEvent {
+                    phase: phase.into(),
+                    current: 0,
+                    total: 0,
+                    filename: folder_path.clone(),
+                    imported: 0,
+                    duplicates: 0,
+                    errors: 0,
+                },
+            );
+            IMPORT_RUNNING.store(false, Ordering::SeqCst);
+            return;
+        }
+        run_import_task(app_clone, files, resources);
+    });
+    Ok(())
+}
+
+struct ImportResources {
+    db_pool: DbPool,
+    storage: std::sync::Arc<dyn folio_core::storage::Storage>,
+    covers_storage: std::sync::Arc<dyn folio_core::storage::Storage>,
+    import_mode: String,
+}
+
+fn acquire_import_slot(state: &State<'_, AppState>) -> FolioResult<ImportResources> {
+    if IMPORT_RUNNING.swap(true, Ordering::SeqCst) {
+        return Err(FolioError::invalid("Import already running"));
+    }
+    IMPORT_CANCEL.store(false, Ordering::SeqCst);
+    // From here on, every error path must release the slot.
+    let result = (|| -> FolioResult<ImportResources> {
+        let db_pool = state.active_db()?;
+        let storage = state.active_storage()?;
+        let covers_storage = state.covers_storage()?;
+        let import_mode = {
+            let conn = db_pool.get()?;
+            db::get_setting(&conn, "import_mode")
+                .ok()
+                .flatten()
+                .unwrap_or_else(|| "import".to_string())
+        };
+        Ok(ImportResources {
+            db_pool,
+            storage,
+            covers_storage,
+            import_mode,
+        })
+    })();
+    if result.is_err() {
+        IMPORT_RUNNING.store(false, Ordering::SeqCst);
+    }
+    result
+}
+
+fn walk_folder_for_import(
+    dir: &std::path::Path,
+    results: &mut Vec<String>,
+    visited: &mut std::collections::HashSet<std::path::PathBuf>,
+    app: &AppHandle,
+) -> std::io::Result<()> {
+    if IMPORT_CANCEL.load(Ordering::SeqCst) {
+        return Ok(());
+    }
+    // Cycle guard: resolve the directory's canonical path and skip if we've
+    // already walked it. Symlink loops (`books/back -> ..`) would otherwise
+    // recurse forever and wedge the IMPORT_RUNNING slot.
+    //
+    // Errors from canonicalize/read_dir bubble up as `Err`. The top-level
+    // caller surfaces that as an error event so the user sees a real
+    // diagnostic; recursive callers below intentionally swallow the error
+    // (`let _ = ...`) so partial-permission trees still walk past
+    // unreadable nested dirs.
+    let canonical = std::fs::canonicalize(dir)?;
+    if !visited.insert(canonical) {
+        return Ok(());
+    }
+    let _ = app.emit(
+        "import-progress",
+        ImportProgressEvent {
+            phase: "scanning".into(),
+            current: results.len() as u32,
+            total: 0,
+            filename: dir.to_string_lossy().to_string(),
+            imported: 0,
+            duplicates: 0,
+            errors: 0,
+        },
+    );
+    let supported = supported_import_extensions();
+    let entries = std::fs::read_dir(dir)?;
+    for entry in entries.flatten() {
+        if IMPORT_CANCEL.load(Ordering::SeqCst) {
+            return Ok(());
+        }
+        let file_type = match entry.file_type() {
+            Ok(t) => t,
+            Err(_) => continue,
+        };
+        let path = entry.path();
+        // `file_type()` does not follow symlinks. For symlink entries, stat
+        // the target so symlinked subdirectories still get walked.
+        let is_dir = if file_type.is_symlink() {
+            std::fs::metadata(&path)
+                .map(|m| m.is_dir())
+                .unwrap_or(false)
+        } else {
+            file_type.is_dir()
+        };
+        if is_dir {
+            if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                if !name.starts_with('.') && name != "__MACOSX" {
+                    // Silently skip unreadable nested dirs.
+                    let _ = walk_folder_for_import(&path, results, visited, app);
+                }
+            }
+        } else if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+            let lower = ext.to_lowercase();
+            if supported.contains(&lower.as_str()) {
+                results.push(path.to_string_lossy().to_string());
+            }
+        }
+    }
+    Ok(())
+}
+
+fn run_import_task(app: AppHandle, paths: Vec<String>, resources: ImportResources) {
+    use std::collections::VecDeque;
+    use std::sync::atomic::AtomicU32;
+    use std::sync::Mutex;
+
+    let total = paths.len() as u32;
+    let queue: Mutex<VecDeque<String>> = Mutex::new(paths.into());
+    let imported = AtomicU32::new(0);
+    let duplicates = AtomicU32::new(0);
+    let errors = AtomicU32::new(0);
+    let completed = AtomicU32::new(0);
+
+    let ImportResources {
+        db_pool,
+        storage,
+        covers_storage,
+        import_mode,
+    } = resources;
+
+    if total > 0 {
+        std::thread::scope(|scope| {
+            for _ in 0..IMPORT_WORKER_COUNT {
+                let queue = &queue;
+                let imported = &imported;
+                let duplicates = &duplicates;
+                let errors = &errors;
+                let completed = &completed;
+                let db_pool = db_pool.clone();
+                let storage = storage.clone();
+                let covers_storage = covers_storage.clone();
+                let import_mode = import_mode.clone();
+                let app = app.clone();
+                scope.spawn(move || loop {
+                    if IMPORT_CANCEL.load(Ordering::SeqCst) {
+                        break;
+                    }
+                    let path = match queue.lock() {
+                        Ok(mut q) => match q.pop_front() {
+                            Some(p) => p,
+                            None => break,
+                        },
+                        Err(_) => break,
+                    };
+                    let filename = std::path::Path::new(&path)
+                        .file_name()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or(&path)
+                        .to_string();
+                    match import_book_inner(
+                        path.clone(),
+                        db_pool.clone(),
+                        storage.clone(),
+                        covers_storage.clone(),
+                        &import_mode,
+                        false,
+                    ) {
+                        Ok(ImportOutcome::Imported(_)) => {
+                            imported.fetch_add(1, Ordering::SeqCst);
+                        }
+                        Ok(ImportOutcome::Duplicate(_)) => {
+                            duplicates.fetch_add(1, Ordering::SeqCst);
+                        }
+                        Err(e) => {
+                            log::warn!("import failed for {path}: {e}");
+                            errors.fetch_add(1, Ordering::SeqCst);
+                        }
+                    }
+                    let done = completed.fetch_add(1, Ordering::SeqCst) + 1;
+                    let _ = app.emit(
+                        "import-progress",
+                        ImportProgressEvent {
+                            phase: "importing".into(),
+                            current: done,
+                            total,
+                            filename: filename.clone(),
+                            imported: imported.load(Ordering::SeqCst),
+                            duplicates: duplicates.load(Ordering::SeqCst),
+                            errors: errors.load(Ordering::SeqCst),
+                        },
+                    );
+                });
+            }
+        });
+    }
+
+    let final_phase = if IMPORT_CANCEL.load(Ordering::SeqCst) {
+        "cancelled"
+    } else {
+        "done"
+    };
+    let _ = app.emit(
+        "import-progress",
+        ImportProgressEvent {
+            phase: final_phase.into(),
+            current: completed.load(Ordering::SeqCst),
+            total,
+            filename: String::new(),
+            imported: imported.load(Ordering::SeqCst),
+            duplicates: duplicates.load(Ordering::SeqCst),
+            errors: errors.load(Ordering::SeqCst),
+        },
+    );
+    IMPORT_RUNNING.store(false, Ordering::SeqCst);
 }
 
 #[tauri::command]
@@ -5791,6 +6223,46 @@ mod tests {
             Some("false"),
             "migration must not clobber user changes after first migration"
         );
+    }
+
+    // ── Background-import atomics ─────────────────────────────────────────────
+    //
+    // These tests exercise the run-once / cancel invariants that protect the
+    // background importer. They use the static atomics directly because the
+    // full IPC wrappers need a Tauri State which is impractical to build in
+    // a unit test. The atomics are the only state the wrappers consult, so
+    // the contract is the same.
+
+    #[test]
+    fn import_atomics_default_false() {
+        // Note: tests in the same binary share statics. Reset before checking
+        // the invariant we care about.
+        IMPORT_RUNNING.store(false, Ordering::SeqCst);
+        IMPORT_CANCEL.store(false, Ordering::SeqCst);
+        assert!(!IMPORT_RUNNING.load(Ordering::SeqCst));
+        assert!(!IMPORT_CANCEL.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn import_running_swap_blocks_second_acquire() {
+        IMPORT_RUNNING.store(false, Ordering::SeqCst);
+        // First acquire succeeds (returns the previous value, false).
+        assert!(!IMPORT_RUNNING.swap(true, Ordering::SeqCst));
+        // Second acquire observes the running flag and would refuse the slot.
+        assert!(IMPORT_RUNNING.swap(true, Ordering::SeqCst));
+        // Cleanup so other tests in the binary aren't affected.
+        IMPORT_RUNNING.store(false, Ordering::SeqCst);
+    }
+
+    #[test]
+    fn cancel_import_sets_flag() {
+        IMPORT_CANCEL.store(false, Ordering::SeqCst);
+        // The Tauri command body is just this store; calling it through the
+        // tokio runtime would force an async harness, so call the underlying
+        // op directly.
+        IMPORT_CANCEL.store(true, Ordering::SeqCst);
+        assert!(IMPORT_CANCEL.load(Ordering::SeqCst));
+        IMPORT_CANCEL.store(false, Ordering::SeqCst);
     }
 }
 

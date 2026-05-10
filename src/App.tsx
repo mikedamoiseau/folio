@@ -1,12 +1,14 @@
 import { useState, useCallback } from "react";
 import { BrowserRouter, Routes, Route, Link, useLocation, useNavigate } from "react-router-dom";
 import { ThemeProvider } from "./context/ThemeContext";
+import { ImportProvider } from "./context/ImportContext";
 import { ToastProvider } from "./components/Toast";
 import SettingsPanel from "./components/SettingsPanel";
 import ReadingStats from "./components/ReadingStats";
 import ProfileSwitcher from "./components/ProfileSwitcher";
 import CatalogBrowser from "./components/CatalogBrowser";
 import LanguageSwitcher from "./components/LanguageSwitcher";
+import ImportStatusBar from "./components/ImportStatusBar";
 import Library from "./screens/Library";
 import Reader from "./screens/Reader";
 
@@ -109,6 +111,8 @@ function AppShell() {
         open={settingsOpen}
         onClose={() => setSettingsOpen(false)}
       />
+
+      <ImportStatusBar />
     </div>
   );
 }
@@ -117,9 +121,11 @@ function App() {
   return (
     <ThemeProvider>
       <ToastProvider>
-        <BrowserRouter>
-          <AppShell />
-        </BrowserRouter>
+        <ImportProvider>
+          <BrowserRouter>
+            <AppShell />
+          </BrowserRouter>
+        </ImportProvider>
       </ToastProvider>
     </ThemeProvider>
   );

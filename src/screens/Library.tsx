@@ -24,6 +24,7 @@ import { FALLBACK_FORMATS, getSupportedFormats, useSupportedFormats } from "../l
 import { LiveRegion } from "../components/LiveRegion";
 import { useToast } from "../components/Toast";
 import { useDebounce } from "../hooks/useDebounce";
+import { useImport } from "../context/ImportContext";
 import type { Book, BookGridItem } from "../types";
 
 interface ReadingProgress {
@@ -88,13 +89,14 @@ export default function Library() {
 
   const [fileNotAvailableBookId, setFileNotAvailableBookId] = useState<string | null>(null);
 
-  const [importing, setImporting] = useState(false);
+  const importCtx = useImport();
+  // URL imports stay synchronous (single-file download + import). Their own
+  // local flag drives the button's loading state without conflicting with the
+  // background folder/file import managed by `importCtx`.
+  const [importingUrl, setImportingUrl] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
   const [loaded, setLoaded] = useState(false);
-  const [importProgress, setImportProgress] = useState<{ current: number; total: number; filename: string } | null>(null);
-  const [folderScanProgress, setFolderScanProgress] = useState<{ folder: string; filesFound: number } | null>(null);
-  const importCancelledRef = useRef(false);
   const [editingBook, setEditingBook] = useState<Book | null>(null);
   const [detailBook, setDetailBook] = useState<Book | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
@@ -330,43 +332,13 @@ export default function Library() {
 
   const importFiles = useCallback(async (paths: string[]) => {
     if (paths.length === 0) return;
-    importCancelledRef.current = false;
-    setImporting(true);
     setError(null);
-    const results = { imported: 0, duplicates: 0, errors: [] as string[] };
     try {
-      for (let i = 0; i < paths.length; i++) {
-        if (importCancelledRef.current) break;
-        const filename = paths[i].split(/[\\/]/).pop() ?? paths[i];
-        setImportProgress({ current: i + 1, total: paths.length, filename });
-        try {
-          await invoke("import_book", { filePath: paths[i] });
-          results.imported++;
-        } catch (err) {
-          const msg = String(err);
-          if (msg.includes("duplicate") || msg.includes("already")) {
-            results.duplicates++;
-          } else {
-            results.errors.push(`${paths[i].split("/").pop()}: ${friendlyError(err, t)}`);
-          }
-        }
-      }
-      await loadBooks(activeCollectionIdRef.current);
-      await loadRecentlyRead();
-      const parts: string[] = [];
-      if (results.imported > 0) parts.push(t("library.imported", { count: results.imported }));
-      if (results.duplicates > 0) parts.push(t("library.skipped", { count: results.duplicates }));
-      if (importCancelledRef.current) parts.push(t("library.cancelled"));
-      if (results.errors.length > 0) parts.push(t("library.failed", { count: results.errors.length }));
-      if (results.errors.length > 0 || importCancelledRef.current) {
-        setError(parts.join(", ") + (results.errors.length > 0 ? ": " + results.errors.join("; ") : ""));
-      }
-    } finally {
-      setImporting(false);
-      setImportProgress(null);
-      importCancelledRef.current = false;
+      await importCtx.startFiles(paths);
+    } catch (err) {
+      setError(friendlyError(err, t));
     }
-  }, [loadBooks, loadRecentlyRead]);
+  }, [importCtx, t]);
 
   const handleSelectSeries = useCallback((name: string | null) => {
     setActiveSeries(name);
@@ -376,7 +348,6 @@ export default function Library() {
   }, [loadBooks]);
 
   const handleImportFolder = useCallback(async () => {
-    let unlisten: (() => void) | undefined;
     try {
       const selected = await open({
         directory: true,
@@ -385,32 +356,12 @@ export default function Library() {
       if (!selected) return;
       const folderPath = typeof selected === "string" ? selected : selected[0];
       if (!folderPath) return;
-      setImporting(true);
       setError(null);
-      unlisten = await listen<{ folder: string; files_found: number }>(
-        "folder-scan-progress",
-        (e) =>
-          setFolderScanProgress({
-            folder: e.payload.folder,
-            filesFound: e.payload.files_found,
-          })
-      );
-      const files = await invoke<string[]>("scan_folder_for_books", { folderPath });
-      setFolderScanProgress(null);
-      if (files.length === 0) {
-        setError(t("library.noSupportedFiles"));
-        setImporting(false);
-        return;
-      }
-      await importFiles(files);
+      await importCtx.startFolder(folderPath);
     } catch (err) {
       setError(friendlyError(err, t));
-      setImporting(false);
-    } finally {
-      unlisten?.();
-      setFolderScanProgress(null);
     }
-  }, [importFiles, t]);
+  }, [importCtx, t]);
 
   const handleImport = useCallback(async () => {
     try {
@@ -444,16 +395,16 @@ export default function Library() {
 
   const handleImportUrl = useCallback(async (url: string) => {
     try {
-      setImporting(true);
+      setImportingUrl(true);
       setError(null);
       await invoke("download_opds_book", { downloadUrl: url });
       await loadBooks(activeCollectionIdRef.current);
     } catch (err) {
       setError(friendlyError(err, t));
     } finally {
-      setImporting(false);
+      setImportingUrl(false);
     }
-  }, [loadBooks]);
+  }, [loadBooks, t]);
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
@@ -655,6 +606,14 @@ export default function Library() {
     return () => { unlistenProgress?.(); unlistenAutoStart?.(); };
   }, [loadBooks]);
 
+  // Reload the grid whenever a background import finishes so freshly imported
+  // books appear without a manual refresh.
+  useEffect(() => {
+    if (importCtx.lastCompletedAt === null) return;
+    loadBooks(activeCollectionIdRef.current);
+    loadRecentlyRead();
+  }, [importCtx.lastCompletedAt, loadBooks, loadRecentlyRead]);
+
   const handleStartScan = useCallback(async () => {
     try { await invoke("start_scan", { includeSkipped: true }); } catch (err) { setError(friendlyError(err, t)); }
   }, []);
@@ -853,8 +812,12 @@ export default function Library() {
             onImportFiles={handleImport}
             onImportFolder={handleImportFolder}
             onImportUrl={handleImportUrl}
-            loading={importing}
-            progress={importProgress}
+            loading={importCtx.running || importingUrl}
+            progress={
+              importCtx.progress && importCtx.progress.phase === "importing"
+                ? { current: importCtx.progress.current, total: importCtx.progress.total }
+                : null
+            }
           />
         </div>
       )}
@@ -1320,63 +1283,6 @@ export default function Library() {
         )}
       </div>
 
-      {/* Import progress overlay */}
-      {importing && (importProgress || folderScanProgress) && (
-        <div className="absolute inset-x-0 bottom-0 z-30 bg-surface border-t border-warm-border px-6 py-4 shadow-[0_-4px_24px_-4px_rgba(44,34,24,0.10)]">
-          <div className="flex items-center gap-4">
-            <div className="flex-1 min-w-0">
-              {importProgress ? (
-                <>
-                  <div className="flex items-center justify-between mb-1.5">
-                    <span className="text-sm font-medium text-ink">
-                      {t("library.importingProgress", { current: importProgress.current, total: importProgress.total })}
-                    </span>
-                    <span className="text-xs text-ink-muted tabular-nums">
-                      {Math.round((importProgress.current / importProgress.total) * 100)}%
-                    </span>
-                  </div>
-                  <div className="h-2 bg-warm-subtle rounded-full overflow-hidden">
-                    <div
-                      className="h-full bg-accent rounded-full transition-all duration-300"
-                      style={{ width: `${(importProgress.current / importProgress.total) * 100}%` }}
-                    />
-                  </div>
-                  <div
-                    className="mt-1.5 text-xs text-ink-muted truncate"
-                    style={{ direction: "rtl", textAlign: "left" }}
-                    title={importProgress.filename}
-                  >
-                    {t("library.importingFile", { filename: importProgress.filename })}
-                  </div>
-                </>
-              ) : folderScanProgress ? (
-                <>
-                  <div
-                    className="text-sm font-medium text-ink truncate mb-1.5"
-                    style={{ direction: "rtl", textAlign: "left" }}
-                    title={folderScanProgress.folder}
-                  >
-                    {t("library.scanningFolder", { folder: folderScanProgress.folder, count: folderScanProgress.filesFound })}
-                  </div>
-                  <div className="h-2 bg-warm-subtle rounded-full overflow-hidden">
-                    <div className="h-full w-1/3 bg-accent rounded-full animate-pulse" />
-                  </div>
-                </>
-              ) : null}
-            </div>
-            {importProgress && (
-              <button
-                type="button"
-                onClick={() => { importCancelledRef.current = true; }}
-                className="shrink-0 px-3 py-1.5 text-sm text-ink-muted hover:text-red-600 dark:hover:text-red-400 bg-warm-subtle hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition-colors"
-              >
-                {t("common.cancel")}
-              </button>
-            )}
-          </div>
-        </div>
-      )}
-
       {/* Drag overlay */}
       {dragging && (
         <div className="absolute inset-0 z-10 pointer-events-none flex items-center justify-center bg-accent/[0.06] border-2 border-dashed border-accent rounded-inherit">
@@ -1647,8 +1553,8 @@ export default function Library() {
       {/* Screen reader announcements for import and scan progress */}
       <LiveRegion
         message={
-          importing && importProgress
-            ? `${t("library.importing")} ${importProgress.current} / ${importProgress.total}`
+          importCtx.running && importCtx.progress && importCtx.progress.total > 0
+            ? `${t("library.importing")} ${importCtx.progress.current} / ${importCtx.progress.total}`
             : scanToastMessage || ""
         }
       />
