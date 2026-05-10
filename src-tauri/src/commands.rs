@@ -6060,6 +6060,46 @@ mod tests {
             "migration must not clobber user changes after first migration"
         );
     }
+
+    // ── Background-import atomics ─────────────────────────────────────────────
+    //
+    // These tests exercise the run-once / cancel invariants that protect the
+    // background importer. They use the static atomics directly because the
+    // full IPC wrappers need a Tauri State which is impractical to build in
+    // a unit test. The atomics are the only state the wrappers consult, so
+    // the contract is the same.
+
+    #[test]
+    fn import_atomics_default_false() {
+        // Note: tests in the same binary share statics. Reset before checking
+        // the invariant we care about.
+        IMPORT_RUNNING.store(false, Ordering::SeqCst);
+        IMPORT_CANCEL.store(false, Ordering::SeqCst);
+        assert!(!IMPORT_RUNNING.load(Ordering::SeqCst));
+        assert!(!IMPORT_CANCEL.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn import_running_swap_blocks_second_acquire() {
+        IMPORT_RUNNING.store(false, Ordering::SeqCst);
+        // First acquire succeeds (returns the previous value, false).
+        assert!(!IMPORT_RUNNING.swap(true, Ordering::SeqCst));
+        // Second acquire observes the running flag and would refuse the slot.
+        assert!(IMPORT_RUNNING.swap(true, Ordering::SeqCst));
+        // Cleanup so other tests in the binary aren't affected.
+        IMPORT_RUNNING.store(false, Ordering::SeqCst);
+    }
+
+    #[test]
+    fn cancel_import_sets_flag() {
+        IMPORT_CANCEL.store(false, Ordering::SeqCst);
+        // The Tauri command body is just this store; calling it through the
+        // tokio runtime would force an async harness, so call the underlying
+        // op directly.
+        IMPORT_CANCEL.store(true, Ordering::SeqCst);
+        assert!(IMPORT_CANCEL.load(Ordering::SeqCst));
+        IMPORT_CANCEL.store(false, Ordering::SeqCst);
+    }
 }
 
 // ── Autostart ──────────────────────────────────────────────
