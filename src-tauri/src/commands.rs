@@ -4002,6 +4002,262 @@ pub async fn cancel_scan() -> FolioResult<()> {
     Ok(())
 }
 
+// ── Background import ─────────────────────────────────────────────────────────
+//
+// Mirrors the `start_scan` shape: the IPC command kicks off a `spawn_blocking`
+// task that owns the long-running work, emits `import-progress` events, and
+// observes `IMPORT_CANCEL` between work units. Only one import may run at a
+// time — `IMPORT_RUNNING` enforces that.
+
+static IMPORT_RUNNING: AtomicBool = AtomicBool::new(false);
+static IMPORT_CANCEL: AtomicBool = AtomicBool::new(false);
+
+const IMPORT_WORKER_COUNT: usize = 6;
+
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ImportProgressEvent {
+    /// "scanning" while walking the folder, "importing" per file, "done" or
+    /// "cancelled" once the task exits.
+    phase: String,
+    current: u32,
+    total: u32,
+    filename: String,
+    imported: u32,
+    errors: u32,
+}
+
+#[tauri::command]
+pub async fn is_import_running() -> bool {
+    IMPORT_RUNNING.load(Ordering::SeqCst)
+}
+
+#[tauri::command]
+pub async fn cancel_import() -> FolioResult<()> {
+    IMPORT_CANCEL.store(true, Ordering::SeqCst);
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn start_files_import(
+    paths: Vec<String>,
+    state: State<'_, AppState>,
+    app: AppHandle,
+) -> FolioResult<()> {
+    let resources = acquire_import_slot(&state)?;
+    let app_clone = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        run_import_task(app_clone, paths, resources);
+    });
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn start_folder_import(
+    folder_path: String,
+    state: State<'_, AppState>,
+    app: AppHandle,
+) -> FolioResult<()> {
+    let resources = acquire_import_slot(&state)?;
+    let app_clone = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let _ = app_clone.emit(
+            "import-progress",
+            ImportProgressEvent {
+                phase: "scanning".into(),
+                current: 0,
+                total: 0,
+                filename: folder_path.clone(),
+                imported: 0,
+                errors: 0,
+            },
+        );
+        let mut files = Vec::new();
+        walk_folder_for_import(std::path::Path::new(&folder_path), &mut files, &app_clone);
+        files.sort();
+        run_import_task(app_clone, files, resources);
+    });
+    Ok(())
+}
+
+struct ImportResources {
+    db_pool: DbPool,
+    storage: std::sync::Arc<dyn folio_core::storage::Storage>,
+    covers_storage: std::sync::Arc<dyn folio_core::storage::Storage>,
+    import_mode: String,
+}
+
+fn acquire_import_slot(state: &State<'_, AppState>) -> FolioResult<ImportResources> {
+    if IMPORT_RUNNING.swap(true, Ordering::SeqCst) {
+        return Err(FolioError::invalid("Import already running"));
+    }
+    IMPORT_CANCEL.store(false, Ordering::SeqCst);
+    // From here on, every error path must release the slot.
+    let result = (|| -> FolioResult<ImportResources> {
+        let db_pool = state.active_db()?;
+        let storage = state.active_storage()?;
+        let covers_storage = state.covers_storage()?;
+        let import_mode = {
+            let conn = db_pool.get()?;
+            db::get_setting(&conn, "import_mode")
+                .ok()
+                .flatten()
+                .unwrap_or_else(|| "import".to_string())
+        };
+        Ok(ImportResources {
+            db_pool,
+            storage,
+            covers_storage,
+            import_mode,
+        })
+    })();
+    if result.is_err() {
+        IMPORT_RUNNING.store(false, Ordering::SeqCst);
+    }
+    result
+}
+
+fn walk_folder_for_import(dir: &std::path::Path, results: &mut Vec<String>, app: &AppHandle) {
+    if IMPORT_CANCEL.load(Ordering::SeqCst) {
+        return;
+    }
+    let _ = app.emit(
+        "import-progress",
+        ImportProgressEvent {
+            phase: "scanning".into(),
+            current: results.len() as u32,
+            total: 0,
+            filename: dir.to_string_lossy().to_string(),
+            imported: 0,
+            errors: 0,
+        },
+    );
+    let supported = supported_import_extensions();
+    let entries = match std::fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+    for entry in entries.flatten() {
+        if IMPORT_CANCEL.load(Ordering::SeqCst) {
+            return;
+        }
+        let file_type = match entry.file_type() {
+            Ok(t) => t,
+            Err(_) => continue,
+        };
+        let path = entry.path();
+        if file_type.is_dir() {
+            if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                if !name.starts_with('.') && name != "__MACOSX" {
+                    walk_folder_for_import(&path, results, app);
+                }
+            }
+        } else if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+            let lower = ext.to_lowercase();
+            if supported.contains(&lower.as_str()) {
+                results.push(path.to_string_lossy().to_string());
+            }
+        }
+    }
+}
+
+fn run_import_task(app: AppHandle, paths: Vec<String>, resources: ImportResources) {
+    use std::collections::VecDeque;
+    use std::sync::atomic::AtomicU32;
+    use std::sync::Mutex;
+
+    let total = paths.len() as u32;
+    let queue: Mutex<VecDeque<String>> = Mutex::new(paths.into());
+    let imported = AtomicU32::new(0);
+    let errors = AtomicU32::new(0);
+    let completed = AtomicU32::new(0);
+
+    let ImportResources {
+        db_pool,
+        storage,
+        covers_storage,
+        import_mode,
+    } = resources;
+
+    if total > 0 {
+        std::thread::scope(|scope| {
+            for _ in 0..IMPORT_WORKER_COUNT {
+                let queue = &queue;
+                let imported = &imported;
+                let errors = &errors;
+                let completed = &completed;
+                let db_pool = db_pool.clone();
+                let storage = storage.clone();
+                let covers_storage = covers_storage.clone();
+                let import_mode = import_mode.clone();
+                let app = app.clone();
+                scope.spawn(move || loop {
+                    if IMPORT_CANCEL.load(Ordering::SeqCst) {
+                        break;
+                    }
+                    let path = match queue.lock() {
+                        Ok(mut q) => match q.pop_front() {
+                            Some(p) => p,
+                            None => break,
+                        },
+                        Err(_) => break,
+                    };
+                    let filename = std::path::Path::new(&path)
+                        .file_name()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or(&path)
+                        .to_string();
+                    match import_book_inner(
+                        path.clone(),
+                        db_pool.clone(),
+                        storage.clone(),
+                        covers_storage.clone(),
+                        &import_mode,
+                    ) {
+                        Ok(_) => {
+                            imported.fetch_add(1, Ordering::SeqCst);
+                        }
+                        Err(e) => {
+                            log::warn!("import failed for {path}: {e}");
+                            errors.fetch_add(1, Ordering::SeqCst);
+                        }
+                    }
+                    let done = completed.fetch_add(1, Ordering::SeqCst) + 1;
+                    let _ = app.emit(
+                        "import-progress",
+                        ImportProgressEvent {
+                            phase: "importing".into(),
+                            current: done,
+                            total,
+                            filename: filename.clone(),
+                            imported: imported.load(Ordering::SeqCst),
+                            errors: errors.load(Ordering::SeqCst),
+                        },
+                    );
+                });
+            }
+        });
+    }
+
+    let final_phase = if IMPORT_CANCEL.load(Ordering::SeqCst) {
+        "cancelled"
+    } else {
+        "done"
+    };
+    let _ = app.emit(
+        "import-progress",
+        ImportProgressEvent {
+            phase: final_phase.into(),
+            current: completed.load(Ordering::SeqCst),
+            total,
+            filename: String::new(),
+            imported: imported.load(Ordering::SeqCst),
+            errors: errors.load(Ordering::SeqCst),
+        },
+    );
+    IMPORT_RUNNING.store(false, Ordering::SeqCst);
+}
+
 #[tauri::command]
 pub async fn scan_single_book(book_id: String, state: State<'_, AppState>) -> FolioResult<Book> {
     let conn = state.active_db()?.get()?;
