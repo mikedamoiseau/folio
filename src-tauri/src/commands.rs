@@ -510,8 +510,15 @@ pub async fn import_book(
             .flatten()
             .unwrap_or_else(|| "import".to_string())
     };
-    import_book_inner(file_path, db_pool, storage, covers_storage, &import_mode)
-        .map(ImportOutcome::into_book)
+    import_book_inner(
+        file_path,
+        db_pool,
+        storage,
+        covers_storage,
+        &import_mode,
+        false,
+    )
+    .map(ImportOutcome::into_book)
 }
 
 /// Distinguishes a freshly-imported book from one that already existed in the
@@ -541,6 +548,7 @@ pub(crate) fn import_book_inner(
     storage: std::sync::Arc<dyn folio_core::storage::Storage>,
     covers_storage: std::sync::Arc<dyn folio_core::storage::Storage>,
     import_mode: &str,
+    force_copy: bool,
 ) -> FolioResult<ImportOutcome> {
     // Step 1: single stat — used for size guard, mode-dependent dedup, and to
     // avoid extra round trips on slow filesystems (network shares).
@@ -554,9 +562,11 @@ pub(crate) fn import_book_inner(
         )));
     }
 
-    // Step 2: URL imports always copy (file lives in a temp dir).
-    let is_url_import = file_path.starts_with("http://") || file_path.starts_with("https://");
-    let should_copy = import_mode != "link" || is_url_import;
+    // Step 2: callers that own the file (e.g. OPDS-downloaded temp files)
+    // must set `force_copy` so `link` mode still copies into the library.
+    // The path string itself is unreliable as a signal — OPDS hands us a
+    // local temp path, not a URL — so we take an explicit flag instead.
+    let should_copy = force_copy || import_mode != "link";
 
     // Step 3: content-hash dedup for all modes. `file_hash` is required by
     // downstream features (comic page-cache prepare, cross-device sync), so
@@ -2976,7 +2986,7 @@ pub async fn download_opds_book(
     download_url: String,
     mime_type: Option<String>,
     state: State<'_, AppState>,
-    app: AppHandle,
+    _app: AppHandle,
 ) -> FolioResult<Book> {
     // Determine the file extension for the temp import path. Precedence:
     //   1. URL suffix — Folio's own feed and many well-behaved feeds put the
@@ -3038,10 +3048,31 @@ pub async fn download_opds_book(
         rx.recv()??;
     }
 
-    // Import via the standard import pipeline
-    let result = import_book(temp_str.clone(), state, app).await;
+    // Import via the shared inner pipeline. We bypass the `import_book` IPC
+    // wrapper so we can pass `force_copy = true`: the temp file is about to
+    // be deleted below, so even in `link` mode we must copy into the library
+    // rather than store the temp path in the DB.
+    let db_pool = state.active_db()?;
+    let storage = state.active_storage()?;
+    let covers_storage = state.covers_storage()?;
+    let import_mode = {
+        let conn = db_pool.get()?;
+        db::get_setting(&conn, "import_mode")
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| "import".to_string())
+    };
+    let result = import_book_inner(
+        temp_str.clone(),
+        db_pool,
+        storage,
+        covers_storage,
+        &import_mode,
+        true,
+    )
+    .map(ImportOutcome::into_book);
 
-    // Clean up temp file (import_book copies it to the library folder)
+    // Clean up temp file (import_book_inner copies it to the library folder)
     let _ = std::fs::remove_file(&temp_path);
 
     result
@@ -4305,6 +4336,7 @@ fn run_import_task(app: AppHandle, paths: Vec<String>, resources: ImportResource
                         storage.clone(),
                         covers_storage.clone(),
                         &import_mode,
+                        false,
                     ) {
                         Ok(ImportOutcome::Imported(_)) => {
                             imported.fetch_add(1, Ordering::SeqCst);
