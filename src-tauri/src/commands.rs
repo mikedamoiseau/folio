@@ -512,8 +512,8 @@ pub async fn import_book(
         )));
     }
 
-    // Step 2: resolve import mode early so the dedup strategy can match it.
-    // URL imports always copy (file lives in a temp dir).
+    // Step 2: resolve import mode early. URL imports always copy (file lives
+    // in a temp dir).
     let import_mode = {
         let conn = state.active_db()?.get()?;
         db::get_setting(&conn, "import_mode")
@@ -524,12 +524,12 @@ pub async fn import_book(
     let is_url_import = file_path.starts_with("http://") || file_path.starts_with("https://");
     let should_copy = import_mode != "link" || is_url_import;
 
-    // Step 3: dedup + hash strategy.
-    // - copy mode: full SHA-256 of contents (content-dedup, survives path changes).
-    // - link mode: dedup by absolute path (file_path column is UNIQUE). Skip the
-    //   full-file read so importing from a network share doesn't transfer every
-    //   byte just to compute an identity hash.
-    let hash: Option<String> = if should_copy {
+    // Step 3: content-hash dedup for all modes. `file_hash` is required by
+    // downstream features (comic page-cache prepare, cross-device sync), so
+    // linked books need a stable content hash too. Hashing also guards
+    // against duplicate library entries when the same file is reached
+    // through different path spellings (symlinks, alternate mounts, …).
+    let hash: Option<String> = {
         use sha2::{Digest, Sha256};
         use std::io::Read;
         let mut hasher = Sha256::new();
@@ -551,12 +551,6 @@ pub async fn import_book(
             }
         }
         Some(computed)
-    } else {
-        let conn = state.active_db()?.get()?;
-        if let Some(existing) = db::get_book_by_file_path(&conn, &file_path)? {
-            return Ok(existing);
-        }
-        None
     };
 
     // Detect format from file extension, with magic-byte fallback for
@@ -622,8 +616,7 @@ pub async fn import_book(
     let storage = state.active_storage()?;
 
     // Step 4: Copy source file into library folder as {book_id}.{ext},
-    // or keep original path if import_mode is "link". `should_copy` was
-    // resolved up front so the dedup strategy could match it.
+    // or keep original path if import_mode is "link".
     //
     // #64 M4: imported books now store the storage *key* in `file_path`,
     // not the absolute filesystem path. Parsers still need a real path,
