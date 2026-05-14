@@ -164,7 +164,9 @@
     "missingFileMessage": "Le fichier de ce livre est introuvable. Il a peut-\u00eatre \u00e9t\u00e9 d\u00e9plac\u00e9 ou supprim\u00e9.",
     "removeFromLibrary": "Retirer de la biblioth\u00e8que",
     "preparingPages": "Pr\u00e9paration des pages...",
-    "preparingPagesDetail": "Extraction des pages pour une lecture plus rapide"
+    "preparingPagesDetail": "Extraction des pages pour une lecture plus rapide",
+    "thumbnailStripLabel": "Vignettes de pages",
+    "thumbnailGoTo": "Aller \u00e0 la page {{number}}"
   },
 
   "import": {

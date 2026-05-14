@@ -164,7 +164,9 @@
     "missingFileMessage": "This book\u2019s file could not be found. It may have been moved or deleted.",
     "removeFromLibrary": "Remove from library",
     "preparingPages": "Preparing pages...",
-    "preparingPagesDetail": "Extracting pages for faster reading"
+    "preparingPagesDetail": "Extracting pages for faster reading",
+    "thumbnailStripLabel": "Page thumbnails",
+    "thumbnailGoTo": "Go to page {{number}}"
   },
 
   "import": {
