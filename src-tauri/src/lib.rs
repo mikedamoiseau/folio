@@ -148,11 +148,6 @@ pub fn run() {
                     c.set_max_bytes(200 * 1024 * 1024);
                     c
                 }),
-                pdf_cache: std::sync::Mutex::new({
-                    let mut c = LruCache::new(20);
-                    c.set_max_bytes(200 * 1024 * 1024); // 200 MB memory limit (#52)
-                    c
-                }),
                 enrichment_registry,
                 web_server_handle: std::sync::Mutex::new(None),
             });
@@ -291,11 +286,9 @@ pub fn run() {
             commands::remove_bookmark,
             commands::update_bookmark,
             commands::get_comic_page_count,
-            commands::get_comic_page,
             commands::get_comic_page_bytes,
             commands::check_pdf_support,
             commands::get_pdf_page_count,
-            commands::get_pdf_page,
             commands::get_pdf_page_bytes,
             commands::create_collection,
             commands::update_collection,

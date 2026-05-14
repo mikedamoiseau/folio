@@ -101,7 +101,12 @@ impl<V> LruCache<V> {
         self.order.push(key);
     }
 
-    /// Insert with explicit byte size tracking (#52).
+    /// Insert with explicit byte size tracking (#52). Reachable in the
+    /// production lib only when the `mobi` feature is on (and from the
+    /// unit-test build via `#[cfg(test)]`); without `--all-targets`,
+    /// clippy on the default-feature lib build can't see those callers
+    /// and would flag this as dead.
+    #[cfg_attr(not(feature = "mobi"), allow(dead_code))]
     fn insert_with_size(&mut self, key: String, value: V, size_bytes: usize) {
         if self.entries.contains_key(&key) {
             // Update size tracking for existing entry
@@ -151,9 +156,8 @@ impl<V> LruCache<V> {
 /// 1. `profile_state` — profile name + pool map
 /// 2. `epub_cache` — EPUB archive LRU cache
 /// 3. `mobi_cache` — MOBI parsed-book LRU cache (mobi feature only)
-/// 4. `pdf_cache` — PDF render LRU cache
-/// 5. `enrichment_registry` — metadata provider registry
-/// 6. `web_server_handle` — running web server handle
+/// 4. `enrichment_registry` — metadata provider registry
+/// 5. `web_server_handle` — running web server handle
 pub struct ProfileState {
     pub active: String,
     pub pools: std::collections::HashMap<String, DbPool>,
@@ -173,16 +177,13 @@ pub struct AppState {
     /// request. Mirrors the EPUB cache's role for the MOBI hot paths.
     #[cfg(feature = "mobi")]
     pub mobi_cache: std::sync::Mutex<LruCache<folio_core::mobi::CachedMobiBook>>,
-    /// PDF render LRU cache (lock #4). Single Mutex replaces the former
-    /// dual-Mutex (pdf_render_cache + pdf_render_cache_order).
-    pub pdf_cache: std::sync::Mutex<LruCache<String>>,
-    /// Metadata provider registry (lock #5).
+    /// Metadata provider registry (lock #4).
     pub enrichment_registry: std::sync::Mutex<crate::providers::ProviderRegistry>,
     /// DB pool shared with the web server, swapped on profile switch.
     pub shared_active_pool: std::sync::Arc<std::sync::Mutex<DbPool>>,
     /// PIN hash shared with the web server, updated by `web_server_set_pin`.
     pub shared_pin_hash: std::sync::Arc<std::sync::Mutex<Option<String>>>,
-    /// Handle to the running web server (lock #6).
+    /// Handle to the running web server (lock #5).
     pub web_server_handle: std::sync::Mutex<Option<crate::web_server::WebServerHandle>>,
 }
 
@@ -1879,75 +1880,10 @@ pub async fn get_comic_page_count(book_id: String, state: State<'_, AppState>) -
     }
 }
 
-#[tauri::command]
-pub async fn get_comic_page(
-    book_id: String,
-    page_index: u32,
-    state: State<'_, AppState>,
-    app: AppHandle,
-) -> FolioResult<String> {
-    let start = std::time::Instant::now();
-    page_cache::page_dbg!(
-        "get_comic_page called: book={} page={}",
-        book_id,
-        page_index
-    );
-
-    let book = {
-        let conn = state.active_db()?.get()?;
-        db::get_book(&conn, &book_id)?
-            .ok_or_else(|| FolioError::not_found(format!("Book '{book_id}' not found")))?
-    };
-    page_cache::page_dbg!("DB lookup: {:?}", start.elapsed());
-    let file_path = state.resolve_book_path(&book)?;
-
-    validate_file_exists(&file_path)?;
-
-    // Try cache first
-    if let Ok(storage) = page_cache_storage(&app) {
-        if let Some(ref book_hash) = book.file_hash {
-            let cache_start = std::time::Instant::now();
-            if let Ok((data, mime)) = page_cache::get_cached_page(&storage, book_hash, page_index) {
-                use base64::{engine::general_purpose, Engine as _};
-                let encoded = general_purpose::STANDARD.encode(&data);
-                page_cache::page_dbg!(
-                    "cache HIT: page={} read={:?} size={}KB total={:?}",
-                    page_index,
-                    cache_start.elapsed(),
-                    data.len() / 1024,
-                    start.elapsed()
-                );
-                return Ok(format!("data:{mime};base64,{encoded}"));
-            }
-            page_cache::page_dbg!(
-                "cache MISS: page={} checked in {:?}",
-                page_index,
-                cache_start.elapsed()
-            );
-        }
-    }
-
-    // Fallback to direct archive read
-    page_cache::page_dbg!("falling back to archive read: format={:?}", book.format);
-    let result = match book.format {
-        BookFormat::Cbz => cbz::get_page_image(&file_path, page_index),
-        BookFormat::Cbr => cbr::get_page_image(&file_path, page_index),
-        _ => Err(FolioError::invalid(format!(
-            "get_comic_page is not supported for {:?}",
-            book.format
-        ))),
-    };
-    page_cache::page_dbg!(
-        "archive read done: page={} ok={} total={:?}",
-        page_index,
-        result.is_ok(),
-        start.elapsed()
-    );
-    result
-}
-
-/// Binary variant of [`get_comic_page`] — returns raw bytes plus a
-/// trailing mime tag (see `page_wire`) instead of a base64 data URI.
+/// Comic page reader for the desktop frontend. Returns raw image
+/// bytes plus a trailing mime tag (see `page_wire`); the frontend
+/// builds a `Blob` + `URL.createObjectURL` and assigns it directly
+/// to `<img src>`, bypassing base64 entirely.
 ///
 /// `target_width` clamps the page width to the viewport. The frontend
 /// computes this from container width × DPR so we ship roughly the
@@ -3740,12 +3676,13 @@ pub async fn get_pdf_page_count(book_id: String, state: State<'_, AppState>) -> 
     pdf::get_page_count(&file_path)
 }
 
-/// Binary variant of [`get_pdf_page`] — returns raw JPEG bytes plus a
-/// trailing mime tag (see `page_wire`) instead of a base64 data URI.
+/// PDF page reader for the desktop frontend. Returns raw JPEG bytes
+/// plus a trailing mime tag (see `page_wire`); the frontend builds a
+/// `Blob` + `URL.createObjectURL` for `<img src>`.
 ///
 /// `width` controls the render resolution (clamped to 9600). When
 /// omitted, `folio_core::pdf::get_page_image_bytes` falls back to
-/// `DEFAULT_RENDER_WIDTH` (1200 px), matching the legacy default.
+/// `DEFAULT_RENDER_WIDTH` (1200 px).
 #[tauri::command]
 pub async fn get_pdf_page_bytes(
     book_id: String,
@@ -3765,47 +3702,6 @@ pub async fn get_pdf_page_bytes(
     Ok(tauri::ipc::Response::new(crate::page_wire::append_tag(
         bytes, mime,
     )))
-}
-
-#[tauri::command]
-pub async fn get_pdf_page(
-    book_id: String,
-    page_index: u32,
-    width: Option<u32>,
-    state: State<'_, AppState>,
-) -> FolioResult<String> {
-    let render_width = width.unwrap_or(1200).min(9600);
-    let file_path = {
-        let conn = state.active_db()?.get()?;
-        let book = db::get_book(&conn, &book_id)?
-            .ok_or_else(|| FolioError::not_found(format!("Book '{book_id}' not found")))?;
-        state.resolve_book_path(&book)?
-    };
-    validate_file_exists(&file_path)?;
-
-    let cache_key = format!("{}:{}:{}", file_path, page_index, render_width);
-
-    // Check cache (single lock for both map and LRU order)
-    {
-        let mut cache = state.pdf_cache.lock()?;
-        if let Some(data) = cache.get(&cache_key) {
-            let result = data.clone();
-            cache.touch(&cache_key);
-            return Ok(result);
-        }
-    }
-
-    // Render (outside the lock)
-    let data = pdf::get_page_image(&file_path, page_index, render_width)?;
-
-    // Store in cache with LRU + memory eviction (#52)
-    {
-        let size = data.len();
-        let mut cache = state.pdf_cache.lock()?;
-        cache.insert_with_size(cache_key, data.clone(), size);
-    }
-
-    Ok(data)
 }
 
 // ---- Remote Backup Commands ----
