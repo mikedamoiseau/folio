@@ -97,17 +97,30 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
   const searchInputRef = useRef<HTMLInputElement>(null);
 
   // Thumbnail strip (CBZ/CBR/PDF only) — persisted per book so reopening
-  // the same book restores the user's preference.
-  const thumbStripStorageKey = bookId ? `folio-thumbstrip-${bookId}` : null;
-  const [thumbStripOpen, setThumbStripOpen] = useState(() => {
-    if (!thumbStripStorageKey) return false;
-    return localStorage.getItem(thumbStripStorageKey) === "1";
-  });
+  // the same book restores the user's preference. Reader stays mounted
+  // across `/reader/:bookId` changes, so we must reload the preference on
+  // bookId change AND write storage at toggle time (not via an effect) to
+  // avoid persisting book A's state to book B's key during the swap.
+  const [thumbStripOpen, setThumbStripOpen] = useState(() =>
+    bookId ? localStorage.getItem(`folio-thumbstrip-${bookId}`) === "1" : false,
+  );
   useEffect(() => {
-    if (!thumbStripStorageKey) return;
-    if (thumbStripOpen) localStorage.setItem(thumbStripStorageKey, "1");
-    else localStorage.removeItem(thumbStripStorageKey);
-  }, [thumbStripOpen, thumbStripStorageKey]);
+    if (!bookId) {
+      setThumbStripOpen(false);
+      return;
+    }
+    setThumbStripOpen(localStorage.getItem(`folio-thumbstrip-${bookId}`) === "1");
+  }, [bookId]);
+  const toggleThumbStrip = useCallback(() => {
+    if (!bookId) return;
+    setThumbStripOpen((prev) => {
+      const next = !prev;
+      const key = `folio-thumbstrip-${bookId}`;
+      if (next) localStorage.setItem(key, "1");
+      else localStorage.removeItem(key);
+      return next;
+    });
+  }, [bookId]);
 
   // Do Not Disturb mode
   const [dndMode, setDndMode] = useState(false);
@@ -1184,7 +1197,7 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
       } else if (e.key === "d" && !e.metaKey && !e.ctrlKey) {
         setDndMode((prev) => !prev);
       } else if (e.key === "m" && !e.metaKey && !e.ctrlKey && !isHtmlBook) {
-        setThumbStripOpen((prev) => !prev);
+        toggleThumbStrip();
       } else if (e.key === "?" || (e.key === "/" && e.shiftKey)) {
         setShowShortcuts((prev) => !prev);
       } else if (e.key === "Escape") {
@@ -1198,7 +1211,7 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [prevChapter, nextChapter, goHistoryBack, goHistoryForward, addBookmarkAtCurrentPosition, showShortcuts, tocOpen, bookmarksOpen, dndMode, settingsOpen, navigate, bookFormat, isHtmlBook, searchOpen]);
+  }, [prevChapter, nextChapter, goHistoryBack, goHistoryForward, addBookmarkAtCurrentPosition, showShortcuts, tocOpen, bookmarksOpen, dndMode, settingsOpen, navigate, bookFormat, isHtmlBook, searchOpen, toggleThumbStrip]);
 
   // ---- TOC focus trap ----
 
@@ -1674,7 +1687,7 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
               )}
               {!isHtmlBook && (
                 <button
-                  onClick={() => setThumbStripOpen((prev) => !prev)}
+                  onClick={toggleThumbStrip}
                   className={`p-1.5 transition-colors rounded-lg focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 ${thumbStripOpen ? "text-accent bg-accent-light" : "text-ink-muted hover:text-ink hover:bg-warm-subtle"}`}
                   aria-label={t("reader.toggleThumbStrip")}
                   title={t("reader.thumbStripTitle")}
