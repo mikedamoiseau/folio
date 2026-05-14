@@ -240,10 +240,13 @@ Expand where books come from and how they persist.
 - ~~Quick-access section at the top of the library: last 3-5 books read~~
 - ~~One-click to resume where you left off~~
 
-### 19. Share Collections — **Done**
+### 19. Share Collections — **Done (scope-trimmed)**
 - ~~Export a collection as a shareable reading list (title, author, optional notes)~~
-- ~~Format: Markdown, JSON~~ (shareable link TBD)
-- Import a shared list to see which books you have/are missing (TBD)
+- ~~Format: Markdown, JSON~~
+- ~~Shareable link~~ — **dropped 2026-05-14.** Needs a WAN endpoint the free app doesn't have; would depend on `folio-server` infra for a niche feature.
+- ~~Import a shared list to see which books you have/are missing~~ — **dropped 2026-05-14.** No real-world supply of Folio-format lists; users share via Goodreads / plain text / blog posts instead. Self-fulfilling problem: format would only exist if Folio became a sharing platform, which it isn't.
+
+Manual sharing via the existing Markdown / JSON export is sufficient.
 
 ### 20. Book Recommendations — **Partial** *(Discover section)*
 - ~~Discover section: popular/new books from configured OPDS catalogs, shown on library home~~
@@ -403,11 +406,11 @@ Expand where books come from and how they persist.
 - ~~Cross-chapter search uses `recordJumpFrom(source, dest)` with an explicit pre-render source capture — destination scroll is committed only after the chapter renders and the match scroll is resolved~~
 - ~~Unified paginated scroll save/restore denominator (`scrollHeight - clientHeight`), correcting a latent drift that also affected bookmark restore for long chapters~~
 
-#### 37. Custom CSS Override — **Done**
+#### 37. Custom CSS Override — **Done (scope-trimmed)**
 - ~~Let users inject custom CSS into EPUB rendering~~
 - ~~Global stylesheet override via textarea in settings~~
 - ~~Applied as a `<style>` tag while reading EPUBs~~
-- Per-book CSS override (TBD)
+- ~~Per-book CSS override~~ — **dropped 2026-05-14.** Marginal value over the global override; would need per-book editor UI + storage + activation logic for a use case (one badly-styled EPUB) better solved by editing the source file.
 
 #### 38. Dual-Page Spread / Manga Mode — **Done**
 - ~~Side-by-side two-page view for all formats (CBZ/CBR, PDF, EPUB in paginated mode)~~
@@ -440,17 +443,20 @@ Expand where books come from and how they persist.
 - ~~Navigation locked during animation to prevent stuck states~~
 - Future: additional animation styles (fade, curl)
 
-#### 62. Comic Page Cache (CBZ/CBR Performance) — **Done**
+#### 62. Comic Page Cache (CBZ/CBR Performance) — **Done (follow-ups flagged)**
 - ~~Extract-on-open: extract all pages from archive to disk cache on first open~~
 - ~~Subsequent page loads read from disk (~1-5ms vs ~50-500ms from archive)~~
 - ~~Three-layer eviction: LRU by book count (5), total size cap (user-configurable, default 500MB), age expiry (7 days)~~
 - ~~Settings UI: cache size limit dropdown, current usage display, clear cache button~~
 - ~~New `prepare_comic` command for explicit extraction with loading indicator~~
-- Future: thumbnail strip — scrollable page preview bar using cached full-res pages as source
-- Future: extract-on-demand with prefetch — lazy extraction if upfront cost too high for 100+ page comics
-- Future: image resizing/compression — serve at screen resolution, switch base64 to blob URLs
-- Future: PDF disk cache — extend page_cache module for rendered PDF pages
-- Future: frontend cache tuning — increase 10-entry LRU or make size-aware
+
+**Highest-ROI remaining polish on the free app (priority-ranked 2026-05-14).** Bundle as a single "perf + comics" drop after the next `folio-server` milestone; do not pull focus from #65.
+
+1. **Image resizing/compression — P2.** Serve at viewport resolution, switch base64 to blob URLs. Compounds across CBZ, CBR, PDF. Invisible feature with the largest felt performance improvement per LOC; smaller IPC payloads and lower memory across the board.
+2. **Thumbnail strip — P2.** Scrollable page preview bar using cached full-res pages as source. Most-asked comic-reader feature (Mihon / Tachiyomi / CDisplayEx parity); leverages the existing extract-on-open disk cache, mostly virtualized-scroll UI work.
+3. **PDF disk cache — P3.** Extend `page_cache` module to rendered PDF pages so they survive app restarts. Natural follow-on since #1 already touches `page_cache`. Smaller cohort than comic users.
+4. ~~Extract-on-demand with prefetch~~ — **dropped 2026-05-14.** Solves a narrow pain (100+ page comic first-open) and adds coordination complexity against extract-on-open. Revisit only if users complain.
+5. ~~Frontend cache tuning (LRU size / size-aware eviction)~~ — **dropped 2026-05-14.** Trivial polish, not roadmap-worthy on its own; fold into #1 if it surfaces naturally there.
 
 #### 40. Split View / Side-by-Side Reading — **P2**
 - Open two books simultaneously in a split pane
@@ -562,9 +568,11 @@ Open-core transition: after Folio 2.0 ships, the free desktop/web app enters mai
 - ~~Shipped incrementally across M1–M4 (PRs #15 → #18)~~
 - Paid server will add an S3/object-store implementation in its own crate, with a local disk cache layer in front (page turns can't be raw S3 GETs). *Out of scope for the free app.*
 
-### 65. `folio-server` — Headless Multi-User Server — **P3**
+### 65. `folio-server` — Headless Multi-User Server — **P3 / in active development**
 
-Separate binary, private repo. Sold as a self-host license first; managed hosting added later only if demand is validated.
+Separate binary, **private repo at `git@bitbucket.org:mdamoiseau/folio-server.git`** (local checkout at `/Users/mike/Documents/www/folio-server`). Consumes `folio-core` as a git dependency pinned to a release tag (currently `v2.0.1`). Sold as a self-host license first; managed hosting added later only if demand is validated.
+
+**Status (2026-05-14):** scaffolded and under active development. Shipped scaffolding: axum router skeleton, figment-based config (TOML + env), SQLx + SQLite control-plane DB with embedded migrations, `tracing` JSON telemetry, structured `ServerError` wrapping `folio_core::FolioError`, `UserScope` tenancy newtype, argon2id password hashing, signed-cookie session lifecycle with multi-key rotation, HTTP Basic credential extractor (RFC 7617), `require_auth` tower middleware, user/session/audit repositories, integration test harness, Bitbucket Pipelines CI (`cargo fmt --check`, clippy, test, audit). Not yet shipped: HTTP handlers for library reads, OPDS feeds, admin dashboard, S3 storage backend, transactional mail, license validation, Docker image.
 
 **Scope:**
 - Headless HTTP server (axum). Linux primary target; Windows server optional.
@@ -593,18 +601,20 @@ Separate binary, private repo. Sold as a self-host license first; managed hostin
 
 ## Recommended Implementation Order
 
-The free-app roadmap is nearly closed out. The structural refactors that used to gate the paid server have already shipped; what's left is one Phase 8 feature, the 2.0 tag, and the paid server itself.
+The free-app roadmap is closed out. The structural refactors, the 2.0 tag, and the `folio-server` bootstrap have all shipped; the free app is now in maintenance mode and the paid server is the active line of development.
 
 1. ~~**#55 Structured Error Types.** `FolioError` enum + `FolioResult<T>` in `src-tauri/src/error.rs`, all commands migrated.~~ **Done.**
 2. ~~**#63 `folio-core` extraction.** Workspace crate carved out of `src-tauri/src/`; commands collapsed to thin adapters. Shipped incrementally as M1–M5.~~ **Done.**
 3. ~~**#64 Storage abstraction trait.** `Storage` trait inside `folio-core` with a local-FS implementation; DB `file_path` column now stores storage keys. Shipped incrementally as M1–M4.~~ **Done.**
-4. ~~**Phase 8 — #34 MOBI**~~ ✓ and ~~**#36 Navigation History**~~ ✓. **Remaining: #40 Split View.** Last feature before the 2.0 cutoff.
-5. **Tag Folio 2.0.** Publicly marks the free app as stable — a clean mental and marketing cutoff before the paid pivot.
-6. **#65 `folio-server` bootstrap** in the private repo. Pulls `folio-core` as a git dependency pinned to a tag.
+4. ~~**Phase 8 — #34 MOBI**~~ ✓ and ~~**#36 Navigation History**~~ ✓. (#40 Split View deferred to post-2.0 P2; it was not a 2.0 blocker.)
+5. ~~**Tag Folio 2.0.**~~ **Done** — `v2.0.0` shipped 2026-05-03, `v2.0.1` follow-up 2026-05-?. Free app is now in maintenance mode (see below).
+6. **#65 `folio-server`** in the private repo — **in active development**. Pulls `folio-core` as a git dependency pinned to a release tag.
 
-The historical reasoning ("don't do storage trait before the workspace refactor — double churn") played out in practice: errors landed first, then extraction, then the storage trait inside the now-clean crate. Same logic now suggests #40 can ship before or after the 2.0 tag depending on appetite — there's no architectural blocker either way, just feature scope.
+Post-2.0 the structural concerns play out as predicted: errors landed first, then extraction, then the storage trait, then 2.0, then the server. Remaining Phase 8 polish (#40 Split View, #62 cache improvements, #59 OPDS search nav, etc.) lives under the maintenance-mode policy below — picked up case-by-case, no longer treated as roadmap gates.
 
-### Free app maintenance mode (post-2.0)
+### Free app maintenance mode — **active (post-2.0)**
+
+In force since `v2.0.0` (2026-05-03).
 
 - Bug fixes: yes
 - Security patches: yes
@@ -613,7 +623,7 @@ The historical reasoning ("don't do storage trait before the workspace refactor 
 - New file formats: no
 - New feature requests: politely declined
 
-Document this publicly (README, issue template) to set user expectations before the pivot.
+Document this publicly (README, issue template) to set user expectations.
 
 ## Nice to Have
 
@@ -704,6 +714,6 @@ Tauri v2 supports mobile targets. The React frontend renders in a mobile WebView
 | 6 | Remote Library Access, OPDS Server | Done | Remote access |
 | 8 | Sepia Theme, OpenDyslexic, Star Ratings, In-Book Search, Typography, Custom Fonts, Continuous Scroll, Time-to-Finish, Bookmark Naming, Series, Activity Log, MOBI, Nav History, Custom CSS, Dual-Page/Manga, Settings Reorg, i18n (EN+FR), PDF Zoom Quality, Go to Page, Animations, Comic Page Cache, Split View | 19 done | Reader & library enhancements |
 | 9 | DB Migration Versioning, Transaction Boundaries, Zip Bomb Protection, PDF Cache Memory Limits, Thread Pool, Backup Secret Atomicity, Screen Reader Live Regions, Loading Skeletons, Toast System, Search Nav, Bulk Actions, Highlight Positioning, Structured Errors | 13 done | Hardening & polish |
-| 10 | `folio-core` refactor, Storage trait, `folio-server` (private) | 2 done (#63, #64), `folio-server` not started | Open-core + paid server |
+| 10 | `folio-core` refactor, Storage trait, `folio-server` (private) | 2 done (#63, #64), `folio-server` in active development (private repo, axum + sqlx + auth scaffolding shipped, handlers WIP) | Open-core + paid server |
 | N/H | Dictionary, Vocabulary Builder, TTS, Library-Wide Search, Annotation Exports, Plugins/Hooks | Not started (User Themes done) | Nice to have |
 | Deferred | Android & iOS App (was Phase 7) | Deferred — web server covers the primary mobile use case | Mobile |
