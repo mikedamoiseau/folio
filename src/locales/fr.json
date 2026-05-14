@@ -167,6 +167,7 @@
     "preparingPagesDetail": "Extraction des pages pour une lecture plus rapide",
     "thumbnailStripLabel": "Vignettes de pages",
     "thumbnailGoTo": "Aller \u00e0 la page {{number}}",
+    "thumbnailRetry": "R\u00e9essayer le chargement de la page {{number}}",
     "toggleThumbStrip": "Afficher/masquer les vignettes",
     "thumbStripTitle": "Vignettes de pages (m)"
   },

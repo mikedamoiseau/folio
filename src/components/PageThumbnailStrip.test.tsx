@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { computeVisibleRange } from "./PageThumbnailStrip";
+import { computePrefetchRange, computeVisibleRange } from "./PageThumbnailStrip";
 
 describe("computeVisibleRange", () => {
   const STRIDE = 84;
@@ -47,5 +47,41 @@ describe("computeVisibleRange", () => {
     const { start, end } = computeVisibleRange(9_999_999, 800, STRIDE, 50, 4);
     expect(start).toBeLessThanOrEqual(end);
     expect(end).toBe(50);
+  });
+});
+
+describe("computePrefetchRange", () => {
+  it("looks forward when direction is positive", () => {
+    const range = computePrefetchRange({ start: 10, end: 20 }, 1, 16, 200);
+    expect(range).toEqual({ start: 20, end: 36 });
+  });
+
+  it("looks backward when direction is negative", () => {
+    const range = computePrefetchRange({ start: 40, end: 50 }, -1, 16, 200);
+    expect(range).toEqual({ start: 24, end: 40 });
+  });
+
+  it("treats zero direction as forward (initial paint)", () => {
+    const range = computePrefetchRange({ start: 0, end: 10 }, 0, 16, 200);
+    expect(range.start).toBe(10);
+    expect(range.end).toBe(26);
+  });
+
+  it("clamps forward range at total count", () => {
+    const range = computePrefetchRange({ start: 90, end: 100 }, 1, 16, 100);
+    expect(range).toEqual({ start: 100, end: 100 });
+  });
+
+  it("clamps backward range at zero", () => {
+    const range = computePrefetchRange({ start: 5, end: 15 }, -1, 16, 200);
+    expect(range).toEqual({ start: 0, end: 5 });
+  });
+
+  it("returns empty range when count is zero", () => {
+    expect(computePrefetchRange({ start: 0, end: 0 }, 1, 16, 0)).toEqual({ start: 0, end: 0 });
+  });
+
+  it("returns empty range when ahead is zero", () => {
+    expect(computePrefetchRange({ start: 10, end: 20 }, 1, 0, 200)).toEqual({ start: 0, end: 0 });
   });
 });

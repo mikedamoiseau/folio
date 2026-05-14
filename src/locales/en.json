@@ -167,6 +167,7 @@
     "preparingPagesDetail": "Extracting pages for faster reading",
     "thumbnailStripLabel": "Page thumbnails",
     "thumbnailGoTo": "Go to page {{number}}",
+    "thumbnailRetry": "Retry loading page {{number}}",
     "toggleThumbStrip": "Toggle page thumbnails",
     "thumbStripTitle": "Page thumbnails (m)"
   },

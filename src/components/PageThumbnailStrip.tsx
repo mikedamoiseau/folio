@@ -9,6 +9,10 @@ const GAP = 4;
 const ITEM_STRIDE = THUMB_WIDTH + GAP;
 const OVERSCAN = 4;
 const CACHE_LIMIT = 80;
+// Tiles to prefetch (no DOM, just kick off the byte fetch) ahead of
+// the visible window in the current scroll direction. Tuned so a fast
+// pan keeps the next viewport already decoded by the time it lands.
+const PREFETCH_AHEAD = 16;
 
 /**
  * Compute which thumbnail indices intersect the visible scroll window.
@@ -32,6 +36,31 @@ export function computeVisibleRange(
   const rawEnd = Math.ceil((scrollLeft + width) / itemStride) + overscan;
   const start = Math.max(0, Math.min(count, rawStart));
   const end = Math.max(start, Math.min(count, rawEnd));
+  return { start, end };
+}
+
+/**
+ * Compute the off-screen prefetch window adjacent to the current
+ * visible range. Direction `1` looks forward (after `visible.end`);
+ * `-1` looks backward (before `visible.start`). Returns a half-open
+ * `[start, end)` clamped to `[0, count]`.
+ *
+ * Pure so it can be unit-tested without DOM or async machinery.
+ */
+export function computePrefetchRange(
+  visible: { start: number; end: number },
+  direction: number,
+  ahead: number,
+  count: number,
+): { start: number; end: number } {
+  if (count <= 0 || ahead <= 0) return { start: 0, end: 0 };
+  if (direction >= 0) {
+    const start = Math.max(0, Math.min(count, visible.end));
+    const end = Math.max(start, Math.min(count, visible.end + ahead));
+    return { start, end };
+  }
+  const end = Math.max(0, Math.min(count, visible.start));
+  const start = Math.max(0, Math.min(count, visible.start - ahead));
   return { start, end };
 }
 
@@ -65,12 +94,21 @@ export default function PageThumbnailStrip({
   const scrollerRef = useRef<HTMLDivElement>(null);
   const [scrollLeft, setScrollLeft] = useState(0);
   const [viewWidth, setViewWidth] = useState(0);
+  // Direction of the most recent scroll event. `1` = forward (right),
+  // `-1` = backward, `0` = no scroll yet. Used by the prefetch effect
+  // to bias work toward where the user is heading.
+  const scrollDirRef = useRef(0);
+  const lastScrollRef = useRef(0);
 
   // Blob URL cache keyed by page index. Revoked on eviction and on
   // unmount / book switch. Stored as a ref so async loads can write
   // back without forcing a parent re-render.
   const cacheRef = useRef<Map<number, string>>(new Map());
   const inflightRef = useRef<Set<number>>(new Set());
+  // Pages whose last load attempt failed. Tiles in this set render a
+  // retry affordance; clicking the tile retries the fetch instead of
+  // selecting the page.
+  const errorRef = useRef<Set<number>>(new Set());
   const generationRef = useRef(0);
   // Trigger a re-render when a thumbnail finishes loading. We do not
   // store the URLs in React state — `cacheRef` is the source of truth
@@ -85,6 +123,7 @@ export default function PageThumbnailStrip({
       for (const url of cache.values()) URL.revokeObjectURL(url);
       cache.clear();
       inflightRef.current.clear();
+      errorRef.current.clear();
     };
   }, [bookId]);
 
@@ -103,7 +142,12 @@ export default function PageThumbnailStrip({
 
   const handleScroll = useCallback(() => {
     const el = scrollerRef.current;
-    if (el) setScrollLeft(el.scrollLeft);
+    if (!el) return;
+    const next = el.scrollLeft;
+    if (next > lastScrollRef.current) scrollDirRef.current = 1;
+    else if (next < lastScrollRef.current) scrollDirRef.current = -1;
+    lastScrollRef.current = next;
+    setScrollLeft(next);
   }, []);
 
   const visible = useMemo(
@@ -127,6 +171,7 @@ export default function PageThumbnailStrip({
       if (cacheRef.current.has(index)) return;
       if (inflightRef.current.has(index)) return;
       inflightRef.current.add(index);
+      errorRef.current.delete(index);
       const myGen = generationRef.current;
       const dpr = typeof window !== "undefined" ? window.devicePixelRatio || 1 : 1;
       const renderWidth = Math.round(THUMB_WIDTH * dpr);
@@ -152,7 +197,10 @@ export default function PageThumbnailStrip({
         }
         tick();
       } catch {
-        // Swallow individual failures; the tile renders its placeholder.
+        if (myGen === generationRef.current) {
+          errorRef.current.add(index);
+          tick();
+        }
       } finally {
         inflightRef.current.delete(index);
       }
@@ -160,12 +208,38 @@ export default function PageThumbnailStrip({
     [bookId, isPdf, evict, tick],
   );
 
+  // Retry an errored tile by clearing its error mark and re-issuing
+  // the load. Used by tile click handlers when the page is in the
+  // error state.
+  const retryThumb = useCallback(
+    (index: number) => {
+      errorRef.current.delete(index);
+      tick();
+      void loadThumb(index);
+    },
+    [loadThumb, tick],
+  );
+
   // Fire loads for every visible thumb whenever the window moves
   useEffect(() => {
     for (let i = visible.start; i < visible.end; i++) {
-      if (!cacheRef.current.has(i)) void loadThumb(i);
+      if (!cacheRef.current.has(i) && !errorRef.current.has(i)) void loadThumb(i);
     }
   }, [visible.start, visible.end, loadThumb]);
+
+  // Prefetch tiles just past the visible window in the current scroll
+  // direction. Errored tiles are skipped — the user retries explicitly.
+  useEffect(() => {
+    const range = computePrefetchRange(
+      visible,
+      scrollDirRef.current,
+      PREFETCH_AHEAD,
+      totalPages,
+    );
+    for (let i = range.start; i < range.end; i++) {
+      if (!cacheRef.current.has(i) && !errorRef.current.has(i)) void loadThumb(i);
+    }
+  }, [visible.start, visible.end, loadThumb, totalPages]);
 
   // When the current page changes, scroll the active thumb into view.
   useEffect(() => {
@@ -185,24 +259,31 @@ export default function PageThumbnailStrip({
   const tiles = [];
   for (let i = visible.start; i < visible.end; i++) {
     const url = cacheRef.current.get(i);
+    const errored = errorRef.current.has(i);
     const isActive = i === currentPage;
+    const label = errored
+      ? t("reader.thumbnailRetry", { number: i + 1 })
+      : t("reader.thumbnailGoTo", { number: i + 1 });
     tiles.push(
       <button
         key={i}
         type="button"
-        onClick={() => onSelect(i)}
+        onClick={() => (errored ? retryThumb(i) : onSelect(i))}
         className={`absolute top-0 flex flex-col items-center justify-end p-0.5 rounded-sm border transition-colors ${
           isActive
             ? "border-accent ring-1 ring-accent bg-accent-light/40"
-            : "border-warm-border hover:border-accent/60 bg-warm-subtle"
+            : errored
+              ? "border-red-300 dark:border-red-900/40 bg-red-50/40 dark:bg-red-900/20 hover:border-red-400 dark:hover:border-red-700"
+              : "border-warm-border hover:border-accent/60 bg-warm-subtle"
         }`}
         style={{
           left: i * ITEM_STRIDE,
           width: THUMB_WIDTH,
           height: THUMB_HEIGHT,
         }}
-        aria-label={t("reader.thumbnailGoTo", { number: i + 1 })}
+        aria-label={label}
         aria-current={isActive ? "page" : undefined}
+        title={errored ? label : undefined}
       >
         {url ? (
           <img
@@ -211,6 +292,12 @@ export default function PageThumbnailStrip({
             className="max-w-full max-h-[88%] object-contain"
             draggable={false}
           />
+        ) : errored ? (
+          <div className="flex-1 w-full flex items-center justify-center text-red-500 dark:text-red-400">
+            <svg width="16" height="16" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+              <path d="M4 4l12 12M16 4L4 16" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+            </svg>
+          </div>
         ) : (
           <div className="flex-1 w-full flex items-center justify-center">
             <div className="w-3 h-3 border border-warm-border border-t-accent/60 rounded-full animate-spin" />
