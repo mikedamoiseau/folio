@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
 import { getSpreadPages } from "../lib/utils";
 import { friendlyError } from "../lib/errors";
+import { blobUrlFromBytes } from "../lib/pageWire";
 
 const MIN_ZOOM = 0.5;
 const MAX_ZOOM = 4;
@@ -155,64 +156,134 @@ export default function PageViewer({
   // Quantize zoom to nearest 0.25 so we don't re-render on every tiny change
   const renderZoom = Math.ceil(zoom * 4) / 4;
 
+  // Fetches a single page from the backend over the binary wire format
+  // and returns a blob URL ready to assign to `<img src>`. The caller
+  // owns the URL and must `URL.revokeObjectURL` it when no longer in use
+  // (handled here by the cache eviction + unmount paths below).
   const loadPage = useCallback(
-    async (index: number, renderWidth?: number): Promise<string> => {
-      const command = isPdf ? "get_pdf_page" : "get_comic_page";
+    async (index: number, renderWidth: number): Promise<string> => {
+      const command = isPdf ? "get_pdf_page_bytes" : "get_comic_page_bytes";
+      // Tauri auto-converts snake_case Rust params to camelCase JS keys.
+      // `get_pdf_page_bytes` exposes `width`; `get_comic_page_bytes`
+      // exposes `targetWidth`. Both accept zero/undefined as "default".
       const params: Record<string, unknown> = { bookId, pageIndex: index };
-      if (isPdf && renderWidth) {
-        params.width = renderWidth;
+      if (renderWidth > 0) {
+        if (isPdf) params.width = renderWidth;
+        else params.targetWidth = renderWidth;
       }
-      dbg(`invoke ${command} page=${index}`, renderWidth ? `width=${renderWidth}` : "");
+      dbg(`invoke ${command} page=${index} width=${renderWidth}`);
       const t0 = performance.now();
-      const data = await invoke<string>(command, params);
-      dbg(`invoke ${command} page=${index} done in ${(performance.now() - t0).toFixed(0)}ms size=${(data.length / 1024).toFixed(0)}KB`);
-      return data;
+      const payload = await invoke<ArrayBuffer>(command, params);
+      const { url, mime } = blobUrlFromBytes(payload);
+      dbg(
+        `invoke ${command} page=${index} done in ${(performance.now() - t0).toFixed(0)}ms ` +
+          `size=${(payload.byteLength / 1024).toFixed(0)}KB mime=${mime}`
+      );
+      return url;
     },
     [bookId, isPdf]
   );
 
-  // For PDF, compute render width based on zoom + device pixel ratio for Retina sharpness
+  // Render-target width — quantized to the nearest 100 px so that small
+  // window-size jitter doesn't invalidate the cache or trigger redundant
+  // backend renders. Multiplied by DPR for Retina sharpness and by
+  // `max(renderZoom, 1)` so zoomed-in views request a higher-resolution
+  // source instead of upscaling a blurry low-res blob.
   const dpr = typeof window !== "undefined" ? window.devicePixelRatio || 1 : 1;
-  const pdfRenderWidth = isPdf ? Math.round(1200 * Math.max(renderZoom, 1) * dpr) : undefined;
+  const [containerWidth, setContainerWidth] = useState(0);
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    setContainerWidth(el.clientWidth);
+    const observer = new ResizeObserver((entries) => {
+      const next = entries[0]?.contentRect.width ?? 0;
+      if (next > 0) setContainerWidth(next);
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+  const renderWidth = (() => {
+    // Default to a reasonable fallback before the container measures so
+    // the very first page request still gets a sane width.
+    const base = containerWidth > 0 ? containerWidth : 1600;
+    const perPage = dualPage ? base / 2 : base;
+    const raw = perPage * Math.max(renderZoom, 1) * dpr;
+    // Quantize and clamp. The backend clamps to 9600 too — match it.
+    const quantized = Math.round(raw / 100) * 100;
+    return Math.min(9600, Math.max(400, quantized));
+  })();
 
-  // Page cache: resolved images keyed by "{pageIndex}:{renderWidth}"
+  // Blob URL cache keyed by `{pageIndex}:{renderWidth}`. URLs evicted
+  // here MUST be revoked or the renderer keeps the blob alive
+  // indefinitely — a 4 MB page leaks once per page turn otherwise.
   const pageCacheRef = useRef<Map<string, string>>(new Map());
-  // In-flight promises: prevents duplicate invokes for the same page
   const inflightRef = useRef<Map<string, Promise<string>>>(new Map());
 
+  const evictUrl = useCallback((key: string) => {
+    const url = pageCacheRef.current.get(key);
+    if (url) {
+      URL.revokeObjectURL(url);
+      pageCacheRef.current.delete(key);
+    }
+  }, []);
+
   const loadPageCached = useCallback(
-    async (index: number, renderWidth?: number): Promise<string> => {
-      const key = `${index}:${renderWidth ?? 0}`;
+    async (index: number, width: number): Promise<string> => {
+      const key = `${index}:${width}`;
       const cached = pageCacheRef.current.get(key);
       if (cached) {
         dbg(`frontend cache HIT page=${index}`);
         return cached;
       }
-      // Reuse in-flight request if one exists for this key
       const inflight = inflightRef.current.get(key);
       if (inflight) {
         dbg(`frontend cache PENDING page=${index}, reusing in-flight request`);
         return inflight;
       }
       dbg(`frontend cache MISS page=${index}, fetching...`);
-      const promise = loadPage(index, renderWidth).then((data) => {
-        pageCacheRef.current.set(key, data);
-        inflightRef.current.delete(key);
-        // Keep cache bounded (max 10 entries)
-        if (pageCacheRef.current.size > 10) {
-          const firstKey = pageCacheRef.current.keys().next().value;
-          if (firstKey !== undefined) pageCacheRef.current.delete(firstKey);
-        }
-        return data;
-      }).catch((err) => {
-        inflightRef.current.delete(key);
-        throw err;
-      });
+      const promise = loadPage(index, width)
+        .then((url) => {
+          // If another request for the same key beat us to it (rare —
+          // we de-dupe via inflightRef above — but possible across
+          // re-renders), drop the duplicate blob to avoid a leak.
+          const existing = pageCacheRef.current.get(key);
+          if (existing && existing !== url) {
+            URL.revokeObjectURL(url);
+            inflightRef.current.delete(key);
+            return existing;
+          }
+          pageCacheRef.current.set(key, url);
+          inflightRef.current.delete(key);
+          while (pageCacheRef.current.size > 10) {
+            const oldest = pageCacheRef.current.keys().next().value;
+            if (oldest === undefined) break;
+            evictUrl(oldest);
+          }
+          return url;
+        })
+        .catch((err) => {
+          inflightRef.current.delete(key);
+          throw err;
+        });
       inflightRef.current.set(key, promise);
       return promise;
     },
-    [loadPage]
+    [loadPage, evictUrl]
   );
+
+  // Revoke every cached blob URL when the viewer unmounts or the book
+  // switches — otherwise the renderer keeps every page we ever loaded
+  // alive in memory.
+  useEffect(() => {
+    const cacheRef = pageCacheRef;
+    return () => {
+      for (const url of cacheRef.current.values()) {
+        URL.revokeObjectURL(url);
+      }
+      cacheRef.current.clear();
+      inflightRef.current.clear();
+    };
+  }, [bookId]);
 
   // Load spread (one or two pages in parallel) with timeout
   useEffect(() => {
@@ -225,8 +296,8 @@ export default function PageViewer({
     // Clear stale in-flight entries for pages we no longer need.
     // This prevents abandoned renders from blocking the pdfium queue.
     const keep = new Set<string>();
-    keep.add(`${spread.left}:${pdfRenderWidth ?? 0}`);
-    if (spread.right !== null) keep.add(`${spread.right}:${pdfRenderWidth ?? 0}`);
+    keep.add(`${spread.left}:${renderWidth}`);
+    if (spread.right !== null) keep.add(`${spread.right}:${renderWidth}`);
     for (const key of inflightRef.current.keys()) {
       if (!keep.has(key)) {
         dbg(`clearing stale inflight: ${key}`);
@@ -247,9 +318,9 @@ export default function PageViewer({
         const timeout = new Promise<never>((_, reject) => {
           timeoutId = setTimeout(() => reject(new Error("timeout")), 30000);
         });
-        const promises: Promise<string>[] = [loadPageCached(spread.left, pdfRenderWidth)];
+        const promises: Promise<string>[] = [loadPageCached(spread.left, renderWidth)];
         if (spread.right !== null) {
-          promises.push(loadPageCached(spread.right, pdfRenderWidth));
+          promises.push(loadPageCached(spread.right, renderWidth));
         }
         const results = await Promise.race([Promise.all(promises), timeout]);
         clearTimeout(timeoutId);
@@ -285,7 +356,7 @@ export default function PageViewer({
       clearTimeout(slowTimerId);
       if (rafId !== undefined) cancelAnimationFrame(rafId);
     };
-  }, [spread.left, spread.right, loadPageCached, pdfRenderWidth, retryCount]);
+  }, [spread.left, spread.right, loadPageCached, renderWidth, retryCount]);
 
   // Preload adjacent spreads in the background after current spread renders.
   // Debounced by 500ms to prevent queue buildup during fast navigation.
@@ -315,11 +386,11 @@ export default function PageViewer({
       // Fire-and-forget — don't block on preloads
       for (const idx of toPreload) {
         dbg(`preload page=${idx}`);
-        loadPageCached(idx, pdfRenderWidth);
+        loadPageCached(idx, renderWidth);
       }
     }, 500);
     return () => clearTimeout(timerId);
-  }, [loading, spread.left, spread.right, dualPage, totalPages, loadPageCached, pdfRenderWidth]);
+  }, [loading, spread.left, spread.right, dualPage, totalPages, loadPageCached, renderWidth]);
 
   const goTo = useCallback(
     (index: number) => {
@@ -581,11 +652,11 @@ export default function PageViewer({
             <button
               onClick={() => {
                 // Evict from cache and in-flight so retry fetches fresh
-                const key = `${spread.left}:${pdfRenderWidth ?? 0}`;
+                const key = `${spread.left}:${renderWidth}`;
                 pageCacheRef.current.delete(key);
                 inflightRef.current.delete(key);
                 if (spread.right !== null) {
-                  const rkey = `${spread.right}:${pdfRenderWidth ?? 0}`;
+                  const rkey = `${spread.right}:${renderWidth}`;
                   pageCacheRef.current.delete(rkey);
                   inflightRef.current.delete(rkey);
                 }
