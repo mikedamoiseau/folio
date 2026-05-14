@@ -1946,6 +1946,74 @@ pub async fn get_comic_page(
     result
 }
 
+/// Binary variant of [`get_comic_page`] — returns raw bytes plus a
+/// trailing mime tag (see `page_wire`) instead of a base64 data URI.
+///
+/// `target_width` clamps the page width to the viewport. The frontend
+/// computes this from container width × DPR so we ship roughly the
+/// number of pixels the browser actually paints, not the full-res
+/// archive scan (often 4–10 MB at native resolution).
+#[tauri::command]
+pub async fn get_comic_page_bytes(
+    book_id: String,
+    page_index: u32,
+    target_width: Option<u32>,
+    state: State<'_, AppState>,
+    app: AppHandle,
+) -> FolioResult<tauri::ipc::Response> {
+    let start = std::time::Instant::now();
+    let target_width = target_width.filter(|&w| w > 0).map(|w| w.min(9600));
+
+    let book = {
+        let conn = state.active_db()?.get()?;
+        db::get_book(&conn, &book_id)?
+            .ok_or_else(|| FolioError::not_found(format!("Book '{book_id}' not found")))?
+    };
+    let file_path = state.resolve_book_path(&book)?;
+    validate_file_exists(&file_path)?;
+
+    // Cache-first path. Cached pages are full-resolution archive bytes;
+    // run them through the same resize helper the cold path uses so the
+    // wire-level promise (≤ target_width) holds either way.
+    if let Ok(storage) = page_cache_storage(&app) {
+        if let Some(ref book_hash) = book.file_hash {
+            if let Ok((data, mime)) = page_cache::get_cached_page(&storage, book_hash, page_index) {
+                let (bytes, out_mime) =
+                    crate::image_util::maybe_resize_to_jpeg(data, mime, target_width)?;
+                page_cache::page_dbg!(
+                    "bytes cache HIT: page={} size={}KB total={:?}",
+                    page_index,
+                    bytes.len() / 1024,
+                    start.elapsed()
+                );
+                return Ok(tauri::ipc::Response::new(crate::page_wire::append_tag(
+                    bytes, &out_mime,
+                )));
+            }
+        }
+    }
+
+    let (bytes, mime) = match book.format {
+        BookFormat::Cbz => cbz::get_page_image_bytes(&file_path, page_index, target_width)?,
+        BookFormat::Cbr => cbr::get_page_image_bytes(&file_path, page_index, target_width)?,
+        _ => {
+            return Err(FolioError::invalid(format!(
+                "get_comic_page_bytes is not supported for {:?}",
+                book.format
+            )));
+        }
+    };
+    page_cache::page_dbg!(
+        "bytes archive read: page={} size={}KB total={:?}",
+        page_index,
+        bytes.len() / 1024,
+        start.elapsed()
+    );
+    Ok(tauri::ipc::Response::new(crate::page_wire::append_tag(
+        bytes, &mime,
+    )))
+}
+
 #[tauri::command]
 pub async fn prepare_comic(
     book_id: String,
@@ -3670,6 +3738,33 @@ pub async fn get_pdf_page_count(book_id: String, state: State<'_, AppState>) -> 
     };
     validate_file_exists(&file_path)?;
     pdf::get_page_count(&file_path)
+}
+
+/// Binary variant of [`get_pdf_page`] — returns raw JPEG bytes plus a
+/// trailing mime tag (see `page_wire`) instead of a base64 data URI.
+///
+/// `width` controls the render resolution (clamped to 9600). When
+/// omitted, `folio_core::pdf::get_page_image_bytes` falls back to
+/// `DEFAULT_RENDER_WIDTH` (1200 px), matching the legacy default.
+#[tauri::command]
+pub async fn get_pdf_page_bytes(
+    book_id: String,
+    page_index: u32,
+    width: Option<u32>,
+    state: State<'_, AppState>,
+) -> FolioResult<tauri::ipc::Response> {
+    let render_width = width.filter(|&w| w > 0).map(|w| w.min(9600));
+    let file_path = {
+        let conn = state.active_db()?.get()?;
+        let book = db::get_book(&conn, &book_id)?
+            .ok_or_else(|| FolioError::not_found(format!("Book '{book_id}' not found")))?;
+        state.resolve_book_path(&book)?
+    };
+    validate_file_exists(&file_path)?;
+    let (bytes, mime) = pdf::get_page_image_bytes(&file_path, page_index, render_width)?;
+    Ok(tauri::ipc::Response::new(crate::page_wire::append_tag(
+        bytes, mime,
+    )))
 }
 
 #[tauri::command]

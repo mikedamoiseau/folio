@@ -1,6 +1,7 @@
 #[cfg(test)]
 mod ci_workflow_test;
 pub mod commands;
+pub mod page_wire;
 #[cfg(test)]
 mod release_workflow_test;
 #[cfg(test)]
@@ -12,8 +13,8 @@ pub mod web_server;
 // call sites in commands.rs, web_server, and tray keep compiling unchanged.
 // New code should prefer `use folio_core::…` directly.
 pub use folio_core::{
-    backup, cbr, cbz, db, enrichment, epub, error, models, opds, openlibrary, page_cache, paths,
-    pdf, providers, sync,
+    backup, cbr, cbz, db, enrichment, epub, error, image_util, models, opds, openlibrary,
+    page_cache, paths, pdf, providers, sync,
 };
 
 use commands::{AppState, LruCache, ProfileState};
@@ -291,9 +292,11 @@ pub fn run() {
             commands::update_bookmark,
             commands::get_comic_page_count,
             commands::get_comic_page,
+            commands::get_comic_page_bytes,
             commands::check_pdf_support,
             commands::get_pdf_page_count,
             commands::get_pdf_page,
+            commands::get_pdf_page_bytes,
             commands::create_collection,
             commands::update_collection,
             commands::get_collections,
