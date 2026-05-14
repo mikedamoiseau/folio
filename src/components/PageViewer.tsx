@@ -218,6 +218,14 @@ export default function PageViewer({
   // indefinitely — a 4 MB page leaks once per page turn otherwise.
   const pageCacheRef = useRef<Map<string, string>>(new Map());
   const inflightRef = useRef<Map<string, Promise<string>>>(new Map());
+  // Generation counter — bumps on bookId change/unmount cleanup. Each
+  // in-flight `loadPage` snapshots the generation at start; when the
+  // promise resolves we compare against the live counter to reject and
+  // revoke stale blobs that would otherwise either leak (URL never put
+  // into the cache, never revoked) or cross-contaminate the next book
+  // by being inserted under a key like `0:1600` that the new book also
+  // requests.
+  const generationRef = useRef(0);
 
   const evictUrl = useCallback((key: string) => {
     const url = pageCacheRef.current.get(key);
@@ -241,8 +249,18 @@ export default function PageViewer({
         return inflight;
       }
       dbg(`frontend cache MISS page=${index}, fetching...`);
+      const myGen = generationRef.current;
       const promise = loadPage(index, width)
         .then((url) => {
+          // Stale: bookId changed (or component unmounted) while the
+          // backend was rendering. Revoke immediately so the blob does
+          // NOT enter the cache (where the new book might pick it up
+          // under the same key) and does NOT leak.
+          if (myGen !== generationRef.current) {
+            URL.revokeObjectURL(url);
+            inflightRef.current.delete(key);
+            throw new Error("page load aborted: book changed");
+          }
           // If another request for the same key beat us to it (rare —
           // we de-dupe via inflightRef above — but possible across
           // re-renders), drop the duplicate blob to avoid a leak.
@@ -277,6 +295,10 @@ export default function PageViewer({
   useEffect(() => {
     const cacheRef = pageCacheRef;
     return () => {
+      // Bump first so any in-flight promises that resolve AFTER this
+      // cleanup runs see a stale generation and revoke their blobs
+      // instead of leaking or contaminating the next book.
+      generationRef.current += 1;
       for (const url of cacheRef.current.values()) {
         URL.revokeObjectURL(url);
       }
@@ -651,13 +673,17 @@ export default function PageViewer({
             <span className="text-sm text-red-500 text-center max-w-sm">{error}</span>
             <button
               onClick={() => {
-                // Evict from cache and in-flight so retry fetches fresh
+                // Evict from cache and in-flight so retry fetches fresh.
+                // Must go through evictUrl so the blob URL is revoked —
+                // a raw cache delete would leak the successfully-loaded
+                // page (e.g. left page in a dual-page spread when right
+                // failed).
                 const key = `${spread.left}:${renderWidth}`;
-                pageCacheRef.current.delete(key);
+                evictUrl(key);
                 inflightRef.current.delete(key);
                 if (spread.right !== null) {
                   const rkey = `${spread.right}:${renderWidth}`;
-                  pageCacheRef.current.delete(rkey);
+                  evictUrl(rkey);
                   inflightRef.current.delete(rkey);
                 }
                 setRetryCount((c) => c + 1);
