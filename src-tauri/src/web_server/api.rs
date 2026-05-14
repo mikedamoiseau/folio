@@ -467,17 +467,17 @@ async fn get_page_image(
     match book.format {
         BookFormat::Pdf => {
             let (bytes, mime) =
-                crate::pdf::get_page_image_bytes(&file_path, index).map_err(folio_status)?;
+                crate::pdf::get_page_image_bytes(&file_path, index, None).map_err(folio_status)?;
             Ok(([(header::CONTENT_TYPE, mime.to_string())], bytes).into_response())
         }
         BookFormat::Cbz => {
             let (bytes, mime) =
-                crate::cbz::get_page_image_bytes(&file_path, index).map_err(folio_status)?;
+                crate::cbz::get_page_image_bytes(&file_path, index, None).map_err(folio_status)?;
             Ok(([(header::CONTENT_TYPE, mime)], bytes).into_response())
         }
         BookFormat::Cbr => {
             let (bytes, mime) =
-                crate::cbr::get_page_image_bytes(&file_path, index).map_err(folio_status)?;
+                crate::cbr::get_page_image_bytes(&file_path, index, None).map_err(folio_status)?;
             Ok(([(header::CONTENT_TYPE, mime)], bytes).into_response())
         }
         _ => Err((

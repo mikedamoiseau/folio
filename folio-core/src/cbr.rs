@@ -226,7 +226,15 @@ pub fn get_page_image(path: &str, page_index: u32) -> FolioResult<String> {
 }
 
 /// Extracts a single page image and returns raw bytes + mime type.
-pub fn get_page_image_bytes(path: &str, page_index: u32) -> FolioResult<(Vec<u8>, String)> {
+///
+/// When `target_width` is `Some(w)` and the source image is wider than
+/// `w`, the page is downscaled and re-encoded as JPEG; otherwise the
+/// original archive bytes are returned untouched.
+pub fn get_page_image_bytes(
+    path: &str,
+    page_index: u32,
+    target_width: Option<u32>,
+) -> FolioResult<(Vec<u8>, String)> {
     let images = collect_image_names(path)?;
     let target_name = images
         .get(page_index as usize)
@@ -261,7 +269,7 @@ pub fn get_page_image_bytes(path: &str, page_index: u32) -> FolioResult<(Vec<u8>
                         .read()
                         .map_err(|e| rar_err("Cannot extract page", e))?;
                     let mime = mime_for(&target_name).to_string();
-                    return Ok((data, mime));
+                    return crate::image_util::maybe_resize_to_jpeg(data, mime, target_width);
                 } else {
                     cursor = entry
                         .skip()

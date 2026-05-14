@@ -164,7 +164,16 @@ pub fn get_page_image(path: &str, page_index: u32) -> FolioResult<String> {
 
 /// Extracts a single page image and returns raw bytes + mime type.
 /// Avoids the base64 encode/decode round-trip for web serving.
-pub fn get_page_image_bytes(path: &str, page_index: u32) -> FolioResult<(Vec<u8>, String)> {
+///
+/// When `target_width` is `Some(w)` and the source image is wider than
+/// `w`, the page is downscaled to width `w` (preserving aspect) and
+/// re-encoded as JPEG. When `None`, or the source is already at or
+/// below the target, the original archive bytes are returned untouched.
+pub fn get_page_image_bytes(
+    path: &str,
+    page_index: u32,
+    target_width: Option<u32>,
+) -> FolioResult<(Vec<u8>, String)> {
     let mut archive = open_archive(path)?;
     let images = collect_image_names(&mut archive);
 
@@ -198,7 +207,7 @@ pub fn get_page_image_bytes(path: &str, page_index: u32) -> FolioResult<(Vec<u8>
         "image/jpeg"
     };
 
-    Ok((data, mime.to_string()))
+    crate::image_util::maybe_resize_to_jpeg(data, mime.to_string(), target_width)
 }
 
 #[cfg(test)]

@@ -153,7 +153,16 @@ pub fn get_page_image(path: &str, page_index: u32, width: u32) -> FolioResult<St
 
 /// Render one PDF page to raw JPEG bytes + mime type.
 /// Avoids the base64 encode/decode round-trip for web serving.
-pub fn get_page_image_bytes(path: &str, page_index: u32) -> FolioResult<(Vec<u8>, &'static str)> {
+///
+/// `target_width` controls the render resolution. When `None`, falls
+/// back to [`DEFAULT_RENDER_WIDTH`] (preserves the legacy 1200 px web
+/// default). The caller is responsible for clamping to a sensible
+/// upper bound (a 10 000 px request will be honored).
+pub fn get_page_image_bytes(
+    path: &str,
+    page_index: u32,
+    target_width: Option<u32>,
+) -> FolioResult<(Vec<u8>, &'static str)> {
     let pdfium = bind_pdfium()?;
     let document = pdfium
         .load_pdf_from_file(path, None)
@@ -170,7 +179,11 @@ pub fn get_page_image_bytes(path: &str, page_index: u32) -> FolioResult<(Vec<u8>
         .get(page_index as u16)
         .map_err(|e| FolioError::not_found(format!("page {page_index} not found: {e}")))?;
 
-    let config = PdfRenderConfig::new().set_target_width(1200);
+    let width = match target_width {
+        Some(0) | None => DEFAULT_RENDER_WIDTH,
+        Some(w) => w,
+    };
+    let config = PdfRenderConfig::new().set_target_width(width as i32);
 
     let bitmap = page
         .render_with_config(&config)
@@ -184,6 +197,10 @@ pub fn get_page_image_bytes(path: &str, page_index: u32) -> FolioResult<(Vec<u8>
 
     Ok((jpeg_bytes, "image/jpeg"))
 }
+
+/// Default render width when no `target_width` is supplied. Picked to
+/// match the historical web-server fallback resolution.
+pub const DEFAULT_RENDER_WIDTH: u32 = 1200;
 
 /// Search result from PDF text search — mirrors epub::SearchResult so the
 /// frontend can use the same type for both formats.
