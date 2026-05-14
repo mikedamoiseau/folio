@@ -166,7 +166,9 @@
     "preparingPages": "Pr\u00e9paration des pages...",
     "preparingPagesDetail": "Extraction des pages pour une lecture plus rapide",
     "thumbnailStripLabel": "Vignettes de pages",
-    "thumbnailGoTo": "Aller \u00e0 la page {{number}}"
+    "thumbnailGoTo": "Aller \u00e0 la page {{number}}",
+    "toggleThumbStrip": "Afficher/masquer les vignettes",
+    "thumbStripTitle": "Vignettes de pages (m)"
   },
 
   "import": {
@@ -616,6 +618,7 @@
     "toggleToc": "Basculer la table des mati\u00e8res",
     "addBookmark": "Ajouter un signet",
     "toggleFocus": "Basculer le mode concentration",
+    "toggleThumbStrip": "Afficher/masquer les vignettes (PDF/comics)",
     "closeExit": "Fermer les panneaux / Quitter le mode concentration / Retour \u00e0 la biblioth\u00e8que"
   },
 

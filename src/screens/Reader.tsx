@@ -5,6 +5,7 @@ import { listen } from "@tauri-apps/api/event";
 import { useTranslation } from "react-i18next";
 import { useTheme, MIN_FONT_SIZE, MAX_FONT_SIZE } from "../context/ThemeContext";
 import PageViewer from "../components/PageViewer";
+import PageThumbnailStrip from "../components/PageThumbnailStrip";
 import KeyboardShortcutsHelp from "../components/KeyboardShortcutsHelp";
 import HighlightsPanel, { HIGHLIGHT_COLORS } from "../components/HighlightsPanel";
 import BookmarksPanel from "../components/BookmarksPanel";
@@ -94,6 +95,19 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
   const [searching, setSearching] = useState(false);
   const [activeMatchIndex, setActiveMatchIndex] = useState(-1);
   const searchInputRef = useRef<HTMLInputElement>(null);
+
+  // Thumbnail strip (CBZ/CBR/PDF only) — persisted per book so reopening
+  // the same book restores the user's preference.
+  const thumbStripStorageKey = bookId ? `folio-thumbstrip-${bookId}` : null;
+  const [thumbStripOpen, setThumbStripOpen] = useState(() => {
+    if (!thumbStripStorageKey) return false;
+    return localStorage.getItem(thumbStripStorageKey) === "1";
+  });
+  useEffect(() => {
+    if (!thumbStripStorageKey) return;
+    if (thumbStripOpen) localStorage.setItem(thumbStripStorageKey, "1");
+    else localStorage.removeItem(thumbStripStorageKey);
+  }, [thumbStripOpen, thumbStripStorageKey]);
 
   // Do Not Disturb mode
   const [dndMode, setDndMode] = useState(false);
@@ -1169,6 +1183,8 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
         addBookmarkAtCurrentPosition();
       } else if (e.key === "d" && !e.metaKey && !e.ctrlKey) {
         setDndMode((prev) => !prev);
+      } else if (e.key === "m" && !e.metaKey && !e.ctrlKey && !isHtmlBook) {
+        setThumbStripOpen((prev) => !prev);
       } else if (e.key === "?" || (e.key === "/" && e.shiftKey)) {
         setShowShortcuts((prev) => !prev);
       } else if (e.key === "Escape") {
@@ -1656,6 +1672,21 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
                   </svg>
                 </button>
               )}
+              {!isHtmlBook && (
+                <button
+                  onClick={() => setThumbStripOpen((prev) => !prev)}
+                  className={`p-1.5 transition-colors rounded-lg focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 ${thumbStripOpen ? "text-accent bg-accent-light" : "text-ink-muted hover:text-ink hover:bg-warm-subtle"}`}
+                  aria-label={t("reader.toggleThumbStrip")}
+                  title={t("reader.thumbStripTitle")}
+                  aria-pressed={thumbStripOpen}
+                >
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+                    <rect x="3" y="6" width="4" height="12" rx="1" stroke="currentColor" strokeWidth="1.5" />
+                    <rect x="10" y="6" width="4" height="12" rx="1" stroke="currentColor" strokeWidth="1.5" />
+                    <rect x="17" y="6" width="4" height="12" rx="1" stroke="currentColor" strokeWidth="1.5" />
+                  </svg>
+                </button>
+              )}
             </div>
           )}
 
@@ -1825,17 +1856,31 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
         {/* Content area — chapter HTML (EPUB/MOBI) or page-based viewer */}
         {!isHtmlBook ? (
           pageCount > 0 ? (
-            <PageViewer
-              bookId={bookId!}
-              format={bookFormat}
-              totalPages={pageCount}
-              initialPage={chapterIndex}
-              onPageChange={(index) => setChapterIndex(index)}
-              onPageJump={(target) => recordJump(target, 0)}
-              dualPage={dualPage}
-              mangaMode={mangaMode}
-              pageAnimation={pageAnimation}
-            />
+            <>
+              <PageViewer
+                bookId={bookId!}
+                format={bookFormat}
+                totalPages={pageCount}
+                initialPage={chapterIndex}
+                onPageChange={(index) => setChapterIndex(index)}
+                onPageJump={(target) => recordJump(target, 0)}
+                dualPage={dualPage}
+                mangaMode={mangaMode}
+                pageAnimation={pageAnimation}
+              />
+              {thumbStripOpen && (bookFormat === "cbz" || bookFormat === "cbr" || bookFormat === "pdf") && (
+                <PageThumbnailStrip
+                  bookId={bookId!}
+                  format={bookFormat}
+                  totalPages={pageCount}
+                  currentPage={chapterIndex}
+                  onSelect={(target) => {
+                    if (target !== chapterIndex) recordJump(target, 0);
+                    setChapterIndex(target);
+                  }}
+                />
+              )}
+            </>
           ) : (
             <div className="flex-1 flex items-center justify-center">
               <p className="text-sm text-ink-muted">{t("reader.loadingPages")}</p>

@@ -34,6 +34,7 @@ export default function KeyboardShortcutsHelp({ context, onClose }: KeyboardShor
       { keys: "t", description: t("shortcuts.toggleToc") },
       { keys: "b", description: t("shortcuts.addBookmark") },
       { keys: "d", description: t("shortcuts.toggleFocus") },
+      { keys: "m", description: t("shortcuts.toggleThumbStrip") },
       { keys: "Escape", description: t("shortcuts.closeExit") },
       { keys: "?", description: t("shortcuts.toggleHelp") },
     ],

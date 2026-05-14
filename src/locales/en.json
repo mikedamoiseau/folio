@@ -166,7 +166,9 @@
     "preparingPages": "Preparing pages...",
     "preparingPagesDetail": "Extracting pages for faster reading",
     "thumbnailStripLabel": "Page thumbnails",
-    "thumbnailGoTo": "Go to page {{number}}"
+    "thumbnailGoTo": "Go to page {{number}}",
+    "toggleThumbStrip": "Toggle page thumbnails",
+    "thumbStripTitle": "Page thumbnails (m)"
   },
 
   "import": {
@@ -616,6 +618,7 @@
     "toggleToc": "Toggle table of contents",
     "addBookmark": "Add bookmark",
     "toggleFocus": "Toggle focus mode",
+    "toggleThumbStrip": "Toggle page thumbnails (PDF/comics)",
     "closeExit": "Close panels / Exit focus / Back to library"
   },
 
