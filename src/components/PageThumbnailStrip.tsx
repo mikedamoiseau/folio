@@ -166,8 +166,15 @@ export default function PageThumbnailStrip({
   // Load the thumbnail bytes for a single page and write the resulting
   // blob URL into the cache. No-op if the entry is already present or
   // in-flight. Bumps a tick so the visible range re-renders the new tile.
+  //
+  // `markError` controls whether a failure is recorded in `errorRef`.
+  // Visible (foreground) loads pass `true` so the tile surfaces a retry
+  // affordance. Speculative prefetch loads pass `false` so transient
+  // background failures do not poison the normal on-demand load path
+  // when the user later scrolls to that page.
   const loadThumb = useCallback(
-    async (index: number) => {
+    async (index: number, options?: { markError?: boolean }) => {
+      const markError = options?.markError ?? true;
       if (cacheRef.current.has(index)) return;
       if (inflightRef.current.has(index)) return;
       inflightRef.current.add(index);
@@ -197,7 +204,7 @@ export default function PageThumbnailStrip({
         }
         tick();
       } catch {
-        if (myGen === generationRef.current) {
+        if (markError && myGen === generationRef.current) {
           errorRef.current.add(index);
           tick();
         }
@@ -229,6 +236,9 @@ export default function PageThumbnailStrip({
 
   // Prefetch tiles just past the visible window in the current scroll
   // direction. Errored tiles are skipped — the user retries explicitly.
+  // Prefetch failures are swallowed (markError: false) so a transient
+  // background error does not surface as a user-visible retry tile
+  // before they ever scrolled there.
   useEffect(() => {
     const range = computePrefetchRange(
       visible,
@@ -237,7 +247,9 @@ export default function PageThumbnailStrip({
       totalPages,
     );
     for (let i = range.start; i < range.end; i++) {
-      if (!cacheRef.current.has(i) && !errorRef.current.has(i)) void loadThumb(i);
+      if (!cacheRef.current.has(i) && !errorRef.current.has(i)) {
+        void loadThumb(i, { markError: false });
+      }
     }
   }, [visible.start, visible.end, loadThumb, totalPages]);
 
