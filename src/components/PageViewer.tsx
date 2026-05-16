@@ -111,6 +111,13 @@ export default function PageViewer({
   const isInitialLoad = useRef(true);
   const animationRef = useRef<Animation | null>(null);
   const isAnimating = useRef(false);
+  // Tracks the last page index that successfully animated in. Used to
+  // suppress redundant slide-in animations that fire when the
+  // load-spread effect re-runs for reasons that are not a real page
+  // turn — for example, a `renderWidth` quantization flip caused by a
+  // sibling component (the thumbnail strip) mounting and reflowing
+  // the layout, which changes the cache key and forces a re-fetch.
+  const lastAnimatedPageRef = useRef<number | null>(null);
 
   const { t } = useTranslation();
   const isPdf = format === "pdf";
@@ -352,10 +359,17 @@ export default function PageViewer({
         setError(null);
         setLeftImageData(results[0]);
         setRightImageData(results.length > 1 ? results[1] : null);
-        // Slide in after new images are set
-        rafId = requestAnimationFrame(() => {
-          if (!cancelled) slideInRef.current();
-        });
+        // Slide in after new images are set — but only when the
+        // page actually changed. A second loadSpread fire for the
+        // same page (e.g. cache key churn after a sibling reflow)
+        // would otherwise replay the slide animation on a page that
+        // is already on screen.
+        if (lastAnimatedPageRef.current !== spread.left) {
+          lastAnimatedPageRef.current = spread.left;
+          rafId = requestAnimationFrame(() => {
+            if (!cancelled) slideInRef.current();
+          });
+        }
       } catch (err) {
         clearTimeout(timeoutId);
         clearTimeout(slowTimerId);

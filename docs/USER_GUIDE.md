@@ -224,6 +224,8 @@ These formats use a page-by-page viewer. Navigate with the Previous/Next buttons
 
 **Go to page:** Click the page label (e.g., "Page 5 / 45") in the footer bar. It turns into a number input — type the page you want and press Enter. Press Escape or click away to cancel.
 
+**Thumbnail strip:** Click the three-bar icon in the header (or press `M`) to open a horizontal strip of page thumbnails below the reader. Click any thumbnail to jump to that page — the jump is recorded in navigation history so back/forward returns to the source page. Pages closest to the one you're reading decode first, so the strip fills outward from the current page. The strip remembers its open/closed state per book.
+
 **Page cache (CBZ/CBR):** When you open a comic for the first time, Folio extracts all pages from the archive to a disk cache. Subsequent page turns read from disk and are near-instant (~1-5ms). The cache persists between sessions — reopening the same comic skips extraction entirely. Cache is managed automatically via eviction (max 5 books, configurable size cap, 7-day expiry). You can adjust the cache size limit or clear it in Settings > Library.
 
 **Zoom quality:** When you zoom into any page-based format, Folio keeps images sharp. PDFs are re-rendered at the target resolution (like native PDF viewers), and comic pages (CBZ/CBR) are displayed using physical DOM resizing so the browser resamples at full resolution instead of blurring. PDF pages are rendered as high-quality JPEG images with an in-memory cache for fast navigation.
@@ -748,6 +750,7 @@ Press `?` at any time to see the shortcut reference.
 | `T` | Toggle Table of Contents |
 | `B` | Add bookmark |
 | `D` | Toggle focus mode |
+| `M` | Toggle page thumbnails (PDF / CBZ / CBR) |
 | `Escape` | Close panel / exit focus mode / back to library |
 | `?` | Toggle shortcut help |
 

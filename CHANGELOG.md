@@ -5,6 +5,17 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- **Page-thumbnail strip** for image-based formats (CBZ / CBR / PDF). A toggleable horizontal strip below the reader shows every page; clicking a thumbnail jumps to that page (and stamps navigation history). Header button + `m` shortcut. Per-book open/closed state persists in `localStorage`.
+  - Virtualized: only thumbnails inside the visible window plus overscan render as DOM nodes, so a 1000-page book stays cheap.
+  - Module-level per-book blob-URL cache survives strip close/reopen — second open is instant.
+  - Directional prefetch + distance-from-current load ordering: pages near the current page decode first, and a scroll-direction-biased prefetch window keeps the next viewport already decoded by the time it lands.
+  - Per-tile loading / error / loaded states with retry-on-click for failed tiles. Empty tiles render transparent (no border / background) so the strip stays quiet while many pages decode.
+  - Subtle motion: strip slide-up enter, per-tile fade-up, active-tile shadow + accent number label, edge mask fading thumbs into the surface. All animations honour `prefers-reduced-motion`.
+
+### Fixed
+- **PageViewer re-animated the current page on layout reflow.** The slide-in animation re-fired when the load-spread effect re-ran for reasons other than a real page turn (for example, the thumbnail strip mounting and shifting the page-image cache key). Tracked the last-animated page index so the animation only plays on actual navigation.
+
 ## [2.0.0] - 2026-05-03
 
 A milestone release. The 1.x line shipped the reader and the library; 2.0 is the platform underneath it. The desktop app now sits on top of `folio-core`, a separately-tested Rust crate with a pluggable `Storage` trait and structured errors — the same machinery that powers the embedded web server. New formats (MOBI / AZW / AZW3), a back/forward navigation stack, a curated OPDS preset picker, and a refactored remote-access toggle round out the user-facing additions. UX has had a measurable consistency pass (4 px spacing grid, clustered animation durations, normalized icon strokes, codified error surfaces).

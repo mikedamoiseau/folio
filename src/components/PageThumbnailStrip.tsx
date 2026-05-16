@@ -14,6 +14,41 @@ const CACHE_LIMIT = 80;
 // pan keeps the next viewport already decoded by the time it lands.
 const PREFETCH_AHEAD = 16;
 
+// ─── Module-level thumbnail cache ──────────────────────────────────
+// Surviving instances of the strip share a per-book cache so that
+// closing the strip and reopening it does not re-decode every page.
+// One book's worth of state lives at a time; activating a different
+// book evicts the prior one's blobs (and bumps its generation, so
+// any still-pending fetches drop on resolution).
+type BookCache = {
+  urls: Map<number, string>;
+  inflight: Set<number>;
+  errors: Set<number>;
+  generation: number;
+};
+
+const bookCaches = new Map<string, BookCache>();
+
+function getBookCache(bookId: string): BookCache {
+  let c = bookCaches.get(bookId);
+  if (!c) {
+    c = { urls: new Map(), inflight: new Set(), errors: new Set(), generation: 0 };
+    bookCaches.set(bookId, c);
+  }
+  return c;
+}
+
+function evictBookCache(bookId: string) {
+  const c = bookCaches.get(bookId);
+  if (!c) return;
+  c.generation += 1;
+  for (const url of c.urls.values()) URL.revokeObjectURL(url);
+  c.urls.clear();
+  c.inflight.clear();
+  c.errors.clear();
+  bookCaches.delete(bookId);
+}
+
 /**
  * Compute which thumbnail indices intersect the visible scroll window.
  *
@@ -100,31 +135,34 @@ export default function PageThumbnailStrip({
   const scrollDirRef = useRef(0);
   const lastScrollRef = useRef(0);
 
-  // Blob URL cache keyed by page index. Revoked on eviction and on
-  // unmount / book switch. Stored as a ref so async loads can write
-  // back without forcing a parent re-render.
-  const cacheRef = useRef<Map<number, string>>(new Map());
-  const inflightRef = useRef<Set<number>>(new Set());
-  // Pages whose last load attempt failed. Tiles in this set render a
-  // retry affordance; clicking the tile retries the fetch instead of
-  // selecting the page.
-  const errorRef = useRef<Set<number>>(new Set());
-  const generationRef = useRef(0);
+  // Per-book cache (shared across mount/unmount cycles of this
+  // component). Reading from refs keeps the call-sites unchanged.
+  const bookCache = getBookCache(bookId);
+  const cacheRef = useRef(bookCache.urls);
+  const inflightRef = useRef(bookCache.inflight);
+  const errorRef = useRef(bookCache.errors);
+  // Keep refs pointing at the active book's cache whenever bookId
+  // changes (the Reader stays mounted across books).
+  cacheRef.current = bookCache.urls;
+  inflightRef.current = bookCache.inflight;
+  errorRef.current = bookCache.errors;
+  // Generation lives on the BookCache itself so that any in-flight
+  // promise resolving after a book switch sees the bumped counter
+  // and drops its blob URL.
+  const generationRef = useRef(bookCache.generation);
+  generationRef.current = bookCache.generation;
   // Trigger a re-render when a thumbnail finishes loading. We do not
   // store the URLs in React state — `cacheRef` is the source of truth
   // — but components need to repaint when fresh entries land.
   const [, forceTick] = useState(0);
   const tick = useCallback(() => forceTick((n) => n + 1), []);
 
+  // Evict caches for any books other than the active one. Runs on
+  // bookId change; the active book's cache survives strip toggling.
   useEffect(() => {
-    const cache = cacheRef.current;
-    return () => {
-      generationRef.current += 1;
-      for (const url of cache.values()) URL.revokeObjectURL(url);
-      cache.clear();
-      inflightRef.current.clear();
-      errorRef.current.clear();
-    };
+    for (const otherId of [...bookCaches.keys()]) {
+      if (otherId !== bookId) evictBookCache(otherId);
+    }
   }, [bookId]);
 
   // Track viewport width so we can compute the visible range
@@ -155,14 +193,6 @@ export default function PageThumbnailStrip({
     [scrollLeft, viewWidth, totalPages],
   );
 
-  const evict = useCallback((index: number) => {
-    const url = cacheRef.current.get(index);
-    if (url) {
-      URL.revokeObjectURL(url);
-      cacheRef.current.delete(index);
-    }
-  }, []);
-
   // Load the thumbnail bytes for a single page and write the resulting
   // blob URL into the cache. No-op if the entry is already present or
   // in-flight. Bumps a tick so the visible range re-renders the new tile.
@@ -175,11 +205,16 @@ export default function PageThumbnailStrip({
   const loadThumb = useCallback(
     async (index: number, options?: { markError?: boolean }) => {
       const markError = options?.markError ?? true;
-      if (cacheRef.current.has(index)) return;
-      if (inflightRef.current.has(index)) return;
-      inflightRef.current.add(index);
-      errorRef.current.delete(index);
-      const myGen = generationRef.current;
+      // Pin the cache for this fetch to the BookCache identity at
+      // call time. If the book later switches (cache eviction bumps
+      // generation), the resolution branch drops its result rather
+      // than poisoning a new book's state.
+      const cache = bookCache;
+      if (cache.urls.has(index)) return;
+      if (cache.inflight.has(index)) return;
+      cache.inflight.add(index);
+      cache.errors.delete(index);
+      const startingGen = cache.generation;
       const dpr = typeof window !== "undefined" ? window.devicePixelRatio || 1 : 1;
       const renderWidth = Math.round(THUMB_WIDTH * dpr);
       const command = isPdf ? "get_pdf_page_bytes" : "get_comic_page_bytes";
@@ -188,31 +223,32 @@ export default function PageThumbnailStrip({
       else params.targetWidth = renderWidth;
       try {
         const payload = await invoke<ArrayBuffer>(command, params);
-        if (myGen !== generationRef.current) return;
+        if (cache.generation !== startingGen) return;
         const { url } = blobUrlFromBytes(payload);
-        // If a duplicate concurrent load landed first, drop the late one.
-        const existing = cacheRef.current.get(index);
+        const existing = cache.urls.get(index);
         if (existing && existing !== url) {
           URL.revokeObjectURL(url);
           return;
         }
-        cacheRef.current.set(index, url);
-        while (cacheRef.current.size > CACHE_LIMIT) {
-          const oldest = cacheRef.current.keys().next().value;
+        cache.urls.set(index, url);
+        while (cache.urls.size > CACHE_LIMIT) {
+          const oldest = cache.urls.keys().next().value;
           if (oldest === undefined || oldest === index) break;
-          evict(oldest);
+          const oldUrl = cache.urls.get(oldest);
+          if (oldUrl) URL.revokeObjectURL(oldUrl);
+          cache.urls.delete(oldest);
         }
         tick();
       } catch {
-        if (markError && myGen === generationRef.current) {
-          errorRef.current.add(index);
+        if (markError && cache.generation === startingGen) {
+          cache.errors.add(index);
           tick();
         }
       } finally {
-        inflightRef.current.delete(index);
+        cache.inflight.delete(index);
       }
     },
-    [bookId, isPdf, evict, tick],
+    [bookId, isPdf, bookCache, tick],
   );
 
   // Retry an errored tile by clearing its error mark and re-issuing
