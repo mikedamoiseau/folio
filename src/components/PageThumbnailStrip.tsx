@@ -227,18 +227,27 @@ export default function PageThumbnailStrip({
     [loadThumb, tick],
   );
 
-  // Fire loads for every visible thumb whenever the window moves
+  // Fire loads for every visible thumb whenever the window moves.
+  // Ordering matters: pdfium / the archive readers serve invokes
+  // roughly in submission order, so we sort missing tiles by their
+  // distance from `currentPage` first. The result is that the active
+  // page and its immediate neighbours decode before far-away tiles
+  // the user is unlikely to look at right away.
   useEffect(() => {
+    const missing: number[] = [];
     for (let i = visible.start; i < visible.end; i++) {
-      if (!cacheRef.current.has(i) && !errorRef.current.has(i)) void loadThumb(i);
+      if (!cacheRef.current.has(i) && !errorRef.current.has(i)) missing.push(i);
     }
-  }, [visible.start, visible.end, loadThumb]);
+    missing.sort((a, b) => Math.abs(a - currentPage) - Math.abs(b - currentPage));
+    for (const i of missing) void loadThumb(i);
+  }, [visible.start, visible.end, loadThumb, currentPage]);
 
   // Prefetch tiles just past the visible window in the current scroll
   // direction. Errored tiles are skipped — the user retries explicitly.
   // Prefetch failures are swallowed (markError: false) so a transient
   // background error does not surface as a user-visible retry tile
-  // before they ever scrolled there.
+  // before they ever scrolled there. Ordering follows the same
+  // distance-from-current rule as the visible-range loader.
   useEffect(() => {
     const range = computePrefetchRange(
       visible,
@@ -246,12 +255,13 @@ export default function PageThumbnailStrip({
       PREFETCH_AHEAD,
       totalPages,
     );
+    const missing: number[] = [];
     for (let i = range.start; i < range.end; i++) {
-      if (!cacheRef.current.has(i) && !errorRef.current.has(i)) {
-        void loadThumb(i, { markError: false });
-      }
+      if (!cacheRef.current.has(i) && !errorRef.current.has(i)) missing.push(i);
     }
-  }, [visible.start, visible.end, loadThumb, totalPages]);
+    missing.sort((a, b) => Math.abs(a - currentPage) - Math.abs(b - currentPage));
+    for (const i of missing) void loadThumb(i, { markError: false });
+  }, [visible.start, visible.end, loadThumb, totalPages, currentPage]);
 
   // When the current page changes, scroll the active thumb into view.
   useEffect(() => {
@@ -272,22 +282,39 @@ export default function PageThumbnailStrip({
   for (let i = visible.start; i < visible.end; i++) {
     const url = cacheRef.current.get(i);
     const errored = errorRef.current.has(i);
+    const hasImage = Boolean(url);
     const isActive = i === currentPage;
     const label = errored
       ? t("reader.thumbnailRetry", { number: i + 1 })
       : t("reader.thumbnailGoTo", { number: i + 1 });
+
+    // Chrome (border / bg / shadow) only paints when the tile has
+    // something to frame: a loaded image, or the active page. Empty
+    // loading and errored tiles render as transparent slots that
+    // float their glyph on the surface — keeps the strip quiet while
+    // many pages decode in parallel.
+    let chrome: string;
+    if (hasImage && isActive) {
+      chrome =
+        "border border-accent ring-1 ring-accent bg-accent-light/60 dark:bg-accent-light/30 shadow-[0_4px_14px_-6px_rgba(44,34,24,0.35)] scale-[1.04] z-10";
+    } else if (hasImage) {
+      chrome =
+        "border border-warm-border hover:border-accent/60 hover:-translate-y-px hover:shadow-[0_3px_10px_-6px_rgba(44,34,24,0.25)] bg-warm-subtle";
+    } else if (isActive) {
+      // Active but image not yet decoded — outline only, no fill, so
+      // the active marker remains visible while the page renders.
+      chrome = "border border-accent/60 z-10";
+    } else {
+      // Loading or errored, inactive — no chrome at all.
+      chrome = "border border-transparent";
+    }
+
     tiles.push(
       <button
         key={i}
         type="button"
         onClick={() => (errored ? retryThumb(i) : onSelect(i))}
-        className={`absolute top-0 flex flex-col items-center justify-end p-0.5 rounded-sm border will-change-transform transition-[transform,border-color,background-color,box-shadow,opacity] duration-200 ease-out motion-reduce:transition-none ${
-          isActive
-            ? "border-accent ring-1 ring-accent bg-accent-light/60 dark:bg-accent-light/30 shadow-[0_4px_14px_-6px_rgba(44,34,24,0.35)] scale-[1.04] z-10"
-            : errored
-              ? "border-red-300 dark:border-red-900/40 bg-red-50/40 dark:bg-red-900/20 hover:border-red-400 dark:hover:border-red-700 hover:-translate-y-px"
-              : "border-warm-border hover:border-accent/60 hover:-translate-y-px hover:shadow-[0_3px_10px_-6px_rgba(44,34,24,0.25)] bg-warm-subtle"
-        }`}
+        className={`absolute top-0 flex flex-col items-center justify-end p-0.5 rounded-sm will-change-transform transition-[transform,border-color,background-color,box-shadow,opacity] duration-200 ease-out motion-reduce:transition-none ${chrome}`}
         style={{
           left: i * ITEM_STRIDE,
           width: THUMB_WIDTH,
@@ -305,19 +332,21 @@ export default function PageThumbnailStrip({
             draggable={false}
           />
         ) : errored ? (
-          <div className="flex-1 w-full flex items-center justify-center text-red-500 dark:text-red-400 animate-fade-in motion-reduce:animate-none">
-            <svg width="16" height="16" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+          <div className="flex-1 w-full flex items-center justify-center text-red-400/80 dark:text-red-400/70 animate-fade-in motion-reduce:animate-none">
+            <svg width="14" height="14" viewBox="0 0 20 20" fill="none" aria-hidden="true">
               <path d="M4 4l12 12M16 4L4 16" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
             </svg>
           </div>
         ) : (
-          <div className="flex-1 w-full flex items-center justify-center">
-            <div className="w-3 h-3 border border-warm-border border-t-accent/60 rounded-full animate-spin" />
+          <div className="flex-1 w-full flex items-center justify-center text-ink-muted/40">
+            <svg width="12" height="12" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+              <circle cx="10" cy="10" r="7" stroke="currentColor" strokeWidth="1.5" />
+            </svg>
           </div>
         )}
         <span
           className={`text-[10px] tabular-nums leading-none mt-0.5 transition-colors duration-200 ease-out motion-reduce:transition-none ${
-            isActive ? "text-accent font-medium" : "text-ink-muted"
+            isActive ? "text-accent font-medium" : "text-ink-muted/70"
           }`}
         >
           {i + 1}
