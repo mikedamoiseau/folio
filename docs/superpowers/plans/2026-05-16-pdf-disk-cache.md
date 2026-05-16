@@ -1121,48 +1121,60 @@ pub async fn get_pdf_page_bytes(
         }
     }
 
-    // Miss path: render at canonical width through the lazy cache, or
-    // fall back to direct render at the requested viewport width when
-    // caching is not possible (no storage / no hash).
+    // Miss path. Use the cached-render code path (canonical 2400 px
+    // render + best-effort disk write) only when a PDF manifest is
+    // already in place — otherwise we pay the higher canonical-width
+    // render cost without getting cache reuse. Without a manifest
+    // (prepare_pdf never ran, failed, or wrote a non-PDF manifest),
+    // fall back to a direct render at the viewport width — the same
+    // behaviour shipped before this spec landed.
     let (bytes, mime) = if let Some(book_hash) = book.file_hash.clone() {
         if let Ok(storage) = page_cache_storage(&app) {
-            // Set up the eviction callback. Cloning the AppHandle so it
-            // can outlive this call into the background spawn.
-            let app_for_evict = app.clone();
-            let max_size_mb = {
-                let conn = state.active_db()?.get()?;
-                db::get_setting(&conn, "page_cache_max_size_mb")
-                    .ok()
-                    .flatten()
-                    .and_then(|v| v.parse::<u64>().ok())
-                    .unwrap_or(page_cache::DEFAULT_MAX_CACHE_SIZE_MB)
-            };
-            let on_batch = move || {
-                if let Ok(evict_storage) = page_cache_storage(&app_for_evict) {
-                    tauri::async_runtime::spawn_blocking(move || {
-                        let _ = page_cache::run_eviction(&evict_storage, max_size_mb);
-                    });
-                }
-            };
-            page_cache::get_or_render_pdf_page_with_eviction(
-                &storage,
-                &book_hash,
-                &file_path,
-                page_index,
-                on_batch,
-            )?
+            let has_pdf_manifest = page_cache::read_manifest(&storage, &book_hash)
+                .map(|m| m.format == BookFormat::Pdf)
+                .unwrap_or(false);
+            if has_pdf_manifest {
+                // Eviction callback. Cloning the AppHandle so it can
+                // outlive this call into the background spawn.
+                let app_for_evict = app.clone();
+                let max_size_mb = {
+                    let conn = state.active_db()?.get()?;
+                    db::get_setting(&conn, "page_cache_max_size_mb")
+                        .ok()
+                        .flatten()
+                        .and_then(|v| v.parse::<u64>().ok())
+                        .unwrap_or(page_cache::DEFAULT_MAX_CACHE_SIZE_MB)
+                };
+                let on_batch = move || {
+                    if let Ok(evict_storage) = page_cache_storage(&app_for_evict) {
+                        tauri::async_runtime::spawn_blocking(move || {
+                            let _ = page_cache::run_eviction(&evict_storage, max_size_mb);
+                        });
+                    }
+                };
+                page_cache::get_or_render_pdf_page_with_eviction(
+                    &storage,
+                    &book_hash,
+                    &file_path,
+                    page_index,
+                    on_batch,
+                )?
+            } else {
+                // No PDF manifest — viewport render, no cache.
+                pdf::get_page_image_bytes(&file_path, page_index, render_width)?
+            }
         } else {
-            // Storage unavailable — render at the viewport width, no cache.
+            // Storage unavailable — viewport render, no cache.
             pdf::get_page_image_bytes(&file_path, page_index, render_width)?
         }
     } else {
-        // No file hash — direct render at the viewport width, no cache.
+        // No file hash — viewport render, no cache.
         pdf::get_page_image_bytes(&file_path, page_index, render_width)?
     };
 
-    // Cache-miss canonical render is at 2400 px; the direct fallbacks
-    // already match render_width. `maybe_resize_to_jpeg` is a no-op
-    // when the input is already at the target.
+    // Cache-miss canonical-render branch produced 2400 px JPEG bytes;
+    // the no-cache fallbacks already match `render_width`.
+    // `maybe_resize_to_jpeg` is a no-op when input == target.
     let (bytes, out_mime) = crate::image_util::maybe_resize_to_jpeg(bytes, mime, render_width)?;
     Ok(tauri::ipc::Response::new(crate::page_wire::append_tag(
         bytes, &out_mime,
@@ -1210,13 +1222,20 @@ width directly so uncacheable books stay at pre-spec performance."
 ### Task 3.1 — Reader.tsx invokes `prepare_pdf` for PDF books
 
 **Files:**
-- Modify: `src/screens/Reader.tsx:226-232` (existing `prepare_comic` block)
+- Modify: `src/screens/Reader.tsx:226-248` (existing `prepare_comic` block + the immediate `get_*_page_count` block that follows)
 
-- [ ] **Step 1: Extend the prepare block**
+- [ ] **Step 1: Extend the prepare block + reuse the returned manifest**
 
-Replace lines 226–232 of `src/screens/Reader.tsx`:
+`prepare_pdf` returns a `CacheManifest` whose `page_count` is the document total — exactly what `get_pdf_page_count` would return, except `prepare_pdf` already paid the open-and-count cost. Reusing the manifest avoids a second pdfium open + `FPDF_GetPageCount` round-trip per PDF.
+
+Replace lines 226–248 of `src/screens/Reader.tsx` (the existing `prepare_*` block plus the immediate `get_*_page_count` block) with:
 
 ```typescript
+// Capture the prewarmed manifest's page_count if available so we can
+// skip the dedicated count round-trip below. PDF only — comic flow
+// is unchanged.
+let prewarmedPageCount: number | null = null;
+
 if (bookInfo.format === "cbz" || bookInfo.format === "cbr") {
   try {
     await invoke("prepare_comic", { bookId });
@@ -1225,11 +1244,36 @@ if (bookInfo.format === "cbz" || bookInfo.format === "cbr") {
   }
 } else if (bookInfo.format === "pdf") {
   try {
-    await invoke("prepare_pdf", { bookId });
+    // The Rust CacheManifest struct exposes `page_count` (u32); we
+    // only need that field on the frontend, so type it narrowly.
+    const manifest = await invoke<{ page_count: number }>("prepare_pdf", { bookId });
+    if (typeof manifest?.page_count === "number") {
+      prewarmedPageCount = manifest.page_count;
+    }
   } catch (e) {
     // No file hash, linked book, or transient disk error.
     // Reader still works through the live render path.
     console.warn("PDF cache preparation failed, falling back to direct read:", e);
+  }
+}
+
+// Page count is only meaningful for fixed-layout (PDF) and image
+// (CBZ/CBR) formats. HTML-reflowable books (EPUB + MOBI) use scroll
+// progress instead, so skip the fetch and leave pageCount at 0.
+if (bookInfo.format === "pdf" || bookInfo.format === "cbz" || bookInfo.format === "cbr") {
+  if (bookInfo.format === "pdf" && prewarmedPageCount !== null) {
+    if (!cancelled) setPageCount(prewarmedPageCount);
+  } else {
+    try {
+      const command =
+        bookInfo.format === "pdf"
+          ? "get_pdf_page_count"
+          : "get_comic_page_count";
+      const count = await invoke<number>(command, { bookId });
+      if (!cancelled) setPageCount(count);
+    } catch {
+      // page count unavailable
+    }
   }
 }
 ```
@@ -1248,11 +1292,17 @@ Expected: all PASS (no Reader test exercises this branch directly).
 
 ```bash
 git add src/screens/Reader.tsx
-git commit -m "feat(reader): invoke prepare_pdf on PDF book open
+git commit -m "feat(reader): invoke prepare_pdf and reuse its manifest page_count
 
 Mirrors the existing prepare_comic branch. A failure is non-fatal:
 the reader still serves pages through the live render path so
-linked / unhashed PDFs keep working."
+linked / unhashed PDFs keep working.
+
+prepare_pdf returns a CacheManifest whose page_count is the
+document total. Reusing it avoids the extra pdfium open + page
+count round-trip that get_pdf_page_count would otherwise pay.
+Comic flow is unchanged (prepare_comic's manifest is still
+discarded; that's outside this milestone's scope)."
 ```
 
 ---
