@@ -161,12 +161,6 @@
   );
 }
 
-/* Respect the user's motion preference. The strip remains usable
-   without animation. */
-@media (prefers-reduced-motion: reduce) {
-  .thumb-strip-mask { -webkit-mask-image: none; mask-image: none; }
-}
-
 /* ── Off-screen rendering optimization ──────────────────────── */
 /* Browser skips layout/paint for cards scrolled far off-screen */
 .card-cv {
