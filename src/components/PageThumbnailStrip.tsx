@@ -281,12 +281,12 @@ export default function PageThumbnailStrip({
         key={i}
         type="button"
         onClick={() => (errored ? retryThumb(i) : onSelect(i))}
-        className={`absolute top-0 flex flex-col items-center justify-end p-0.5 rounded-sm border transition-colors ${
+        className={`absolute top-0 flex flex-col items-center justify-end p-0.5 rounded-sm border will-change-transform transition-[transform,border-color,background-color,box-shadow,opacity] duration-200 ease-out motion-reduce:transition-none ${
           isActive
-            ? "border-accent ring-1 ring-accent bg-accent-light/40"
+            ? "border-accent ring-1 ring-accent bg-accent-light/60 dark:bg-accent-light/30 shadow-[0_4px_14px_-6px_rgba(44,34,24,0.35)] scale-[1.04] z-10"
             : errored
-              ? "border-red-300 dark:border-red-900/40 bg-red-50/40 dark:bg-red-900/20 hover:border-red-400 dark:hover:border-red-700"
-              : "border-warm-border hover:border-accent/60 bg-warm-subtle"
+              ? "border-red-300 dark:border-red-900/40 bg-red-50/40 dark:bg-red-900/20 hover:border-red-400 dark:hover:border-red-700 hover:-translate-y-px"
+              : "border-warm-border hover:border-accent/60 hover:-translate-y-px hover:shadow-[0_3px_10px_-6px_rgba(44,34,24,0.25)] bg-warm-subtle"
         }`}
         style={{
           left: i * ITEM_STRIDE,
@@ -301,11 +301,11 @@ export default function PageThumbnailStrip({
           <img
             src={url}
             alt=""
-            className="max-w-full max-h-[88%] object-contain"
+            className="max-w-full max-h-[88%] object-contain animate-thumb-in motion-reduce:animate-none"
             draggable={false}
           />
         ) : errored ? (
-          <div className="flex-1 w-full flex items-center justify-center text-red-500 dark:text-red-400">
+          <div className="flex-1 w-full flex items-center justify-center text-red-500 dark:text-red-400 animate-fade-in motion-reduce:animate-none">
             <svg width="16" height="16" viewBox="0 0 20 20" fill="none" aria-hidden="true">
               <path d="M4 4l12 12M16 4L4 16" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
             </svg>
@@ -315,7 +315,11 @@ export default function PageThumbnailStrip({
             <div className="w-3 h-3 border border-warm-border border-t-accent/60 rounded-full animate-spin" />
           </div>
         )}
-        <span className="text-[10px] tabular-nums text-ink-muted leading-none mt-0.5">
+        <span
+          className={`text-[10px] tabular-nums leading-none mt-0.5 transition-colors duration-200 ease-out motion-reduce:transition-none ${
+            isActive ? "text-accent font-medium" : "text-ink-muted"
+          }`}
+        >
           {i + 1}
         </span>
       </button>,
@@ -326,7 +330,7 @@ export default function PageThumbnailStrip({
     <div
       ref={scrollerRef}
       onScroll={handleScroll}
-      className="shrink-0 w-full overflow-x-auto overflow-y-hidden bg-surface border-t border-warm-border"
+      className="shrink-0 w-full overflow-x-auto overflow-y-hidden bg-surface border-t border-warm-border animate-slide-in-up motion-reduce:animate-none thumb-strip-mask"
       style={{ height: THUMB_HEIGHT + 12 }}
       role="listbox"
       aria-label={t("reader.thumbnailStripLabel")}
