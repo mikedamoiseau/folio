@@ -38,6 +38,14 @@ const CACHE_PREFIX: &str = "page-cache/";
 // Types
 // ---------------------------------------------------------------------------
 
+fn default_cache_format() -> BookFormat {
+    // Legacy comic manifests (pre-PDF-cache) lacked this field.
+    // CBZ is a safe default: CBR manifests already carry
+    // CBR-specific filenames inside `pages`, so the same comic
+    // read path serves both at runtime.
+    BookFormat::Cbz
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CacheManifest {
     pub book_id: String,
@@ -47,6 +55,17 @@ pub struct CacheManifest {
     pub extracted_at: String,
     pub last_accessed: String,
     pub pages: Vec<String>,
+    /// Distinguishes comic manifests (dense `pages` populated with
+    /// archive entry names) from PDF manifests (empty `pages`,
+    /// filenames derived from page index). Defaulted via a named
+    /// function so we do not need to declare a global
+    /// `Default for BookFormat` impl.
+    #[serde(default = "default_cache_format")]
+    pub format: BookFormat,
+    /// `Some(2400)` for PDF, `None` for comic (which caches archive
+    /// bytes as-is and lets the resize helper clamp on read).
+    #[serde(default)]
+    pub canonical_width: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -124,6 +143,18 @@ fn file_extension(name: &str) -> &str {
     }
 }
 
+fn mime_for_page_name(name: &str) -> &'static str {
+    if name.ends_with(".png") {
+        "image/png"
+    } else if name.ends_with(".webp") {
+        "image/webp"
+    } else if name.ends_with(".gif") {
+        "image/gif"
+    } else {
+        "image/jpeg"
+    }
+}
+
 // ---------------------------------------------------------------------------
 // CBZ extraction
 // ---------------------------------------------------------------------------
@@ -183,6 +214,8 @@ pub fn extract_cbz(
         extracted_at: now.clone(),
         last_accessed: now,
         pages,
+        format: BookFormat::Cbz,
+        canonical_width: None,
     };
 
     write_manifest(storage, book_hash, &manifest)?;
@@ -271,6 +304,8 @@ pub fn extract_cbr(
         extracted_at: now.clone(),
         last_accessed: now,
         pages,
+        format: BookFormat::Cbr,
+        canonical_width: None,
     };
 
     write_manifest(storage, book_hash, &manifest)?;
@@ -289,28 +324,33 @@ pub fn get_cached_page(
     let manifest = read_manifest(storage, book_hash)
         .ok_or_else(|| FolioError::not_found("Cache manifest not found"))?;
 
-    let page_name = manifest.pages.get(page_index as usize).ok_or_else(|| {
-        FolioError::not_found(format!(
-            "Page index {page_index} out of range (total: {})",
-            manifest.page_count
-        ))
-    })?;
-
-    let data = storage
-        .get(&page_key(book_hash, page_name))
-        .map_err(|e| FolioError::io(format!("Failed to read cached page {page_index}: {e}")))?;
-
-    let mime = if page_name.ends_with(".png") {
-        "image/png"
-    } else if page_name.ends_with(".webp") {
-        "image/webp"
-    } else if page_name.ends_with(".gif") {
-        "image/gif"
-    } else {
-        "image/jpeg"
+    let page_name = match manifest.format {
+        BookFormat::Pdf => {
+            if page_index >= manifest.page_count {
+                return Err(FolioError::not_found(format!(
+                    "Page index {page_index} out of range (total: {})",
+                    manifest.page_count
+                )));
+            }
+            format!("{page_index:03}.jpg")
+        }
+        _ => manifest
+            .pages
+            .get(page_index as usize)
+            .cloned()
+            .ok_or_else(|| {
+                FolioError::not_found(format!(
+                    "Page index {page_index} out of range (total: {})",
+                    manifest.page_count
+                ))
+            })?,
     };
 
-    Ok((data, mime.to_string()))
+    let data = storage
+        .get(&page_key(book_hash, &page_name))
+        .map_err(|e| FolioError::io(format!("Failed to read cached page {page_index}: {e}")))?;
+
+    Ok((data, mime_for_page_name(&page_name).to_string()))
 }
 
 pub fn ensure_cached(
@@ -354,6 +394,7 @@ pub fn ensure_cached(
     let result = match format {
         BookFormat::Cbz => extract_cbz(storage, book_id, book_hash, file_path),
         BookFormat::Cbr => extract_cbr(storage, book_id, book_hash, file_path),
+        BookFormat::Pdf => ensure_pdf_prewarmed(storage, book_id, book_hash, file_path, 10),
         _ => Err(FolioError::invalid(format!(
             "Page cache not supported for format: {:?}",
             format
@@ -361,6 +402,261 @@ pub fn ensure_cached(
     };
     page_dbg!("ensure_cached: extraction took {:?}", start.elapsed());
     result
+}
+
+// ---------------------------------------------------------------------------
+// PDF cache (lazy on-disk render cache)
+// ---------------------------------------------------------------------------
+
+/// Lazy cache writes are coalesced into background eviction passes:
+/// every `LAZY_EVICTION_BATCH` successful writes fire the caller's
+/// `on_batch` hook. The command layer uses this to spawn a background
+/// `run_eviction`.
+pub const LAZY_EVICTION_BATCH: u32 = 25;
+
+// Global counter rather than per-book — eviction is whole-cache
+// anyway, so the trigger cadence does not need to be per-book.
+static LAZY_WRITE_COUNTER: std::sync::atomic::AtomicU32 =
+    std::sync::atomic::AtomicU32::new(0);
+
+#[cfg(test)]
+pub fn reset_lazy_eviction_counter_for_tests() {
+    LAZY_WRITE_COUNTER.store(0, std::sync::atomic::Ordering::SeqCst);
+}
+
+/// Pre-render the first `prewarm.min(page_count)` pages of a PDF and
+/// persist a manifest describing the document. The renderer closure is
+/// injected so unit tests can stub pdfium out; production callers go
+/// through [`ensure_pdf_prewarmed`] (below) which wires
+/// [`crate::pdf::get_page_image_bytes`] for them.
+///
+/// On any disk write failure (or final manifest write failure) the
+/// function rolls back partial state via [`evict_book`] and returns
+/// the underlying [`FolioError`]; no manifest is persisted in that
+/// case. This keeps stray page files out of `collect_cached_books`,
+/// which only counts books with a manifest.
+pub fn ensure_pdf_prewarmed_with_renderer<F>(
+    storage: &dyn Storage,
+    book_id: &str,
+    book_hash: &str,
+    page_count: u32,
+    prewarm: u32,
+    render: F,
+) -> FolioResult<CacheManifest>
+where
+    F: Fn(u32) -> FolioResult<(Vec<u8>, String)>,
+{
+    let prewarm = prewarm.min(page_count);
+
+    if let Some(mut manifest) = read_manifest(storage, book_hash) {
+        if manifest.format == BookFormat::Pdf
+            && manifest.page_count == page_count
+            && (0..prewarm).all(|i| {
+                storage
+                    .exists(&page_key(book_hash, &format!("{i:03}.jpg")))
+                    .unwrap_or(false)
+            })
+        {
+            page_dbg!(
+                "ensure_pdf_prewarmed: cache hit for {} ({}/{} pre-warmed)",
+                book_hash,
+                prewarm,
+                page_count
+            );
+            manifest.last_accessed = now_iso();
+            let _ = write_manifest(storage, book_hash, &manifest);
+            return Ok(manifest);
+        }
+    }
+
+    page_dbg!(
+        "ensure_pdf_prewarmed: rendering first {} of {} for {}",
+        prewarm,
+        page_count,
+        book_hash
+    );
+    let start = std::time::Instant::now();
+
+    // Helper: any failure in the loop or the final manifest write
+    // leaves the partial output (page files, possibly an old manifest
+    // pointing at stale paths) unreferenced from the manifest layer.
+    // `collect_cached_books` skips books without a manifest, so those
+    // orphans would never be evicted. Roll back explicitly.
+    let try_warm = || -> FolioResult<u64> {
+        let mut total_size: u64 = 0;
+        for i in 0..prewarm {
+            let (bytes, _mime) = render(i)?;
+            let name = format!("{i:03}.jpg");
+            storage.put(&page_key(book_hash, &name), &bytes)?;
+            total_size += bytes.len() as u64;
+        }
+        Ok(total_size)
+    };
+
+    let total_size = match try_warm() {
+        Ok(s) => s,
+        Err(e) => {
+            page_dbg!(
+                "ensure_pdf_prewarmed: warm failed for {} — rolling back partial cache",
+                book_hash
+            );
+            let _ = evict_book(storage, book_hash);
+            return Err(e);
+        }
+    };
+
+    page_dbg!(
+        "ensure_pdf_prewarmed: warmed {} pages ({} KB) in {:?}",
+        prewarm,
+        total_size / 1024,
+        start.elapsed()
+    );
+
+    let now = now_iso();
+    let manifest = CacheManifest {
+        book_id: book_id.to_string(),
+        book_hash: book_hash.to_string(),
+        page_count,
+        total_size_bytes: total_size,
+        extracted_at: now.clone(),
+        last_accessed: now,
+        pages: Vec::new(),
+        format: BookFormat::Pdf,
+        canonical_width: Some(crate::pdf::CACHE_CANONICAL_WIDTH),
+    };
+    if let Err(e) = write_manifest(storage, book_hash, &manifest) {
+        let _ = evict_book(storage, book_hash);
+        return Err(e);
+    }
+    Ok(manifest)
+}
+
+/// Production entry point: wires [`crate::pdf::get_page_count`] +
+/// [`crate::pdf::get_page_image_bytes`] into the generic prewarm above.
+pub fn ensure_pdf_prewarmed(
+    storage: &dyn Storage,
+    book_id: &str,
+    book_hash: &str,
+    file_path: &str,
+    prewarm: u32,
+) -> FolioResult<CacheManifest> {
+    let page_count = crate::pdf::get_page_count(file_path)?;
+    let render = |idx: u32| -> FolioResult<(Vec<u8>, String)> {
+        let (bytes, mime) = crate::pdf::get_page_image_bytes(
+            file_path,
+            idx,
+            Some(crate::pdf::CACHE_CANONICAL_WIDTH),
+        )?;
+        Ok((bytes, mime.to_string()))
+    };
+    ensure_pdf_prewarmed_with_renderer(storage, book_id, book_hash, page_count, prewarm, render)
+}
+
+/// Disk-first PDF page lookup. On cache miss, renders via the injected
+/// closure, attempts to persist (best-effort), and returns the bytes
+/// either way. Manifest must already exist (created by
+/// [`ensure_pdf_prewarmed`]); without one, falls back to render-only.
+///
+/// `on_batch` fires when the lazy-write counter crosses a multiple of
+/// [`LAZY_EVICTION_BATCH`] — the command layer wires this to spawn a
+/// background eviction.
+pub fn get_or_render_pdf_page_with_renderer<F, B>(
+    storage: &dyn Storage,
+    book_hash: &str,
+    page_index: u32,
+    render: F,
+    on_batch: B,
+) -> FolioResult<(Vec<u8>, String)>
+where
+    F: Fn(u32) -> FolioResult<(Vec<u8>, String)>,
+    B: Fn(),
+{
+    let manifest_opt = read_manifest(storage, book_hash);
+
+    if let Some(ref manifest) = manifest_opt {
+        if manifest.format == BookFormat::Pdf {
+            // Guard against out-of-range indices before either the
+            // disk lookup or the renderer runs. `get_cached_page`
+            // returns `NotFound` both for "file missing" and "index
+            // >= page_count"; we want the latter to surface to the
+            // caller rather than silently fall through to the
+            // expensive render + cache path.
+            if page_index >= manifest.page_count {
+                return Err(FolioError::not_found(format!(
+                    "Page index {page_index} out of range (total: {})",
+                    manifest.page_count
+                )));
+            }
+            if let Ok((data, mime)) = get_cached_page(storage, book_hash, page_index) {
+                return Ok((data, mime));
+            }
+        }
+    }
+
+    let (bytes, mime) = render(page_index)?;
+
+    // Only attempt to cache when a PDF manifest exists; otherwise
+    // just return the rendered bytes. Cache writes are best-effort.
+    if let Some(mut manifest) = manifest_opt {
+        if manifest.format == BookFormat::Pdf {
+            let name = format!("{page_index:03}.jpg");
+            match storage.put(&page_key(book_hash, &name), &bytes) {
+                Ok(()) => {
+                    manifest.total_size_bytes =
+                        manifest.total_size_bytes.saturating_add(bytes.len() as u64);
+                    manifest.last_accessed = now_iso();
+                    let _ = write_manifest(storage, book_hash, &manifest);
+
+                    let prev = LAZY_WRITE_COUNTER
+                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    if (prev + 1).is_multiple_of(LAZY_EVICTION_BATCH) {
+                        on_batch();
+                    }
+                }
+                Err(e) => {
+                    page_dbg!(
+                        "lazy cache write failed for {}/{}: {} — serving from memory",
+                        book_hash,
+                        name,
+                        e
+                    );
+                }
+            }
+        }
+    }
+
+    Ok((bytes, mime))
+}
+
+/// Production wrapper: wires [`crate::pdf::get_page_image_bytes`] at
+/// the canonical width and forwards the `on_batch` callback unchanged.
+pub fn get_or_render_pdf_page_with_eviction<B>(
+    storage: &dyn Storage,
+    book_hash: &str,
+    file_path: &str,
+    page_index: u32,
+    on_batch: B,
+) -> FolioResult<(Vec<u8>, String)>
+where
+    B: Fn(),
+{
+    let render = |idx: u32| -> FolioResult<(Vec<u8>, String)> {
+        let (bytes, mime) =
+            crate::pdf::get_page_image_bytes(file_path, idx, Some(crate::pdf::CACHE_CANONICAL_WIDTH))?;
+        Ok((bytes, mime.to_string()))
+    };
+    get_or_render_pdf_page_with_renderer(storage, book_hash, page_index, render, on_batch)
+}
+
+/// No-op-eviction variant for callers that do not have a runtime
+/// to dispatch the background pass (tests, ad-hoc tooling).
+pub fn get_or_render_pdf_page(
+    storage: &dyn Storage,
+    book_hash: &str,
+    file_path: &str,
+    page_index: u32,
+) -> FolioResult<(Vec<u8>, String)> {
+    get_or_render_pdf_page_with_eviction(storage, book_hash, file_path, page_index, || {})
 }
 
 // ---------------------------------------------------------------------------
@@ -517,6 +813,8 @@ mod tests {
             extracted_at: last_accessed.to_string(),
             last_accessed: last_accessed.to_string(),
             pages,
+            format: BookFormat::Cbz,
+            canonical_width: None,
         };
         write_manifest(storage, book_hash, &manifest).unwrap();
         manifest
@@ -539,6 +837,8 @@ mod tests {
                 "001.jpg".to_string(),
                 "002.jpg".to_string(),
             ],
+            format: BookFormat::Cbz,
+            canonical_width: None,
         };
 
         write_manifest(&storage, hash, &manifest).unwrap();
@@ -768,5 +1068,415 @@ mod tests {
         // Persisted change is readable
         let reloaded = read_manifest(&storage, "hash_a").unwrap();
         assert_ne!(reloaded.last_accessed, "2020-01-01T00:00:00+00:00");
+    }
+
+    // ---------------------------------------------------------------------
+    // PDF cache tests
+    // ---------------------------------------------------------------------
+
+    #[test]
+    fn manifest_legacy_comic_loads_without_format_or_canonical_width() {
+        let (_d, storage) = temp_storage();
+        let hash = "legacy-hash";
+        // Hand-craft a manifest JSON missing the new fields, exactly as
+        // pre-spec comic manifests on disk.
+        let legacy = serde_json::json!({
+            "book_id": "legacy",
+            "book_hash": hash,
+            "page_count": 2,
+            "total_size_bytes": 42,
+            "extracted_at": "2026-01-01T00:00:00Z",
+            "last_accessed": "2026-01-01T00:00:00Z",
+            "pages": ["000.jpg", "001.jpg"],
+        });
+        storage
+            .put(&manifest_key(hash), legacy.to_string().as_bytes())
+            .unwrap();
+
+        let loaded = read_manifest(&storage, hash).expect("legacy manifest must load");
+        assert_eq!(loaded.format, BookFormat::Cbz);
+        assert_eq!(loaded.canonical_width, None);
+    }
+
+    #[test]
+    fn get_cached_page_pdf_derives_filename_from_index() {
+        let (_d, storage) = temp_storage();
+        let hash = "pdf-hash";
+
+        let manifest = CacheManifest {
+            book_id: "b".into(),
+            book_hash: hash.into(),
+            page_count: 50,
+            total_size_bytes: 0,
+            extracted_at: now_iso(),
+            last_accessed: now_iso(),
+            pages: Vec::new(),
+            format: BookFormat::Pdf,
+            canonical_width: Some(2400),
+        };
+        write_manifest(&storage, hash, &manifest).unwrap();
+        storage
+            .put(&page_key(hash, "042.jpg"), b"pdf-page-bytes")
+            .unwrap();
+
+        let (bytes, mime) = get_cached_page(&storage, hash, 42).unwrap();
+        assert_eq!(bytes, b"pdf-page-bytes");
+        assert_eq!(mime, "image/jpeg");
+    }
+
+    #[test]
+    fn get_cached_page_pdf_out_of_range() {
+        let (_d, storage) = temp_storage();
+        let hash = "pdf-hash";
+        let manifest = CacheManifest {
+            book_id: "b".into(),
+            book_hash: hash.into(),
+            page_count: 10,
+            total_size_bytes: 0,
+            extracted_at: now_iso(),
+            last_accessed: now_iso(),
+            pages: Vec::new(),
+            format: BookFormat::Pdf,
+            canonical_width: Some(2400),
+        };
+        write_manifest(&storage, hash, &manifest).unwrap();
+
+        let err = get_cached_page(&storage, hash, 999).unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("out of range"), "got: {msg}");
+    }
+
+    #[test]
+    fn ensure_pdf_prewarmed_writes_first_n_pages() {
+        let (_d, storage) = temp_storage();
+        let hash = "warm-hash";
+
+        let render = |idx: u32| -> FolioResult<(Vec<u8>, String)> {
+            Ok((format!("page-{idx}").into_bytes(), "image/jpeg".into()))
+        };
+
+        let manifest = ensure_pdf_prewarmed_with_renderer(
+            &storage, "book", hash, /*page_count=*/ 25, /*prewarm=*/ 10, render,
+        )
+        .unwrap();
+
+        assert_eq!(manifest.format, BookFormat::Pdf);
+        assert_eq!(manifest.canonical_width, Some(2400));
+        assert!(manifest.pages.is_empty(), "PDF manifests keep pages empty");
+        assert_eq!(manifest.page_count, 25);
+
+        for i in 0..10 {
+            let key = page_key(hash, &format!("{i:03}.jpg"));
+            assert!(storage.exists(&key).unwrap(), "page {i} should be on disk");
+        }
+        // Pages beyond the prewarm window are not pre-rendered.
+        assert!(!storage.exists(&page_key(hash, "010.jpg")).unwrap());
+    }
+
+    #[test]
+    fn ensure_pdf_prewarmed_is_idempotent() {
+        let (_d, storage) = temp_storage();
+        let hash = "warm-hash";
+
+        let calls = std::cell::Cell::new(0u32);
+        let render = |idx: u32| -> FolioResult<(Vec<u8>, String)> {
+            calls.set(calls.get() + 1);
+            Ok((format!("page-{idx}").into_bytes(), "image/jpeg".into()))
+        };
+
+        ensure_pdf_prewarmed_with_renderer(&storage, "book", hash, 25, 5, &render).unwrap();
+        let first_calls = calls.get();
+
+        ensure_pdf_prewarmed_with_renderer(&storage, "book", hash, 25, 5, &render).unwrap();
+        assert_eq!(
+            calls.get(),
+            first_calls,
+            "second prewarm with cache intact must not re-render"
+        );
+    }
+
+    #[test]
+    fn ensure_pdf_prewarmed_disk_write_failure_aborts_and_rolls_back() {
+        use crate::storage::Storage;
+
+        // Custom storage stub that fails the third put(). Uses
+        // AtomicU32 instead of Cell so the type is Sync (the Storage
+        // trait requires Send + Sync).
+        struct FailingStorage {
+            inner: LocalStorage,
+            fail_after: std::sync::atomic::AtomicU32,
+        }
+        impl Storage for FailingStorage {
+            fn get(&self, k: &str) -> FolioResult<Vec<u8>> {
+                self.inner.get(k)
+            }
+            fn put(&self, k: &str, v: &[u8]) -> FolioResult<()> {
+                let n = self.fail_after.load(std::sync::atomic::Ordering::SeqCst);
+                if n == 0 {
+                    return Err(FolioError::io("simulated disk failure"));
+                }
+                self.fail_after.store(n - 1, std::sync::atomic::Ordering::SeqCst);
+                self.inner.put(k, v)
+            }
+            fn delete(&self, k: &str) -> FolioResult<()> {
+                self.inner.delete(k)
+            }
+            fn list(&self, prefix: &str) -> FolioResult<Vec<String>> {
+                self.inner.list(prefix)
+            }
+            fn exists(&self, k: &str) -> FolioResult<bool> {
+                self.inner.exists(k)
+            }
+            fn size(&self, k: &str) -> FolioResult<u64> {
+                self.inner.size(k)
+            }
+            fn local_path(&self, k: &str) -> FolioResult<std::path::PathBuf> {
+                self.inner.local_path(k)
+            }
+        }
+
+        let dir = TempDir::new().unwrap();
+        let storage = FailingStorage {
+            inner: LocalStorage::new(dir.path()).unwrap(),
+            fail_after: std::sync::atomic::AtomicU32::new(3),
+        };
+        let render = |idx: u32| -> FolioResult<(Vec<u8>, String)> {
+            Ok((format!("page-{idx}").into_bytes(), "image/jpeg".into()))
+        };
+
+        let result =
+            ensure_pdf_prewarmed_with_renderer(&storage, "book", "h", 25, 10, render);
+        assert!(result.is_err(), "must surface disk failure");
+        assert!(
+            read_manifest(&storage, "h").is_none(),
+            "manifest must not be persisted on partial failure"
+        );
+        // Rollback must wipe the partial page files as well — otherwise
+        // collect_cached_books cannot count them and eviction can never
+        // reclaim the space.
+        let remaining_pages: Vec<String> = storage
+            .list(&book_prefix("h"))
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|k| !k.ends_with("manifest.json"))
+            .collect();
+        assert!(
+            remaining_pages.is_empty(),
+            "partial cache must be rolled back; orphans: {remaining_pages:?}"
+        );
+    }
+
+    #[test]
+    fn get_or_render_pdf_page_disk_hit_skips_renderer() {
+        let (_d, storage) = temp_storage();
+        let hash = "h";
+        let manifest = CacheManifest {
+            book_id: "b".into(),
+            book_hash: hash.into(),
+            page_count: 10,
+            total_size_bytes: 0,
+            extracted_at: now_iso(),
+            last_accessed: now_iso(),
+            pages: Vec::new(),
+            format: BookFormat::Pdf,
+            canonical_width: Some(2400),
+        };
+        write_manifest(&storage, hash, &manifest).unwrap();
+        storage
+            .put(&page_key(hash, "003.jpg"), b"cached-bytes")
+            .unwrap();
+
+        let render = |_idx: u32| -> FolioResult<(Vec<u8>, String)> {
+            panic!("renderer must not be called on cache hit");
+        };
+
+        let (bytes, mime) =
+            get_or_render_pdf_page_with_renderer(&storage, hash, 3, render, || {}).unwrap();
+        assert_eq!(bytes, b"cached-bytes");
+        assert_eq!(mime, "image/jpeg");
+    }
+
+    #[test]
+    fn get_or_render_pdf_page_miss_writes_disk_and_updates_manifest() {
+        let (_d, storage) = temp_storage();
+        let hash = "h";
+        let manifest = CacheManifest {
+            book_id: "b".into(),
+            book_hash: hash.into(),
+            page_count: 50,
+            total_size_bytes: 100,
+            extracted_at: now_iso(),
+            last_accessed: now_iso(),
+            pages: Vec::new(),
+            format: BookFormat::Pdf,
+            canonical_width: Some(2400),
+        };
+        write_manifest(&storage, hash, &manifest).unwrap();
+
+        let render = |idx: u32| -> FolioResult<(Vec<u8>, String)> {
+            Ok((format!("p{idx}").into_bytes(), "image/jpeg".into()))
+        };
+
+        let (bytes, _) =
+            get_or_render_pdf_page_with_renderer(&storage, hash, 42, render, || {}).unwrap();
+        assert_eq!(bytes, b"p42");
+
+        assert!(storage.exists(&page_key(hash, "042.jpg")).unwrap());
+        let updated = read_manifest(&storage, hash).unwrap();
+        assert_eq!(updated.total_size_bytes, 100 + b"p42".len() as u64);
+        assert!(updated.pages.is_empty(), "PDF manifests keep pages empty");
+    }
+
+    #[test]
+    fn get_or_render_pdf_page_out_of_range_errors_without_rendering() {
+        let (_d, storage) = temp_storage();
+        let hash = "h";
+        write_manifest(
+            &storage,
+            hash,
+            &CacheManifest {
+                book_id: "b".into(),
+                book_hash: hash.into(),
+                page_count: 10,
+                total_size_bytes: 0,
+                extracted_at: now_iso(),
+                last_accessed: now_iso(),
+                pages: Vec::new(),
+                format: BookFormat::Pdf,
+                canonical_width: Some(2400),
+            },
+        )
+        .unwrap();
+
+        let render = |_idx: u32| -> FolioResult<(Vec<u8>, String)> {
+            panic!("renderer must not run for out-of-range index");
+        };
+
+        let err =
+            get_or_render_pdf_page_with_renderer(&storage, hash, 999, render, || {}).unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("out of range"), "got: {msg}");
+    }
+
+    #[test]
+    fn get_or_render_pdf_page_missing_manifest_falls_back_to_render_only() {
+        let (_d, storage) = temp_storage();
+        let render =
+            |idx: u32| -> FolioResult<(Vec<u8>, String)> {
+                Ok((format!("p{idx}").into_bytes(), "image/jpeg".into()))
+            };
+
+        let (bytes, _) =
+            get_or_render_pdf_page_with_renderer(&storage, "nope", 0, render, || {}).unwrap();
+        assert_eq!(bytes, b"p0");
+        // No manifest → no cache writes.
+        assert!(!storage.exists(&page_key("nope", "000.jpg")).unwrap());
+    }
+
+    #[test]
+    fn get_or_render_pdf_page_swallows_write_failure() {
+        use crate::storage::Storage;
+
+        // Storage that fails all puts EXCEPT manifest writes.
+        struct PageWriteFails {
+            inner: LocalStorage,
+        }
+        impl Storage for PageWriteFails {
+            fn get(&self, k: &str) -> FolioResult<Vec<u8>> {
+                self.inner.get(k)
+            }
+            fn put(&self, k: &str, v: &[u8]) -> FolioResult<()> {
+                if k.ends_with("manifest.json") {
+                    self.inner.put(k, v)
+                } else {
+                    Err(FolioError::io("simulated"))
+                }
+            }
+            fn delete(&self, k: &str) -> FolioResult<()> {
+                self.inner.delete(k)
+            }
+            fn list(&self, p: &str) -> FolioResult<Vec<String>> {
+                self.inner.list(p)
+            }
+            fn exists(&self, k: &str) -> FolioResult<bool> {
+                self.inner.exists(k)
+            }
+            fn size(&self, k: &str) -> FolioResult<u64> {
+                self.inner.size(k)
+            }
+            fn local_path(&self, k: &str) -> FolioResult<std::path::PathBuf> {
+                self.inner.local_path(k)
+            }
+        }
+        let dir = TempDir::new().unwrap();
+        let storage = PageWriteFails {
+            inner: LocalStorage::new(dir.path()).unwrap(),
+        };
+        let hash = "h";
+        write_manifest(
+            &storage,
+            hash,
+            &CacheManifest {
+                book_id: "b".into(),
+                book_hash: hash.into(),
+                page_count: 10,
+                total_size_bytes: 0,
+                extracted_at: now_iso(),
+                last_accessed: now_iso(),
+                pages: Vec::new(),
+                format: BookFormat::Pdf,
+                canonical_width: Some(2400),
+            },
+        )
+        .unwrap();
+
+        let render =
+            |idx: u32| -> FolioResult<(Vec<u8>, String)> {
+                Ok((format!("p{idx}").into_bytes(), "image/jpeg".into()))
+            };
+        let (bytes, _) =
+            get_or_render_pdf_page_with_renderer(&storage, hash, 5, render, || {}).unwrap();
+        assert_eq!(bytes, b"p5");
+        // Cache write failed silently; manifest size unchanged.
+        let m = read_manifest(&storage, hash).unwrap();
+        assert_eq!(m.total_size_bytes, 0);
+    }
+
+    #[test]
+    fn lazy_eviction_callback_fires_every_batch() {
+        let (_d, storage) = temp_storage();
+        let hash = "h";
+        write_manifest(
+            &storage,
+            hash,
+            &CacheManifest {
+                book_id: "b".into(),
+                book_hash: hash.into(),
+                page_count: 200,
+                total_size_bytes: 0,
+                extracted_at: now_iso(),
+                last_accessed: now_iso(),
+                pages: Vec::new(),
+                format: BookFormat::Pdf,
+                canonical_width: Some(2400),
+            },
+        )
+        .unwrap();
+
+        let render =
+            |idx: u32| -> FolioResult<(Vec<u8>, String)> {
+                Ok((format!("p{idx}").into_bytes(), "image/jpeg".into()))
+            };
+        let calls = std::cell::Cell::new(0u32);
+        let on_batch = || calls.set(calls.get() + 1);
+
+        // Reset the global counter so the test is deterministic.
+        reset_lazy_eviction_counter_for_tests();
+
+        for i in 0..LAZY_EVICTION_BATCH * 2 {
+            get_or_render_pdf_page_with_renderer(&storage, hash, i, &render, &on_batch).unwrap();
+        }
+
+        assert_eq!(calls.get(), 2, "callback fires exactly once per batch");
     }
 }

@@ -7,6 +7,13 @@ use std::sync::{LazyLock, Mutex, OnceLock};
 use crate::epub;
 use crate::error::{FolioError, FolioResult};
 
+/// Canonical render width used when populating the on-disk page cache.
+/// Wider than typical reading viewports so zoomed-in views can downscale
+/// rather than re-render, but small enough that 200-page books stay
+/// comfortably inside the shared `page-cache/` budget (≈ 200–500 KB JPEG
+/// per page at this width).
+pub const CACHE_CANONICAL_WIDTH: u32 = 2400;
+
 // ---- PDF text cache ----
 
 /// Maximum number of books whose extracted text we keep in memory.
