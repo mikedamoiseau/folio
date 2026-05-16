@@ -360,6 +360,15 @@ pub fn ensure_cached(
     file_path: &str,
     format: &BookFormat,
 ) -> FolioResult<CacheManifest> {
+    // PDF manifests intentionally keep `pages` empty (filenames are
+    // derived from the page index), so the comic-style first/last
+    // validation below would always report "corrupt" and evict a
+    // healthy PDF cache. Delegate to `ensure_pdf_prewarmed`, which
+    // has its own format-aware idempotency check.
+    if matches!(format, BookFormat::Pdf) {
+        return ensure_pdf_prewarmed(storage, book_id, book_hash, file_path, 10);
+    }
+
     if let Some(mut manifest) = read_manifest(storage, book_hash) {
         let first_ok = manifest
             .pages
@@ -394,7 +403,6 @@ pub fn ensure_cached(
     let result = match format {
         BookFormat::Cbz => extract_cbz(storage, book_id, book_hash, file_path),
         BookFormat::Cbr => extract_cbr(storage, book_id, book_hash, file_path),
-        BookFormat::Pdf => ensure_pdf_prewarmed(storage, book_id, book_hash, file_path, 10),
         _ => Err(FolioError::invalid(format!(
             "Page cache not supported for format: {:?}",
             format
@@ -1478,5 +1486,55 @@ mod tests {
         }
 
         assert_eq!(calls.get(), 2, "callback fires exactly once per batch");
+    }
+
+    #[test]
+    fn ensure_cached_pdf_does_not_evict_via_comic_validation() {
+        // Regression test for the PR review finding: PDF manifests
+        // have empty `pages`, so the comic-style first/last validation
+        // in `ensure_cached` previously reported every warm PDF as
+        // corrupt and called `evict_book` *before* any pdfium I/O.
+        // After the fix `ensure_cached` short-circuits to
+        // `ensure_pdf_prewarmed`, which only mutates cache state on
+        // an actual render/write failure (and rolls back partials).
+        //
+        // We exercise this without a real pdfium dylib: pass a
+        // non-existent path so `ensure_pdf_prewarmed` fails at
+        // `get_page_count`. The OLD code would have evicted before
+        // that failure surfaced; the NEW code propagates the error
+        // with the cache intact.
+        let (_d, storage) = temp_storage();
+        let hash = "warm-pdf";
+
+        let manifest = CacheManifest {
+            book_id: "b".into(),
+            book_hash: hash.into(),
+            page_count: 25,
+            total_size_bytes: 0,
+            extracted_at: now_iso(),
+            last_accessed: now_iso(),
+            pages: Vec::new(),
+            format: BookFormat::Pdf,
+            canonical_width: Some(2400),
+        };
+        write_manifest(&storage, hash, &manifest).unwrap();
+        // Seed a lazily cached page beyond the prewarm window — the
+        // bug would have wiped this via evict_book.
+        storage
+            .put(&page_key(hash, "020.jpg"), b"lazy")
+            .unwrap();
+
+        let _ = ensure_cached(&storage, "b", hash, "/nonexistent.pdf", &BookFormat::Pdf);
+
+        // Lazy page must survive regardless of whether the PDF
+        // open succeeded (it won't in tests without pdfium).
+        assert!(
+            storage.exists(&page_key(hash, "020.jpg")).unwrap(),
+            "ensure_cached must not evict warm PDF state via comic-style validation"
+        );
+        assert!(
+            read_manifest(&storage, hash).is_some(),
+            "ensure_cached must not delete the PDF manifest via comic-style validation"
+        );
     }
 }
