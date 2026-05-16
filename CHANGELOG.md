@@ -5,6 +5,9 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Performance
+- **Page images served at viewport resolution over binary IPC** (ROADMAP P2). PDF / CBZ / CBR pages are now resized to the viewport width on the Rust side, transmitted as raw bytes through Tauri IPC, and wrapped as `Blob` + `URL.createObjectURL` in the frontend. Cuts IPC payloads by roughly 70–90 % on typical pages, removes the base64 encode/decode round-trip, and lowers steady-state renderer memory. Landed across m1–m4: viewport-resize support in `folio-core`, binary page commands, frontend blob URLs with revoke-on-eviction, and retirement of the legacy data-URI commands.
+
 ### Added
 - **Page-thumbnail strip** for image-based formats (CBZ / CBR / PDF). A toggleable horizontal strip below the reader shows every page; clicking a thumbnail jumps to that page (and stamps navigation history). Header button + `m` shortcut. Per-book open/closed state persists in `localStorage`.
   - Virtualized: only thumbnails inside the visible window plus overscan render as DOM nodes, so a 1000-page book stays cheap.
