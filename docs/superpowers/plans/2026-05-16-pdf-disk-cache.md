@@ -103,7 +103,20 @@ pub struct CacheManifest {
 }
 ```
 
-Every existing site that constructs a `CacheManifest` literal needs the two new fields. There are two such sites in `extract_cbz` and `extract_cbr`. Add `format: BookFormat::Cbz` (or `Cbr` respectively) and `canonical_width: None` to both literals. Also update the helper `create_fake_cache` in the tests module to set them to defaults.
+Every existing site that constructs a `CacheManifest` literal needs the two new fields. As of the spec date, those sites are:
+
+- `extract_cbz` (`folio-core/src/page_cache.rs:178`) — set `format: BookFormat::Cbz`, `canonical_width: None`.
+- `extract_cbr` (`folio-core/src/page_cache.rs:266`) — set `format: BookFormat::Cbr`, `canonical_width: None`.
+- `create_fake_cache` test helper (`folio-core/src/page_cache.rs:512`) — set `format: BookFormat::Cbz`, `canonical_width: None`.
+- `manifest_roundtrip` test (`folio-core/src/page_cache.rs:530`) — set `format: BookFormat::Cbz`, `canonical_width: None`.
+
+Re-grep before editing in case more have been added since the spec landed:
+
+```bash
+grep -nE "let .*= CacheManifest \{|^\s*CacheManifest \{|\) -> CacheManifest" folio-core/src/page_cache.rs
+```
+
+Update every match. The compile step in Step 5 will fail clearly if any literal is missed, but it is faster to catch them all up front than to iterate.
 
 - [ ] **Step 4: Run the test to verify it passes**
 
@@ -381,7 +394,9 @@ fn ensure_pdf_prewarmed_is_idempotent() {
 fn ensure_pdf_prewarmed_disk_write_failure_aborts() {
     use crate::storage::Storage;
 
-    // Custom storage stub that fails the third put().
+    // Custom storage stub that fails the third put(). The Storage
+    // trait requires `size` and `local_path` in addition to the
+    // headline methods, so forward both to the inner LocalStorage.
     struct FailingStorage {
         inner: LocalStorage,
         fail_after: std::cell::Cell<u32>,
@@ -399,6 +414,10 @@ fn ensure_pdf_prewarmed_disk_write_failure_aborts() {
         fn delete(&self, k: &str) -> FolioResult<()> { self.inner.delete(k) }
         fn list(&self, prefix: &str) -> FolioResult<Vec<String>> { self.inner.list(prefix) }
         fn exists(&self, k: &str) -> FolioResult<bool> { self.inner.exists(k) }
+        fn size(&self, k: &str) -> FolioResult<u64> { self.inner.size(k) }
+        fn local_path(&self, k: &str) -> FolioResult<std::path::PathBuf> {
+            self.inner.local_path(k)
+        }
     }
 
     let dir = TempDir::new().unwrap();
@@ -415,6 +434,19 @@ fn ensure_pdf_prewarmed_disk_write_failure_aborts() {
     assert!(
         read_manifest(&storage, "h").is_none(),
         "manifest must not be persisted on partial failure"
+    );
+    // Rollback must wipe the partial page files as well — otherwise
+    // collect_cached_books cannot count them and eviction can never
+    // reclaim the space.
+    let remaining_pages: Vec<String> = storage
+        .list(&book_prefix("h"))
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|k| !k.ends_with("manifest.json"))
+        .collect();
+    assert!(
+        remaining_pages.is_empty(),
+        "partial cache must be rolled back; orphans: {remaining_pages:?}"
     );
 }
 ```
@@ -484,13 +516,35 @@ where
         book_hash
     );
     let start = std::time::Instant::now();
-    let mut total_size: u64 = 0;
-    for i in 0..prewarm {
-        let (bytes, _mime) = render(i)?;
-        let name = format!("{i:03}.jpg");
-        storage.put(&page_key(book_hash, &name), &bytes)?;
-        total_size += bytes.len() as u64;
-    }
+
+    // Helper: any failure in the loop or the final manifest write
+    // leaves the partial output (page files, possibly an old manifest
+    // pointing at stale paths) unreferenced from the manifest layer.
+    // `collect_cached_books` skips books without a manifest, so those
+    // orphans would never be evicted. Roll back explicitly.
+    let try_warm = || -> FolioResult<u64> {
+        let mut total_size: u64 = 0;
+        for i in 0..prewarm {
+            let (bytes, _mime) = render(i)?;
+            let name = format!("{i:03}.jpg");
+            storage.put(&page_key(book_hash, &name), &bytes)?;
+            total_size += bytes.len() as u64;
+        }
+        Ok(total_size)
+    };
+
+    let total_size = match try_warm() {
+        Ok(s) => s,
+        Err(e) => {
+            page_dbg!(
+                "ensure_pdf_prewarmed: warm failed for {} — rolling back partial cache",
+                book_hash
+            );
+            let _ = evict_book(storage, book_hash);
+            return Err(e);
+        }
+    };
+
     page_dbg!(
         "ensure_pdf_prewarmed: warmed {} pages ({} KB) in {:?}",
         prewarm,
@@ -510,7 +564,11 @@ where
         format: BookFormat::Pdf,
         canonical_width: Some(crate::pdf::CACHE_CANONICAL_WIDTH),
     };
-    write_manifest(storage, book_hash, &manifest)?;
+    if let Err(e) = write_manifest(storage, book_hash, &manifest) {
+        // Same orphan risk as above — clean up before bubbling up.
+        let _ = evict_book(storage, book_hash);
+        return Err(e);
+    }
     Ok(manifest)
 }
 
@@ -638,6 +696,31 @@ fn get_or_render_pdf_page_miss_writes_disk_and_updates_manifest() {
 }
 
 #[test]
+fn get_or_render_pdf_page_out_of_range_errors_without_rendering() {
+    let (_d, storage) = temp_storage();
+    let hash = "h";
+    write_manifest(&storage, hash, &CacheManifest {
+        book_id: "b".into(),
+        book_hash: hash.into(),
+        page_count: 10,
+        total_size_bytes: 0,
+        extracted_at: now_iso(),
+        last_accessed: now_iso(),
+        pages: Vec::new(),
+        format: BookFormat::Pdf,
+        canonical_width: Some(2400),
+    }).unwrap();
+
+    let render = |_idx: u32| -> FolioResult<(Vec<u8>, String)> {
+        panic!("renderer must not run for out-of-range index");
+    };
+
+    let err = get_or_render_pdf_page_with_renderer(&storage, hash, 999, &render, || {}).unwrap_err();
+    let msg = format!("{err}");
+    assert!(msg.contains("out of range"), "got: {msg}");
+}
+
+#[test]
 fn get_or_render_pdf_page_missing_manifest_falls_back_to_render_only() {
     let (_d, storage) = temp_storage();
     let render = |idx: u32| Ok((format!("p{idx}").into_bytes(), "image/jpeg".into()));
@@ -653,7 +736,9 @@ fn get_or_render_pdf_page_missing_manifest_falls_back_to_render_only() {
 fn get_or_render_pdf_page_swallows_write_failure() {
     use crate::storage::Storage;
 
-    // Storage that fails all puts EXCEPT manifest writes.
+    // Storage that fails all puts EXCEPT manifest writes. The
+    // Storage trait requires `size` and `local_path`; forward them
+    // to the inner LocalStorage.
     struct PageWriteFails {
         inner: LocalStorage,
     }
@@ -669,6 +754,10 @@ fn get_or_render_pdf_page_swallows_write_failure() {
         fn delete(&self, k: &str) -> FolioResult<()> { self.inner.delete(k) }
         fn list(&self, p: &str) -> FolioResult<Vec<String>> { self.inner.list(p) }
         fn exists(&self, k: &str) -> FolioResult<bool> { self.inner.exists(k) }
+        fn size(&self, k: &str) -> FolioResult<u64> { self.inner.size(k) }
+        fn local_path(&self, k: &str) -> FolioResult<std::path::PathBuf> {
+            self.inner.local_path(k)
+        }
     }
     let dir = TempDir::new().unwrap();
     let storage = PageWriteFails { inner: LocalStorage::new(dir.path()).unwrap() };
@@ -766,6 +855,18 @@ where
 
     if let Some(ref manifest) = manifest_opt {
         if manifest.format == BookFormat::Pdf {
+            // Guard against out-of-range indices before either the
+            // disk lookup or the renderer runs. `get_cached_page`
+            // returns `NotFound` both for "file missing" and "index
+            // >= page_count"; we want the latter to surface to the
+            // caller rather than silently fall through to the
+            // expensive render + cache path.
+            if page_index >= manifest.page_count {
+                return Err(FolioError::not_found(format!(
+                    "Page index {page_index} out of range (total: {})",
+                    manifest.page_count
+                )));
+            }
             if let Ok((data, mime)) = get_cached_page(storage, book_hash, page_index) {
                 return Ok((data, mime));
             }
