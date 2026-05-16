@@ -2,7 +2,7 @@
 
 ## Overview
 
-PDF pages today are rendered by pdfium on every request. A reading-size render costs roughly 100 ms – 2 s per page depending on document complexity, and the result lives only in an in-memory LRU; closing the app discards it. This spec adds an on-disk cache for rendered PDF pages that survives restarts.
+PDF pages today are rendered by pdfium on every request and the rendered bytes are discarded once they leave the IPC response (`src-tauri/src/commands.rs:3701`). A reading-size render costs roughly 100 ms – 2 s per page depending on document complexity, so re-opening a book, jumping back to a previously visited page, or even reloading after a window resize re-pays that cost from scratch. This spec adds an on-disk cache for rendered PDF pages that survives restarts.
 
 The cache reuses the existing `page-cache/{hash}/` namespace, manifest format, and three-tier eviction (LRU / size cap / age) that already serves the CBZ and CBR readers. Both formats share one Settings slider, one storage budget, and one eviction pass.
 
@@ -206,13 +206,21 @@ let (bytes, mime) = if let Ok(storage) = page_cache_storage(&app) {
             },
         )?
     } else {
-        // Linked / no-hash PDF — direct render, no caching.
-        pdf::get_page_image_bytes(&file_path, page_index, Some(pdf::CACHE_CANONICAL_WIDTH))?
+        // Linked / no-hash PDF — direct render at the viewport width.
+        // Skipping the cache means skipping the canonical-width step
+        // too; the cache only exists to amortise the cost of a 2400 px
+        // render across reuses, which we cannot get here.
+        pdf::get_page_image_bytes(&file_path, page_index, render_width)?
     }
 } else {
-    pdf::get_page_image_bytes(&file_path, page_index, Some(pdf::CACHE_CANONICAL_WIDTH))?
+    // Storage unavailable — same reasoning as the no-hash branch.
+    pdf::get_page_image_bytes(&file_path, page_index, render_width)?
 };
 
+// The cache-miss branch returned canonical-width bytes; the no-hash /
+// no-storage branches already rendered at `render_width`. Either way,
+// `maybe_resize_to_jpeg` is a no-op when the input is already at the
+// target width, so the call below stays valid.
 let (bytes, out_mime) = crate::image_util::maybe_resize_to_jpeg(bytes, mime, render_width)?;
 Ok(tauri::ipc::Response::new(crate::page_wire::append_tag(bytes, &out_mime)))
 ```
