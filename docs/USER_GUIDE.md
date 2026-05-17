@@ -228,6 +228,8 @@ These formats use a page-by-page viewer. Navigate with the Previous/Next buttons
 
 **Page cache (CBZ/CBR):** When you open a comic for the first time, Folio extracts all pages from the archive to a disk cache. Subsequent page turns read from disk and are near-instant (~1-5ms). The cache persists between sessions — reopening the same comic skips extraction entirely. Cache is managed automatically via eviction (max 5 books, configurable size cap, 7-day expiry). You can adjust the cache size limit or clear it in Settings > Library.
 
+**Page cache (PDF):** PDFs also use the same on-disk page cache. When you open a PDF, Folio renders the first ten pages at a high canonical resolution and writes them to the cache. As you read further, additional pages are cached on demand. Reopening the same PDF in a later session reads pages from disk instead of re-running pdfium — typically a 10–100× speed-up on the first-page render. Cache budget, LRU, and 7-day expiry are shared with the comic cache.
+
 **Zoom quality:** When you zoom into any page-based format, Folio keeps images sharp. PDFs are re-rendered at the target resolution (like native PDF viewers), and comic pages (CBZ/CBR) are displayed using physical DOM resizing so the browser resamples at full resolution instead of blurring. PDF pages are rendered as high-quality JPEG images with an in-memory cache for fast navigation.
 
 **Slow page loading:** Some PDF pages with complex content may take longer to render. If a page takes more than 8 seconds, Folio shows a "taking longer than usual" hint while continuing to load. If it exceeds 30 seconds, a retry button appears. Retrying is often instant since the render may have completed in the background and been cached.
@@ -531,7 +533,7 @@ In Settings > Library, you can view your current library folder path, file count
 - **Copy** (default) — the file is copied into Folio's managed library folder. Safe and self-contained.
 - **Link** — Folio references the file at its original location without copying. Useful for large libraries on external drives or NAS. Linked books show a link badge on their card.
 
-**Page cache:** Folio caches extracted comic pages (CBZ/CBR) on disk for faster reading. The cache size limit controls the maximum disk space used (default 500 MB). You can choose 250 MB, 500 MB, 1 GB, or 2 GB. The current cache usage and a "Clear cache" button are shown below the setting.
+**Page cache:** Folio caches extracted comic pages (CBZ/CBR) and rendered PDF pages on disk for faster reading. The cache size limit controls the maximum disk space used across both formats (default 500 MB). You can choose 250 MB, 500 MB, 1 GB, or 2 GB. The current cache usage and a "Clear cache" button are shown below the setting.
 
 ---
 
