@@ -290,6 +290,7 @@ pub fn run() {
             commands::check_pdf_support,
             commands::get_pdf_page_count,
             commands::get_pdf_page_bytes,
+            commands::prepare_pdf,
             commands::create_collection,
             commands::update_collection,
             commands::get_collections,

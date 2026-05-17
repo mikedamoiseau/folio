@@ -2005,6 +2005,71 @@ pub async fn prepare_comic(
     Ok(manifest)
 }
 
+/// First-open warm pass for PDF books. Mirrors `prepare_comic`:
+/// asserts the format, requires `book.file_hash`, renders the first
+/// ten pages into the shared `page-cache/` namespace, and kicks off
+/// a background eviction afterwards. Returns the freshly-written
+/// manifest so the frontend can reuse `page_count` instead of calling
+/// `get_pdf_page_count` separately.
+#[tauri::command]
+pub async fn prepare_pdf(
+    book_id: String,
+    state: State<'_, AppState>,
+    app: AppHandle,
+) -> FolioResult<page_cache::CacheManifest> {
+    const PDF_PREWARM_PAGES: u32 = 10;
+
+    let (book, max_size_mb) = {
+        let conn = state.active_db()?.get()?;
+        let book = db::get_book(&conn, &book_id)?
+            .ok_or_else(|| FolioError::not_found(format!("Book '{book_id}' not found")))?;
+        let max_size_mb = db::get_setting(&conn, "page_cache_max_size_mb")
+            .ok()
+            .flatten()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(page_cache::DEFAULT_MAX_CACHE_SIZE_MB);
+        (book, max_size_mb)
+    };
+    let file_path = state.resolve_book_path(&book)?;
+    validate_file_exists(&file_path)?;
+
+    if book.format != BookFormat::Pdf {
+        return Err(FolioError::invalid("prepare_pdf only supports PDF format"));
+    }
+    let book_hash = book
+        .file_hash
+        .as_deref()
+        .ok_or_else(|| FolioError::invalid("Book has no file hash; cannot populate PDF cache"))?;
+
+    let storage = page_cache_storage(&app)?;
+    let prep_start = std::time::Instant::now();
+    page_cache::page_dbg!(
+        "prepare_pdf: book={} hash={} prewarm={}",
+        book_id,
+        book_hash,
+        PDF_PREWARM_PAGES
+    );
+    let manifest = page_cache::ensure_pdf_prewarmed(
+        &storage,
+        &book_id,
+        book_hash,
+        &file_path,
+        PDF_PREWARM_PAGES,
+    )?;
+    page_cache::page_dbg!(
+        "prepare_pdf done: page_count={} elapsed={:?}",
+        manifest.page_count,
+        prep_start.elapsed()
+    );
+
+    let evict_storage = page_cache_storage(&app)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let _ = page_cache::run_eviction(&evict_storage, max_size_mb);
+    });
+
+    Ok(manifest)
+}
+
 #[tauri::command]
 pub async fn get_cache_stats(app: AppHandle) -> FolioResult<page_cache::CacheStats> {
     let storage = page_cache_storage(&app)?;
@@ -3680,27 +3745,104 @@ pub async fn get_pdf_page_count(book_id: String, state: State<'_, AppState>) -> 
 /// plus a trailing mime tag (see `page_wire`); the frontend builds a
 /// `Blob` + `URL.createObjectURL` for `<img src>`.
 ///
-/// `width` controls the render resolution (clamped to 9600). When
+/// `width` controls the viewport-target width (clamped to 9600). When
 /// omitted, `folio_core::pdf::get_page_image_bytes` falls back to
 /// `DEFAULT_RENDER_WIDTH` (1200 px).
+///
+/// Cache-first against the `page-cache/` namespace populated by
+/// `prepare_pdf`: a disk hit reads canonical-width bytes and resizes
+/// down to the viewport target. On miss with a PDF manifest present,
+/// renders at the canonical width and writes best-effort to disk
+/// (eviction is coalesced via a callback). Without a manifest (no
+/// hash, storage error, or `prepare_pdf` never ran) the function
+/// falls back to a direct render at the viewport width so uncacheable
+/// PDFs match pre-spec performance.
 #[tauri::command]
 pub async fn get_pdf_page_bytes(
     book_id: String,
     page_index: u32,
     width: Option<u32>,
     state: State<'_, AppState>,
+    app: AppHandle,
 ) -> FolioResult<tauri::ipc::Response> {
     let render_width = width.filter(|&w| w > 0).map(|w| w.min(9600));
-    let file_path = {
+
+    let book = {
         let conn = state.active_db()?.get()?;
-        let book = db::get_book(&conn, &book_id)?
-            .ok_or_else(|| FolioError::not_found(format!("Book '{book_id}' not found")))?;
-        state.resolve_book_path(&book)?
+        db::get_book(&conn, &book_id)?
+            .ok_or_else(|| FolioError::not_found(format!("Book '{book_id}' not found")))?
     };
+    let file_path = state.resolve_book_path(&book)?;
     validate_file_exists(&file_path)?;
-    let (bytes, mime) = pdf::get_page_image_bytes(&file_path, page_index, render_width)?;
+
+    // Cache-first path. Cached pages live at the canonical render
+    // width; resize on read clamps them to the viewport-derived
+    // target.
+    if let Ok(storage) = page_cache_storage(&app) {
+        if let Some(ref book_hash) = book.file_hash {
+            if let Ok((data, mime)) = page_cache::get_cached_page(&storage, book_hash, page_index) {
+                let (bytes, out_mime) =
+                    crate::image_util::maybe_resize_to_jpeg(data, mime, render_width)?;
+                return Ok(tauri::ipc::Response::new(crate::page_wire::append_tag(
+                    bytes, &out_mime,
+                )));
+            }
+        }
+    }
+
+    // Miss path. Use the cached-render code path (canonical 2400 px
+    // render + best-effort disk write) only when a PDF manifest is
+    // already in place — otherwise the higher render cost has no
+    // cache benefit. No manifest → render at viewport width directly,
+    // matching pre-spec behavior.
+    let (bytes, mime) = if let Some(book_hash) = book.file_hash.clone() {
+        if let Ok(storage) = page_cache_storage(&app) {
+            let has_pdf_manifest = page_cache::read_manifest(&storage, &book_hash)
+                .map(|m| m.format == BookFormat::Pdf)
+                .unwrap_or(false);
+            if has_pdf_manifest {
+                let app_for_evict = app.clone();
+                let max_size_mb = {
+                    let conn = state.active_db()?.get()?;
+                    db::get_setting(&conn, "page_cache_max_size_mb")
+                        .ok()
+                        .flatten()
+                        .and_then(|v| v.parse::<u64>().ok())
+                        .unwrap_or(page_cache::DEFAULT_MAX_CACHE_SIZE_MB)
+                };
+                let on_batch = move || {
+                    if let Ok(evict_storage) = page_cache_storage(&app_for_evict) {
+                        tauri::async_runtime::spawn_blocking(move || {
+                            let _ = page_cache::run_eviction(&evict_storage, max_size_mb);
+                        });
+                    }
+                };
+                let (b, m) = page_cache::get_or_render_pdf_page_with_eviction(
+                    &storage, &book_hash, &file_path, page_index, on_batch,
+                )?;
+                (b, m.to_string())
+            } else {
+                // No PDF manifest — viewport render, no cache.
+                let (b, m) = pdf::get_page_image_bytes(&file_path, page_index, render_width)?;
+                (b, m.to_string())
+            }
+        } else {
+            // Storage unavailable — viewport render, no cache.
+            let (b, m) = pdf::get_page_image_bytes(&file_path, page_index, render_width)?;
+            (b, m.to_string())
+        }
+    } else {
+        // No file hash — viewport render, no cache.
+        let (b, m) = pdf::get_page_image_bytes(&file_path, page_index, render_width)?;
+        (b, m.to_string())
+    };
+
+    // Cache-miss canonical-render branch produced 2400 px JPEG bytes;
+    // the no-cache fallbacks already match `render_width`.
+    // `maybe_resize_to_jpeg` is a no-op when input == target.
+    let (bytes, out_mime) = crate::image_util::maybe_resize_to_jpeg(bytes, mime, render_width)?;
     Ok(tauri::ipc::Response::new(crate::page_wire::append_tag(
-        bytes, mime,
+        bytes, &out_mime,
     )))
 }
 

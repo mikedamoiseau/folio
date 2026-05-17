@@ -610,8 +610,14 @@ where
             let name = format!("{page_index:03}.jpg");
             match storage.put(&page_key(book_hash, &name), &bytes) {
                 Ok(()) => {
-                    manifest.total_size_bytes =
-                        manifest.total_size_bytes.saturating_add(bytes.len() as u64);
+                    // Only touch last_accessed — `total_size_bytes`
+                    // intentionally stays as the warm-time snapshot.
+                    // Eviction reads the disk directly via
+                    // `book_disk_size_bytes`, so a concurrent lazy
+                    // read-modify-write on the field would only ever
+                    // cause stats drift, not eviction misbehavior.
+                    // Dropping the update kills the lost-increment
+                    // race outright.
                     manifest.last_accessed = now_iso();
                     let _ = write_manifest(storage, book_hash, &manifest);
 
@@ -710,6 +716,26 @@ fn evict_book(storage: &dyn Storage, book_hash: &str) -> FolioResult<()> {
     Ok(())
 }
 
+/// Disk-authoritative size for a single cached book. Sums `storage.size`
+/// across every page key under the book's prefix; the manifest JSON
+/// is excluded so the number reflects cached payload only (and stays
+/// stable across manifest rewrites). Used by `run_eviction` and
+/// `get_cache_stats` so a stale `manifest.total_size_bytes` snapshot
+/// (which we deliberately do not update on lazy PDF writes to avoid a
+/// concurrent read-modify-write race) cannot drift the eviction budget
+/// or the Settings stats panel.
+fn book_disk_size_bytes(storage: &dyn Storage, book_hash: &str) -> u64 {
+    let prefix = book_prefix(book_hash);
+    let keys = match storage.list(&prefix) {
+        Ok(k) => k,
+        Err(_) => return 0,
+    };
+    keys.into_iter()
+        .filter(|k| !k.ends_with("manifest.json"))
+        .filter_map(|k| storage.size(&k).ok())
+        .sum()
+}
+
 pub fn run_eviction(storage: &dyn Storage, max_size_mb: u64) -> FolioResult<()> {
     let mut books = collect_cached_books(storage);
     books.sort_by(|a, b| a.last_accessed.cmp(&b.last_accessed));
@@ -721,14 +747,20 @@ pub fn run_eviction(storage: &dyn Storage, max_size_mb: u64) -> FolioResult<()> 
         books.remove(0);
     }
 
-    // Layer 2: Total size cap
+    // Layer 2: Total size cap (disk-authoritative — the manifest
+    // snapshot is not maintained on lazy PDF writes).
     let max_size_bytes = max_size_mb * 1024 * 1024;
-    let mut total_size: u64 = books.iter().map(|b| b.total_size_bytes).sum();
+    let mut sizes: Vec<u64> = books
+        .iter()
+        .map(|b| book_disk_size_bytes(storage, &b.book_hash))
+        .collect();
+    let mut total_size: u64 = sizes.iter().sum();
     while total_size > max_size_bytes && !books.is_empty() {
-        let oldest = &books[0];
-        total_size -= oldest.total_size_bytes;
-        evict_book(storage, &oldest.book_hash)?;
+        let oldest_size = sizes[0];
+        total_size = total_size.saturating_sub(oldest_size);
+        evict_book(storage, &books[0].book_hash)?;
         books.remove(0);
+        sizes.remove(0);
     }
 
     // Layer 3: Age expiry
@@ -748,18 +780,21 @@ pub fn run_eviction(storage: &dyn Storage, max_size_mb: u64) -> FolioResult<()> 
 
 pub fn get_cache_stats(storage: &dyn Storage) -> CacheStats {
     let books = collect_cached_books(storage);
-    let total_size_bytes: u64 = books.iter().map(|b| b.total_size_bytes).sum();
     let book_count = books.len();
     let book_infos: Vec<CacheBookInfo> = books
         .into_iter()
-        .map(|b| CacheBookInfo {
-            book_id: b.book_id,
-            book_hash: b.book_hash,
-            size_bytes: b.total_size_bytes,
-            page_count: b.page_count,
-            last_accessed: b.last_accessed,
+        .map(|b| {
+            let size_bytes = book_disk_size_bytes(storage, &b.book_hash);
+            CacheBookInfo {
+                book_id: b.book_id,
+                book_hash: b.book_hash,
+                size_bytes,
+                page_count: b.page_count,
+                last_accessed: b.last_accessed,
+            }
         })
         .collect();
+    let total_size_bytes: u64 = book_infos.iter().map(|b| b.size_bytes).sum();
     CacheStats {
         total_size_bytes,
         book_count,
@@ -796,6 +831,10 @@ mod tests {
     }
 
     /// Helper: create a fake cached book with a manifest and dummy page files.
+    /// `total_size_bytes` controls both the manifest field AND the actual
+    /// payload written to disk so eviction logic that reads disk-truth
+    /// sees the same number as the manifest snapshot. Page payload is
+    /// `total_size_bytes / page_count` zero bytes.
     fn create_fake_cache(
         storage: &dyn Storage,
         book_id: &str,
@@ -805,10 +844,16 @@ mod tests {
         last_accessed: &str,
     ) -> CacheManifest {
         let mut pages = Vec::new();
+        let per_page = if page_count == 0 {
+            0
+        } else {
+            total_size_bytes / page_count as u64
+        };
         for i in 0..page_count {
             let name = format!("{:03}.jpg", i);
+            let payload = vec![0u8; per_page as usize];
             storage
-                .put(&page_key(book_hash, &name), b"fake image data")
+                .put(&page_key(book_hash, &name), &payload)
                 .unwrap();
             pages.push(name);
         }
@@ -903,7 +948,9 @@ mod tests {
     fn size_cap_eviction() {
         let (_d, storage) = temp_storage();
 
-        // Create 3 books, each 200 MB in manifest (tiny actual files)
+        // Create 3 books, each ~2 MB on disk (real payload — eviction
+        // now reads filesystem size directly rather than trusting the
+        // manifest field).
         let base = chrono::Utc::now();
         for i in 0..3 {
             let ts = base + chrono::Duration::seconds(i as i64);
@@ -912,16 +959,15 @@ mod tests {
                 &format!("book{i}"),
                 &format!("hash{i}"),
                 1,
-                200 * 1024 * 1024, // 200 MB
+                2 * 1024 * 1024, // 2 MB
                 &ts.to_rfc3339(),
             );
         }
 
-        // Total = 600 MB; cap at 500 MB → should evict the oldest
-        run_eviction(&storage, 500).unwrap();
+        // Total ≈ 6 MB; cap at 4 MB → should evict the oldest.
+        run_eviction(&storage, 4).unwrap();
 
         let after = collect_cached_books(&storage);
-        // Need to remove at least 1 to get under 500 MB (200*2 = 400 < 500)
         assert!(after.len() <= 2);
         assert!(read_manifest(&storage, "hash0").is_none());
     }
@@ -954,6 +1000,10 @@ mod tests {
     fn cache_stats_counts_and_sizes() {
         let (_d, storage) = temp_storage();
 
+        // create_fake_cache writes payload sized to match the claim
+        // (rounded down to per_page = total / page_count). 3 pages
+        // for "a" → 333 bytes each = 999 bytes total; 5 pages for "b"
+        // → 400 bytes each = 2000 bytes. Stats now read disk-truth.
         create_fake_cache(
             &storage,
             "a",
@@ -973,8 +1023,9 @@ mod tests {
 
         let stats = get_cache_stats(&storage);
         assert_eq!(stats.book_count, 2);
-        assert_eq!(stats.total_size_bytes, 3000);
         assert_eq!(stats.books.len(), 2);
+        // Disk-truth excludes the manifest. 333*3 + 400*5 = 2999.
+        assert_eq!(stats.total_size_bytes, 2999);
     }
 
     #[test]
@@ -1046,10 +1097,13 @@ mod tests {
     fn get_cached_page_reads_bytes_through_storage() {
         let (_d, storage) = temp_storage();
         let now = now_iso();
+        // 2 pages × 50 bytes each = 100 bytes total (matches the
+        // total_size_bytes claim so disk-truth eviction lines up).
         create_fake_cache(&storage, "a", "hash_a", 2, 100, &now);
 
         let (data, mime) = get_cached_page(&storage, "hash_a", 0).unwrap();
-        assert_eq!(data, b"fake image data");
+        assert_eq!(data.len(), 50);
+        assert!(data.iter().all(|&b| b == 0));
         assert_eq!(mime, "image/jpeg");
     }
 
@@ -1308,13 +1362,14 @@ mod tests {
     fn get_or_render_pdf_page_miss_writes_disk_and_updates_manifest() {
         let (_d, storage) = temp_storage();
         let hash = "h";
+        let baseline_extracted = "2026-01-01T00:00:00+00:00";
         let manifest = CacheManifest {
             book_id: "b".into(),
             book_hash: hash.into(),
             page_count: 50,
             total_size_bytes: 100,
-            extracted_at: now_iso(),
-            last_accessed: now_iso(),
+            extracted_at: baseline_extracted.into(),
+            last_accessed: baseline_extracted.into(),
             pages: Vec::new(),
             format: BookFormat::Pdf,
             canonical_width: Some(2400),
@@ -1331,8 +1386,15 @@ mod tests {
 
         assert!(storage.exists(&page_key(hash, "042.jpg")).unwrap());
         let updated = read_manifest(&storage, hash).unwrap();
-        assert_eq!(updated.total_size_bytes, 100 + b"p42".len() as u64);
+        // total_size_bytes is the warm-time snapshot; lazy writes do
+        // NOT update it (would race). Eviction uses disk-truth via
+        // `book_disk_size_bytes`. last_accessed is updated so LRU
+        // sees the touch.
+        assert_eq!(updated.total_size_bytes, 100);
+        assert_ne!(updated.last_accessed, baseline_extracted);
         assert!(updated.pages.is_empty(), "PDF manifests keep pages empty");
+        // Disk-truth: the new page contributes its bytes.
+        assert_eq!(book_disk_size_bytes(&storage, hash), b"p42".len() as u64);
     }
 
     #[test]
