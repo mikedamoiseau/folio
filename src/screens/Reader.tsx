@@ -234,13 +234,30 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
         // Page count is only meaningful for fixed-layout (PDF) and image
         // (CBZ/CBR) formats. HTML-reflowable books (EPUB + MOBI) use scroll
         // progress instead, so skip the fetch and leave pageCount at 0.
-        if (bookInfo.format === "pdf" || bookInfo.format === "cbz" || bookInfo.format === "cbr") {
+        if (bookInfo.format === "pdf") {
+          // First-open PDF warm pass: populates the page-cache manifest
+          // so subsequent get_pdf_page_bytes calls take the cache-first
+          // path. Reuse the returned page_count to skip a separate
+          // get_pdf_page_count round-trip; fall back to it only if
+          // prepare_pdf fails (e.g. missing file hash).
           try {
-            const command =
-              bookInfo.format === "pdf"
-                ? "get_pdf_page_count"
-                : "get_comic_page_count";
-            const count = await invoke<number>(command, { bookId });
+            const manifest = await invoke<{ page_count: number }>(
+              "prepare_pdf",
+              { bookId }
+            );
+            if (!cancelled) setPageCount(manifest.page_count);
+          } catch (e) {
+            console.warn("PDF cache preparation failed, falling back to direct read:", e);
+            try {
+              const count = await invoke<number>("get_pdf_page_count", { bookId });
+              if (!cancelled) setPageCount(count);
+            } catch {
+              // page count unavailable
+            }
+          }
+        } else if (bookInfo.format === "cbz" || bookInfo.format === "cbr") {
+          try {
+            const count = await invoke<number>("get_comic_page_count", { bookId });
             if (!cancelled) setPageCount(count);
           } catch {
             // page count unavailable

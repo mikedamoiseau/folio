@@ -3772,6 +3772,11 @@ pub async fn get_pdf_page_bytes(
         db::get_book(&conn, &book_id)?
             .ok_or_else(|| FolioError::not_found(format!("Book '{book_id}' not found")))?
     };
+    if book.format != BookFormat::Pdf {
+        return Err(FolioError::invalid(
+            "get_pdf_page_bytes only supports PDF format",
+        ));
+    }
     let file_path = state.resolve_book_path(&book)?;
     validate_file_exists(&file_path)?;
 
