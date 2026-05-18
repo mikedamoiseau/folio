@@ -134,7 +134,7 @@ pub fn cover_mime(cover_path: Option<&str>) -> &'static str {
 pub fn book_to_entry(book: &Book, urls: &EntryUrls) -> String {
     let title = xml_escape(&book.title);
     let author = xml_escape(&book.author);
-    let id = &book.id;
+    let id = xml_escape(&book.id);
     let updated = chrono::DateTime::from_timestamp(book.added_at, 0)
         .map(|dt| dt.format("%Y-%m-%dT%H:%M:%SZ").to_string())
         .unwrap_or_else(|| "2024-01-01T00:00:00Z".to_string());
@@ -420,6 +420,22 @@ mod tests {
             entry.contains(r#"href="https://example.test/cover/abc" type="image/png""#),
             "cover link should advertise png mime with caller-supplied href:\n{entry}"
         );
+    }
+
+    #[test]
+    fn entry_id_is_xml_escaped() {
+        // Book IDs are stored as unconstrained TEXT; if a row carries
+        // XML-significant characters they must be escaped or the
+        // emitted `<id>` element becomes malformed / injectable.
+        let mut book = make_book("/lib/story.epub", BookFormat::Epub);
+        book.id = "x&y</id><entry>".to_string();
+        let entry = book_to_entry(&book, &fixed_urls());
+        assert!(
+            entry.contains("urn:folio:x&amp;y&lt;/id&gt;&lt;entry&gt;"),
+            "book id must be XML-escaped:\n{entry}"
+        );
+        assert!(!entry.contains("urn:folio:x&y"));
+        assert!(!entry.contains("</id><entry>"));
     }
 
     #[test]
