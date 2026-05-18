@@ -20,6 +20,11 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 ### Fixed
 - **PageViewer re-animated the current page on layout reflow.** The slide-in animation re-fired when the load-spread effect re-ran for reasons other than a real page turn (for example, the thumbnail strip mounting and shifting the page-image cache key). Tracked the last-animated page index so the animation only plays on actual navigation.
 
+## [2.0.3] - 2026-05-18
+
+### Added
+- `folio_core::opds_feed` — public primitives for rendering OPDS Atom feeds: `xml_escape`, `mobi_ext_and_mime`, `cover_mime`, `book_to_entry`, `wrap_feed`, `EntryUrls`, `FeedKind`, and the two content-type constants. Lets external tooling render OPDS feeds from `Book` rows without depending on the desktop app's `web_server` module.
+
 ## [2.0.2] - 2026-05-18
 
 ### Added
