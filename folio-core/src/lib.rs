@@ -20,6 +20,7 @@ pub mod isbn;
 pub mod mobi;
 pub mod models;
 pub mod opds;
+pub mod opds_feed;
 pub mod openlibrary;
 pub mod page_cache;
 pub mod paths;
