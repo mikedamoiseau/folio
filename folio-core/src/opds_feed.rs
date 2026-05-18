@@ -117,9 +117,11 @@ pub fn cover_mime(cover_path: Option<&str>) -> &'static str {
 /// Render a single Atom `<entry>` element for `book`.
 ///
 /// The returned string is the entry XML alone (no `<feed>` wrapper).
-/// Caller-supplied `urls` are inlined verbatim into `href=` attributes
-/// and MUST already be valid URLs; all metadata fields (title, author,
-/// description) are XML-escaped internally.
+/// Caller-supplied `urls` MUST already be valid URLs; the builder
+/// XML-escapes them before interpolation so query strings containing
+/// `&` (e.g. `?a=1&b=2`) produce well-formed Atom. All metadata
+/// fields (title, author, description) are likewise XML-escaped
+/// internally.
 ///
 /// For MOBI-family books the acquisition link's MIME type is derived
 /// from the stored file path via [`mobi_ext_and_mime`] so clients see
@@ -143,9 +145,11 @@ pub fn book_to_entry(book: &Book, urls: &EntryUrls) -> String {
         .map(|d| format!("<summary>{}</summary>", xml_escape(d)))
         .unwrap_or_default();
 
+    let cover_href = xml_escape(&urls.cover_href);
+    let download_href = xml_escape(&urls.download_href);
+
     let cover_link = format!(
-        r#"<link rel="http://opds-spec.org/image" href="{}" type="{}"/>"#,
-        urls.cover_href,
+        r#"<link rel="http://opds-spec.org/image" href="{cover_href}" type="{}"/>"#,
         cover_mime(book.cover_path.as_deref())
     );
 
@@ -157,8 +161,7 @@ pub fn book_to_entry(book: &Book, urls: &EntryUrls) -> String {
         crate::models::BookFormat::Mobi => mobi_ext_and_mime(&book.file_path),
     };
     let download_link = format!(
-        r#"<link rel="http://opds-spec.org/acquisition" href="{}" type="{mime}" title="{title}.{ext}"/>"#,
-        urls.download_href
+        r#"<link rel="http://opds-spec.org/acquisition" href="{download_href}" type="{mime}" title="{title}.{ext}"/>"#,
     );
 
     format!(
@@ -417,6 +420,28 @@ mod tests {
             entry.contains(r#"href="https://example.test/cover/abc" type="image/png""#),
             "cover link should advertise png mime with caller-supplied href:\n{entry}"
         );
+    }
+
+    #[test]
+    fn entry_hrefs_are_xml_escaped() {
+        // Query-string URLs containing `&` must be escaped in the
+        // emitted attributes or the feed becomes ill-formed XML.
+        let book = make_book("/lib/story.epub", BookFormat::Epub);
+        let urls = EntryUrls {
+            cover_href: "/books/1/cover?a=1&b=2".to_string(),
+            download_href: "/books/1/download?token=abc&format=epub".to_string(),
+        };
+        let entry = book_to_entry(&book, &urls);
+        assert!(
+            entry.contains(r#"href="/books/1/cover?a=1&amp;b=2""#),
+            "cover href must be XML-escaped:\n{entry}"
+        );
+        assert!(
+            entry.contains(r#"href="/books/1/download?token=abc&amp;format=epub""#),
+            "download href must be XML-escaped:\n{entry}"
+        );
+        assert!(!entry.contains("?a=1&b=2"));
+        assert!(!entry.contains("token=abc&format=epub"));
     }
 
     #[test]
