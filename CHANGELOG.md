@@ -20,6 +20,11 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 ### Fixed
 - **PageViewer re-animated the current page on layout reflow.** The slide-in animation re-fired when the load-spread effect re-ran for reasons other than a real page turn (for example, the thumbnail strip mounting and shifting the page-image cache key). Tracked the last-animated page index so the animation only plays on actual navigation.
 
+## [2.0.2] - 2026-05-18
+
+### Added
+- `folio_core::db::provision_library(path)` — public entry point for creating a library file and applying the canonical schema without taking a connection-pool handle. Idempotent.
+
 ## [2.0.0] - 2026-05-03
 
 A milestone release. The 1.x line shipped the reader and the library; 2.0 is the platform underneath it. The desktop app now sits on top of `folio-core`, a separately-tested Rust crate with a pluggable `Storage` trait and structured errors — the same machinery that powers the embedded web server. New formats (MOBI / AZW / AZW3), a back/forward navigation stack, a curated OPDS preset picker, and a refactored remote-access toggle round out the user-facing additions. UX has had a measurable consistency pass (4 px spacing grid, clustered animation durations, normalized icon strokes, codified error surfaces).

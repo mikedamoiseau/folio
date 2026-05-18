@@ -326,6 +326,24 @@ fn run_schema(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+/// Open or create the SQLite library file at `db_path`, run the canonical
+/// schema migrations, and close the connection. Idempotent — re-running on
+/// an existing file is a no-op.
+///
+/// Use this entry point when you need to provision a library file without
+/// taking a long-lived [`DbPool`]. The function ensures the parent
+/// directory exists, sets `PRAGMA foreign_keys = ON`, and applies the
+/// migrations defined by `run_schema`.
+pub fn provision_library(db_path: &Path) -> crate::error::FolioResult<()> {
+    if let Some(parent) = db_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let conn = Connection::open(db_path)?;
+    conn.execute_batch("PRAGMA foreign_keys = ON;")?;
+    run_schema(&conn)?;
+    Ok(())
+}
+
 pub fn create_pool(db_path: &Path) -> crate::error::FolioResult<DbPool> {
     use crate::error::FolioError;
 
@@ -3270,5 +3288,40 @@ mod tests {
         // Must not error when key is absent.
         delete_setting(&conn, "never_existed").unwrap();
         assert!(get_setting(&conn, "never_existed").unwrap().is_none());
+    }
+
+    #[test]
+    fn provision_library_creates_file_and_applies_schema() {
+        use tempfile::tempdir;
+        let tmp = tempdir().unwrap();
+        let db_path = tmp.path().join("nested").join("library.db");
+
+        // File should not exist yet.
+        assert!(!db_path.exists());
+
+        provision_library(&db_path).expect("provision must succeed");
+
+        // File exists and the parent directory was created.
+        assert!(db_path.exists(), "library.db must be on disk");
+        assert!(db_path.parent().unwrap().exists());
+
+        // Schema is at the current version.
+        let conn = Connection::open(&db_path).unwrap();
+        let v = get_schema_version(&conn).unwrap();
+        assert_eq!(v, SCHEMA_VERSION, "schema must be migrated to head");
+    }
+
+    #[test]
+    fn provision_library_is_idempotent() {
+        use tempfile::tempdir;
+        let tmp = tempdir().unwrap();
+        let db_path = tmp.path().join("library.db");
+
+        provision_library(&db_path).expect("first call");
+        provision_library(&db_path).expect("second call must be a no-op");
+
+        let conn = Connection::open(&db_path).unwrap();
+        let v = get_schema_version(&conn).unwrap();
+        assert_eq!(v, SCHEMA_VERSION);
     }
 }
