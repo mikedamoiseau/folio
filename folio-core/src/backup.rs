@@ -381,11 +381,9 @@ pub fn build_operator(config: &BackupConfig) -> FolioResult<Operator> {
             make_blocking(async_op)
         }
         #[cfg(not(feature = "sftp"))]
-        ProviderType::Sftp => {
-            return Err(FolioError::invalid(
-                "SFTP is not available on this platform",
-            ));
-        }
+        ProviderType::Sftp => Err(FolioError::invalid(
+            "SFTP is not available on this platform",
+        )),
         ProviderType::Webdav => {
             let mut builder = opendal::services::Webdav::default();
             if let Some(v) = config.values.get("endpoint") {

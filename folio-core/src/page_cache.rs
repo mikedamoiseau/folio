@@ -424,8 +424,7 @@ pub const LAZY_EVICTION_BATCH: u32 = 25;
 
 // Global counter rather than per-book — eviction is whole-cache
 // anyway, so the trigger cadence does not need to be per-book.
-static LAZY_WRITE_COUNTER: std::sync::atomic::AtomicU32 =
-    std::sync::atomic::AtomicU32::new(0);
+static LAZY_WRITE_COUNTER: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 
 #[cfg(test)]
 pub fn reset_lazy_eviction_counter_for_tests() {
@@ -621,8 +620,8 @@ where
                     manifest.last_accessed = now_iso();
                     let _ = write_manifest(storage, book_hash, &manifest);
 
-                    let prev = LAZY_WRITE_COUNTER
-                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    let prev =
+                        LAZY_WRITE_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     if (prev + 1).is_multiple_of(LAZY_EVICTION_BATCH) {
                         on_batch();
                     }
@@ -655,8 +654,11 @@ where
     B: Fn(),
 {
     let render = |idx: u32| -> FolioResult<(Vec<u8>, String)> {
-        let (bytes, mime) =
-            crate::pdf::get_page_image_bytes(file_path, idx, Some(crate::pdf::CACHE_CANONICAL_WIDTH))?;
+        let (bytes, mime) = crate::pdf::get_page_image_bytes(
+            file_path,
+            idx,
+            Some(crate::pdf::CACHE_CANONICAL_WIDTH),
+        )?;
         Ok((bytes, mime.to_string()))
     };
     get_or_render_pdf_page_with_renderer(storage, book_hash, page_index, render, on_batch)
@@ -852,9 +854,7 @@ mod tests {
         for i in 0..page_count {
             let name = format!("{:03}.jpg", i);
             let payload = vec![0u8; per_page as usize];
-            storage
-                .put(&page_key(book_hash, &name), &payload)
-                .unwrap();
+            storage.put(&page_key(book_hash, &name), &payload).unwrap();
             pages.push(name);
         }
 
@@ -1277,7 +1277,8 @@ mod tests {
                 if n == 0 {
                     return Err(FolioError::io("simulated disk failure"));
                 }
-                self.fail_after.store(n - 1, std::sync::atomic::Ordering::SeqCst);
+                self.fail_after
+                    .store(n - 1, std::sync::atomic::Ordering::SeqCst);
                 self.inner.put(k, v)
             }
             fn delete(&self, k: &str) -> FolioResult<()> {
@@ -1306,8 +1307,7 @@ mod tests {
             Ok((format!("page-{idx}").into_bytes(), "image/jpeg".into()))
         };
 
-        let result =
-            ensure_pdf_prewarmed_with_renderer(&storage, "book", "h", 25, 10, render);
+        let result = ensure_pdf_prewarmed_with_renderer(&storage, "book", "h", 25, 10, render);
         assert!(result.is_err(), "must surface disk failure");
         assert!(
             read_manifest(&storage, "h").is_none(),
@@ -1431,10 +1431,9 @@ mod tests {
     #[test]
     fn get_or_render_pdf_page_missing_manifest_falls_back_to_render_only() {
         let (_d, storage) = temp_storage();
-        let render =
-            |idx: u32| -> FolioResult<(Vec<u8>, String)> {
-                Ok((format!("p{idx}").into_bytes(), "image/jpeg".into()))
-            };
+        let render = |idx: u32| -> FolioResult<(Vec<u8>, String)> {
+            Ok((format!("p{idx}").into_bytes(), "image/jpeg".into()))
+        };
 
         let (bytes, _) =
             get_or_render_pdf_page_with_renderer(&storage, "nope", 0, render, || {}).unwrap();
@@ -1500,10 +1499,9 @@ mod tests {
         )
         .unwrap();
 
-        let render =
-            |idx: u32| -> FolioResult<(Vec<u8>, String)> {
-                Ok((format!("p{idx}").into_bytes(), "image/jpeg".into()))
-            };
+        let render = |idx: u32| -> FolioResult<(Vec<u8>, String)> {
+            Ok((format!("p{idx}").into_bytes(), "image/jpeg".into()))
+        };
         let (bytes, _) =
             get_or_render_pdf_page_with_renderer(&storage, hash, 5, render, || {}).unwrap();
         assert_eq!(bytes, b"p5");
@@ -1533,10 +1531,9 @@ mod tests {
         )
         .unwrap();
 
-        let render =
-            |idx: u32| -> FolioResult<(Vec<u8>, String)> {
-                Ok((format!("p{idx}").into_bytes(), "image/jpeg".into()))
-            };
+        let render = |idx: u32| -> FolioResult<(Vec<u8>, String)> {
+            Ok((format!("p{idx}").into_bytes(), "image/jpeg".into()))
+        };
         let calls = std::cell::Cell::new(0u32);
         let on_batch = || calls.set(calls.get() + 1);
 
@@ -1582,9 +1579,7 @@ mod tests {
         write_manifest(&storage, hash, &manifest).unwrap();
         // Seed a lazily cached page beyond the prewarm window — the
         // bug would have wiped this via evict_book.
-        storage
-            .put(&page_key(hash, "020.jpg"), b"lazy")
-            .unwrap();
+        storage.put(&page_key(hash, "020.jpg"), b"lazy").unwrap();
 
         let _ = ensure_cached(&storage, "b", hash, "/nonexistent.pdf", &BookFormat::Pdf);
 
