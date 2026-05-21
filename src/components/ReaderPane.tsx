@@ -72,9 +72,27 @@ interface ReaderPaneProps {
   bookId: string;
   onOpenSettings: () => void;
   settingsOpen?: boolean;
+  /** True when two panes are mounted side-by-side. Defaults to false. */
+  splitMode?: boolean;
+  /**
+   * True for the left pane (or the single pane when split is off).
+   * Only the primary pane owns the global keyboard listeners so split
+   * mode does not double-fire navigation on every arrow key. The
+   * companion pane reuses props but skips window-level event wiring.
+   */
+  isPrimary?: boolean;
+  /** Toggle split mode on/off — supplied by the Reader shell. */
+  onToggleSplit?: () => void;
 }
 
-export default function ReaderPane({ bookId, onOpenSettings, settingsOpen = false }: ReaderPaneProps) {
+export default function ReaderPane({
+  bookId,
+  onOpenSettings,
+  settingsOpen = false,
+  splitMode = false,
+  isPrimary = true,
+  onToggleSplit,
+}: ReaderPaneProps) {
   const navigate = useNavigate();
   const { t } = useTranslation();
   const { addToast } = useToast();
@@ -1227,6 +1245,8 @@ export default function ReaderPane({ bookId, onOpenSettings, settingsOpen = fals
         setDndMode((prev) => !prev);
       } else if (e.key === "m" && !e.metaKey && !e.ctrlKey && !isHtmlBook) {
         toggleThumbStrip();
+      } else if (e.key === "\\" && !e.metaKey && !e.ctrlKey && onToggleSplit) {
+        onToggleSplit();
       } else if (e.key === "?" || (e.key === "/" && e.shiftKey)) {
         setShowShortcuts((prev) => !prev);
       } else if (e.key === "Escape") {
@@ -1238,9 +1258,15 @@ export default function ReaderPane({ bookId, onOpenSettings, settingsOpen = fals
       }
     }
 
+    // Only the primary pane binds the window-level listener. In split
+    // mode a second instance is also mounted; without this guard every
+    // arrow key (and every shortcut) would fire on both panes at once.
+    // Focus-aware routing lands in m4 — until then, navigation always
+    // targets the primary pane.
+    if (!isPrimary) return;
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [prevChapter, nextChapter, goHistoryBack, goHistoryForward, addBookmarkAtCurrentPosition, showShortcuts, tocOpen, bookmarksOpen, dndMode, settingsOpen, navigate, bookFormat, isHtmlBook, searchOpen, toggleThumbStrip]);
+  }, [prevChapter, nextChapter, goHistoryBack, goHistoryForward, addBookmarkAtCurrentPosition, showShortcuts, tocOpen, bookmarksOpen, dndMode, settingsOpen, navigate, bookFormat, isHtmlBook, searchOpen, toggleThumbStrip, onToggleSplit, isPrimary]);
 
   // ---- TOC focus trap ----
 
@@ -1730,6 +1756,24 @@ export default function ReaderPane({ bookId, onOpenSettings, settingsOpen = fals
                 </button>
               )}
             </div>
+          )}
+
+          {/* Split-view toggle — only rendered on the primary pane.
+              The companion pane shows the same book today (m3 adds a
+              book picker for the second pane). */}
+          {isPrimary && onToggleSplit && (
+            <button
+              onClick={onToggleSplit}
+              className={`p-1.5 transition-colors rounded-lg focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 ${splitMode ? "text-accent bg-accent-light" : "text-ink-muted hover:text-ink hover:bg-warm-subtle"}`}
+              aria-label={t("reader.toggleSplitView")}
+              title={t("reader.splitViewTitle")}
+              aria-pressed={splitMode}
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+                <rect x="3" y="4" width="8" height="16" rx="1" stroke="currentColor" strokeWidth="1.5" />
+                <rect x="13" y="4" width="8" height="16" rx="1" stroke="currentColor" strokeWidth="1.5" />
+              </svg>
+            </button>
           )}
 
           {/* DND toggle */}

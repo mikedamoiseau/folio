@@ -169,7 +169,9 @@
     "thumbnailGoTo": "Aller \u00e0 la page {{number}}",
     "thumbnailRetry": "R\u00e9essayer le chargement de la page {{number}}",
     "toggleThumbStrip": "Afficher/masquer les vignettes",
-    "thumbStripTitle": "Vignettes de pages (m)"
+    "thumbStripTitle": "Vignettes de pages (m)",
+    "toggleSplitView": "Basculer la vue divisée",
+    "splitViewTitle": "Vue divisée (\\)"
   },
 
   "import": {
@@ -620,6 +622,7 @@
     "addBookmark": "Ajouter un signet",
     "toggleFocus": "Basculer le mode concentration",
     "toggleThumbStrip": "Afficher/masquer les vignettes (PDF/comics)",
+    "toggleSplitView": "Basculer la vue divis\u00e9e",
     "closeExit": "Fermer les panneaux / Quitter le mode concentration / Retour \u00e0 la biblioth\u00e8que"
   },
 

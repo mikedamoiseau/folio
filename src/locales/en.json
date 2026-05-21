@@ -169,7 +169,9 @@
     "thumbnailGoTo": "Go to page {{number}}",
     "thumbnailRetry": "Retry loading page {{number}}",
     "toggleThumbStrip": "Toggle page thumbnails",
-    "thumbStripTitle": "Page thumbnails (m)"
+    "thumbStripTitle": "Page thumbnails (m)",
+    "toggleSplitView": "Toggle split view",
+    "splitViewTitle": "Split view (\\)"
   },
 
   "import": {
@@ -620,6 +622,7 @@
     "addBookmark": "Add bookmark",
     "toggleFocus": "Toggle focus mode",
     "toggleThumbStrip": "Toggle page thumbnails (PDF/comics)",
+    "toggleSplitView": "Toggle split view",
     "closeExit": "Close panels / Exit focus / Back to library"
   },
 
