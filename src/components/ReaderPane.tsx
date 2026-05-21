@@ -235,6 +235,7 @@ export default function ReaderPane({
   const contentRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const chapterNavRef = useRef<HTMLDivElement>(null);
+  const tocSidebarRef = useRef<HTMLElement>(null);
   const [bottomNavVisible, setBottomNavVisible] = useState(true);
   const sessionStartRef = useRef<number>(Math.floor(Date.now() / 1000));
   const startChapterRef = useRef<number>(0);
@@ -1321,7 +1322,11 @@ export default function ReaderPane({
 
   useEffect(() => {
     if (!tocOpen) return;
-    const sidebar = document.getElementById("toc-sidebar");
+    // Use the ref instead of `getElementById` so each ReaderPane traps
+    // focus on its own sidebar — in split mode both panes can render a
+    // `<aside>` with the same role, so a global id lookup would always
+    // resolve to the primary pane's sidebar.
+    const sidebar = tocSidebarRef.current;
     if (!sidebar) return;
 
     const focusable = sidebar.querySelectorAll<HTMLElement>(
@@ -1468,7 +1473,7 @@ export default function ReaderPane({
   if (error) {
     return (
       <div
-        className="flex flex-col items-center justify-center h-full gap-4 p-8 bg-paper"
+        className="relative flex flex-col items-center justify-center h-full gap-4 p-8 bg-paper"
         role="alert"
         aria-live="assertive"
       >
@@ -1489,12 +1494,12 @@ export default function ReaderPane({
         </button>
         {missingFileDialog && (
           <>
-            <div className="fixed inset-0 bg-ink/40 backdrop-blur-sm z-[80]" aria-hidden="true" />
+            <div className="absolute inset-0 bg-ink/40 backdrop-blur-sm z-[80]" aria-hidden="true" />
             <div
               role="dialog"
               aria-label={t("reader.missingFileTitle")}
               aria-modal="true"
-              className="fixed inset-0 z-[90] flex items-center justify-center p-4"
+              className="absolute inset-0 z-[90] flex items-center justify-center p-4"
             >
               <div className="bg-surface rounded-2xl shadow-2xl w-full max-w-md border border-warm-border p-6 space-y-5">
                 <h3 className="font-serif text-base font-semibold text-ink">
@@ -1609,11 +1614,11 @@ export default function ReaderPane({
         <>
           {/* Backdrop */}
           <div
-            className="fixed inset-0 bg-ink/20 backdrop-blur-sm z-10 animate-fade-in"
+            className="absolute inset-0 bg-ink/20 backdrop-blur-sm z-10 animate-fade-in"
             onClick={() => setTocOpen(false)}
           />
           {/* Sidebar */}
-          <aside id="toc-sidebar" role="dialog" aria-modal="true" aria-label={t("reader.contents")} className="fixed left-0 top-0 bottom-0 w-72 bg-surface border-r border-warm-border z-20 flex flex-col shadow-[4px_0_24px_-4px_rgba(44,34,24,0.12)] animate-slide-in-left">
+          <aside ref={tocSidebarRef} role="dialog" aria-modal="true" aria-label={t("reader.contents")} className="absolute left-0 top-0 bottom-0 w-72 bg-surface border-r border-warm-border z-20 flex flex-col shadow-[4px_0_24px_-4px_rgba(44,34,24,0.12)] animate-slide-in-left">
             <div className="px-5 py-4 border-b border-warm-border flex items-center justify-between">
               <h2 className="font-serif text-base font-semibold text-ink">
                 {t("reader.contents")}
@@ -2314,12 +2319,12 @@ export default function ReaderPane({
         )}
       {missingFileDialog && (
         <>
-          <div className="fixed inset-0 bg-ink/40 backdrop-blur-sm z-[80]" aria-hidden="true" />
+          <div className="absolute inset-0 bg-ink/40 backdrop-blur-sm z-[80]" aria-hidden="true" />
           <div
             role="dialog"
             aria-label={t("reader.missingFileTitle")}
             aria-modal="true"
-            className="fixed inset-0 z-[90] flex items-center justify-center p-4"
+            className="absolute inset-0 z-[90] flex items-center justify-center p-4"
           >
             <div className="bg-surface rounded-2xl shadow-2xl w-full max-w-md border border-warm-border p-6 space-y-5">
               <h3 className="font-serif text-base font-semibold text-ink">
