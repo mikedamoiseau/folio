@@ -133,7 +133,7 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
             settingsOpen={settingsOpen}
             splitMode
             isPrimary
-            isActive={activePaneId === "primary"}
+            isActive={!pickerOpen && activePaneId === "primary"}
             canPersist
             onActivate={() => setActivePaneId("primary")}
             onToggleSplit={toggleSplit}
@@ -151,7 +151,7 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
             settingsOpen={settingsOpen}
             splitMode
             isPrimary={false}
-            isActive={activePaneId === "companion"}
+            isActive={!pickerOpen && activePaneId === "companion"}
             // Both panes write their own book's progress, except when
             // they share a bookId (the picker hasn't been used yet) —
             // then only the primary writes to avoid racing on the
