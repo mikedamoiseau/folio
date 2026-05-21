@@ -461,7 +461,7 @@ Manual sharing via the existing Markdown / JSON export is sufficient.
 #### 40. Split View / Side-by-Side Reading — **Done** *(shipped 2026-05-21)*
 - ~~Open two books simultaneously in a split pane~~ — toggle in the reader header or via `\`.
 - ~~Useful for reference material alongside primary reading~~ — companion-book picker opens from the companion pane.
-- ~~Niche but valuable for academic use~~ — active-pane focus routing, per-book progress persistence, swap + close-pane controls, localStorage companion pairing. Landed across four milestones (`2308090` ReaderPane extraction → `5496c4a` split shell → `0ef1566` book picker → `3975042` focus + polish). ([CHANGELOG](../CHANGELOG.md#unreleased))
+- ~~Niche but valuable for academic use~~ — active-pane focus routing, per-book progress persistence, swap + close-pane controls, localStorage companion pairing. Landed across four milestones (`2308090` ReaderPane extraction → `5496c4a` split shell → `0ef1566` book picker → `3975042` focus + polish), with a follow-up review pass (`8bc621a`) that scoped TOC / missing-file overlays to their pane, replaced the global `getElementById("toc-sidebar")` focus trap with a ref, made `swapPanes` symmetric (old primary keeps its pairing), and extracted the localStorage contract into `src/lib/splitView.ts` with 14 unit tests. ([CHANGELOG](../CHANGELOG.md#unreleased))
 
 ## Phase 9: Hardening & Polish
 

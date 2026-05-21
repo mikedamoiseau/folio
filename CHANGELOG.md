@@ -20,6 +20,7 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 - **PageViewer re-animated the current page on layout reflow.** The slide-in animation re-fired when the load-spread effect re-ran for reasons other than a real page turn (for example, the thumbnail strip mounting and shifting the page-image cache key). Tracked the last-animated page index so the animation only plays on actual navigation.
+- **Split-view overlay scoping, focus trap, and swap symmetry.** Post-review fixes on top of the initial split-view ship: the TOC focus trap now uses a ref instead of `getElementById("toc-sidebar")` so two ReaderPanes can render a sidebar without colliding on the same DOM id; the TOC sidebar/backdrop and the missing-file dialog scope to their pane (`absolute` over a `relative` pane root) instead of the whole viewport, so opening the companion's TOC no longer plants the sidebar over the primary pane; `swapPanes` leaves the old primary's pairing intact (`companion-A = B`) so navigating back to A restores the same split layout instead of degenerating into a same-book split. The localStorage contract moved into `src/lib/splitView.ts` with 14 unit tests covering key derivation, read/write, swap round-trip, effective companion fallback, and the persistence collapse.
 
 ## [2.0.3] - 2026-05-18
 
