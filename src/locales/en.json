@@ -171,7 +171,11 @@
     "toggleThumbStrip": "Toggle page thumbnails",
     "thumbStripTitle": "Page thumbnails (m)",
     "toggleSplitView": "Toggle split view",
-    "splitViewTitle": "Split view (\\)"
+    "splitViewTitle": "Split view (\\)",
+    "pickCompanionBook": "Choose a book for the second pane",
+    "searchLibrary": "Search by title or author…",
+    "noBooksFound": "No matching books",
+    "chooseAnotherBook": "Choose another book"
   },
 
   "import": {

@@ -83,6 +83,13 @@ interface ReaderPaneProps {
   isPrimary?: boolean;
   /** Toggle split mode on/off — supplied by the Reader shell. */
   onToggleSplit?: () => void;
+  /**
+   * When set, the pane renders a "Choose another book" header button
+   * that fires this callback. Only the Reader shell wires this — it
+   * passes the callback to the companion pane in split mode so the
+   * user can pick a different book for that pane.
+   */
+  onChangeBook?: () => void;
 }
 
 export default function ReaderPane({
@@ -92,6 +99,7 @@ export default function ReaderPane({
   splitMode = false,
   isPrimary = true,
   onToggleSplit,
+  onChangeBook,
 }: ReaderPaneProps) {
   const navigate = useNavigate();
   const { t } = useTranslation();
@@ -1760,9 +1768,26 @@ export default function ReaderPane({
             </div>
           )}
 
-          {/* Split-view toggle — only rendered on the primary pane.
-              The companion pane shows the same book today (m3 adds a
-              book picker for the second pane). */}
+          {/* "Choose another book" — only rendered on the companion
+              pane in split mode. Lets the user pair two different
+              books in split view. */}
+          {!isPrimary && onChangeBook && (
+            <button
+              onClick={onChangeBook}
+              className="p-1.5 text-ink-muted hover:text-ink hover:bg-warm-subtle transition-colors rounded-lg focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2"
+              aria-label={t("reader.chooseAnotherBook")}
+              title={t("reader.chooseAnotherBook")}
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+                <path d="M4 5h12v14H4z" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" />
+                <path d="M8 9h4M8 12h4M8 15h2" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+                <circle cx="18" cy="6" r="3" stroke="currentColor" strokeWidth="1.5" fill="none" />
+                <path d="M18 4.5v3M16.5 6h3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+              </svg>
+            </button>
+          )}
+
+          {/* Split-view toggle — only rendered on the primary pane. */}
           {isPrimary && onToggleSplit && (
             <button
               onClick={onToggleSplit}
