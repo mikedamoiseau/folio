@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { useTranslation } from "react-i18next";
 import type { BookGridItem } from "../types";
+import { useFocusTrap } from "../lib/useFocusTrap";
 
 interface BookPickerModalProps {
   /** Currently-selected book in the pane that's being changed. Hidden
@@ -32,6 +33,9 @@ export default function BookPickerModal({
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const searchInputRef = useRef<HTMLInputElement>(null);
+  // Trap Tab + Escape inside the dialog so a keyboard user cannot
+  // reach the reader behind the modal while the picker is open.
+  const dialogRef = useFocusTrap(onClose);
 
   useEffect(() => {
     let cancelled = false;
@@ -53,24 +57,12 @@ export default function BookPickerModal({
   }, []);
 
   // Auto-focus the search input on open so the user can type-to-filter
-  // without reaching for the mouse.
+  // without reaching for the mouse. (useFocusTrap focuses the first
+  // focusable element by default — the close button — so we override
+  // it here for the better UX of starting in the search box.)
   useEffect(() => {
     searchInputRef.current?.focus();
   }, []);
-
-  const handleKeyDown = useCallback(
-    (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        e.preventDefault();
-        onClose();
-      }
-    },
-    [onClose],
-  );
-  useEffect(() => {
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [handleKeyDown]);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -91,6 +83,7 @@ export default function BookPickerModal({
       />
       <div className="fixed inset-0 z-50 flex items-center justify-center p-6 pointer-events-none">
         <div
+          ref={dialogRef}
           role="dialog"
           aria-modal="true"
           aria-label={t("reader.pickCompanionBook")}

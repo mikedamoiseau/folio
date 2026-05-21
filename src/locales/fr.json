@@ -175,7 +175,9 @@
     "pickCompanionBook": "Choisir un livre pour le second volet",
     "searchLibrary": "Rechercher par titre ou auteur…",
     "noBooksFound": "Aucun livre correspondant",
-    "chooseAnotherBook": "Choisir un autre livre"
+    "chooseAnotherBook": "Choisir un autre livre",
+    "closePane": "Fermer ce volet",
+    "swapPanes": "Échanger les volets"
   },
 
   "import": {

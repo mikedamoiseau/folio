@@ -81,8 +81,30 @@ interface ReaderPaneProps {
    * companion pane reuses props but skips window-level event wiring.
    */
   isPrimary?: boolean;
+  /**
+   * Whether keyboard navigation + the split-toggle hotkey should fire
+   * on this pane. Defaults to `isPrimary` so the single-pane case
+   * works unchanged. In split mode the Reader shell tracks which pane
+   * is "active" and routes keyboard handling to it via this prop.
+   */
+  isActive?: boolean;
+  /**
+   * Whether this pane is allowed to write reading progress + sync to
+   * the backend on its own. Defaults to `isPrimary`. In split mode
+   * the Reader shell sets this to `true` for both panes as long as
+   * their bookIds differ (so each pane writes only its own book's
+   * progress); when both panes show the same book it stays
+   * primary-only to avoid two panes racing on the same DB row.
+   */
+  canPersist?: boolean;
+  /** Fires on mousedown anywhere inside the pane root. Reader shell
+   *  uses it to mark the pane "active" for keyboard routing. */
+  onActivate?: () => void;
   /** Toggle split mode on/off — supplied by the Reader shell. */
   onToggleSplit?: () => void;
+  /** Swap primary / companion bookIds. Wired on the primary pane in
+   *  split mode when a companion has been picked. */
+  onSwapPanes?: () => void;
   /**
    * When set, the pane renders a "Choose another book" header button
    * that fires this callback. Only the Reader shell wires this — it
@@ -90,6 +112,13 @@ interface ReaderPaneProps {
    * user can pick a different book for that pane.
    */
   onChangeBook?: () => void;
+  /**
+   * When set, the pane renders an X close button in its header that
+   * fires this callback. The Reader shell wires it on the companion
+   * pane in split mode so the user can collapse back to single-pane
+   * view without having to find the split-toggle button.
+   */
+  onCloseThisPane?: () => void;
 }
 
 export default function ReaderPane({
@@ -98,9 +127,16 @@ export default function ReaderPane({
   settingsOpen = false,
   splitMode = false,
   isPrimary = true,
+  isActive,
+  canPersist,
+  onActivate,
   onToggleSplit,
+  onSwapPanes,
   onChangeBook,
+  onCloseThisPane,
 }: ReaderPaneProps) {
+  const effectiveActive = isActive ?? isPrimary;
+  const effectivePersist = canPersist ?? isPrimary;
   const navigate = useNavigate();
   const { t } = useTranslation();
   const { addToast } = useToast();
@@ -569,11 +605,14 @@ export default function ReaderPane({
   );
 
   // Save progress on chapter change (paginated mode only — continuous tracks via scroll).
-  // Companion panes in split mode must not persist progress — only the primary pane writes.
+  // Companion panes in split mode only persist progress when they're
+  // showing a different book than the primary pane (so each pane
+  // writes its own book's row). When both panes share a bookId the
+  // shell sets `canPersist` to primary-only.
   useEffect(() => {
-    if (!isPrimary || !bookId || loading || isContinuous) return;
+    if (!effectivePersist || !bookId || loading || isContinuous) return;
     saveProgress(0);
-  }, [chapterIndex, isPrimary]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [chapterIndex, effectivePersist]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ---- Scroll tracking (paginated mode) ----
 
@@ -605,7 +644,7 @@ export default function ReaderPane({
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
-    if (!isPrimary) return;
+    if (!effectivePersist) return;
     return () => {
       saveProgress();
       const now = Math.floor(Date.now() / 1000);
@@ -619,7 +658,7 @@ export default function ReaderPane({
         }).catch(() => {});
       }
     };
-  }, [saveProgress, bookId, chapterIndex, isPrimary]);
+  }, [saveProgress, bookId, chapterIndex, effectivePersist]);
 
   // Push local changes to sync remote only on reader unmount (not on chapter change).
   // Chains after an explicit save_reading_progress to guarantee the final position
@@ -628,7 +667,7 @@ export default function ReaderPane({
   useEffect(() => { getScrollPosRef.current = getChapterScrollPosition; }, [getChapterScrollPosition]);
 
   useEffect(() => {
-    if (!isPrimary) return;
+    if (!effectivePersist) return;
     return () => {
       const id = bookIdRef.current;
       if (!id) return;
@@ -642,7 +681,7 @@ export default function ReaderPane({
           invoke("sync_push_book", { bookId: id }).catch(() => {});
         });
     };
-  }, [isPrimary]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [effectivePersist]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Text selection handler for highlights
   useEffect(() => {
@@ -1268,15 +1307,15 @@ export default function ReaderPane({
       }
     }
 
-    // Only the primary pane binds the window-level listener. In split
-    // mode a second instance is also mounted; without this guard every
-    // arrow key (and every shortcut) would fire on both panes at once.
-    // Focus-aware routing lands in m4 — until then, navigation always
-    // targets the primary pane.
-    if (!isPrimary) return;
+    // Only the active pane binds the window-level listener. In split
+    // mode the Reader shell tracks which pane was clicked last and
+    // routes keys to it via the `isActive` prop. Without this guard
+    // every arrow key (and every shortcut) would fire on both panes
+    // at once.
+    if (!effectiveActive) return;
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [prevChapter, nextChapter, goHistoryBack, goHistoryForward, addBookmarkAtCurrentPosition, showShortcuts, tocOpen, bookmarksOpen, dndMode, settingsOpen, navigate, bookFormat, isHtmlBook, searchOpen, toggleThumbStrip, onToggleSplit, isPrimary]);
+  }, [prevChapter, nextChapter, goHistoryBack, goHistoryForward, addBookmarkAtCurrentPosition, showShortcuts, tocOpen, bookmarksOpen, dndMode, settingsOpen, navigate, bookFormat, isHtmlBook, searchOpen, toggleThumbStrip, onToggleSplit, effectiveActive]);
 
   // ---- TOC focus trap ----
 
@@ -1499,8 +1538,21 @@ export default function ReaderPane({
   const showHeader = !dndMode || dndShowControls;
   const showFooter = !dndMode || dndShowControls;
 
+  // Split-mode active-pane indicator: when the user is split-viewing,
+  // a subtle accent ring on the active pane shows which one will
+  // receive arrow keys / shortcuts. Outside split mode the pane is
+  // implicitly active and the ring is hidden.
+  const paneActivationClass = splitMode
+    ? effectiveActive
+      ? "ring-1 ring-inset ring-accent/40 transition-shadow"
+      : "ring-1 ring-inset ring-transparent transition-shadow"
+    : "";
+
   return (
-    <div className={`flex h-full relative bg-paper ${dndCursorHidden ? "cursor-none" : ""}`}>
+    <div
+      onMouseDown={onActivate}
+      className={`flex h-full relative bg-paper ${dndCursorHidden ? "cursor-none" : ""} ${paneActivationClass}`}
+    >
       {/* Keyboard shortcuts help */}
       {showShortcuts && (
         <KeyboardShortcutsHelp context="reader" onClose={() => setShowShortcuts(false)} />
@@ -1768,6 +1820,23 @@ export default function ReaderPane({
             </div>
           )}
 
+          {/* Close-this-pane (X) — only rendered when the shell
+              wires the callback (companion pane in split mode). Lets
+              the user collapse back to single-pane view without
+              hunting for the split-toggle button. */}
+          {onCloseThisPane && (
+            <button
+              onClick={onCloseThisPane}
+              className="p-1.5 text-ink-muted hover:text-ink hover:bg-warm-subtle transition-colors rounded-lg focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2"
+              aria-label={t("reader.closePane")}
+              title={t("reader.closePane")}
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+                <path d="M6 6l12 12M18 6L6 18" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+              </svg>
+            </button>
+          )}
+
           {/* "Choose another book" — only rendered on the companion
               pane in split mode. Lets the user pair two different
               books in split view. */}
@@ -1783,6 +1852,21 @@ export default function ReaderPane({
                 <path d="M8 9h4M8 12h4M8 15h2" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
                 <circle cx="18" cy="6" r="3" stroke="currentColor" strokeWidth="1.5" fill="none" />
                 <path d="M18 4.5v3M16.5 6h3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+              </svg>
+            </button>
+          )}
+
+          {/* Swap panes — only rendered on the primary pane in split
+              mode once a companion has been chosen. */}
+          {isPrimary && onSwapPanes && (
+            <button
+              onClick={onSwapPanes}
+              className="p-1.5 text-ink-muted hover:text-ink hover:bg-warm-subtle transition-colors rounded-lg focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2"
+              aria-label={t("reader.swapPanes")}
+              title={t("reader.swapPanes")}
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+                <path d="M7 8h13l-3-3M17 16H4l3 3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
               </svg>
             </button>
           )}
@@ -1980,7 +2064,7 @@ export default function ReaderPane({
                 dualPage={dualPage}
                 mangaMode={mangaMode}
                 pageAnimation={pageAnimation}
-                keyboardEnabled={isPrimary}
+                keyboardEnabled={effectiveActive}
               />
               {thumbStripOpen && (bookFormat === "cbz" || bookFormat === "cbr" || bookFormat === "pdf") && (
                 <PageThumbnailStrip
