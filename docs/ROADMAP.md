@@ -458,10 +458,10 @@ Manual sharing via the existing Markdown / JSON export is sufficient.
 4. ~~Extract-on-demand with prefetch~~ — **dropped 2026-05-14.** Solves a narrow pain (100+ page comic first-open) and adds coordination complexity against extract-on-open. Revisit only if users complain.
 5. ~~Frontend cache tuning (LRU size / size-aware eviction)~~ — **dropped 2026-05-14.** Trivial polish, not roadmap-worthy on its own; fold into #1 if it surfaces naturally there.
 
-#### 40. Split View / Side-by-Side Reading — **P2**
-- Open two books simultaneously in a split pane
-- Useful for reference material alongside primary reading
-- Niche but valuable for academic use
+#### 40. Split View / Side-by-Side Reading — **Done** *(shipped 2026-05-21)*
+- ~~Open two books simultaneously in a split pane~~ — toggle in the reader header or via `\`.
+- ~~Useful for reference material alongside primary reading~~ — companion-book picker opens from the companion pane.
+- ~~Niche but valuable for academic use~~ — active-pane focus routing, per-book progress persistence, swap + close-pane controls, localStorage companion pairing. Landed across four milestones (`2308090` ReaderPane extraction → `5496c4a` split shell → `0ef1566` book picker → `3975042` focus + polish). ([CHANGELOG](../CHANGELOG.md#unreleased))
 
 ## Phase 9: Hardening & Polish
 

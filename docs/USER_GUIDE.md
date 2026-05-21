@@ -226,6 +226,8 @@ These formats use a page-by-page viewer. Navigate with the Previous/Next buttons
 
 **Thumbnail strip:** Click the three-bar icon in the header (or press `M`) to open a horizontal strip of page thumbnails below the reader. Click any thumbnail to jump to that page — the jump is recorded in navigation history so back/forward returns to the source page. Pages closest to the one you're reading decode first, so the strip fills outward from the current page. The strip remembers its open/closed state per book.
 
+**Split view:** Click the two-rectangle icon in the header (or press `\`) to read two books side-by-side. The companion pane starts on the same book; click "Choose another book" in its header to pick a different library entry. Each pane has its own reading progress, navigation history, and zoom — Folio writes both books' progress as you read. The pane you last clicked is the "active" pane (a subtle accent ring shows which one); arrow keys and shortcuts target it. The primary pane has a swap-panes button when a companion is set, and the companion pane has an X to close split view from its side. Split state and the companion pairing persist per book, so reopening the primary restores both panes.
+
 **Page cache (CBZ/CBR):** When you open a comic for the first time, Folio extracts all pages from the archive to a disk cache. Subsequent page turns read from disk and are near-instant (~1-5ms). The cache persists between sessions — reopening the same comic skips extraction entirely. Cache is managed automatically via eviction (max 5 books, configurable size cap, 7-day expiry). You can adjust the cache size limit or clear it in Settings > Library.
 
 **Page cache (PDF):** PDFs also use the same on-disk page cache. When you open a PDF, Folio renders the first ten pages at a high canonical resolution and writes them to the cache. As you read further, additional pages are cached on demand. Reopening the same PDF in a later session reads pages from disk instead of re-running pdfium — typically a 10–100× speed-up on the first-page render. Cache budget, LRU, and 7-day expiry are shared with the comic cache.
@@ -753,6 +755,7 @@ Press `?` at any time to see the shortcut reference.
 | `B` | Add bookmark |
 | `D` | Toggle focus mode |
 | `M` | Toggle page thumbnails (PDF / CBZ / CBR) |
+| `\` | Toggle split view |
 | `Escape` | Close panel / exit focus mode / back to library |
 | `?` | Toggle shortcut help |
 
