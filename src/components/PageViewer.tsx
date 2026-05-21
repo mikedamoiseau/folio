@@ -34,6 +34,8 @@ interface PageViewerProps {
   dualPage?: boolean;
   mangaMode?: boolean;
   pageAnimation?: boolean;
+  /** When false, skip the window-level keydown listener (split-mode companion pane). */
+  keyboardEnabled?: boolean;
 }
 
 export default function PageViewer({
@@ -46,6 +48,7 @@ export default function PageViewer({
   dualPage = false,
   mangaMode = false,
   pageAnimation = true,
+  keyboardEnabled = true,
 }: PageViewerProps) {
   const [pageIndex, setPageIndex] = useState(initialPage);
 
@@ -517,9 +520,10 @@ export default function PageViewer({
         zoomReset();
       }
     }
+    if (!keyboardEnabled) return;
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [prevSpread, nextSpread, zoomIn, zoomOut, zoomReset, mangaMode]);
+  }, [prevSpread, nextSpread, zoomIn, zoomOut, zoomReset, mangaMode, keyboardEnabled]);
 
   const wheelCooldown = useRef(false);
   const handleWheel = useCallback(

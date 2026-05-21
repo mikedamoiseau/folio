@@ -560,11 +560,12 @@ export default function ReaderPane({
     [bookId, chapterIndex, getChapterScrollPosition]
   );
 
-  // Save progress on chapter change (paginated mode only — continuous tracks via scroll)
+  // Save progress on chapter change (paginated mode only — continuous tracks via scroll).
+  // Companion panes in split mode must not persist progress — only the primary pane writes.
   useEffect(() => {
-    if (!bookId || loading || isContinuous) return;
+    if (!isPrimary || !bookId || loading || isContinuous) return;
     saveProgress(0);
-  }, [chapterIndex]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [chapterIndex, isPrimary]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ---- Scroll tracking (paginated mode) ----
 
@@ -596,9 +597,9 @@ export default function ReaderPane({
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
+    if (!isPrimary) return;
     return () => {
       saveProgress();
-      // Record reading session on unmount
       const now = Math.floor(Date.now() / 1000);
       const duration = now - sessionStartRef.current;
       if (bookId && duration >= 10) {
@@ -610,7 +611,7 @@ export default function ReaderPane({
         }).catch(() => {});
       }
     };
-  }, [saveProgress, bookId, chapterIndex]);
+  }, [saveProgress, bookId, chapterIndex, isPrimary]);
 
   // Push local changes to sync remote only on reader unmount (not on chapter change).
   // Chains after an explicit save_reading_progress to guarantee the final position
@@ -619,6 +620,7 @@ export default function ReaderPane({
   useEffect(() => { getScrollPosRef.current = getChapterScrollPosition; }, [getChapterScrollPosition]);
 
   useEffect(() => {
+    if (!isPrimary) return;
     return () => {
       const id = bookIdRef.current;
       if (!id) return;
@@ -632,7 +634,7 @@ export default function ReaderPane({
           invoke("sync_push_book", { bookId: id }).catch(() => {});
         });
     };
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [isPrimary]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Text selection handler for highlights
   useEffect(() => {
@@ -1953,6 +1955,7 @@ export default function ReaderPane({
                 dualPage={dualPage}
                 mangaMode={mangaMode}
                 pageAnimation={pageAnimation}
+                keyboardEnabled={isPrimary}
               />
               {thumbStripOpen && (bookFormat === "cbz" || bookFormat === "cbr" || bookFormat === "pdf") && (
                 <PageThumbnailStrip
