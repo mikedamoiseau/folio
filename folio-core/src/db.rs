@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use crate::models::{
     ActivityEntry, Book, BookGridItem, Bookmark, Collection, CollectionRule, CollectionType,
-    CustomFont, ReadingProgress, SeriesInfo,
+    CustomFont, FeatureFlag, ReadingProgress, SeriesInfo,
 };
 
 pub type DbPool = Pool<SqliteConnectionManager>;
@@ -210,6 +210,12 @@ fn run_schema(conn: &Connection) -> Result<()> {
             file_name TEXT NOT NULL,
             file_path TEXT NOT NULL,
             created_at INTEGER NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS feature_flags (
+            key TEXT PRIMARY KEY,
+            enabled INTEGER NOT NULL DEFAULT 0,
+            description TEXT
         );
     ",
     )?;
@@ -763,6 +769,39 @@ pub fn get_or_create_device_id(conn: &Connection) -> Result<String> {
 
 pub fn is_sync_enabled(conn: &Connection) -> bool {
     get_setting(conn, "sync_enabled").ok().flatten().as_deref() == Some("true")
+}
+
+// --- Feature Flags CRUD ---
+
+pub fn list_feature_flags(conn: &Connection) -> Result<Vec<FeatureFlag>> {
+    let mut stmt = conn.prepare("SELECT key, enabled, description FROM feature_flags ORDER BY key")?;
+    let rows = stmt.query_map([], |row| {
+        Ok(FeatureFlag {
+            key: row.get(0)?,
+            enabled: row.get::<_, i32>(1)? != 0,
+            description: row.get(2)?,
+        })
+    })?;
+    rows.collect()
+}
+
+pub fn get_feature_flag(conn: &Connection, key: &str) -> Result<bool> {
+    let mut stmt = conn.prepare("SELECT enabled FROM feature_flags WHERE key = ?1")?;
+    let mut rows = stmt.query(params![key])?;
+    if let Some(row) = rows.next()? {
+        Ok(row.get::<_, i32>(0)? != 0)
+    } else {
+        Ok(false)
+    }
+}
+
+pub fn set_feature_flag(conn: &Connection, key: &str, enabled: bool, description: Option<&str>) -> Result<()> {
+    conn.execute(
+        "INSERT INTO feature_flags (key, enabled, description) VALUES (?1, ?2, ?3)
+         ON CONFLICT(key) DO UPDATE SET enabled=excluded.enabled, description=COALESCE(excluded.description, feature_flags.description)",
+        params![key, enabled as i32, description],
+    )?;
+    Ok(())
 }
 
 // --- ReadingProgress CRUD ---
@@ -3323,5 +3362,27 @@ mod tests {
         let conn = Connection::open(&db_path).unwrap();
         let v = get_schema_version(&conn).unwrap();
         assert_eq!(v, SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn feature_flags_crud() {
+        let (_dir, conn) = setup();
+
+        assert_eq!(list_feature_flags(&conn).unwrap().len(), 0);
+        assert!(!get_feature_flag(&conn, "discover").unwrap());
+
+        set_feature_flag(&conn, "discover", true, Some("Show Discover section")).unwrap();
+        assert!(get_feature_flag(&conn, "discover").unwrap());
+
+        let flags = list_feature_flags(&conn).unwrap();
+        assert_eq!(flags.len(), 1);
+        assert_eq!(flags[0].key, "discover");
+        assert!(flags[0].enabled);
+        assert_eq!(flags[0].description.as_deref(), Some("Show Discover section"));
+
+        set_feature_flag(&conn, "discover", false, None).unwrap();
+        assert!(!get_feature_flag(&conn, "discover").unwrap());
+        let flags = list_feature_flags(&conn).unwrap();
+        assert_eq!(flags[0].description.as_deref(), Some("Show Discover section"));
     }
 }

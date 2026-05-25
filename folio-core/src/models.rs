@@ -162,6 +162,14 @@ pub struct Collection {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct FeatureFlag {
+    pub key: String,
+    pub enabled: bool,
+    pub description: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ActivityEntry {
     pub id: String,
     pub timestamp: i64,

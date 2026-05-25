@@ -8,8 +8,8 @@ use crate::epub;
 use crate::error::{FolioError, FolioResult};
 use crate::models::{
     AutoBackup, Book, BookFormat, BookGridItem, Bookmark, CleanupEntry, CleanupProgress,
-    CleanupResult, Collection, CollectionRule, CollectionType, CustomFont, Highlight, NewRuleInput,
-    ReadingProgress, SeriesInfo,
+    CleanupResult, Collection, CollectionRule, CollectionType, CustomFont, FeatureFlag, Highlight,
+    NewRuleInput, ReadingProgress, SeriesInfo,
 };
 use crate::opds;
 use crate::openlibrary;
@@ -4709,6 +4709,34 @@ pub async fn set_setting_value(
 ) -> FolioResult<()> {
     let conn = state.active_db()?.get()?;
     Ok(db::set_setting(&conn, &key, &value)?)
+}
+
+#[tauri::command]
+pub async fn get_feature_flags(state: State<'_, AppState>) -> FolioResult<Vec<FeatureFlag>> {
+    let conn = state.active_db()?.get()?;
+    Ok(db::list_feature_flags(&conn)?)
+}
+
+#[tauri::command]
+pub async fn set_feature_flag(
+    key: String,
+    enabled: bool,
+    description: Option<String>,
+    state: State<'_, AppState>,
+) -> FolioResult<()> {
+    let conn = state.active_db()?.get()?;
+    Ok(db::set_feature_flag(
+        &conn,
+        &key,
+        enabled,
+        description.as_deref(),
+    )?)
+}
+
+#[tauri::command]
+pub async fn get_feature_flag_value(key: String, state: State<'_, AppState>) -> FolioResult<bool> {
+    let conn = state.active_db()?.get()?;
+    Ok(db::get_feature_flag(&conn, &key)?)
 }
 
 #[tauri::command]
