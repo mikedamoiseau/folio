@@ -368,7 +368,7 @@ export default function Library() {
   }, [importCtx, t]);
 
   const handleSelectSeries = useCallback((name: string | null) => {
-    scrollBeforeDrillRef.current = null;
+    if (name !== null) scrollBeforeDrillRef.current = null;
     setActiveSeries(name);
     setActiveCollectionId(null);
     if (name) setSortBy("series");
