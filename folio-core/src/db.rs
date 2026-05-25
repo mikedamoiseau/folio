@@ -804,6 +804,11 @@ pub fn set_feature_flag(conn: &Connection, key: &str, enabled: bool, description
     Ok(())
 }
 
+pub fn delete_feature_flag(conn: &Connection, key: &str) -> Result<()> {
+    conn.execute("DELETE FROM feature_flags WHERE key = ?1", params![key])?;
+    Ok(())
+}
+
 // --- ReadingProgress CRUD ---
 
 pub fn upsert_reading_progress(conn: &Connection, progress: &ReadingProgress) -> Result<()> {
@@ -3384,5 +3389,9 @@ mod tests {
         assert!(!get_feature_flag(&conn, "discover").unwrap());
         let flags = list_feature_flags(&conn).unwrap();
         assert_eq!(flags[0].description.as_deref(), Some("Show Discover section"));
+
+        delete_feature_flag(&conn, "discover").unwrap();
+        assert_eq!(list_feature_flags(&conn).unwrap().len(), 0);
+        assert!(!get_feature_flag(&conn, "discover").unwrap());
     }
 }

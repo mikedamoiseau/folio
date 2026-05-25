@@ -4740,6 +4740,12 @@ pub async fn get_feature_flag_value(key: String, state: State<'_, AppState>) -> 
 }
 
 #[tauri::command]
+pub async fn delete_feature_flag(key: String, state: State<'_, AppState>) -> FolioResult<()> {
+    let conn = state.active_db()?.get()?;
+    Ok(db::delete_feature_flag(&conn, &key)?)
+}
+
+#[tauri::command]
 pub async fn get_enrichment_providers(
     state: State<'_, AppState>,
 ) -> FolioResult<Vec<crate::providers::ProviderInfo>> {

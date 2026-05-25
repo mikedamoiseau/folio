@@ -333,6 +333,7 @@ pub fn run() {
             commands::get_feature_flags,
             commands::set_feature_flag,
             commands::get_feature_flag_value,
+            commands::delete_feature_flag,
             commands::get_enrichment_providers,
             commands::set_enrichment_provider_config,
             commands::set_enrichment_provider_order,
