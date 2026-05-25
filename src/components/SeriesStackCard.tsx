@@ -28,19 +28,21 @@ export default function SeriesStackCard({
       className="w-full text-left group cursor-pointer"
       title={seriesName}
     >
-      <div className="relative" style={{ padding: "8px 8px 0 0" }}>
+      <div className="relative" style={{ padding: "12px 12px 0 0" }}>
         {backCards.map((book, i) => {
-          const offset = (i + 1) * 4;
+          const rotation = (backCards.length - i) * 3;
           return (
             <div
               key={book.id}
-              className="absolute aspect-[2/3] rounded-lg overflow-hidden bg-warm-subtle"
+              className="absolute aspect-[2/3] rounded-lg overflow-hidden bg-warm-subtle border border-warm-border/40"
               style={{
-                top: offset,
-                left: offset,
-                width: "calc(100% - 8px)",
-                opacity: i === 0 ? 0.5 : 0.3,
-                zIndex: 0,
+                top: 0,
+                left: 0,
+                width: "calc(100% - 12px)",
+                opacity: i === 0 ? 0.7 : 0.45,
+                zIndex: i,
+                transform: `rotate(${rotation}deg)`,
+                transformOrigin: "bottom center",
               }}
             >
               {book.coverSrc && (
@@ -58,7 +60,7 @@ export default function SeriesStackCard({
           className="relative aspect-[2/3] bg-warm-subtle overflow-hidden rounded-lg transition-transform duration-300 group-hover:scale-[1.02]"
           style={{
             zIndex: 2,
-            boxShadow: "0 2px 6px rgba(0,0,0,0.15)",
+            boxShadow: "0 2px 8px rgba(0,0,0,0.18)",
           }}
         >
           {covers[0]?.coverSrc ? (
