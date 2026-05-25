@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 import ReaderPane from "../components/ReaderPane";
 import BookPickerModal from "../components/BookPickerModal";
@@ -33,7 +33,17 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
   const { bookId } = useParams<{ bookId: string }>();
   const navigate = useNavigate();
   const location = useLocation();
-  const initialChapterIndex = (location.state as { chapterIndex?: number } | null)?.chapterIndex ?? undefined;
+  const incomingChapter = (location.state as { chapterIndex?: number } | null)?.chapterIndex ?? undefined;
+  const consumedForBook = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (incomingChapter !== undefined && consumedForBook.current !== bookId) {
+      consumedForBook.current = bookId ?? null;
+      navigate(location.pathname, { replace: true, state: {} });
+    }
+  }, [incomingChapter, bookId, navigate, location.pathname]);
+
+  const initialChapterIndex = consumedForBook.current !== bookId ? incomingChapter : undefined;
 
   const [splitMode, setSplitMode] = useState(() => {
     if (!bookId) return false;
