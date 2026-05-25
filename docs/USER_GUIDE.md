@@ -179,7 +179,11 @@ Multiple rules are combined with AND logic — a book must match all rules to ap
 Books with series metadata are automatically grouped in two ways:
 
 - **Sidebar:** A "Series" section appears below collections, showing each series with its book count. Click a series to filter the library to just those books, sorted by volume order.
-- **Sort by Series:** Select the "Series" sort option in the library toolbar. Books are grouped under series headers, sorted by volume within each group. Books without series data appear at the bottom.
+- **Sort by Series:** Select the "Series" sort option in the library toolbar. Two view modes are available via a pill toggle at the right end of the sort bar:
+  - **Expanded** (default): Books are grouped under collapsible series headers, sorted by volume within each group.
+  - **Stacked**: Each series appears as a single tile — the first book's cover with fanned-out covers behind it, series name and book count below. Click a stack to drill into that series. A back bar with ← arrow returns to the stacked view and restores your scroll position. Press Escape to go back.
+
+  Books without series data appear at the bottom in both modes. The selected view mode is remembered across sessions.
 
 Series data comes from book file metadata (EPUB/CBZ). You can also set or edit series info manually via the edit dialog on any book.
 
