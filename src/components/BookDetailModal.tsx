@@ -43,6 +43,7 @@ export default function BookDetailModal({ book, onClose, onOpen, onEdit, onScan 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
+        e.stopPropagation();
         onClose();
         return;
       }

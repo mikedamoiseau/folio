@@ -604,15 +604,17 @@ export default function Library() {
         setShowShortcuts((prev) => !prev);
       } else if (e.key === "Escape") {
         if (showShortcuts) setShowShortcuts(false);
-        else if (highlightSearchOpen) setHighlightSearchOpen(false);
-        else if (activeSeries && seriesViewMode === "stacked") setActiveSeries(null);
-        else if (collectionsOpen) setCollectionsOpen(false);
+        else if (detailBook) setDetailBook(null);
         else if (editingBook) setEditingBook(null);
+        else if (bulkEditing) setBulkEditing(false);
+        else if (highlightSearchOpen) setHighlightSearchOpen(false);
+        else if (collectionsOpen) setCollectionsOpen(false);
+        else if (activeSeries && seriesViewMode === "stacked") setActiveSeries(null);
       }
     }
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [showShortcuts, highlightSearchOpen, activeSeries, seriesViewMode, collectionsOpen, editingBook]);
+  }, [showShortcuts, detailBook, editingBook, bulkEditing, highlightSearchOpen, collectionsOpen, activeSeries, seriesViewMode]);
 
   useEffect(() => {
     let unlistenProgress: (() => void) | undefined;
