@@ -165,6 +165,18 @@ export default function Library() {
   const [activeSeries, setActiveSeries] = useState<string | null>(null);
   const [seriesList, setSeriesList] = useState<Array<{ name: string; count: number }>>([]);
 
+  const prevActiveSeriesRef = useRef<string | null>(null);
+  useEffect(() => {
+    const prev = prevActiveSeriesRef.current;
+    prevActiveSeriesRef.current = activeSeries;
+    if (!contentRef.current) return;
+    if (prev === null && activeSeries !== null) {
+      contentRef.current.scrollTop = 0;
+    } else if (prev !== null && activeSeries === null && seriesViewMode === "stacked") {
+      contentRef.current.scrollTop = scrollBeforeDrillRef.current;
+    }
+  }, [activeSeries, seriesViewMode]);
+
   // Keep a stable ref to activeCollectionId for use in callbacks
   const activeCollectionIdRef = useRef(activeCollectionId);
   activeCollectionIdRef.current = activeCollectionId;
