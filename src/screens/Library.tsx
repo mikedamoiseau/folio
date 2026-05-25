@@ -117,7 +117,7 @@ export default function Library() {
     return stored === "stacked" ? "stacked" : "expanded";
   });
   const contentRef = useRef<HTMLDivElement>(null);
-  const scrollBeforeDrillRef = useRef(0);
+  const scrollBeforeDrillRef = useRef<{ collectionId: string | null; scrollTop: number }>({ collectionId: null, scrollTop: 0 });
   useEffect(() => { localStorage.setItem("folio-series-view-mode", seriesViewMode); }, [seriesViewMode]);
 
   // scanToast state kept for LiveRegion — visual toasts now use useToast()
@@ -173,9 +173,14 @@ export default function Library() {
     if (prev === null && activeSeries !== null) {
       contentRef.current.scrollTop = 0;
     } else if (prev !== null && activeSeries === null && seriesViewMode === "stacked") {
-      contentRef.current.scrollTop = scrollBeforeDrillRef.current;
+      const saved = scrollBeforeDrillRef.current;
+      if (saved.collectionId === activeCollectionId) {
+        contentRef.current.scrollTop = saved.scrollTop;
+      } else {
+        contentRef.current.scrollTop = 0;
+      }
     }
-  }, [activeSeries, seriesViewMode]);
+  }, [activeSeries, seriesViewMode, activeCollectionId]);
 
   // Keep a stable ref to activeCollectionId for use in callbacks
   const activeCollectionIdRef = useRef(activeCollectionId);
@@ -1165,7 +1170,7 @@ export default function Library() {
                               bookCount={booksInSeries.length}
                               covers={covers}
                               onClick={() => {
-                                scrollBeforeDrillRef.current = contentRef.current?.scrollTop ?? 0;
+                                scrollBeforeDrillRef.current = { collectionId: activeCollectionId, scrollTop: contentRef.current?.scrollTop ?? 0 };
                                 setActiveSeries(seriesName);
                               }}
                             />
