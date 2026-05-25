@@ -1,16 +1,18 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 
-// Local font imports (replaces Google Fonts CDN)
+// UI fonts — loaded eagerly (DM Sans for body, Playfair Display for serif headings)
 import "@fontsource-variable/dm-sans";
 import "@fontsource-variable/dm-sans/wght-italic.css";
-import "@fontsource-variable/lora";
-import "@fontsource-variable/lora/wght-italic.css";
-import "@fontsource-variable/literata";
-import "@fontsource-variable/literata/wght-italic.css";
 import "@fontsource-variable/playfair-display";
 
+// Reading fonts (Lora, Literata) loaded on demand by src/lib/fontLoader.ts
+// when the user selects them — saves ~120KB from initial bundle.
+import { preloadStoredFont } from "./lib/fontLoader";
+
 import "./i18n";
+
+preloadStoredFont();
 import "./index.css";
 import App from "./App";
 

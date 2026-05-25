@@ -234,6 +234,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const setFontFamily = useCallback((family: FontFamily) => {
+    import("../lib/fontLoader").then((m) => m.loadFont(family));
     setFontFamilyState(family);
     localStorage.setItem(STORAGE_KEYS.fontFamily, family);
   }, []);
