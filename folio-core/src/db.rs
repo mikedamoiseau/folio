@@ -1396,7 +1396,7 @@ pub fn search_highlights(
     query: &str,
     limit: u32,
 ) -> Result<Vec<HighlightSearchResult>> {
-    let escaped = query.replace('%', "\\%").replace('_', "\\_");
+    let escaped = query.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_");
     let pattern = format!("%{escaped}%");
     let mut stmt = conn.prepare(
         "SELECT h.id, h.book_id, b.title, b.author, h.chapter_index, h.text, h.color, h.note, h.created_at
@@ -3476,5 +3476,43 @@ mod tests {
 
         let results = search_highlights(&conn, "fox", 1).unwrap();
         assert_eq!(results.len(), 1);
+    }
+
+    #[test]
+    fn search_highlights_escapes_special_chars() {
+        let (_dir, conn) = setup();
+        let book = sample_book("b1");
+        insert_book(&conn, &book).unwrap();
+
+        let h = crate::models::Highlight {
+            id: "h1".to_string(),
+            book_id: "b1".to_string(),
+            chapter_index: 0,
+            text: r"Path C:\temp and 100% done with under_score".to_string(),
+            color: "#f6c445".to_string(),
+            note: None,
+            start_offset: 0,
+            end_offset: 43,
+            created_at: 1700000000,
+            updated_at: 1700000000,
+            deleted_at: None,
+        };
+        insert_highlight(&conn, &h).unwrap();
+
+        // Backslash must match literally, not act as escape
+        let results = search_highlights(&conn, r"C:\temp", 100).unwrap();
+        assert_eq!(results.len(), 1);
+
+        // % must match literally, not act as wildcard
+        let results = search_highlights(&conn, "100%", 100).unwrap();
+        assert_eq!(results.len(), 1);
+        let results = search_highlights(&conn, "100x", 100).unwrap();
+        assert!(results.is_empty());
+
+        // _ must match literally, not act as single-char wildcard
+        let results = search_highlights(&conn, "under_score", 100).unwrap();
+        assert_eq!(results.len(), 1);
+        let results = search_highlights(&conn, "underXscore", 100).unwrap();
+        assert!(results.is_empty());
     }
 }
