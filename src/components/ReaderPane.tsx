@@ -119,6 +119,7 @@ interface ReaderPaneProps {
    * view without having to find the split-toggle button.
    */
   onCloseThisPane?: () => void;
+  initialChapterIndex?: number;
 }
 
 export default function ReaderPane({
@@ -134,6 +135,7 @@ export default function ReaderPane({
   onSwapPanes,
   onChangeBook,
   onCloseThisPane,
+  initialChapterIndex,
 }: ReaderPaneProps) {
   const effectiveActive = isActive ?? isPrimary;
   const effectivePersist = canPersist ?? isPrimary;
@@ -339,18 +341,23 @@ export default function ReaderPane({
           }
         }
 
-        try {
-          const progress = await invoke<ReadingProgress | null>(
-            "get_reading_progress",
-            { bookId }
-          );
-          if (!cancelled && progress) {
-            setChapterIndex(progress.chapter_index);
-            savedScrollPosition.current = progress.scroll_position;
-            restoringScroll.current = progress.chapter_index;
+        if (initialChapterIndex !== undefined) {
+          setChapterIndex(initialChapterIndex);
+          restoringScroll.current = initialChapterIndex;
+        } else {
+          try {
+            const progress = await invoke<ReadingProgress | null>(
+              "get_reading_progress",
+              { bookId }
+            );
+            if (!cancelled && progress) {
+              setChapterIndex(progress.chapter_index);
+              savedScrollPosition.current = progress.scroll_position;
+              restoringScroll.current = progress.chapter_index;
+            }
+          } catch {
+            // No saved progress — start at chapter 0
           }
-        } catch {
-          // No saved progress — start at chapter 0
         }
       } catch (err) {
         if (!cancelled) {

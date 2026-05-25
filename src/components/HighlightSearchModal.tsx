@@ -18,7 +18,7 @@ interface HighlightSearchResult {
 
 interface HighlightSearchModalProps {
   onClose: () => void;
-  onNavigate: (bookId: string) => void;
+  onNavigate: (bookId: string, chapterIndex: number) => void;
 }
 
 export default function HighlightSearchModal({
@@ -128,7 +128,7 @@ export default function HighlightSearchModal({
                 <button
                   type="button"
                   onClick={() => {
-                    onNavigate(bookId);
+                    onNavigate(bookId, group.items[0].chapterIndex);
                     onClose();
                   }}
                   className="text-left w-full mb-2 group"
@@ -144,7 +144,7 @@ export default function HighlightSearchModal({
                       key={h.highlightId}
                       type="button"
                       onClick={() => {
-                        onNavigate(bookId);
+                        onNavigate(bookId, h.chapterIndex);
                         onClose();
                       }}
                       className="text-left w-full p-2 rounded-lg hover:bg-warm-subtle transition-colors"

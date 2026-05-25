@@ -1355,7 +1355,7 @@ export default function Library() {
       {highlightSearchOpen && (
         <HighlightSearchModal
           onClose={() => setHighlightSearchOpen(false)}
-          onNavigate={(bookId) => navigate(`/reader/${bookId}`)}
+          onNavigate={(bookId, chapterIndex) => navigate(`/reader/${bookId}`, { state: { chapterIndex } })}
         />
       )}
 

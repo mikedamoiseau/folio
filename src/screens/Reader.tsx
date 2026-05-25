@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { useLocation, useNavigate, useParams } from "react-router-dom";
 import ReaderPane from "../components/ReaderPane";
 import BookPickerModal from "../components/BookPickerModal";
 import {
@@ -32,6 +32,8 @@ interface ReaderProps {
 export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderProps) {
   const { bookId } = useParams<{ bookId: string }>();
   const navigate = useNavigate();
+  const location = useLocation();
+  const initialChapterIndex = (location.state as { chapterIndex?: number } | null)?.chapterIndex ?? undefined;
 
   const [splitMode, setSplitMode] = useState(() => {
     if (!bookId) return false;
@@ -118,6 +120,7 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
         splitMode={false}
         isPrimary
         onToggleSplit={toggleSplit}
+        initialChapterIndex={initialChapterIndex}
       />
     );
   }
@@ -137,6 +140,7 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
             onActivate={() => setActivePaneId("primary")}
             onToggleSplit={toggleSplit}
             onSwapPanes={!sameBook ? swapPanes : undefined}
+            initialChapterIndex={initialChapterIndex}
           />
         </div>
         <div className="flex-1 min-w-0">
