@@ -22,6 +22,7 @@ import { friendlyError } from "../lib/errors";
 import { pickSupportedOpdsLink } from "../lib/utils";
 import { FALLBACK_FORMATS, getSupportedFormats, useSupportedFormats } from "../lib/supportedFormats";
 import HighlightSearchModal from "../components/HighlightSearchModal";
+import SeriesStackCard from "../components/SeriesStackCard";
 import { LiveRegion } from "../components/LiveRegion";
 import { useToast } from "../components/Toast";
 import { useDebounce } from "../hooks/useDebounce";
@@ -111,6 +112,13 @@ export default function Library() {
 
   // Collapsed series groups (series view)
   const [collapsedSeries, setCollapsedSeries] = useState<Set<string>>(new Set());
+  const [seriesViewMode, setSeriesViewMode] = useState<"stacked" | "expanded">(() => {
+    const stored = localStorage.getItem("folio-series-view-mode");
+    return stored === "stacked" ? "stacked" : "expanded";
+  });
+  const contentRef = useRef<HTMLDivElement>(null);
+  const scrollBeforeDrillRef = useRef(0);
+  useEffect(() => { localStorage.setItem("folio-series-view-mode", seriesViewMode); }, [seriesViewMode]);
 
   // scanToast state kept for LiveRegion — visual toasts now use useToast()
   const [scanToastMessage, setScanToastMessage] = useState("");
@@ -886,6 +894,32 @@ export default function Library() {
               </button>
             );
           })}
+          {sortBy === "series" && !activeSeries && (
+            <div className="ml-auto flex text-[11px] rounded-md overflow-hidden border border-warm-border">
+              <button
+                type="button"
+                onClick={() => setSeriesViewMode("stacked")}
+                className={`px-2.5 py-1 transition-colors ${
+                  seriesViewMode === "stacked"
+                    ? "bg-accent text-white"
+                    : "text-ink-muted hover:bg-warm-subtle"
+                }`}
+              >
+                {t("seriesView.stacked")}
+              </button>
+              <button
+                type="button"
+                onClick={() => setSeriesViewMode("expanded")}
+                className={`px-2.5 py-1 transition-colors ${
+                  seriesViewMode === "expanded"
+                    ? "bg-accent text-white"
+                    : "text-ink-muted hover:bg-warm-subtle"
+                }`}
+              >
+                {t("seriesView.expanded")}
+              </button>
+            </div>
+          )}
         </div>
       )}
 
@@ -907,7 +941,7 @@ export default function Library() {
       )}
 
       {/* Content area */}
-      <div className="flex-1 overflow-y-auto p-6">
+      <div ref={contentRef} className="flex-1 overflow-y-auto p-6">
         {!hasBooks && activeCollectionId ? (
           <div className="flex flex-col items-center justify-center h-full text-center">
             <p className="text-base font-medium text-ink">{t("library.collectionEmpty")}</p>
@@ -1103,6 +1137,80 @@ export default function Library() {
                   });
                 }
                 const sortedGroupNames = Object.keys(groups).sort((a, b) => a.localeCompare(b));
+                if (seriesViewMode === "stacked" && !activeSeries) {
+                  return (
+                    <>
+                      {sortedGroupNames.map((seriesName) => {
+                        const booksInSeries = groups[seriesName];
+                        const covers = booksInSeries.slice(0, 3).map((b) => ({
+                          id: b.id,
+                          coverSrc: b.cover_path ? convertFileSrc(b.cover_path) : null,
+                        }));
+                        return (
+                          <div key={seriesName} className="relative card-cv">
+                            <SeriesStackCard
+                              seriesName={seriesName}
+                              bookCount={booksInSeries.length}
+                              covers={covers}
+                              onClick={() => {
+                                scrollBeforeDrillRef.current = contentRef.current?.scrollTop ?? 0;
+                                setActiveSeries(seriesName);
+                              }}
+                            />
+                          </div>
+                        );
+                      })}
+                      {nonSeriesBooks.length > 0 && sortedGroupNames.length > 0 && (
+                        <button
+                          type="button"
+                          className="col-span-full flex items-center gap-2 pt-4 pb-2 text-left"
+                          onClick={() => setCollapsedSeries((prev) => {
+                            const next = new Set(prev);
+                            if (next.has("__other__")) next.delete("__other__");
+                            else next.add("__other__");
+                            return next;
+                          })}
+                        >
+                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" className={`text-ink-muted/50 transition-transform ${collapsedSeries.has("__other__") ? "" : "rotate-90"}`}>
+                            <path d="M9 6l6 6-6 6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                          </svg>
+                          <span className="text-xs font-semibold text-ink-muted uppercase tracking-wider">{t("library.otherBooks")}</span>
+                          <span className="text-[10px] text-ink-muted/50">{t("library.booksCount", { count: nonSeriesBooks.length })}</span>
+                          <div className="flex-1 border-t border-warm-border/50" />
+                        </button>
+                      )}
+                      {!collapsedSeries.has("__other__") && nonSeriesBooks.map((book) => (
+                        <div
+                          key={book.id}
+                          className="relative card-cv"
+                          onMouseDown={() => !selectMode && startDrag(book.id, book.cover_path ? convertFileSrc(book.cover_path) : undefined)}
+                          onMouseUp={() => !selectMode && endDrag()}
+                          onDragStart={(e) => e.preventDefault()}
+                        >
+                          {selectMode && (
+                            <SelectCheckbox
+                              checked={selectedIds.has(book.id)}
+                              title={book.title}
+                              onToggle={() => toggleSelected(book.id)}
+                            />
+                          )}
+                          <BookCard
+                            book={toCardData(book)}
+                            actions={{
+                              onClick: () => {
+                                if (selectMode) { toggleSelected(book.id); } else { openBook(book.id); }
+                              },
+                              onDelete: selectMode ? undefined : handleRemoveBook,
+                              onInfo: handleShowBookDetail,
+                            }}
+                            isScanning={scanningBookId === book.id}
+                            isSelected={selectMode && selectedIds.has(book.id)}
+                          />
+                        </div>
+                      ))}
+                    </>
+                  );
+                }
                 return (
                   <>
                     {sortedGroupNames.map((seriesName) => (
