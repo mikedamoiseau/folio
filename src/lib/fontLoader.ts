@@ -22,8 +22,8 @@ export async function loadFont(key: string): Promise<void> {
 }
 
 export function preloadStoredFont(): void {
-  const stored = localStorage.getItem("folio-font-family");
-  if (stored && FONT_MODULES[stored]) {
-    loadFont(stored);
+  const key = localStorage.getItem("folio-font-family") ?? "serif";
+  if (FONT_MODULES[key]) {
+    loadFont(key);
   }
 }

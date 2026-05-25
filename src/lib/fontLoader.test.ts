@@ -37,6 +37,12 @@ describe("fontLoader", () => {
     await expect(loadFont("literata")).resolves.toBeUndefined();
   });
 
+  it("preloadStoredFont loads serif by default when no stored value", async () => {
+    const { preloadStoredFont, loadFont } = await import("./fontLoader");
+    preloadStoredFont();
+    await expect(loadFont("serif")).resolves.toBeUndefined();
+  });
+
   it("preloadStoredFont does nothing for UI fonts", async () => {
     localStorage.setItem("folio-font-family", "sans-serif");
     const { preloadStoredFont } = await import("./fontLoader");
