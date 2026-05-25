@@ -264,6 +264,15 @@ Open the highlights panel (pen icon in the reader header) to:
 
 ![Highlights panel](../screenshots/12-reader-highlights.png)
 
+### Cross-Book Highlight Search
+
+Search across all your highlights and notes from the library toolbar. Click the highlighter-search icon (between the tag filter and bulk select buttons) to open a search modal.
+
+- Type to search — results appear instantly, grouped by book
+- Each result shows the highlight text, color, optional note, and chapter number
+- Click any result to open that book in the reader
+- Searches both highlight text and notes
+
 ### Bookmarks
 
 Press `B` in the reader to bookmark the current position. Bookmarks are listed alongside your reading progress.
