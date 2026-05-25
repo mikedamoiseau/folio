@@ -34,12 +34,11 @@ export default function SeriesStackCard({
           return (
             <div
               key={book.id}
-              className="absolute rounded-lg overflow-hidden bg-warm-subtle"
+              className="absolute aspect-[2/3] rounded-lg overflow-hidden bg-warm-subtle"
               style={{
                 top: offset,
                 left: offset,
-                right: -offset,
-                bottom: -offset,
+                width: "calc(100% - 8px)",
                 opacity: i === 0 ? 0.5 : 0.3,
                 zIndex: 0,
               }}
