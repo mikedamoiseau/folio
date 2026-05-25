@@ -250,6 +250,13 @@
     "resultCount": "{{count}} result(s)"
   },
 
+  "seriesView": {
+    "stacked": "Stacked",
+    "expanded": "Expanded",
+    "backToLibrary": "← {{name}}",
+    "bookCount": "{{count}} books"
+  },
+
   "settings": {
     "title": "Settings",
     "closeLabel": "Close settings",

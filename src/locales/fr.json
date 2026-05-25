@@ -250,6 +250,13 @@
     "resultCount": "{{count}} résultat(s)"
   },
 
+  "seriesView": {
+    "stacked": "Empilé",
+    "expanded": "Étendu",
+    "backToLibrary": "← {{name}}",
+    "bookCount": "{{count}} livres"
+  },
+
   "settings": {
     "title": "Param\u00e8tres",
     "closeLabel": "Fermer les param\u00e8tres",
