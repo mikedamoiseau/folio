@@ -265,6 +265,7 @@ pub fn run() {
             commands::update_highlight_note,
             commands::remove_highlight,
             commands::export_highlights_markdown,
+            commands::search_highlights,
             commands::record_reading_session,
             commands::get_reading_stats,
             commands::export_collection_markdown,

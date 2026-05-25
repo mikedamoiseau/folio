@@ -21,6 +21,7 @@ import { startDrag, endDrag, isDragging, getDraggedCoverSrc, subscribe } from ".
 import { friendlyError } from "../lib/errors";
 import { pickSupportedOpdsLink } from "../lib/utils";
 import { FALLBACK_FORMATS, getSupportedFormats, useSupportedFormats } from "../lib/supportedFormats";
+import HighlightSearchModal from "../components/HighlightSearchModal";
 import { LiveRegion } from "../components/LiveRegion";
 import { useToast } from "../components/Toast";
 import { useDebounce } from "../hooks/useDebounce";
@@ -150,6 +151,7 @@ export default function Library() {
 
   // Collections state
   const [collectionsOpen, setCollectionsOpen] = useState(false);
+  const [highlightSearchOpen, setHighlightSearchOpen] = useState(false);
   const [collections, setCollections] = useState<Collection[]>([]);
   const [activeCollectionId, setActiveCollectionId] = useState<string | null>(null);
   const [activeSeries, setActiveSeries] = useState<string | null>(null);
@@ -792,6 +794,24 @@ export default function Library() {
               </svg>
             </button>
           )}
+          {/* Highlight search */}
+          {hasBooks && (
+            <button
+              type="button"
+              onClick={() => setHighlightSearchOpen(true)}
+              title={t("highlightSearch.buttonLabel")}
+              className="p-2 rounded-lg text-ink-muted hover:text-ink hover:bg-warm-subtle transition-colors"
+              aria-label={t("highlightSearch.buttonLabel")}
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+                <rect x="5" y="3" width="9" height="15" rx="1" stroke="currentColor" strokeWidth="1.5" fill="currentColor" opacity="0.15" />
+                <line x1="7.5" y1="7" x2="11.5" y2="7" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+                <line x1="7.5" y1="10" x2="11.5" y2="10" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+                <circle cx="17" cy="17" r="4" stroke="currentColor" strokeWidth="1.5" fill="none" />
+                <path d="M20 20l2.5 2.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+              </svg>
+            </button>
+          )}
           {/* Bulk select toggle (#60) */}
           {hasBooks && (
             <button
@@ -1330,6 +1350,13 @@ export default function Library() {
       {/* Keyboard shortcuts help */}
       {showShortcuts && (
         <KeyboardShortcutsHelp context="library" onClose={() => setShowShortcuts(false)} />
+      )}
+
+      {highlightSearchOpen && (
+        <HighlightSearchModal
+          onClose={() => setHighlightSearchOpen(false)}
+          onNavigate={(bookId) => navigate(`/reader/${bookId}`)}
+        />
       )}
 
       {/* Loading overlay for book detail fetch */}

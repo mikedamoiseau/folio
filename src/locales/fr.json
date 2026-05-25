@@ -239,6 +239,17 @@
     "chapterLabel": "Chapitre {{number}}"
   },
 
+  "highlightSearch": {
+    "title": "Rechercher dans les surlignages",
+    "buttonLabel": "Rechercher dans les surlignages",
+    "placeholder": "Rechercher dans tous vos surlignages…",
+    "searching": "Recherche…",
+    "noResults": "Aucun surlignage ne correspond à votre recherche.",
+    "hint": "Tapez pour rechercher dans tous vos surlignages et notes.",
+    "chapter": "Chapitre {{number}}",
+    "resultCount": "{{count}} résultat(s)"
+  },
+
   "settings": {
     "title": "Param\u00e8tres",
     "closeLabel": "Fermer les param\u00e8tres",

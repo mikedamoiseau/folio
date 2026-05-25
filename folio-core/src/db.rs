@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use crate::models::{
     ActivityEntry, Book, BookGridItem, Bookmark, Collection, CollectionRule, CollectionType,
-    CustomFont, FeatureFlag, ReadingProgress, SeriesInfo,
+    CustomFont, FeatureFlag, HighlightSearchResult, ReadingProgress, SeriesInfo,
 };
 
 pub type DbPool = Pool<SqliteConnectionManager>;
@@ -1386,6 +1386,37 @@ pub fn list_all_bookmarks_for_sync(conn: &Connection, book_id: &str) -> Result<V
             created_at: row.get(6)?,
             updated_at: row.get(7)?,
             deleted_at: row.get(8)?,
+        })
+    })?;
+    rows.collect()
+}
+
+pub fn search_highlights(
+    conn: &Connection,
+    query: &str,
+    limit: u32,
+) -> Result<Vec<HighlightSearchResult>> {
+    let pattern = format!("%{query}%");
+    let mut stmt = conn.prepare(
+        "SELECT h.id, h.book_id, b.title, b.author, h.chapter_index, h.text, h.color, h.note, h.created_at
+         FROM highlights h
+         JOIN books b ON h.book_id = b.id
+         WHERE h.deleted_at IS NULL
+           AND (h.text LIKE ?1 OR h.note LIKE ?1)
+         ORDER BY h.created_at DESC
+         LIMIT ?2",
+    )?;
+    let rows = stmt.query_map(params![pattern, limit], |row| {
+        Ok(HighlightSearchResult {
+            highlight_id: row.get(0)?,
+            book_id: row.get(1)?,
+            book_title: row.get(2)?,
+            book_author: row.get(3)?,
+            chapter_index: row.get(4)?,
+            text: row.get(5)?,
+            color: row.get(6)?,
+            note: row.get(7)?,
+            created_at: row.get(8)?,
         })
     })?;
     rows.collect()
@@ -3393,5 +3424,56 @@ mod tests {
         delete_feature_flag(&conn, "discover").unwrap();
         assert_eq!(list_feature_flags(&conn).unwrap().len(), 0);
         assert!(!get_feature_flag(&conn, "discover").unwrap());
+    }
+
+    #[test]
+    fn search_highlights_matches_text_and_note() {
+        let (_dir, conn) = setup();
+        let book = sample_book("b1");
+        insert_book(&conn, &book).unwrap();
+
+        let h1 = crate::models::Highlight {
+            id: "h1".to_string(),
+            book_id: "b1".to_string(),
+            chapter_index: 0,
+            text: "The quick brown fox".to_string(),
+            color: "#f6c445".to_string(),
+            note: None,
+            start_offset: 0,
+            end_offset: 19,
+            created_at: 1700000000,
+            updated_at: 1700000000,
+            deleted_at: None,
+        };
+        let h2 = crate::models::Highlight {
+            id: "h2".to_string(),
+            book_id: "b1".to_string(),
+            chapter_index: 1,
+            text: "Something else".to_string(),
+            color: "#7bc47f".to_string(),
+            note: Some("note about fox".to_string()),
+            start_offset: 0,
+            end_offset: 14,
+            created_at: 1700000001,
+            updated_at: 1700000001,
+            deleted_at: None,
+        };
+        insert_highlight(&conn, &h1).unwrap();
+        insert_highlight(&conn, &h2).unwrap();
+
+        let results = search_highlights(&conn, "fox", 100).unwrap();
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].book_title, "Test Book");
+        assert_eq!(results[0].book_author, "Test Author");
+
+        let results = search_highlights(&conn, "quick", 100).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].highlight_id, "h1");
+
+        let results = search_highlights(&conn, "nonexistent", 100).unwrap();
+        assert!(results.is_empty());
+
+        let results = search_highlights(&conn, "fox", 1).unwrap();
+        assert_eq!(results.len(), 1);
     }
 }

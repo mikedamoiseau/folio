@@ -170,6 +170,20 @@ pub struct FeatureFlag {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct HighlightSearchResult {
+    pub highlight_id: String,
+    pub book_id: String,
+    pub book_title: String,
+    pub book_author: String,
+    pub chapter_index: u32,
+    pub text: String,
+    pub color: String,
+    pub note: Option<String>,
+    pub created_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ActivityEntry {
     pub id: String,
     pub timestamp: i64,

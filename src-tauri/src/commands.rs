@@ -9,7 +9,7 @@ use crate::error::{FolioError, FolioResult};
 use crate::models::{
     AutoBackup, Book, BookFormat, BookGridItem, Bookmark, CleanupEntry, CleanupProgress,
     CleanupResult, Collection, CollectionRule, CollectionType, CustomFont, FeatureFlag, Highlight,
-    NewRuleInput, ReadingProgress, SeriesInfo,
+    HighlightSearchResult, NewRuleInput, ReadingProgress, SeriesInfo,
 };
 use crate::opds;
 use crate::openlibrary;
@@ -2215,6 +2215,16 @@ pub async fn export_highlights_markdown(
         md.push('\n');
     }
     Ok(md)
+}
+
+#[tauri::command]
+pub async fn search_highlights(
+    query: String,
+    limit: Option<u32>,
+    state: State<'_, AppState>,
+) -> FolioResult<Vec<HighlightSearchResult>> {
+    let conn = state.active_db()?.get()?;
+    Ok(db::search_highlights(&conn, &query, limit.unwrap_or(200))?)
 }
 
 // --- Tags ---

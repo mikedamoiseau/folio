@@ -239,6 +239,17 @@
     "chapterLabel": "Chapter {{number}}"
   },
 
+  "highlightSearch": {
+    "title": "Search Highlights",
+    "buttonLabel": "Search highlights",
+    "placeholder": "Search across all highlights\u2026",
+    "searching": "Searching\u2026",
+    "noResults": "No highlights match your search.",
+    "hint": "Type to search across all your highlights and notes.",
+    "chapter": "Chapter {{number}}",
+    "resultCount": "{{count}} result(s)"
+  },
+
   "settings": {
     "title": "Settings",
     "closeLabel": "Close settings",
