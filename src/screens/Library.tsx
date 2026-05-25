@@ -604,13 +604,15 @@ export default function Library() {
         setShowShortcuts((prev) => !prev);
       } else if (e.key === "Escape") {
         if (showShortcuts) setShowShortcuts(false);
+        else if (highlightSearchOpen) setHighlightSearchOpen(false);
+        else if (activeSeries && seriesViewMode === "stacked") setActiveSeries(null);
         else if (collectionsOpen) setCollectionsOpen(false);
         else if (editingBook) setEditingBook(null);
       }
     }
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [showShortcuts, collectionsOpen, editingBook]);
+  }, [showShortcuts, highlightSearchOpen, activeSeries, seriesViewMode, collectionsOpen, editingBook]);
 
   useEffect(() => {
     let unlistenProgress: (() => void) | undefined;
@@ -1131,13 +1133,28 @@ export default function Library() {
             </div>
           )}
 
-          {(activeCollection || activeSeries) && (
+          {activeSeries && seriesViewMode === "stacked" ? (
+            <button
+              type="button"
+              className="col-[1/-1] flex items-center gap-2 pb-2 text-left group"
+              onClick={() => setActiveSeries(null)}
+            >
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" className="text-ink-muted/50 group-hover:text-accent transition-colors">
+                <path d="M15 18l-6-6 6-6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+              <span className="text-xs font-semibold text-ink-muted uppercase tracking-wider group-hover:text-accent transition-colors">
+                {t("seriesView.backToLibrary", { name: activeSeries })}
+              </span>
+              <span className="text-[10px] text-ink-muted/50">{t("seriesView.bookCount", { count: filtered.length })}</span>
+              <div className="flex-1 border-t border-warm-border/50" />
+            </button>
+          ) : (activeCollection || activeSeries) ? (
             <div className="flex items-center gap-2 pb-2 col-[1/-1]">
               <span className="text-xs font-semibold text-ink-muted uppercase tracking-wider">{activeSeries ?? activeCollection?.name}</span>
               <span className="text-[10px] text-ink-muted/50">{t("library.booksCount", { count: filtered.length })}</span>
               <div className="flex-1 border-t border-warm-border/50" />
             </div>
-          )}
+          ) : null}
             {sortBy === "series" ? (
               (() => {
                 const seriesBooks = filtered.filter((b) => b.series);
