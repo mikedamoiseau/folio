@@ -40,6 +40,7 @@ export default function HighlightSearchModal({
   useEffect(() => {
     if (!debouncedQuery.trim()) {
       setResults([]);
+      setLoading(false);
       return;
     }
     let cancelled = false;

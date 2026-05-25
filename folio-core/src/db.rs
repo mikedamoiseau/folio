@@ -1396,13 +1396,14 @@ pub fn search_highlights(
     query: &str,
     limit: u32,
 ) -> Result<Vec<HighlightSearchResult>> {
-    let pattern = format!("%{query}%");
+    let escaped = query.replace('%', "\\%").replace('_', "\\_");
+    let pattern = format!("%{escaped}%");
     let mut stmt = conn.prepare(
         "SELECT h.id, h.book_id, b.title, b.author, h.chapter_index, h.text, h.color, h.note, h.created_at
          FROM highlights h
          JOIN books b ON h.book_id = b.id
          WHERE h.deleted_at IS NULL
-           AND (h.text LIKE ?1 OR h.note LIKE ?1)
+           AND (h.text LIKE ?1 ESCAPE '\\' OR h.note LIKE ?1 ESCAPE '\\')
          ORDER BY h.created_at DESC
          LIMIT ?2",
     )?;
