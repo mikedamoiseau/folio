@@ -92,7 +92,7 @@ export default function Library() {
   const [fileNotAvailableBookId, setFileNotAvailableBookId] = useState<string | null>(null);
 
   const importCtx = useImport();
-  const preImportIdsRef = useRef<Set<string>>(new Set());
+  const preImportIdsRef = useRef<Set<string> | null>(null);
   const recentlyImportedRef = useRef<Set<string>>(new Set());
   // URL imports stay synchronous (single-file download + import). Their own
   // local flag drives the button's loading state without conflicting with the
@@ -432,6 +432,7 @@ export default function Library() {
     try {
       setImportingUrl(true);
       setError(null);
+      preImportIdsRef.current = new Set(books.map((b) => b.id));
       await invoke("download_opds_book", { downloadUrl: url });
       await loadBooks(activeCollectionIdRef.current);
     } catch (err) {
@@ -439,7 +440,7 @@ export default function Library() {
     } finally {
       setImportingUrl(false);
     }
-  }, [loadBooks, t]);
+  }, [loadBooks, t, books]);
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
@@ -657,11 +658,12 @@ export default function Library() {
 
   // After books list updates post-import, diff against pre-import snapshot
   useEffect(() => {
-    if (preImportIdsRef.current.size === 0) return;
-    const newIds = books.filter((b) => !preImportIdsRef.current.has(b.id)).map((b) => b.id);
+    if (preImportIdsRef.current === null) return;
+    const snapshot = preImportIdsRef.current;
+    const newIds = books.filter((b) => !snapshot.has(b.id)).map((b) => b.id);
     if (newIds.length > 0) {
       recentlyImportedRef.current = new Set(newIds);
-      preImportIdsRef.current = new Set();
+      preImportIdsRef.current = null;
     }
   }, [books]);
 

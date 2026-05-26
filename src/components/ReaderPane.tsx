@@ -207,12 +207,13 @@ export default function ReaderPane({
   const [dndCursorHidden, setDndCursorHidden] = useState(false);
   const dndTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Auto-dismiss focus hint after 5 seconds
+  // Auto-dismiss focus hint after 5 seconds, or immediately when DND exits
   useEffect(() => {
     if (!focusHint) return;
+    if (!dndMode) { setFocusHint(false); return; }
     const timer = setTimeout(() => setFocusHint(false), 5000);
     return () => clearTimeout(timer);
-  }, [focusHint]);
+  }, [focusHint, dndMode]);
 
   const [chapterError, setChapterError] = useState<string | null>(null);
   const [missingFileDialog, setMissingFileDialog] = useState(false);
