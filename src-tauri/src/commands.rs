@@ -3203,11 +3203,12 @@ pub async fn download_opds_book(
         covers_storage,
         &import_mode,
         true,
-    )?;
+    );
 
-    // Clean up temp file (import_book_inner copies it to the library folder)
+    // Clean up temp file regardless of import success/failure
     let _ = std::fs::remove_file(&temp_path);
 
+    let outcome = outcome?;
     Ok(OpdsImportResult {
         newly_imported: outcome.is_new(),
         book: outcome.into_book(),
