@@ -537,6 +537,17 @@ impl ImportOutcome {
             ImportOutcome::Imported(b) | ImportOutcome::Duplicate(b) => b,
         }
     }
+
+    pub(crate) fn is_new(&self) -> bool {
+        matches!(self, ImportOutcome::Imported(_))
+    }
+}
+
+#[derive(serde::Serialize)]
+pub struct OpdsImportResult {
+    #[serde(flatten)]
+    pub book: Book,
+    pub newly_imported: bool,
 }
 
 /// Body of [`import_book`], extracted so background tasks can call it without
@@ -3110,7 +3121,7 @@ pub async fn download_opds_book(
     mime_type: Option<String>,
     state: State<'_, AppState>,
     _app: AppHandle,
-) -> FolioResult<Book> {
+) -> FolioResult<OpdsImportResult> {
     // Determine the file extension for the temp import path. Precedence:
     //   1. URL suffix — Folio's own feed and many well-behaved feeds put the
     //      extension in the path; this is the only signal that disambiguates
@@ -3185,20 +3196,22 @@ pub async fn download_opds_book(
             .flatten()
             .unwrap_or_else(|| "import".to_string())
     };
-    let result = import_book_inner(
+    let outcome = import_book_inner(
         temp_str.clone(),
         db_pool,
         storage,
         covers_storage,
         &import_mode,
         true,
-    )
-    .map(ImportOutcome::into_book);
+    )?;
 
     // Clean up temp file (import_book_inner copies it to the library folder)
     let _ = std::fs::remove_file(&temp_path);
 
-    result
+    Ok(OpdsImportResult {
+        newly_imported: outcome.is_new(),
+        book: outcome.into_book(),
+    })
 }
 
 // --- Profiles ---

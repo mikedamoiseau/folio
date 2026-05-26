@@ -444,8 +444,10 @@ export default function Library({ catalogImportedBookId, onCatalogImportConsumed
     try {
       setImportingUrl(true);
       setError(null);
-      const book = await invoke<{ id: string }>("download_opds_book", { downloadUrl: url });
-      recentlyImportedRef.current = new Set([book.id]);
+      const result = await invoke<{ id: string; newly_imported: boolean }>("download_opds_book", { downloadUrl: url });
+      if (result.newly_imported) {
+        recentlyImportedRef.current = new Set([result.id]);
+      }
       await loadBooks(activeCollectionIdRef.current);
     } catch (err) {
       setError(friendlyError(err, t));
@@ -1119,11 +1121,13 @@ export default function Library({ catalogImportedBookId, onCatalogImportConsumed
                           <button
                             onClick={async () => {
                               try {
-                                const book = await invoke<{ id: string }>("download_opds_book", {
+                                const result = await invoke<{ id: string; newly_imported: boolean }>("download_opds_book", {
                                   downloadUrl: picked.link.href,
                                   mimeType: picked.link.mimeType,
                                 });
-                                recentlyImportedRef.current = new Set([book.id]);
+                                if (result.newly_imported) {
+                                  recentlyImportedRef.current = new Set([result.id]);
+                                }
                                 await loadBooks(activeCollectionIdRef.current);
                                 setDiscoverBooks((prev) => prev.filter((e) => e.id !== entry.id));
                               } catch (err) {

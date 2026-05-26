@@ -37,7 +37,7 @@ interface OpdsFeed {
 
 interface CatalogBrowserProps {
   onClose: () => void;
-  onBookImported: (bookId: string) => void;
+  onBookImported: (bookId: string | null) => void;
 }
 
 export default function CatalogBrowser({ onClose, onBookImported }: CatalogBrowserProps) {
@@ -137,12 +137,12 @@ export default function CatalogBrowser({ onClose, onBookImported }: CatalogBrows
     try {
       // Pass the MIME type so the backend can derive the file extension even
       // when the acquisition URL is opaque (e.g. `/download/123`).
-      const book = await invoke<{ id: string }>("download_opds_book", {
+      const result = await invoke<{ id: string; newly_imported: boolean }>("download_opds_book", {
         downloadUrl: picked.link.href,
         mimeType: picked.link.mimeType,
       });
       setDownloadedIds((prev) => new Set(prev).add(entry.id));
-      onBookImported(book.id);
+      onBookImported(result.newly_imported ? result.id : null);
     } catch (err) {
       setError(t("catalog.downloadFailed", { title: entry.title, error: friendlyError(err, t) }));
     } finally {
