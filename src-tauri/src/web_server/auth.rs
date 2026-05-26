@@ -89,8 +89,9 @@ pub fn validate_pin(pin: &str) -> Result<PinStrength, &'static str> {
         return Err("PIN must not be all the same digit");
     }
 
-    let ascending = chars.windows(2).all(|w| w[1] as i32 - w[0] as i32 == 1);
-    let descending = chars.windows(2).all(|w| w[0] as i32 - w[1] as i32 == 1);
+    let digits: Vec<i32> = chars.iter().map(|&c| c as i32 - '0' as i32).collect();
+    let ascending = digits.windows(2).all(|w| (w[1] - w[0]).rem_euclid(10) == 1);
+    let descending = digits.windows(2).all(|w| (w[0] - w[1]).rem_euclid(10) == 1);
     if ascending || descending {
         return Err("PIN must not be a sequential pattern");
     }
@@ -431,6 +432,14 @@ mod tests {
     fn test_validate_pin_rejects_sequential() {
         assert!(validate_pin("4567").is_err());
         assert!(validate_pin("9876").is_err());
+    }
+
+    #[test]
+    fn test_validate_pin_rejects_wraparound_sequential() {
+        assert!(validate_pin("7890").is_err());
+        assert!(validate_pin("8901").is_err());
+        assert!(validate_pin("0987").is_err());
+        assert!(validate_pin("1098").is_err());
     }
 
     #[test]

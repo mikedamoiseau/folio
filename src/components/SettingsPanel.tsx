@@ -41,9 +41,9 @@ function getPinStrength(pin: string): { strength: PinStrength; error: string | n
   const allSame = pin.split("").every((c) => c === pin[0]);
   if (allSame) return { strength: "weak", error: "settings.pinAllSame" };
 
-  const chars = pin.split("").map((c) => c.charCodeAt(0));
-  const ascending = chars.every((c, i) => i === 0 || c - chars[i - 1] === 1);
-  const descending = chars.every((c, i) => i === 0 || chars[i - 1] - c === 1);
+  const digits = pin.split("").map((c) => parseInt(c, 10));
+  const ascending = digits.every((d, i) => i === 0 || ((d - digits[i - 1] + 10) % 10) === 1);
+  const descending = digits.every((d, i) => i === 0 || ((digits[i - 1] - d + 10) % 10) === 1);
   if (ascending || descending) return { strength: "weak", error: "settings.pinSequential" };
 
   const len = pin.length;
