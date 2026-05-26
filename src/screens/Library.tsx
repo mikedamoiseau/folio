@@ -47,11 +47,10 @@ interface BookTagAssoc {
 }
 
 interface LibraryProps {
-  catalogImportedBookId?: string | null;
-  onCatalogImportConsumed?: () => void;
+  catalogImportedBookIds?: string[];
 }
 
-export default function Library({ catalogImportedBookId, onCatalogImportConsumed }: LibraryProps = {}) {
+export default function Library({ catalogImportedBookIds }: LibraryProps = {}) {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const { addToast } = useToast();
@@ -99,11 +98,8 @@ export default function Library({ catalogImportedBookId, onCatalogImportConsumed
   const importCtx = useImport();
   const preImportIdsRef = useRef<Set<string> | null>(null);
   const recentlyImportedRef = useRef<Set<string>>(
-    catalogImportedBookId ? new Set([catalogImportedBookId]) : new Set()
+    new Set(catalogImportedBookIds ?? [])
   );
-  useEffect(() => {
-    if (catalogImportedBookId) onCatalogImportConsumed?.();
-  }, []);
   // URL imports stay synchronous (single-file download + import). Their own
   // local flag drives the button's loading state without conflicting with the
   // background folder/file import managed by `importCtx`.

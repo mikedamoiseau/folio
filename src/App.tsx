@@ -17,13 +17,14 @@ function AppShell() {
   const [statsOpen, setStatsOpen] = useState(false);
   const [profileKey, setProfileKey] = useState(0);
   const [catalogOpen, setCatalogOpen] = useState(false);
-  const [catalogImportedBookId, setCatalogImportedBookId] = useState<string | null>(null);
+  const [catalogImportedBookIds, setCatalogImportedBookIds] = useState<string[]>([]);
   const location = useLocation();
   const navigate = useNavigate();
   const inReader = location.pathname.startsWith("/reader/");
 
   const handleProfileSwitch = useCallback(() => {
     navigate("/");
+    setCatalogImportedBookIds([]);
     setProfileKey((k) => k + 1); // force Library remount
   }, [navigate]);
 
@@ -87,7 +88,7 @@ function AppShell() {
         style={{ animation: "route-enter 0.25s ease both" }}
       >
         <Routes>
-          <Route path="/" element={<Library key={profileKey} catalogImportedBookId={catalogImportedBookId} onCatalogImportConsumed={() => setCatalogImportedBookId(null)} />} />
+          <Route path="/" element={<Library key={profileKey} catalogImportedBookIds={catalogImportedBookIds} />} />
           <Route
             path="/reader/:bookId"
             element={
@@ -103,8 +104,8 @@ function AppShell() {
       {statsOpen && <ReadingStats onClose={() => setStatsOpen(false)} />}
       {catalogOpen && (
         <CatalogBrowser
-          onClose={() => setCatalogOpen(false)}
-          onBookImported={(bookId) => { setCatalogImportedBookId(bookId); setProfileKey((k) => k + 1); }}
+          onClose={() => { setCatalogOpen(false); setCatalogImportedBookIds([]); }}
+          onBookImported={(bookId) => { if (bookId) setCatalogImportedBookIds(prev => [...prev, bookId]); setProfileKey((k) => k + 1); }}
         />
       )}
 
