@@ -5698,7 +5698,14 @@ pub async fn web_server_set_pin(pin: String, state: State<'_, AppState>) -> Foli
     if pin.is_empty() {
         return Err(FolioError::invalid("PIN cannot be empty"));
     }
+
+    crate::web_server::auth::validate_pin(&pin).map_err(FolioError::invalid)?;
+
     crate::web_server::auth::store_pin(&pin)?;
+
+    // Log the change
+    let conn = state.active_db()?.get()?;
+    db::log_pin_change(&conn, "desktop")?;
 
     // Propagate new hash to the running web server (if any) via the shared Arc
     let new_hash = crate::web_server::auth::hash_pin(&pin);

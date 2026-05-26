@@ -363,8 +363,18 @@
       "opdsHint": "Catalog feed for OPDS apps (Thorium, KOReader, …)."
     },
     "pin": "PIN",
-    "pinPlaceholder": "Set a PIN for web access",
+    "pinPlaceholder": "Set a PIN for web access (4–8 digits)",
     "savePin": "Save PIN",
+    "pinStrength": {
+      "weak": "Weak",
+      "fair": "Fair",
+      "strong": "Strong"
+    },
+    "pinTooShort": "At least 4 digits",
+    "pinDigitsOnly": "Digits only",
+    "pinTooCommon": "Too common",
+    "pinAllSame": "All same digit",
+    "pinSequential": "Sequential pattern",
     "port": "Port",
     "startServer": "Start Server",
     "stopServer": "Stop Server",

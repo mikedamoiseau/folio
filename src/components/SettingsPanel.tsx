@@ -23,6 +23,33 @@ import {
   type SavedTheme,
 } from "../lib/savedThemes";
 
+const COMMON_PINS = new Set([
+  "0000", "1111", "2222", "3333", "4444", "5555", "6666", "7777", "8888",
+  "9999", "1234", "4321", "0123", "3210", "1212", "6969", "1122", "2001",
+  "1984", "2000", "1010", "2580", "0852",
+]);
+
+type PinStrength = "weak" | "fair" | "strong";
+
+function getPinStrength(pin: string): { strength: PinStrength; error: string | null } {
+  if (pin.length === 0) return { strength: "weak", error: null };
+  if (!/^\d+$/.test(pin)) return { strength: "weak", error: "settings.pinDigitsOnly" };
+  if (pin.length < 4) return { strength: "weak", error: "settings.pinTooShort" };
+
+  if (COMMON_PINS.has(pin)) return { strength: "weak", error: "settings.pinTooCommon" };
+
+  const allSame = pin.split("").every((c) => c === pin[0]);
+  if (allSame) return { strength: "weak", error: "settings.pinAllSame" };
+
+  const chars = pin.split("").map((c) => c.charCodeAt(0));
+  const ascending = chars.every((c, i) => i === 0 || c - chars[i - 1] === 1);
+  const descending = chars.every((c, i) => i === 0 || chars[i - 1] - c === 1);
+  if (ascending || descending) return { strength: "weak", error: "settings.pinSequential" };
+
+  if (pin.length >= 6) return { strength: "strong", error: null };
+  return { strength: "fair", error: null };
+}
+
 function Accordion({ title, children, open, onToggle }: { title: string; children: ReactNode; open: boolean; onToggle: () => void }) {
   const sectionId = `section-${title.replace(/\s+/g, "-").toLowerCase()}`;
   return (
@@ -423,6 +450,7 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
   const [webUiEnabled, setWebUiEnabled] = useState(false);
   const [opdsEnabled, setOpdsEnabled] = useState(false);
   const [pinSaved, setPinSaved] = useState(false);
+  const [pinError, setPinError] = useState<string | null>(null);
 
   // Custom fonts
   interface CustomFont {
@@ -1753,19 +1781,45 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                   id="web-server-pin"
                   type="password"
                   value={webServerPin}
-                  onChange={(e) => { setWebServerPin(e.target.value); setPinSaved(false); }}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    setWebServerPin(v);
+                    setPinSaved(false);
+                    setPinError(null);
+                  }}
                   placeholder={t("settings.pinPlaceholder")}
                   maxLength={8}
                   className="w-full bg-transparent text-sm text-ink focus:outline-none"
                 />
+                {webServerPin.length > 0 && (() => {
+                  const { strength, error } = getPinStrength(webServerPin);
+                  const colors = { weak: "bg-red-400", fair: "bg-yellow-400", strong: "bg-green-400" };
+                  const widths = { weak: "w-1/3", fair: "w-2/3", strong: "w-full" };
+                  return (
+                    <div className="mt-1.5">
+                      <div className="h-1 w-full bg-warm-border rounded-full overflow-hidden">
+                        <div className={`h-full rounded-full transition-all ${colors[strength]} ${widths[strength]}`} />
+                      </div>
+                      <div className="flex items-center justify-between mt-0.5">
+                        <span className={`text-[10px] ${strength === "weak" ? "text-red-400" : strength === "fair" ? "text-yellow-500" : "text-green-500"}`}>
+                          {t(`settings.pinStrength.${strength}`)}
+                        </span>
+                        {error && <span className="text-[10px] text-red-400">{t(error)}</span>}
+                      </div>
+                    </div>
+                  );
+                })()}
                 <div className="flex items-center gap-2 mt-1">
                   {webServerPin && (
                     <button
                       type="button"
                       onClick={async () => {
+                        const { error } = getPinStrength(webServerPin);
+                        if (error) { setPinError(t(error)); return; }
                         try {
                           await invoke("web_server_set_pin", { pin: webServerPin });
                           setWebServerError(null);
+                          setPinError(null);
                           setPinSaved(true);
                           setTimeout(() => setPinSaved(false), 2000);
                         } catch (e) { setWebServerError(friendlyError(e, t)); }
@@ -1776,6 +1830,7 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                     </button>
                   )}
                   {pinSaved && <span className="text-xs text-green-400">{t("settings.pinSaved")}</span>}
+                  {pinError && <span className="text-xs text-red-400">{pinError}</span>}
                 </div>
               </div>
 

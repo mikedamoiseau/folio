@@ -217,6 +217,12 @@ fn run_schema(conn: &Connection) -> Result<()> {
             enabled INTEGER NOT NULL DEFAULT 0,
             description TEXT
         );
+
+        CREATE TABLE IF NOT EXISTS pin_change_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            changed_at INTEGER NOT NULL,
+            source TEXT NOT NULL DEFAULT 'desktop'
+        );
     ",
     )?;
 
@@ -1924,6 +1930,18 @@ pub fn list_series(conn: &Connection) -> Result<Vec<SeriesInfo>> {
         })
     })?;
     rows.collect()
+}
+
+pub fn log_pin_change(conn: &Connection, source: &str) -> Result<()> {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64;
+    conn.execute(
+        "INSERT INTO pin_change_log (changed_at, source) VALUES (?1, ?2)",
+        rusqlite::params![now, source],
+    )?;
+    Ok(())
 }
 
 #[cfg(test)]
