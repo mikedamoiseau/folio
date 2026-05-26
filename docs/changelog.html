@@ -140,7 +140,9 @@
         if (!res.ok) throw new Error(res.statusText);
         md = await res.text();
       } catch {
-        md = atob(document.getElementById("changelog-md").textContent);
+        const raw = atob(document.getElementById("changelog-md").textContent);
+        const bytes = Uint8Array.from(raw, c => c.charCodeAt(0));
+        md = new TextDecoder().decode(bytes);
       }
 
       const sections = [];
