@@ -5708,7 +5708,10 @@ pub async fn web_server_set_pin(pin: String, state: State<'_, AppState>) -> Foli
     let new_hash = crate::web_server::auth::hash_pin(&pin);
     let mut ph = match state.shared_pin_hash.lock() {
         Ok(guard) => guard,
-        Err(poisoned) => poisoned.into_inner(),
+        Err(poisoned) => {
+            state.shared_pin_hash.clear_poison();
+            poisoned.into_inner()
+        }
     };
     *ph = Some(new_hash);
     drop(ph);
