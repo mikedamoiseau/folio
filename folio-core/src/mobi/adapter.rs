@@ -16,6 +16,7 @@ use ammonia::clean;
 
 use super::{MobiBook, PartKind};
 use crate::epub::{count_words, strip_html_tags, BookMetadata, ChapterInfo, ExtractedCover};
+use crate::models::ChapterMeta;
 use crate::error::{FolioError, FolioResult};
 use crate::storage::Storage;
 
@@ -177,6 +178,24 @@ fn chapter_word_count(html_bytes: &[u8]) -> FolioResult<usize> {
         .map_err(|e| FolioError::invalid(format!("MOBI chapter is not valid UTF-8: {e}")))?;
     let cleaned = clean(html);
     Ok(count_words(&strip_html_tags(&cleaned)))
+}
+
+/// Combined chapter index, title, and word count in a single pass.
+pub fn get_chapter_metadata_batch_from_cache(
+    cached: &CachedMobiBook,
+) -> FolioResult<Vec<ChapterMeta>> {
+    cached
+        .parts
+        .iter()
+        .enumerate()
+        .map(|(index, part)| {
+            Ok(ChapterMeta {
+                index,
+                title: format!("Chapter {}", index + 1),
+                word_count: chapter_word_count(&part.data)?,
+            })
+        })
+        .collect()
 }
 
 /// Owned, parsed snapshot of a MOBI/AZW/AZW3 file: the bytes for every

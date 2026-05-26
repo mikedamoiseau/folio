@@ -252,6 +252,14 @@ pub struct TocEntry {
     pub children: Vec<TocEntry>,
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChapterMeta {
+    pub index: usize,
+    pub title: String,
+    pub word_count: usize,
+}
+
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SearchResult {

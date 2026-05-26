@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::io::Read;
 use zip::ZipArchive;
 
-use crate::models::{SearchResult, TocEntry};
+use crate::models::{ChapterMeta, SearchResult, TocEntry};
 
 // ---- Error type ----
 
@@ -903,6 +903,36 @@ pub fn get_chapter_word_counts(cached: &mut CachedEpubArchive) -> Result<Vec<usi
         counts.push(count_words(&text));
     }
     Ok(counts)
+}
+
+/// Combined chapter index, title, and word count in a single pass.
+pub fn get_chapter_metadata_batch(
+    cached: &mut CachedEpubArchive,
+) -> Result<Vec<ChapterMeta>, EpubError> {
+    let mut result = Vec::with_capacity(cached.spine.len());
+    for i in 0..cached.spine.len() {
+        let idref = &cached.spine[i];
+        let href = cached
+            .manifest
+            .get(idref)
+            .map(|item| item.href.clone())
+            .ok_or_else(|| EpubError::MissingFile(format!("Manifest item '{idref}' not found")))?;
+
+        let base_dir = &cached.base_dir;
+        let entry_name = find_zip_entry_name(&mut cached.archive, base_dir, &href)
+            .ok_or_else(|| EpubError::MissingFile(format!("{base_dir}{href}")))?;
+
+        let raw_html = read_zip_entry(&mut cached.archive, &entry_name)?;
+        let body_only = clean(&raw_html);
+        let text = strip_html_tags(&body_only);
+
+        result.push(ChapterMeta {
+            index: i,
+            title: format!("Chapter {}", i + 1),
+            word_count: count_words(&text),
+        });
+    }
+    Ok(result)
 }
 
 // ---- Inline-image helpers ----

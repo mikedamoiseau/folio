@@ -7,9 +7,9 @@ use crate::db::{self, DbPool};
 use crate::epub;
 use crate::error::{FolioError, FolioResult};
 use crate::models::{
-    AutoBackup, Book, BookFormat, BookGridItem, Bookmark, CleanupEntry, CleanupProgress,
-    CleanupResult, Collection, CollectionRule, CollectionType, CustomFont, FeatureFlag, Highlight,
-    HighlightSearchResult, NewRuleInput, ReadingProgress, SeriesInfo,
+    AutoBackup, Book, BookFormat, BookGridItem, Bookmark, ChapterMeta, CleanupEntry,
+    CleanupProgress, CleanupResult, Collection, CollectionRule, CollectionType, CustomFont,
+    FeatureFlag, Highlight, HighlightSearchResult, NewRuleInput, ReadingProgress, SeriesInfo,
 };
 use crate::opds;
 use crate::openlibrary;
@@ -1572,6 +1572,50 @@ pub async fn get_chapter_word_counts(
         )),
         other => Err(FolioError::invalid(format!(
             "get_chapter_word_counts is not supported for format {other}"
+        ))),
+    }
+}
+
+#[tauri::command]
+pub async fn get_chapter_metadata_batch(
+    book_id: String,
+    state: State<'_, AppState>,
+) -> FolioResult<Vec<ChapterMeta>> {
+    let (file_path, format) = {
+        let conn = state.active_db()?.get()?;
+        let book = db::get_book(&conn, &book_id)?
+            .ok_or_else(|| FolioError::not_found(format!("Book '{book_id}' not found")))?;
+        (state.resolve_book_path(&book)?, book.format)
+    };
+
+    validate_file_exists(&file_path)?;
+
+    match format {
+        BookFormat::Epub => {
+            let mut cache = state.epub_cache.lock()?;
+            ensure_epub_cached(&mut cache, &file_path);
+            let cached = cache
+                .get_mut(&file_path)
+                .ok_or("Failed to open EPUB archive")?;
+            Ok(epub::get_chapter_metadata_batch(cached)?)
+        }
+        #[cfg(feature = "mobi")]
+        BookFormat::Mobi => {
+            let mut cache = state.mobi_cache.lock()?;
+            ensure_mobi_cached(&mut cache, &file_path)?;
+            let cached = cache
+                .get(&file_path)
+                .ok_or_else(|| FolioError::internal("Failed to open MOBI book"))?;
+            Ok(folio_core::mobi::get_chapter_metadata_batch_from_cache(
+                cached,
+            )?)
+        }
+        #[cfg(not(feature = "mobi"))]
+        BookFormat::Mobi => Err(FolioError::invalid(
+            "MOBI support is not enabled in this build",
+        )),
+        other => Err(FolioError::invalid(format!(
+            "get_chapter_metadata_batch is not supported for format {other}"
         ))),
     }
 }
