@@ -226,13 +226,14 @@ pub async fn auth_middleware(
         return next.run(req).await;
     }
 
-    // If no PIN is configured, allow open access (user hasn't set up auth yet)
-    let has_pin = state
-        .pin_hash
-        .lock()
-        .ok()
-        .and_then(|h| h.as_ref().cloned())
-        .is_some();
+    // If no PIN is configured, allow open access (user hasn't set up auth yet).
+    // Poisoned mutex → fail closed (500), never open access.
+    let has_pin = match state.pin_hash.lock() {
+        Ok(guard) => guard.is_some(),
+        Err(_) => {
+            return (StatusCode::INTERNAL_SERVER_ERROR, "Internal server error").into_response();
+        }
+    };
 
     if !has_pin {
         return next.run(req).await;

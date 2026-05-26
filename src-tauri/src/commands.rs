@@ -5703,9 +5703,13 @@ pub async fn web_server_set_pin(pin: String, state: State<'_, AppState>) -> Foli
 
     crate::web_server::auth::store_pin(&pin)?;
 
-    // Propagate new hash immediately — store_pin is irreversible, runtime must reflect it
+    // Propagate new hash immediately — store_pin is irreversible, runtime must reflect it.
+    // Recover from poisoned mutex: the data is still usable even after a panic.
     let new_hash = crate::web_server::auth::hash_pin(&pin);
-    let mut ph = state.shared_pin_hash.lock()?;
+    let mut ph = match state.shared_pin_hash.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
     *ph = Some(new_hash);
     drop(ph);
 
