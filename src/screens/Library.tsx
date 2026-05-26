@@ -1110,6 +1110,7 @@ export default function Library() {
                           <button
                             onClick={async () => {
                               try {
+                                preImportIdsRef.current = new Set(books.map((b) => b.id));
                                 await invoke("download_opds_book", {
                                   downloadUrl: picked.link.href,
                                   mimeType: picked.link.mimeType,
