@@ -99,7 +99,7 @@ pub fn validate_pin(pin: &str) -> Result<PinStrength, &'static str> {
     let bytes = pin.as_bytes();
     let len = bytes.len();
     for sub_len in 2..=len / 2 {
-        if len % sub_len == 0
+        if len.is_multiple_of(sub_len)
             && bytes
                 .chunks(sub_len)
                 .all(|chunk| chunk == &bytes[..sub_len])
