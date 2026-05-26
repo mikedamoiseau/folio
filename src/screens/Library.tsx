@@ -374,14 +374,15 @@ export default function Library({ catalogImportedBookId, onCatalogImportConsumed
 
   const importFiles = useCallback(async (paths: string[]) => {
     if (paths.length === 0) return;
-    preImportIdsRef.current = new Set(books.map((b) => b.id));
+    const allBooks = await invoke<BookGridItem[]>("get_library_grid");
+    preImportIdsRef.current = new Set(allBooks.map((b) => b.id));
     setError(null);
     try {
       await importCtx.startFiles(paths);
     } catch (err) {
       setError(friendlyError(err, t));
     }
-  }, [importCtx, t, books]);
+  }, [importCtx, t]);
 
   const handleSelectSeries = useCallback((name: string | null) => {
     if (name !== null) scrollBeforeDrillRef.current = null;
@@ -400,13 +401,14 @@ export default function Library({ catalogImportedBookId, onCatalogImportConsumed
       if (!selected) return;
       const folderPath = typeof selected === "string" ? selected : selected[0];
       if (!folderPath) return;
-      preImportIdsRef.current = new Set(books.map((b) => b.id));
+      const allBooks = await invoke<BookGridItem[]>("get_library_grid");
+      preImportIdsRef.current = new Set(allBooks.map((b) => b.id));
       setError(null);
       await importCtx.startFolder(folderPath);
     } catch (err) {
       setError(friendlyError(err, t));
     }
-  }, [importCtx, t, books]);
+  }, [importCtx, t]);
 
   const handleImport = useCallback(async () => {
     try {
@@ -442,15 +444,15 @@ export default function Library({ catalogImportedBookId, onCatalogImportConsumed
     try {
       setImportingUrl(true);
       setError(null);
-      preImportIdsRef.current = new Set(books.map((b) => b.id));
-      await invoke("download_opds_book", { downloadUrl: url });
+      const book = await invoke<{ id: string }>("download_opds_book", { downloadUrl: url });
+      recentlyImportedRef.current = new Set([book.id]);
       await loadBooks(activeCollectionIdRef.current);
     } catch (err) {
       setError(friendlyError(err, t));
     } finally {
       setImportingUrl(false);
     }
-  }, [loadBooks, t, books]);
+  }, [loadBooks, t]);
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
@@ -660,22 +662,19 @@ export default function Library({ catalogImportedBookId, onCatalogImportConsumed
   // books appear without a manual refresh.
   useEffect(() => {
     if (importCtx.lastCompletedAt === null) return;
-    loadBooks(activeCollectionIdRef.current).then(() => {
-      // no-op: recentlyImportedRef is updated in the books effect below
-    });
+    const snapshot = preImportIdsRef.current;
+    if (snapshot) {
+      invoke<BookGridItem[]>("get_library_grid").then((allBooks) => {
+        const newIds = allBooks.filter((b) => !snapshot.has(b.id)).map((b) => b.id);
+        if (newIds.length > 0) {
+          recentlyImportedRef.current = new Set(newIds);
+        }
+        preImportIdsRef.current = null;
+      });
+    }
+    loadBooks(activeCollectionIdRef.current);
     loadRecentlyRead();
   }, [importCtx.lastCompletedAt, loadBooks, loadRecentlyRead]);
-
-  // After books list updates post-import, diff against pre-import snapshot
-  useEffect(() => {
-    if (preImportIdsRef.current === null) return;
-    const snapshot = preImportIdsRef.current;
-    const newIds = books.filter((b) => !snapshot.has(b.id)).map((b) => b.id);
-    if (newIds.length > 0) {
-      recentlyImportedRef.current = new Set(newIds);
-      preImportIdsRef.current = null;
-    }
-  }, [books]);
 
   const handleStartScan = useCallback(async () => {
     try { await invoke("start_scan", { includeSkipped: true }); } catch (err) { setError(friendlyError(err, t)); }
@@ -1120,11 +1119,11 @@ export default function Library({ catalogImportedBookId, onCatalogImportConsumed
                           <button
                             onClick={async () => {
                               try {
-                                preImportIdsRef.current = new Set(books.map((b) => b.id));
-                                await invoke("download_opds_book", {
+                                const book = await invoke<{ id: string }>("download_opds_book", {
                                   downloadUrl: picked.link.href,
                                   mimeType: picked.link.mimeType,
                                 });
+                                recentlyImportedRef.current = new Set([book.id]);
                                 await loadBooks(activeCollectionIdRef.current);
                                 setDiscoverBooks((prev) => prev.filter((e) => e.id !== entry.id));
                               } catch (err) {
