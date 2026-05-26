@@ -110,6 +110,7 @@ Folio is for the opposite case: you already have the files, and you want a bette
 ## Docs
 
 - User guide: [`docs/USER_GUIDE.md`](docs/USER_GUIDE.md)
+- Changelog: [`docs/changelog.html`](docs/changelog.html) ([raw](CHANGELOG.md))
 - Roadmap: [`docs/ROADMAP.md`](docs/ROADMAP.md)
 
 ## Installation
