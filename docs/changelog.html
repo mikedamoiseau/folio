@@ -218,11 +218,24 @@
         return out;
       }
 
+      function safeHref(url) {
+        try {
+          const scheme = new URL(url, "https://x.example").protocol;
+          if (scheme === "https:" || scheme === "http:") return url;
+        } catch { /* malformed URL */ }
+        return null;
+      }
+
       function inlineFormat(s) {
         return escapeHtml(s)
           .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
           .replace(/`(.+?)`/g, '<code style="font-size:0.85em;background:var(--bg);padding:0.1em 0.3em;border-radius:3px">$1</code>')
-          .replace(/\[(.+?)\]\((.+?)\)/g, '<a href="$2" style="color:var(--accent)">$1</a>');
+          .replace(/\[(.+?)\]\((.+?)\)/g, (_, label, href) => {
+            const safe = safeHref(href);
+            return safe
+              ? '<a href="' + safe + '" style="color:var(--accent)">' + label + '</a>'
+              : label;
+          });
       }
     })();
   </script>
