@@ -17,6 +17,7 @@ function AppShell() {
   const [statsOpen, setStatsOpen] = useState(false);
   const [profileKey, setProfileKey] = useState(0);
   const [catalogOpen, setCatalogOpen] = useState(false);
+  const [catalogImportedBookId, setCatalogImportedBookId] = useState<string | null>(null);
   const location = useLocation();
   const navigate = useNavigate();
   const inReader = location.pathname.startsWith("/reader/");
@@ -86,7 +87,7 @@ function AppShell() {
         style={{ animation: "route-enter 0.25s ease both" }}
       >
         <Routes>
-          <Route path="/" element={<Library key={profileKey} />} />
+          <Route path="/" element={<Library key={profileKey} catalogImportedBookId={catalogImportedBookId} onCatalogImportConsumed={() => setCatalogImportedBookId(null)} />} />
           <Route
             path="/reader/:bookId"
             element={
@@ -103,7 +104,7 @@ function AppShell() {
       {catalogOpen && (
         <CatalogBrowser
           onClose={() => setCatalogOpen(false)}
-          onBookImported={() => setProfileKey((k) => k + 1)}
+          onBookImported={(bookId) => { setCatalogImportedBookId(bookId); setProfileKey((k) => k + 1); }}
         />
       )}
 
