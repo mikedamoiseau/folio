@@ -120,6 +120,7 @@ interface ReaderPaneProps {
    */
   onCloseThisPane?: () => void;
   initialChapterIndex?: number;
+  autoFocus?: boolean;
 }
 
 export default function ReaderPane({
@@ -136,6 +137,7 @@ export default function ReaderPane({
   onChangeBook,
   onCloseThisPane,
   initialChapterIndex,
+  autoFocus = false,
 }: ReaderPaneProps) {
   const effectiveActive = isActive ?? isPrimary;
   const effectivePersist = canPersist ?? isPrimary;
@@ -199,10 +201,18 @@ export default function ReaderPane({
   }, [bookId]);
 
   // Do Not Disturb mode
-  const [dndMode, setDndMode] = useState(false);
+  const [dndMode, setDndMode] = useState(autoFocus);
+  const [focusHint, setFocusHint] = useState(autoFocus);
   const [dndShowControls, setDndShowControls] = useState(false);
   const [dndCursorHidden, setDndCursorHidden] = useState(false);
   const dndTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Auto-dismiss focus hint after 5 seconds
+  useEffect(() => {
+    if (!focusHint) return;
+    const timer = setTimeout(() => setFocusHint(false), 5000);
+    return () => clearTimeout(timer);
+  }, [focusHint]);
 
   const [chapterError, setChapterError] = useState<string | null>(null);
   const [missingFileDialog, setMissingFileDialog] = useState(false);
@@ -1565,6 +1575,15 @@ export default function ReaderPane({
       onMouseDown={onActivate}
       className={`flex h-full relative bg-paper ${dndCursorHidden ? "cursor-none" : ""} ${paneActivationClass}`}
     >
+      {/* Auto-focus hint overlay */}
+      {focusHint && (
+        <div className="absolute inset-x-0 top-4 z-50 flex justify-center pointer-events-none animate-fade-in">
+          <div className="bg-ink/80 text-paper text-sm px-4 py-2 rounded-lg shadow-lg backdrop-blur-sm">
+            {t("reader.focusHint")}
+          </div>
+        </div>
+      )}
+
       {/* Keyboard shortcuts help */}
       {showShortcuts && (
         <KeyboardShortcutsHelp context="reader" onClose={() => setShowShortcuts(false)} />

@@ -33,7 +33,9 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
   const { bookId } = useParams<{ bookId: string }>();
   const navigate = useNavigate();
   const location = useLocation();
-  const incomingChapter = (location.state as { chapterIndex?: number } | null)?.chapterIndex ?? undefined;
+  const locState = location.state as { chapterIndex?: number; autoFocus?: boolean } | null;
+  const incomingChapter = locState?.chapterIndex ?? undefined;
+  const autoFocus = locState?.autoFocus ?? false;
   const consumedForBook = useRef<string | null>(null);
 
   useEffect(() => {
@@ -131,6 +133,7 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
         isPrimary
         onToggleSplit={toggleSplit}
         initialChapterIndex={initialChapterIndex}
+        autoFocus={autoFocus}
       />
     );
   }

@@ -318,6 +318,9 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
   // Discover section visibility
   const [showDiscover, setShowDiscover] = useState(() => localStorage.getItem("folio-show-discover") === "true");
 
+  // Auto-focus new imported books (default off)
+  const [autoFocusNewBooks, setAutoFocusNewBooks] = useState(() => localStorage.getItem("folio-auto-focus-new-books") === "true");
+
   const [savedThemes, setSavedThemes] = useState<SavedTheme[]>(loadSavedThemes);
   const [activeThemeId, setActiveThemeId] = useState<string | null>(null);
 
@@ -1047,6 +1050,28 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                 >
                   <span
                     className={`absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full shadow transition-transform ${showDiscover ? "translate-x-4" : ""}`}
+                  />
+                </button>
+              </label>
+              <label className="flex items-center justify-between gap-3 bg-warm-subtle rounded-xl px-3 py-2.5">
+                <div>
+                  <span className="text-sm text-ink">{t("settings.autoFocusNewBooks")}</span>
+                  <p className="text-[11px] text-ink-muted/60 mt-0.5">{t("settings.autoFocusNewBooksHint")}</p>
+                </div>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={autoFocusNewBooks}
+                  data-testid="auto-focus-new-books-toggle"
+                  onClick={() => {
+                    const next = !autoFocusNewBooks;
+                    setAutoFocusNewBooks(next);
+                    localStorage.setItem("folio-auto-focus-new-books", String(next));
+                  }}
+                  className={`relative w-10 h-6 rounded-full transition-colors shrink-0 ${autoFocusNewBooks ? "bg-accent" : "bg-warm-border"}`}
+                >
+                  <span
+                    className={`absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full shadow transition-transform ${autoFocusNewBooks ? "translate-x-4" : ""}`}
                   />
                 </button>
               </label>

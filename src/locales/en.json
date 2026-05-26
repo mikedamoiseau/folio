@@ -151,6 +151,7 @@
     "toggleDualPage": "Toggle dual-page spread",
     "toggleMangaMode": "Toggle manga mode (right-to-left)",
     "toggleFocusMode": "Toggle focus mode",
+    "focusHint": "Focus mode — press D or Escape to exit",
     "openSettings": "Open settings",
     "previousChapter": "Previous chapter",
     "nextChapter": "Next chapter",
@@ -352,6 +353,8 @@
     "showContinueReadingHint": "Display recently opened books at the top of the library",
     "showDiscover": "Show Discover section",
     "showDiscoverHint": "Display popular and new books from catalogs on the library page",
+    "autoFocusNewBooks": "Auto-focus new books",
+    "autoFocusNewBooksHint": "Enter focus mode when opening a newly imported book",
     "remoteAccess": "Remote Access",
     "remoteAccessDescriptions": {
       "webUiCheckbox": "Web UI",

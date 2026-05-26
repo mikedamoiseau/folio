@@ -92,6 +92,8 @@ export default function Library() {
   const [fileNotAvailableBookId, setFileNotAvailableBookId] = useState<string | null>(null);
 
   const importCtx = useImport();
+  const preImportIdsRef = useRef<Set<string>>(new Set());
+  const recentlyImportedRef = useRef<Set<string>>(new Set());
   // URL imports stay synchronous (single-file download + import). Their own
   // local flag drives the button's loading state without conflicting with the
   // background folder/file import managed by `importCtx`.
@@ -352,20 +354,24 @@ export default function Library() {
           }
         }
       }
-      navigate(`/reader/${bookId}`);
+      const autoFocus =
+        localStorage.getItem("folio-auto-focus-new-books") === "true" &&
+        recentlyImportedRef.current.has(bookId);
+      navigate(`/reader/${bookId}`, autoFocus ? { state: { autoFocus: true } } : undefined);
     },
     [books, navigate, t]
   );
 
   const importFiles = useCallback(async (paths: string[]) => {
     if (paths.length === 0) return;
+    preImportIdsRef.current = new Set(books.map((b) => b.id));
     setError(null);
     try {
       await importCtx.startFiles(paths);
     } catch (err) {
       setError(friendlyError(err, t));
     }
-  }, [importCtx, t]);
+  }, [importCtx, t, books]);
 
   const handleSelectSeries = useCallback((name: string | null) => {
     if (name !== null) scrollBeforeDrillRef.current = null;
@@ -384,12 +390,13 @@ export default function Library() {
       if (!selected) return;
       const folderPath = typeof selected === "string" ? selected : selected[0];
       if (!folderPath) return;
+      preImportIdsRef.current = new Set(books.map((b) => b.id));
       setError(null);
       await importCtx.startFolder(folderPath);
     } catch (err) {
       setError(friendlyError(err, t));
     }
-  }, [importCtx, t]);
+  }, [importCtx, t, books]);
 
   const handleImport = useCallback(async () => {
     try {
@@ -642,9 +649,21 @@ export default function Library() {
   // books appear without a manual refresh.
   useEffect(() => {
     if (importCtx.lastCompletedAt === null) return;
-    loadBooks(activeCollectionIdRef.current);
+    loadBooks(activeCollectionIdRef.current).then(() => {
+      // no-op: recentlyImportedRef is updated in the books effect below
+    });
     loadRecentlyRead();
   }, [importCtx.lastCompletedAt, loadBooks, loadRecentlyRead]);
+
+  // After books list updates post-import, diff against pre-import snapshot
+  useEffect(() => {
+    if (preImportIdsRef.current.size === 0) return;
+    const newIds = books.filter((b) => !preImportIdsRef.current.has(b.id)).map((b) => b.id);
+    if (newIds.length > 0) {
+      recentlyImportedRef.current = new Set(newIds);
+      preImportIdsRef.current = new Set();
+    }
+  }, [books]);
 
   const handleStartScan = useCallback(async () => {
     try { await invoke("start_scan", { includeSkipped: true }); } catch (err) { setError(friendlyError(err, t)); }
