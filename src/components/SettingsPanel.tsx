@@ -46,6 +46,18 @@ function getPinStrength(pin: string): { strength: PinStrength; error: string | n
   const descending = chars.every((c, i) => i === 0 || chars[i - 1] - c === 1);
   if (ascending || descending) return { strength: "weak", error: "settings.pinSequential" };
 
+  const len = pin.length;
+  for (let sub = 2; sub <= len / 2; sub++) {
+    if (len % sub === 0) {
+      const pat = pin.slice(0, sub);
+      let repeats = true;
+      for (let i = sub; i < len; i += sub) {
+        if (pin.slice(i, i + sub) !== pat) { repeats = false; break; }
+      }
+      if (repeats) return { strength: "weak", error: "settings.pinRepeating" };
+    }
+  }
+
   if (pin.length >= 6) return { strength: "strong", error: null };
   return { strength: "fair", error: null };
 }

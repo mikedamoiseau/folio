@@ -375,6 +375,7 @@
     "pinTooCommon": "Too common",
     "pinAllSame": "All same digit",
     "pinSequential": "Sequential pattern",
+    "pinRepeating": "Repeating pattern",
     "port": "Port",
     "startServer": "Start Server",
     "stopServer": "Stop Server",

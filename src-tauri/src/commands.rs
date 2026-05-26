@@ -5703,14 +5703,18 @@ pub async fn web_server_set_pin(pin: String, state: State<'_, AppState>) -> Foli
 
     crate::web_server::auth::store_pin(&pin)?;
 
-    // Log the change
-    let conn = state.active_db()?.get()?;
-    db::log_pin_change(&conn, "desktop")?;
-
-    // Propagate new hash to the running web server (if any) via the shared Arc
+    // Propagate new hash immediately — store_pin is irreversible, runtime must reflect it
     let new_hash = crate::web_server::auth::hash_pin(&pin);
     let mut ph = state.shared_pin_hash.lock()?;
     *ph = Some(new_hash);
+    drop(ph);
+
+    // Audit log is best-effort — PIN change already committed
+    if let Ok(db) = state.active_db() {
+        if let Ok(conn) = db.get() {
+            let _ = db::log_pin_change(&conn, "desktop");
+        }
+    }
 
     Ok(())
 }

@@ -95,6 +95,14 @@ pub fn validate_pin(pin: &str) -> Result<PinStrength, &'static str> {
         return Err("PIN must not be a sequential pattern");
     }
 
+    let bytes = pin.as_bytes();
+    let len = bytes.len();
+    for sub_len in 2..=len / 2 {
+        if len % sub_len == 0 && bytes.chunks(sub_len).all(|chunk| chunk == &bytes[..sub_len]) {
+            return Err("PIN must not be a repeating pattern");
+        }
+    }
+
     if pin.len() >= 6 {
         Ok(PinStrength::Strong)
     } else {
@@ -422,6 +430,14 @@ mod tests {
     fn test_validate_pin_rejects_sequential() {
         assert!(validate_pin("4567").is_err());
         assert!(validate_pin("9876").is_err());
+    }
+
+    #[test]
+    fn test_validate_pin_rejects_repeating_pattern() {
+        assert!(validate_pin("121212").is_err());
+        assert!(validate_pin("343434").is_err());
+        assert!(validate_pin("11221122").is_err());
+        assert!(validate_pin("1313").is_err());
     }
 
     #[test]
