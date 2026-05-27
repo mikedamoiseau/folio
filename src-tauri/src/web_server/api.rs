@@ -581,12 +581,47 @@ async fn list_series(
     Ok(Json(series))
 }
 
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CollectionWithCount {
+    id: String,
+    name: String,
+    r#type: crate::models::CollectionType,
+    icon: Option<String>,
+    color: Option<String>,
+    created_at: i64,
+    updated_at: i64,
+    rules: Vec<crate::models::CollectionRule>,
+    book_count: usize,
+}
+
 async fn list_collections(
     State(state): State<WebState>,
-) -> Result<Json<Vec<crate::models::Collection>>, (StatusCode, String)> {
+) -> Result<Json<Vec<CollectionWithCount>>, (StatusCode, String)> {
     let conn = state.conn().map_err(folio_status)?;
     let collections = db::list_collections(&conn).map_err(folio_status)?;
-    Ok(Json(collections))
+
+    let result: Vec<CollectionWithCount> = collections
+        .into_iter()
+        .map(|c| {
+            let book_count = db::get_books_in_collection_grid(&conn, &c.id)
+                .map(|books| books.len())
+                .unwrap_or(0);
+            CollectionWithCount {
+                id: c.id,
+                name: c.name,
+                r#type: c.r#type,
+                icon: c.icon,
+                color: c.color,
+                created_at: c.created_at,
+                updated_at: c.updated_at,
+                rules: c.rules,
+                book_count,
+            }
+        })
+        .collect();
+
+    Ok(Json(result))
 }
 
 async fn get_collection_books(
@@ -711,6 +746,25 @@ mod tests {
         let query: BookQuery = serde_json::from_str("{}").expect("should parse empty");
         assert_eq!(query.q, None);
         assert_eq!(query.series, None);
+    }
+
+    #[test]
+    fn test_collection_with_count_serializes() {
+        let coll = CollectionWithCount {
+            id: "c1".into(),
+            name: "Test".into(),
+            r#type: crate::models::CollectionType::Manual,
+            icon: Some("\u{1F4DA}".into()),
+            color: None,
+            created_at: 0,
+            updated_at: 0,
+            rules: vec![],
+            book_count: 5,
+        };
+        let json = serde_json::to_value(&coll).unwrap();
+        assert_eq!(json["bookCount"], 5);
+        assert_eq!(json["name"], "Test");
+        assert_eq!(json["icon"], "\u{1F4DA}");
     }
 
     #[test]
