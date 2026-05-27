@@ -3971,12 +3971,33 @@ pub async fn get_backup_providers() -> FolioResult<Vec<crate::backup::ProviderIn
 pub async fn save_backup_config(
     config: crate::backup::BackupConfig,
     state: State<'_, AppState>,
-) -> FolioResult<()> {
-    // Store secrets in OS keychain first — only save config to DB if all secrets stored
-    let clean = crate::backup::store_secrets(&config)?;
-    let conn = state.active_db()?.get()?;
-    let json = serde_json::to_string(&clean)?;
-    Ok(db::set_setting(&conn, "backup_config", &json)?)
+) -> Result<crate::backup::ConnectionTestResult, String> {
+    // Store secrets in OS keychain first
+    let clean = crate::backup::store_secrets(&config).map_err(|e| e.to_string())?;
+
+    // Test connection with the original config (secrets still in values map)
+    let (tx, rx) = std::sync::mpsc::channel();
+    let test_config = config.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let result = crate::backup::test_connection(&test_config);
+        let _ = tx.send(result);
+    });
+    let test_result = rx.recv().map_err(|e| format!("Connection test failed: {e}"))?;
+
+    match &test_result {
+        crate::backup::ConnectionTestResult::Ok { .. } => {
+            // Test passed — persist clean config to DB
+            let conn = state.active_db().map_err(|e| e.to_string())?.get().map_err(|e| e.to_string())?;
+            let json = serde_json::to_string(&clean).map_err(|e| e.to_string())?;
+            db::set_setting(&conn, "backup_config", &json).map_err(|e| e.to_string())?;
+        }
+        _ => {
+            // Test failed — rollback keychain entries
+            let _ = crate::backup::remove_secrets(&config);
+        }
+    }
+
+    Ok(test_result)
 }
 
 #[tauri::command]
