@@ -607,6 +607,7 @@
     "libraryImported": "Library Imported",
     "backupCompleted": "Backup Completed",
     "profileSwitched": "Profile Switched",
+    "bookCompleted": "Book Finished",
     "justNow": "Just now",
     "minutesAgo": "{{count}}m ago",
     "hoursAgo": "{{count}}h ago",
@@ -741,5 +742,17 @@
     "modalFullChangelog": "See full changelog",
     "settingsButton": "Release Notes",
     "trayLabel": "What's New"
+  },
+
+  "celebration": {
+    "title": "Book Completed",
+    "heading": "You finished it!",
+    "byAuthor": "by {{author}}",
+    "totalReadingTime": "Total reading time",
+    "ratePrompt": "How would you rate this book?",
+    "ratingSubmitted": "Rating saved",
+    "ratingFailed": "Failed to save rating",
+    "ratingThanks": "Rating saved",
+    "close": "Continue"
   }
 }

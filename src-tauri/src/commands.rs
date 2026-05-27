@@ -1822,6 +1822,7 @@ pub async fn save_reading_progress(
     chapter_index: u32,
     scroll_position: f64,
     state: State<'_, AppState>,
+    app: AppHandle,
 ) -> FolioResult<()> {
     let scroll_position = validate_scroll_position(scroll_position)?;
 
@@ -1838,8 +1839,16 @@ pub async fn save_reading_progress(
         )));
     }
 
+    let is_on_last_chapter =
+        book.total_chapters > 0 && chapter_index >= book.total_chapters.saturating_sub(1);
+
+    let was_completed_before = is_on_last_chapter
+        && db::get_reading_progress(&conn, &book_id)?
+            .map(|p| p.chapter_index >= book.total_chapters.saturating_sub(1))
+            .unwrap_or(false);
+
     let progress = ReadingProgress {
-        book_id,
+        book_id: book_id.clone(),
         chapter_index,
         scroll_position,
         last_read_at: std::time::SystemTime::now()
@@ -1848,7 +1857,30 @@ pub async fn save_reading_progress(
             .as_secs() as i64,
     };
 
-    Ok(db::upsert_reading_progress(&conn, &progress)?)
+    db::upsert_reading_progress(&conn, &progress)?;
+
+    if is_on_last_chapter && !was_completed_before {
+        log_activity(
+            &conn,
+            "book_completed",
+            "book",
+            Some(&book_id),
+            Some(&book.title),
+            None,
+        );
+        let _ = app.emit(
+            "book-completed",
+            serde_json::json!({
+                "bookId": book_id,
+                "title": book.title,
+                "author": book.author,
+                "coverPath": book.cover_path,
+                "totalChapters": book.total_chapters,
+            }),
+        );
+    }
+
+    Ok(())
 }
 
 // --- Bookmarks ---
@@ -2166,6 +2198,15 @@ pub async fn record_reading_session(
 pub async fn get_reading_stats(state: State<'_, AppState>) -> FolioResult<db::ReadingStats> {
     let conn = state.active_db()?.get()?;
     Ok(db::get_reading_stats(&conn)?)
+}
+
+#[tauri::command]
+pub async fn get_book_reading_time(
+    book_id: String,
+    state: State<'_, AppState>,
+) -> FolioResult<i64> {
+    let conn = state.active_db()?.get()?;
+    Ok(db::get_book_reading_time(&conn, &book_id)?)
 }
 
 // --- Highlights ---

@@ -10,6 +10,8 @@ import KeyboardShortcutsHelp from "./KeyboardShortcutsHelp";
 import HighlightsPanel, { HIGHLIGHT_COLORS } from "./HighlightsPanel";
 import BookmarksPanel from "./BookmarksPanel";
 import BookmarkToast from "./BookmarkToast";
+import BookCompletionModal from "./BookCompletionModal";
+import { useBookCompletion } from "../hooks/useBookCompletion";
 import LanguageSwitcher from "./LanguageSwitcher";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { friendlyError, isBookFileMissing } from "../lib/errors";
@@ -217,6 +219,8 @@ export default function ReaderPane({
 
   const [chapterError, setChapterError] = useState<string | null>(null);
   const [missingFileDialog, setMissingFileDialog] = useState(false);
+
+  const completion = useBookCompletion(bookId, chapterIndex, totalChapters);
 
   // ---- Navigation history (back/forward) ----
   // Tracks jump-style navigations (TOC clicks, search-result jumps, bookmark
@@ -2344,6 +2348,16 @@ export default function ReaderPane({
             </footer>
           </>
         )}
+      {completion.showCelebration && completion.completionData && (
+        <BookCompletionModal
+          bookId={bookId}
+          title={completion.completionData.title}
+          author={completion.completionData.author}
+          coverPath={completion.completionData.coverPath}
+          readingTimeSecs={completion.readingTimeSecs}
+          onClose={completion.dismiss}
+        />
+      )}
       {missingFileDialog && (
         <>
           <div className="absolute inset-0 bg-ink/40 backdrop-blur-sm z-[80]" aria-hidden="true" />

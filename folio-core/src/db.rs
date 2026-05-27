@@ -1290,6 +1290,14 @@ pub fn get_reading_stats(conn: &Connection) -> Result<ReadingStats> {
     })
 }
 
+pub fn get_book_reading_time(conn: &Connection, book_id: &str) -> Result<i64> {
+    conn.query_row(
+        "SELECT COALESCE(SUM(duration_secs), 0) FROM reading_sessions WHERE book_id = ?1",
+        params![book_id],
+        |row| row.get(0),
+    )
+}
+
 // --- Highlights CRUD ---
 
 pub fn insert_highlight(conn: &Connection, h: &crate::models::Highlight) -> Result<()> {
@@ -3429,25 +3437,25 @@ mod tests {
     fn feature_flags_crud() {
         let (_dir, conn) = setup();
 
-        assert_eq!(list_feature_flags(&conn).unwrap().len(), 0);
+        let initial_count = list_feature_flags(&conn).unwrap().len();
         assert!(!get_feature_flag(&conn, "discover").unwrap());
 
         set_feature_flag(&conn, "discover", true, Some("Show Discover section")).unwrap();
         assert!(get_feature_flag(&conn, "discover").unwrap());
 
         let flags = list_feature_flags(&conn).unwrap();
-        assert_eq!(flags.len(), 1);
-        assert_eq!(flags[0].key, "discover");
-        assert!(flags[0].enabled);
-        assert_eq!(flags[0].description.as_deref(), Some("Show Discover section"));
+        assert_eq!(flags.len(), initial_count + 1);
+        let discover = flags.iter().find(|f| f.key == "discover").unwrap();
+        assert!(discover.enabled);
+        assert_eq!(discover.description.as_deref(), Some("Show Discover section"));
 
         set_feature_flag(&conn, "discover", false, None).unwrap();
         assert!(!get_feature_flag(&conn, "discover").unwrap());
-        let flags = list_feature_flags(&conn).unwrap();
-        assert_eq!(flags[0].description.as_deref(), Some("Show Discover section"));
+        let discover = list_feature_flags(&conn).unwrap().into_iter().find(|f| f.key == "discover").unwrap();
+        assert_eq!(discover.description.as_deref(), Some("Show Discover section"));
 
         delete_feature_flag(&conn, "discover").unwrap();
-        assert_eq!(list_feature_flags(&conn).unwrap().len(), 0);
+        assert_eq!(list_feature_flags(&conn).unwrap().len(), initial_count);
         assert!(!get_feature_flag(&conn, "discover").unwrap());
     }
 
