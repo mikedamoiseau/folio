@@ -105,6 +105,33 @@ pub struct BackupConfig {
     pub values: std::collections::HashMap<String, String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "status")]
+pub enum ConnectionTestResult {
+    Ok { latency_ms: u64 },
+    AuthFailed { message: String },
+    PermissionDenied { message: String },
+    NetworkError { message: String },
+    Timeout,
+}
+
+pub fn classify_opendal_error(err: &opendal::Error) -> ConnectionTestResult {
+    match err.kind() {
+        opendal::ErrorKind::PermissionDenied => ConnectionTestResult::AuthFailed {
+            message: err.to_string(),
+        },
+        opendal::ErrorKind::ConfigInvalid => ConnectionTestResult::NetworkError {
+            message: err.to_string(),
+        },
+        opendal::ErrorKind::NotFound => ConnectionTestResult::NetworkError {
+            message: err.to_string(),
+        },
+        _ => ConnectionTestResult::NetworkError {
+            message: err.to_string(),
+        },
+    }
+}
+
 pub fn provider_schemas() -> Vec<ProviderInfo> {
     vec![
         ProviderInfo {
