@@ -66,7 +66,13 @@ Go to the [GitHub Releases page](https://github.com/mikedamoiseau/folio/releases
 
 ### First launch
 
-The first time you open the app, you'll see an empty library with a prompt to import your first book. Your data stays on your machine — nothing is sent to the cloud.
+The first time you open the app, a short onboarding wizard guides you through the basics in three steps:
+
+1. **Welcome** — introduces Folio and what it does.
+2. **Import a Book** — pick individual files, scan a folder, or drag and drop. The wizard advances automatically once your first import completes.
+3. **Quick Tips** — highlights Focus Mode (press **D** while reading), online catalogs (Project Gutenberg, Standard Ebooks, and more), and drag-and-drop import.
+
+You can skip the wizard at any step — it won't appear again. Everything stays on your machine; nothing is sent to the cloud.
 
 ![Folio library in light theme](../screenshots/01-library-light.png)
 
