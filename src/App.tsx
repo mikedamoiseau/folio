@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, lazy, Suspense } from "react";
 import { BrowserRouter, Routes, Route, Link, useLocation, useNavigate } from "react-router-dom";
 import { ThemeProvider } from "./context/ThemeContext";
 import { ImportProvider } from "./context/ImportContext";
@@ -10,7 +10,10 @@ import CatalogBrowser from "./components/CatalogBrowser";
 import LanguageSwitcher from "./components/LanguageSwitcher";
 import ImportStatusBar from "./components/ImportStatusBar";
 import Library from "./screens/Library";
-import Reader from "./screens/Reader";
+import ReaderSkeleton from "./components/ReaderSkeleton";
+import ReaderErrorBoundary from "./components/ReaderErrorBoundary";
+
+const Reader = lazy(() => import("./screens/Reader"));
 
 function AppShell() {
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -92,10 +95,14 @@ function AppShell() {
           <Route
             path="/reader/:bookId"
             element={
-              <Reader
-                onOpenSettings={() => setSettingsOpen(true)}
-                settingsOpen={settingsOpen}
-              />
+              <ReaderErrorBoundary>
+                <Suspense fallback={<ReaderSkeleton />}>
+                  <Reader
+                    onOpenSettings={() => setSettingsOpen(true)}
+                    settingsOpen={settingsOpen}
+                  />
+                </Suspense>
+              </ReaderErrorBoundary>
             }
           />
         </Routes>
