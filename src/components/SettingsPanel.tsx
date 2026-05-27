@@ -14,7 +14,7 @@ import {
 } from "../lib/themes";
 import ActivityLog from "./ActivityLog";
 import SavedThemesList from "./SavedThemesList";
-import WhatsNewModal from "./WhatsNewModal";
+import { emit } from "@tauri-apps/api/event";
 import { releaseNotes, appVersion as buildVersion } from "virtual:release-notes";
 import {
   loadSavedThemes,
@@ -350,8 +350,7 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
     getVersion().then(setAppVersion).catch(() => setAppVersion(""));
   }, []);
 
-  const [showReleaseNotes, setShowReleaseNotes] = useState(false);
-  const currentRelease = releaseNotes.find((r) => r.version === buildVersion) ?? null;
+  const hasReleaseNotes = releaseNotes.some((r) => r.version === buildVersion);
 
   // Continue Reading section visibility (default true)
   const [showContinueReading, setShowContinueReading] = useState(() => {
@@ -2097,10 +2096,10 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
               </p>
               <button
                 type="button"
-                onClick={() => setShowReleaseNotes(true)}
-                disabled={!currentRelease}
+                onClick={() => emit("whats-new-open")}
+                disabled={!hasReleaseNotes}
                 className="text-sm text-accent hover:text-accent-hover transition-colors hover:underline disabled:opacity-50 disabled:cursor-not-allowed"
-                title={!currentRelease ? "No release notes for this version" : undefined}
+                title={!hasReleaseNotes ? "No release notes for this version" : undefined}
               >
                 {t("whatsNew.settingsButton")}
               </button>
@@ -2473,9 +2472,6 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
             </div>
           </div>
         </>
-      )}
-      {showReleaseNotes && currentRelease && (
-        <WhatsNewModal release={currentRelease} onClose={() => setShowReleaseNotes(false)} />
       )}
     </>
   );

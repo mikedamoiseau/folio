@@ -66,13 +66,10 @@ export default function WhatsNewModal({ release, onClose }: WhatsNewModalProps) 
               <h3 className="text-xs font-semibold uppercase tracking-wider text-ink-muted mb-2">
                 {category}
               </h3>
-              <ul className="space-y-2">
+              <ul className="space-y-1.5">
                 {entries.map((entry) => (
-                  <li key={entry.title} className="text-sm text-ink">
-                    <span className="font-medium">{entry.title}</span>
-                    {entry.description && (
-                      <span className="text-ink-muted"> — {entry.description}</span>
-                    )}
+                  <li key={entry.title} className="text-sm text-ink font-medium">
+                    {entry.title}
                   </li>
                 ))}
               </ul>
