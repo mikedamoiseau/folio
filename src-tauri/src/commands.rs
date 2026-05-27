@@ -3980,6 +3980,19 @@ pub async fn save_backup_config(
 }
 
 #[tauri::command]
+pub async fn test_backup_connection(
+    config: crate::backup::BackupConfig,
+) -> Result<crate::backup::ConnectionTestResult, String> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    tauri::async_runtime::spawn_blocking(move || {
+        let result = crate::backup::test_connection(&config);
+        let _ = tx.send(result);
+    });
+    rx.recv()
+        .map_err(|e| format!("Connection test failed: {e}"))
+}
+
+#[tauri::command]
 pub async fn get_backup_config(
     state: State<'_, AppState>,
 ) -> FolioResult<Option<crate::backup::BackupConfig>> {

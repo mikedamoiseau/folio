@@ -320,6 +320,7 @@ pub fn run() {
             commands::download_opds_book,
             commands::get_backup_providers,
             commands::save_backup_config,
+            commands::test_backup_connection,
             commands::get_backup_config,
             commands::run_backup,
             commands::get_backup_status,
