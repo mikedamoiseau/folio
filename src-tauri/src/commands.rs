@@ -3982,12 +3982,18 @@ pub async fn save_backup_config(
         let result = crate::backup::test_connection(&test_config);
         let _ = tx.send(result);
     });
-    let test_result = rx.recv().map_err(|e| format!("Connection test failed: {e}"))?;
+    let test_result = rx
+        .recv()
+        .map_err(|e| format!("Connection test failed: {e}"))?;
 
     match &test_result {
         crate::backup::ConnectionTestResult::Ok { .. } => {
             // Test passed — persist clean config to DB
-            let conn = state.active_db().map_err(|e| e.to_string())?.get().map_err(|e| e.to_string())?;
+            let conn = state
+                .active_db()
+                .map_err(|e| e.to_string())?
+                .get()
+                .map_err(|e| e.to_string())?;
             let json = serde_json::to_string(&clean).map_err(|e| e.to_string())?;
             db::set_setting(&conn, "backup_config", &json).map_err(|e| e.to_string())?;
         }
@@ -5285,12 +5291,24 @@ fn merge_result_summary(r: &crate::sync::MergeResult) -> String {
     }
 }
 
+fn sync_error_kind_str(e: &crate::sync::SyncError) -> &'static str {
+    match e {
+        crate::sync::SyncError::Transport { kind: Some(k), .. } => match k {
+            opendal::ErrorKind::PermissionDenied => "auth_failed",
+            _ => "network",
+        },
+        crate::sync::SyncError::Transport { kind: None, .. } => "network",
+        crate::sync::SyncError::Timeout => "timeout",
+        crate::sync::SyncError::Malformed(_) => "other",
+    }
+}
+
 fn friendly_sync_error(e: &crate::sync::SyncError) -> String {
     match e {
         crate::sync::SyncError::Timeout => {
             "Remote server did not respond within 5 seconds".to_string()
         }
-        crate::sync::SyncError::Transport(_) => {
+        crate::sync::SyncError::Transport { .. } => {
             "Could not reach remote storage. Check your internet connection and backup settings."
                 .to_string()
         }
@@ -5377,8 +5395,13 @@ pub async fn sync_pull_book(
         }
         Ok(Err(e)) => {
             let msg = friendly_sync_error(&e);
+            let kind = sync_error_kind_str(&e);
             let _ = db::set_setting(&conn, "last_sync_error_at", &now_unix_secs().to_string());
             let _ = db::set_setting(&conn, "last_sync_error_message", &msg);
+            let _ = db::set_setting(&conn, "last_sync_error_kind", kind);
+            if kind == "auth_failed" || kind == "permission_denied" {
+                let _ = app.emit("backup-auth-error", serde_json::json!({ "message": msg }));
+            }
             log_activity(
                 &conn,
                 "sync_pull_failed",
@@ -5467,6 +5490,7 @@ pub async fn sync_push_book(book_id: String, state: State<'_, AppState>) -> Foli
                 let _ =
                     db::set_setting(&bg_conn, "last_sync_error_at", &now_unix_secs().to_string());
                 let _ = db::set_setting(&bg_conn, "last_sync_error_message", &msg);
+                let _ = db::set_setting(&bg_conn, "last_sync_error_kind", sync_error_kind_str(&e));
                 log_activity(
                     &bg_conn,
                     "sync_push_failed",
