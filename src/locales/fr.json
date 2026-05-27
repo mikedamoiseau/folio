@@ -707,5 +707,9 @@
     "modalFullChangelog": "Voir le changelog complet",
     "settingsButton": "Notes de version",
     "trayLabel": "Nouveaut\u00e9s"
+  },
+
+  "toast": {
+    "backupAuthFailed": "Backup authentication failed \u2014 check credentials in Settings"
   }
 }

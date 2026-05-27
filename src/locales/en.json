@@ -764,5 +764,9 @@
     "ratingFailed": "Failed to save rating",
     "ratingThanks": "Rating saved",
     "close": "Continue"
+  },
+
+  "toast": {
+    "backupAuthFailed": "Backup authentication failed — check credentials in Settings"
   }
 }

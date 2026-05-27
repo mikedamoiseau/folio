@@ -1,8 +1,10 @@
-import { useState, useCallback, lazy, Suspense } from "react";
+import { useState, useCallback, lazy, Suspense, useEffect, useRef } from "react";
 import { BrowserRouter, Routes, Route, Link, useLocation, useNavigate } from "react-router-dom";
+import { listen } from "@tauri-apps/api/event";
+import { useTranslation } from "react-i18next";
 import { ThemeProvider } from "./context/ThemeContext";
 import { ImportProvider } from "./context/ImportContext";
-import { ToastProvider } from "./components/Toast";
+import { ToastProvider, useToast } from "./components/Toast";
 import SettingsPanel from "./components/SettingsPanel";
 import ReadingStats from "./components/ReadingStats";
 import ProfileSwitcher from "./components/ProfileSwitcher";
@@ -24,6 +26,18 @@ function AppShell() {
   const location = useLocation();
   const navigate = useNavigate();
   const inReader = location.pathname.startsWith("/reader/");
+  const { addToast } = useToast();
+  const { t } = useTranslation();
+  const authErrorShown = useRef(false);
+
+  useEffect(() => {
+    const unlisten = listen<{ message: string }>("backup-auth-error", () => {
+      if (authErrorShown.current) return;
+      authErrorShown.current = true;
+      addToast(t("toast.backupAuthFailed"), "error");
+    });
+    return () => { unlisten.then((fn) => fn()); };
+  }, [addToast, t]);
 
   const handleProfileSwitch = useCallback(() => {
     navigate("/");
