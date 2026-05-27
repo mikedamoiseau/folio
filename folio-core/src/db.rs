@@ -226,6 +226,12 @@ fn run_schema(conn: &Connection) -> Result<()> {
     ",
     )?;
 
+    // Seed feature flags
+    conn.execute(
+        "INSERT OR IGNORE INTO feature_flags (key, enabled, description) VALUES ('whats_new_banner', 1, 'Show What''s New banner after version updates')",
+        [],
+    )?;
+
     // Additive migrations: ALTER TABLE ADD COLUMN fails silently if already exists.
     let _ = conn.execute_batch("ALTER TABLE books ADD COLUMN format TEXT NOT NULL DEFAULT 'epub';");
     let _ = conn.execute_batch("ALTER TABLE books ADD COLUMN file_hash TEXT;");
