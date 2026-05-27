@@ -24,6 +24,7 @@ import { FALLBACK_FORMATS, getSupportedFormats, useSupportedFormats } from "../l
 import HighlightSearchModal from "../components/HighlightSearchModal";
 import SeriesStackCard from "../components/SeriesStackCard";
 import { LiveRegion } from "../components/LiveRegion";
+import OnboardingWizard from "../components/OnboardingWizard";
 import { useToast } from "../components/Toast";
 import { useDebounce } from "../hooks/useDebounce";
 import { useImport } from "../context/ImportContext";
@@ -989,6 +990,8 @@ export default function Library({ catalogImportedBookIds }: LibraryProps = {}) {
           </button>
         </div>
       )}
+
+      <OnboardingWizard onImport={handleImport} onImportFolder={handleImportFolder} />
 
       {/* Content area */}
       <div ref={contentRef} className="flex-1 overflow-y-auto p-6">
