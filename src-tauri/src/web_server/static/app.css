@@ -71,8 +71,52 @@ button:focus-visible, a:focus-visible, input:focus-visible { outline: 2px solid 
 .empty { text-align: center; padding: 60px var(--gap); color: #666; }
 .loading { text-align: center; padding: 40px; color: #666; }
 
+/* ── Stats ────────────────────────────────────── */
+.stats { max-width: 500px; margin: 0 auto; padding: var(--gap); }
+.stat-cards { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 32px; }
+.stat-card { background: var(--card-bg); border-radius: 12px; padding: 16px; text-align: center; }
+.stat-value { font-size: 1.4rem; font-weight: 600; color: var(--fg); font-variant-numeric: tabular-nums; }
+.stat-value.accent { color: var(--accent); }
+.stat-label { font-size: 0.65rem; color: #888; text-transform: uppercase; letter-spacing: 0.05em; margin-top: 4px; }
+.stat-chart-header { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 12px; }
+.stat-chart-title { font-size: 0.7rem; font-weight: 600; color: #888; text-transform: uppercase; letter-spacing: 0.05em; }
+.stat-chart-peak { font-size: 0.6rem; color: #666; }
+.stat-chart { display: flex; align-items: flex-end; gap: 2px; height: 80px; }
+.stat-bar { flex: 1; background: var(--accent); opacity: 0.7; border-radius: 2px 2px 0 0; transition: opacity 0.15s; min-height: 0; }
+.stat-bar:hover { opacity: 1; }
+
+/* ── Collections ──────────────────────────────── */
+.collections { max-width: 600px; margin: 0 auto; padding: var(--gap); }
+.collections-toolbar { display: flex; gap: 10px; align-items: center; padding-bottom: var(--gap); }
+.collections-toolbar input { flex: 1; padding: 8px 12px; background: var(--card-bg); border: 1px solid var(--border); border-radius: var(--radius); color: var(--fg); font-size: 0.85rem; }
+.collections-toolbar .sort-btn { background: var(--card-bg); border: 1px solid var(--border); border-radius: var(--radius); padding: 6px 10px; color: #aaa; cursor: pointer; font-size: 0.8rem; display: flex; align-items: center; gap: 4px; white-space: nowrap; }
+.collections-toolbar .sort-btn:hover { color: var(--fg); border-color: #555; }
+.section-header { font-size: 0.7rem; font-weight: 600; color: #888; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 12px; }
+.section-header .count { color: #555; }
+.collection-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 24px; }
+.collection-row { background: var(--card-bg); border-radius: var(--radius); padding: 14px 16px; display: flex; align-items: center; gap: 12px; cursor: pointer; border: 1px solid var(--border); transition: border-color 0.15s; }
+.collection-row:hover { border-color: #555; }
+.collection-icon { font-size: 1.2rem; flex-shrink: 0; }
+.collection-info { flex: 1; min-width: 0; }
+.collection-name { font-size: 0.9rem; font-weight: 600; color: var(--fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.collection-type { font-size: 0.7rem; color: #888; margin-top: 2px; }
+.collection-color { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 6px; vertical-align: middle; }
+.auto-dot { display: inline-block; width: 6px; height: 6px; background: var(--accent); border-radius: 50%; margin-right: 4px; vertical-align: middle; }
+.collection-count { background: #2a2a4e; color: #aaa; font-size: 0.7rem; padding: 3px 8px; border-radius: 10px; font-weight: 500; white-space: nowrap; }
+.collection-chevron { color: #555; font-size: 0.9rem; }
+
+/* ── Nav Icons ────────────────────────────────── */
+.nav-icons { display: flex; gap: 8px; align-items: center; }
+.nav-icon { background: none; border: none; cursor: pointer; padding: 6px; border-radius: 6px; color: #aaa; display: flex; align-items: center; }
+.nav-icon:hover { color: var(--fg); }
+.nav-icon.active { color: var(--accent); }
+
 @media (max-width: 600px) {
   .detail .meta { flex-direction: column; align-items: center; text-align: center; }
   .detail .cover { width: 150px; }
   .grid { grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); }
+  .stats { padding: 12px; }
+  .stat-cards { gap: 8px; }
+  .stat-value { font-size: 1.1rem; }
+  .collections { padding: 12px; }
 }

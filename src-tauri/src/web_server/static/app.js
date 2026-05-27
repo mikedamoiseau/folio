@@ -26,6 +26,8 @@
   function route() {
     const hash = window.location.hash || "#";
     if (hash === "#" || hash === "#/") return showLibrary();
+    if (hash === "#/stats") return showStats();
+    if (hash === "#/collections") return showCollections();
     if (hash.startsWith("#/book/") && hash.includes("/read")) {
       const parts = hash.replace("#/book/", "").replace("/read", "").split("/");
       return showReader(parts[0], parseInt(parts[1] || "0"));
@@ -161,6 +163,7 @@
             <option value="last_read">Last Read</option>
             <option value="rating">Rating</option>
           </select>
+          ${navIconsHtml("")}
         </div>
         <div id="filter-bar"></div>
         <div id="library-content"><div class="loading">Loading...</div></div>`;
@@ -174,6 +177,8 @@
         clearTimeout(timer);
         timer = setTimeout(() => refreshLibrary(e.target.value), 300);
       };
+
+      bindNavIcons();
 
       // Load filter bar (collections + series)
       renderFilterBar();
@@ -265,6 +270,8 @@
       <div class="header">
         <button class="back-btn" id="back-btn">&larr;</button>
         <h1>${esc(book.title)}</h1>
+        <span style="flex:1"></span>
+        ${navIconsHtml("")}
       </div>
       <div class="detail">
         <div class="meta">
@@ -284,6 +291,7 @@
         </div>
       </div>`;
     $("#back-btn").addEventListener("click", () => navigate("#"));
+    bindNavIcons();
     const coverImg = $(".detail .cover img");
     if (coverImg) coverImg.addEventListener("error", () => { coverImg.style.background = "#333"; });
     const readBtn = $("#read-btn");
@@ -312,6 +320,8 @@
         <div class="header">
           <button class="back-btn" id="back-btn">&larr;</button>
           <h1>${esc(book.title)}</h1>
+          <span style="flex:1"></span>
+          ${navIconsHtml("")}
         </div>
         <div class="reader">
           <div class="nav">
@@ -324,6 +334,7 @@
       $("#back-btn").addEventListener("click", () => navigate("#/book/" + id));
       $("#prev-btn").addEventListener("click", () => navigate("#/book/" + id + "/" + (index - 1) + "/read"));
       $("#next-btn").addEventListener("click", () => navigate("#/book/" + id + "/" + (index + 1) + "/read"));
+      bindNavIcons();
     } else {
       const countResp = await api(`/api/books/${id}/page-count`);
       if (!countResp) return;
@@ -333,6 +344,8 @@
         <div class="header">
           <button class="back-btn" id="back-btn">&larr;</button>
           <h1>${esc(book.title)}</h1>
+          <span style="flex:1"></span>
+          ${navIconsHtml("")}
         </div>
         <div class="reader">
           <div class="nav">
@@ -347,7 +360,184 @@
       $("#back-btn").addEventListener("click", () => navigate("#/book/" + id));
       $("#prev-btn").addEventListener("click", () => navigate("#/book/" + id + "/" + (index - 1) + "/read"));
       $("#next-btn").addEventListener("click", () => navigate("#/book/" + id + "/" + (index + 1) + "/read"));
+      bindNavIcons();
     }
+  }
+
+  // ── Stats ──────────────────────────────────────
+  async function showStats() {
+    app().innerHTML = `
+      <div class="header">
+        <button class="back-btn" id="back-btn">&larr;</button>
+        <h1>Reading Stats</h1>
+        <span style="flex:1"></span>
+        ${navIconsHtml("stats")}
+      </div>
+      <div class="stats"><div class="loading">Loading...</div></div>`;
+    $("#back-btn").addEventListener("click", () => navigate("#"));
+    bindNavIcons();
+
+    const resp = await api("/api/stats");
+    if (!resp) return;
+    const s = await resp.json();
+
+    const container = $(".stats");
+    if (!s || (s.totalSessions === 0 && s.totalReadingTimeSecs === 0)) {
+      container.innerHTML = '<div class="empty">No reading stats yet. Start reading on the desktop app to see your progress here.</div>';
+      return;
+    }
+
+    const maxDaily = s.dailyReading.reduce((max, entry) => Math.max(max, entry[1]), 0);
+
+    let chartHtml = "";
+    if (s.dailyReading.length > 0 && maxDaily > 0) {
+      const bars = s.dailyReading.map(([date, secs]) => {
+        const pct = Math.max(4, (secs / maxDaily) * 100);
+        return `<div class="stat-bar" style="height:${pct}%" title="${date}: ${formatDuration(secs)}"></div>`;
+      }).join("");
+      chartHtml = `
+        <div class="stat-chart-header">
+          <div class="stat-chart-title">Last 30 Days</div>
+          <div class="stat-chart-peak">${formatDuration(maxDaily)} peak</div>
+        </div>
+        <div class="stat-chart">${bars}</div>`;
+    }
+
+    const streak = (d) => d === 1 ? "1 day" : d + " days";
+
+    container.innerHTML = `
+      <div class="stat-cards">
+        <div class="stat-card"><div class="stat-value">${formatDuration(s.totalReadingTimeSecs)}</div><div class="stat-label">Time Reading</div></div>
+        <div class="stat-card"><div class="stat-value">${s.totalSessions}</div><div class="stat-label">Sessions</div></div>
+        <div class="stat-card"><div class="stat-value">${s.totalPagesRead.toLocaleString()}</div><div class="stat-label">Pages Read</div></div>
+        <div class="stat-card"><div class="stat-value">${s.booksFinished}</div><div class="stat-label">Books Finished</div></div>
+        <div class="stat-card"><div class="stat-value accent">${streak(s.currentStreakDays)}</div><div class="stat-label">Current Streak</div></div>
+        <div class="stat-card"><div class="stat-value">${streak(s.longestStreakDays)}</div><div class="stat-label">Longest Streak</div></div>
+      </div>
+      ${chartHtml}`;
+  }
+
+  // ── Collections ────────────────────────────────
+  async function showCollections() {
+    app().innerHTML = `
+      <div class="header">
+        <button class="back-btn" id="back-btn">&larr;</button>
+        <h1>Collections</h1>
+        <span style="flex:1"></span>
+        ${navIconsHtml("collections")}
+      </div>
+      <div class="collections"><div class="loading">Loading...</div></div>`;
+    $("#back-btn").addEventListener("click", () => navigate("#"));
+    bindNavIcons();
+
+    const [collectionsResp, seriesResp] = await Promise.all([
+      api("/api/collections"),
+      api("/api/series"),
+    ]);
+
+    const collections = collectionsResp ? await collectionsResp.json() : [];
+    const series = seriesResp ? await seriesResp.json() : [];
+
+    const container = $(".collections");
+    if (collections.length === 0 && series.length === 0) {
+      container.innerHTML = '<div class="empty">No collections yet. Create collections in the desktop app.</div>';
+      return;
+    }
+
+    let sortAsc = true;
+    let filterText = "";
+
+    function render() {
+      const q = filterText.toLowerCase();
+      const filteredColls = collections
+        .filter(c => !q || c.name.toLowerCase().includes(q))
+        .sort((a, b) => sortAsc ? a.name.localeCompare(b.name) : b.name.localeCompare(a.name));
+      const filteredSeries = series
+        .filter(s => !q || s.name.toLowerCase().includes(q))
+        .sort((a, b) => sortAsc ? a.name.localeCompare(b.name) : b.name.localeCompare(a.name));
+
+      let html = `<div class="collections-toolbar">
+        <input type="text" id="coll-filter" placeholder="Filter collections..." value="${esc(filterText)}">
+        <button class="sort-btn" id="coll-sort">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M11 5h10M11 9h7M11 13h4"/><path d="M3 17l3 3 3-3M6 18V4"/></svg>
+          ${sortAsc ? "A→Z" : "Z→A"}
+        </button>
+      </div>`;
+
+      if (filteredColls.length > 0) {
+        html += `<div class="section-header">Collections <span class="count">(${filteredColls.length})</span></div>`;
+        html += '<div class="collection-list">';
+        for (const c of filteredColls) {
+          const icon = c.icon || "📁";
+          const colorSwatch = c.color ? `<span class="collection-color" style="background:${esc(c.color)}"></span>` : "";
+          const typeBadge = c.type === "automated"
+            ? '<span class="auto-dot"></span>Auto-collection'
+            : "Manual collection";
+          const count = c.bookCount !== undefined ? c.bookCount : "?";
+          html += `<div class="collection-row" data-collection-id="${c.id}">
+            <span class="collection-icon">${icon}</span>
+            <div class="collection-info">
+              <div class="collection-name">${colorSwatch}${esc(c.name)}</div>
+              <div class="collection-type">${typeBadge}</div>
+            </div>
+            <span class="collection-count">${count} book${count !== 1 ? "s" : ""}</span>
+            <span class="collection-chevron">&rsaquo;</span>
+          </div>`;
+        }
+        html += '</div>';
+      }
+
+      if (filteredSeries.length > 0) {
+        html += `<div class="section-header">Series <span class="count">(${filteredSeries.length})</span></div>`;
+        html += '<div class="collection-list">';
+        for (const s of filteredSeries) {
+          html += `<div class="collection-row" data-series-name="${esc(s.name)}">
+            <span class="collection-icon" style="display:flex;align-items:center;">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#888" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
+            </span>
+            <div class="collection-info">
+              <div class="collection-name">${esc(s.name)}</div>
+            </div>
+            <span class="collection-count">${s.count} book${s.count !== 1 ? "s" : ""}</span>
+            <span class="collection-chevron">&rsaquo;</span>
+          </div>`;
+        }
+        html += '</div>';
+      }
+
+      if (filteredColls.length === 0 && filteredSeries.length === 0) {
+        html += '<div class="empty">No matches</div>';
+      }
+
+      container.innerHTML = html;
+
+      const filterInput = $("#coll-filter");
+      let filterTimer;
+      filterInput.oninput = (e) => {
+        clearTimeout(filterTimer);
+        filterTimer = setTimeout(() => { filterText = e.target.value; render(); }, 200);
+      };
+      filterInput.focus();
+
+      $("#coll-sort").onclick = () => { sortAsc = !sortAsc; render(); };
+
+      container.querySelectorAll("[data-collection-id]").forEach(row => {
+        row.onclick = () => {
+          activeCollectionId = row.dataset.collectionId;
+          activeSeries = null;
+          navigate("#/");
+        };
+      });
+      container.querySelectorAll("[data-series-name]").forEach(row => {
+        row.onclick = () => {
+          activeSeries = row.dataset.seriesName;
+          activeCollectionId = null;
+          navigate("#/");
+        };
+      });
+    }
+
+    render();
   }
 
   // ── Helpers ───────────────────────────────────
@@ -356,6 +546,33 @@
     const d = document.createElement("div");
     d.textContent = s;
     return d.innerHTML;
+  }
+
+  function formatDuration(secs) {
+    if (!secs || secs < 60) return "< 1m";
+    const h = Math.floor(secs / 3600);
+    const m = Math.floor((secs % 3600) / 60);
+    if (h === 0) return m + "m";
+    return h + "h " + m + "m";
+  }
+
+  function navIconsHtml(activePage) {
+    const folderColor = activePage === "collections" ? "active" : "";
+    const chartColor = activePage === "stats" ? "active" : "";
+    return `<div class="nav-icons">
+      <button class="nav-icon ${folderColor}" title="Collections" data-nav="collections">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+      </button>
+      <button class="nav-icon ${chartColor}" title="Reading Stats" data-nav="stats">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 20V10M12 20V4M6 20v-6"/></svg>
+      </button>
+    </div>`;
+  }
+
+  function bindNavIcons() {
+    $$("[data-nav]").forEach(btn => {
+      btn.onclick = () => navigate("#/" + btn.dataset.nav);
+    });
   }
 
   // ── Init ──────────────────────────────────────
