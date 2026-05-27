@@ -11,6 +11,7 @@ export default defineConfig(async () => ({
 
   test: {
     setupFiles: ["./src/test-setup.ts"],
+    exclude: ["e2e/**", "tests/e2e/**", "node_modules/**"],
   },
 
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
