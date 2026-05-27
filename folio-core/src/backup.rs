@@ -1293,14 +1293,18 @@ mod tests {
     #[test]
     fn test_connection_network_error_bad_path() {
         let mut values = std::collections::HashMap::new();
-        values.insert("root".to_string(), "/nonexistent/path/that/does/not/exist".to_string());
+        values.insert(
+            "root".to_string(),
+            "/nonexistent/path/that/does/not/exist".to_string(),
+        );
         let config = BackupConfig {
             provider_type: ProviderType::Fs,
             values,
         };
         let result = test_connection(&config);
         match result {
-            ConnectionTestResult::NetworkError { .. } | ConnectionTestResult::PermissionDenied { .. } => {}
+            ConnectionTestResult::NetworkError { .. }
+            | ConnectionTestResult::PermissionDenied { .. } => {}
             ConnectionTestResult::Ok { .. } => panic!("Expected error for nonexistent path"),
             other => panic!("Expected NetworkError or PermissionDenied, got {:?}", other),
         }
