@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderToString } from "react-dom/server";
 import OnboardingWizard from "./OnboardingWizard";
+import { STORAGE_KEY } from "../hooks/useOnboarding";
 
 // Mock react-i18next — return the key as the translated string
 vi.mock("react-i18next", () => ({
@@ -20,8 +21,6 @@ vi.mock("../context/ImportContext", () => ({
     cancel: async () => {},
   }),
 }));
-
-const STORAGE_KEY = "folio-onboarding-complete";
 
 describe("OnboardingWizard", () => {
   beforeEach(() => {
