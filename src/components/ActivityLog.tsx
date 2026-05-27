@@ -32,6 +32,7 @@ const ACTION_LABEL_KEYS: Record<string, string> = {
   library_imported: "activity.libraryImported",
   backup_completed: "activity.backupCompleted",
   profile_switched: "activity.profileSwitched",
+  book_completed: "activity.bookCompleted",
 };
 
 const ACTION_ICONS: Record<string, string> = {
@@ -47,6 +48,7 @@ const ACTION_ICONS: Record<string, string> = {
   library_imported: "↓",
   backup_completed: "☁",
   profile_switched: "⇄",
+  book_completed: "✓",
 };
 
 const LIMIT = 50;

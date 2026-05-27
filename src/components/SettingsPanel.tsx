@@ -14,6 +14,8 @@ import {
 } from "../lib/themes";
 import ActivityLog from "./ActivityLog";
 import SavedThemesList from "./SavedThemesList";
+import { emit } from "@tauri-apps/api/event";
+import { releaseNotes, appVersion as buildVersion } from "virtual:release-notes";
 import {
   loadSavedThemes,
   saveSavedThemes,
@@ -347,6 +349,8 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
   useEffect(() => {
     getVersion().then(setAppVersion).catch(() => setAppVersion(""));
   }, []);
+
+  const hasReleaseNotes = releaseNotes.some((r) => r.version === buildVersion);
 
   // Continue Reading section visibility (default true)
   const [showContinueReading, setShowContinueReading] = useState(() => {
@@ -2090,6 +2094,15 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                   ? t("settings.aboutVersion", { version: appVersion })
                   : t("settings.aboutTagline")}
               </p>
+              <button
+                type="button"
+                onClick={() => emit("whats-new-open")}
+                disabled={!hasReleaseNotes}
+                className="text-sm text-accent hover:text-accent-hover transition-colors hover:underline disabled:opacity-50 disabled:cursor-not-allowed"
+                title={!hasReleaseNotes ? "No release notes for this version" : undefined}
+              >
+                {t("whatsNew.settingsButton")}
+              </button>
               <p className="text-ink-muted">{t("settings.aboutLicense")}</p>
               <div className="space-y-2">
                 <h4 className="text-xs font-semibold uppercase tracking-wider text-ink-muted">

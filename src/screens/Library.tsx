@@ -28,6 +28,9 @@ import OnboardingWizard from "../components/OnboardingWizard";
 import { useToast } from "../components/Toast";
 import { useDebounce } from "../hooks/useDebounce";
 import { useImport } from "../context/ImportContext";
+import WhatsNewBanner from "../components/WhatsNewBanner";
+import WhatsNewModal from "../components/WhatsNewModal";
+import { useWhatsNew } from "../hooks/useWhatsNew";
 import type { Book, BookGridItem } from "../types";
 
 interface ReadingProgress {
@@ -97,6 +100,7 @@ export default function Library({ catalogImportedBookIds }: LibraryProps = {}) {
   const [fileNotAvailableBookId, setFileNotAvailableBookId] = useState<string | null>(null);
 
   const importCtx = useImport();
+  const whatsNew = useWhatsNew();
   const preImportIdsRef = useRef<Set<string> | null>(null);
   const recentlyImportedRef = useRef<Set<string>>(
     new Set(catalogImportedBookIds ?? [])
@@ -974,6 +978,17 @@ export default function Library({ catalogImportedBookIds }: LibraryProps = {}) {
         </div>
       )}
 
+      {whatsNew.showBanner && whatsNew.currentRelease && (
+        <WhatsNewBanner
+          version={whatsNew.currentRelease.version}
+          summary={
+            Object.values(whatsNew.currentRelease.categories)[0]?.[0]?.title ?? ""
+          }
+          onClickCta={whatsNew.openModal}
+          onDismiss={whatsNew.dismissBanner}
+        />
+      )}
+
       {/* Error toast */}
       {error && (
         <div className="mx-6 mt-3 px-4 py-2.5 bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-300 text-sm rounded-xl flex items-center gap-2 border border-red-200 dark:border-red-900/40">
@@ -1764,6 +1779,10 @@ export default function Library({ catalogImportedBookIds }: LibraryProps = {}) {
             : scanToastMessage || ""
         }
       />
+
+      {whatsNew.showModal && whatsNew.currentRelease && (
+        <WhatsNewModal release={whatsNew.currentRelease} onClose={whatsNew.closeModal} />
+      )}
     </div>
   );
 }
