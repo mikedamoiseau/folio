@@ -35,6 +35,7 @@ pub fn routes(state: WebState) -> Router<WebState> {
             "/books/{id}/download/{filename}",
             get(download_book_with_filename),
         )
+        .route("/stats", get(get_stats))
         .route("/series", get(list_series))
         .route("/collections", get(list_collections))
         .route("/collections/{id}/books", get(get_collection_books))
@@ -597,6 +598,16 @@ async fn get_collection_books(
     Ok(Json(books))
 }
 
+// ── Stats ───────────────────────────────────────────────────────────────────
+
+async fn get_stats(
+    State(state): State<WebState>,
+) -> Result<Json<db::ReadingStats>, (StatusCode, String)> {
+    let conn = state.conn().map_err(folio_status)?;
+    let stats = db::get_reading_stats(&conn).map_err(folio_status)?;
+    Ok(Json(stats))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -700,5 +711,26 @@ mod tests {
         let query: BookQuery = serde_json::from_str("{}").expect("should parse empty");
         assert_eq!(query.q, None);
         assert_eq!(query.series, None);
+    }
+
+    #[test]
+    fn test_stats_endpoint_exists() {
+        let stats = db::ReadingStats {
+            total_reading_time_secs: 3600,
+            total_sessions: 10,
+            total_pages_read: 200,
+            books_finished: 2,
+            current_streak_days: 3,
+            longest_streak_days: 7,
+            daily_reading: vec![("2026-05-01".to_string(), 1800)],
+        };
+        let json = serde_json::to_value(&stats).unwrap();
+        assert_eq!(json["totalReadingTimeSecs"], 3600);
+        assert_eq!(json["totalSessions"], 10);
+        assert_eq!(json["totalPagesRead"], 200);
+        assert_eq!(json["booksFinished"], 2);
+        assert_eq!(json["currentStreakDays"], 3);
+        assert_eq!(json["longestStreakDays"], 7);
+        assert!(json["dailyReading"].is_array());
     }
 }
