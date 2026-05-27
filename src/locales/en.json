@@ -445,7 +445,17 @@
     "pageCacheUsage": "Using {{size}} ({{count}} books)",
     "pageCacheUsageEmpty": "Cache is empty",
     "clearPageCache": "Clear cache",
-    "clearPageCacheConfirm": "Cache cleared"
+    "clearPageCacheConfirm": "Cache cleared",
+    "saveAndTest": "Save & Test",
+    "testConnection": "Test Connection",
+    "testingConnection": "Testing connection…",
+    "connected": "Connected ({{ms}}ms)",
+    "authFailed": "Authentication failed — check your credentials",
+    "writePermissionDenied": "Write permission denied — check bucket/folder permissions",
+    "networkError": "Could not connect to remote storage",
+    "connectionTimeout": "Connection timed out",
+    "noConfigSaved": "No backup configuration saved",
+    "testFailed": "Connection test failed: {{error}}"
   },
 
   "collections": {

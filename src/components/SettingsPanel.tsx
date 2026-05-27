@@ -300,6 +300,12 @@ interface BackupConfig {
   values: Record<string, string>;
 }
 
+interface ConnectionTestResult {
+  status: "Ok" | "AuthFailed" | "PermissionDenied" | "NetworkError" | "Timeout";
+  latency_ms?: number;
+  message?: string;
+}
+
 interface SyncResult {
   booksPushed: number;
   progressPushed: number;
@@ -451,6 +457,8 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
   const [backupProgressText, setBackupProgressText] = useState("");
   const [backupStatus, setBackupStatus] = useState<SyncManifest | null>(null);
   const [remoteBackupMessage, setRemoteBackupMessage] = useState<string | null>(null);
+  const [testingConnection, setTestingConnection] = useState(false);
+  const [connectionTestResult, setConnectionTestResult] = useState<ConnectionTestResult | null>(null);
   const [syncEnabled, setSyncEnabled] = useState(false);
   const [lastSyncSuccess, setLastSyncSuccess] = useState<number | null>(null);
   const [lastSyncError, setLastSyncError] = useState<{ at: number; message: string } | null>(null);
@@ -883,6 +891,21 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
     setRemoteBackupMessage(null);
   };
 
+  const connectionResultMessage = (result: ConnectionTestResult): { text: string; isError: boolean } => {
+    switch (result.status) {
+      case "Ok":
+        return { text: t("settings.connected", { ms: result.latency_ms ?? 0 }), isError: false };
+      case "AuthFailed":
+        return { text: t("settings.authFailed"), isError: true };
+      case "PermissionDenied":
+        return { text: t("settings.writePermissionDenied"), isError: true };
+      case "NetworkError":
+        return { text: result.message || t("settings.networkError"), isError: true };
+      case "Timeout":
+        return { text: t("settings.connectionTimeout"), isError: true };
+    }
+  };
+
   const handleSaveBackupConfig = async () => {
     if (!selectedProvider || !currentProviderInfo) return;
     // Validate required fields
@@ -895,18 +918,48 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
     }
     setSavingBackupConfig(true);
     setRemoteBackupMessage(null);
+    setConnectionTestResult(null);
     try {
       const config: BackupConfig = {
         providerType: selectedProvider,
         values: backupFieldValues,
       };
-      await invoke("save_backup_config", { config });
-      setSavedBackupConfig(config);
-      setRemoteBackupMessage(t("settings.configSaved"));
+      const result = await invoke<ConnectionTestResult>("save_backup_config", { config });
+      setConnectionTestResult(result);
+      if (result.status === "Ok") {
+        setSavedBackupConfig(config);
+        const { text } = connectionResultMessage(result);
+        setRemoteBackupMessage(text);
+      } else {
+        const { text } = connectionResultMessage(result);
+        setRemoteBackupMessage(text);
+      }
     } catch (err) {
       setRemoteBackupMessage(t("settings.saveFailed", { error: friendlyError(err, t) }));
     } finally {
       setSavingBackupConfig(false);
+    }
+  };
+
+  const handleTestConnection = async () => {
+    if (!savedBackupConfig) return;
+    setTestingConnection(true);
+    setConnectionTestResult(null);
+    setRemoteBackupMessage(null);
+    try {
+      const config = await invoke<BackupConfig | null>("get_backup_config");
+      if (!config) {
+        setRemoteBackupMessage(t("settings.noConfigSaved"));
+        return;
+      }
+      const result = await invoke<ConnectionTestResult>("test_backup_connection", { config });
+      setConnectionTestResult(result);
+      const { text } = connectionResultMessage(result);
+      setRemoteBackupMessage(text);
+    } catch (err) {
+      setRemoteBackupMessage(t("settings.testFailed", { error: friendlyError(err, t) }));
+    } finally {
+      setTestingConnection(false);
     }
   };
 
@@ -2000,7 +2053,7 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                   disabled={savingBackupConfig || !selectedProvider}
                   className="w-full px-3 py-2 text-sm font-medium bg-accent text-surface rounded-xl hover:opacity-90 transition-opacity disabled:opacity-40"
                 >
-                  {savingBackupConfig ? t("common.saving") : t("settings.saveConfiguration")}
+                  {savingBackupConfig ? t("settings.testingConnection") : t("settings.saveAndTest")}
                 </button>
 
                 {/* Backup now — only shown when a config has been saved */}
@@ -2033,6 +2086,23 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                   </button>
                 )}
 
+                {/* Test connection — only shown when a config has been saved */}
+                {savedBackupConfig && (
+                  <button
+                    onClick={handleTestConnection}
+                    disabled={testingConnection || runningBackup}
+                    className="w-full px-3 py-2 text-sm text-ink-muted hover:text-ink bg-warm-subtle hover:bg-warm-border rounded-xl transition-colors text-left disabled:opacity-40 flex items-center gap-2"
+                  >
+                    {testingConnection && (
+                      <svg className="animate-spin w-3.5 h-3.5 shrink-0" viewBox="0 0 24 24" fill="none">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
+                      </svg>
+                    )}
+                    {testingConnection ? t("settings.testingConnection") : t("settings.testConnection")}
+                  </button>
+                )}
+
                 {/* Last backup timestamp */}
                 {backupStatus && (
                   <p className="text-xs text-ink-muted px-1">
@@ -2045,7 +2115,9 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
 
                 {/* Status messages */}
                 {remoteBackupMessage && (
-                  <p className="text-xs text-ink-muted px-1">{remoteBackupMessage}</p>
+                  <p className={`text-xs px-1 ${connectionTestResult && connectionTestResult.status !== "Ok" ? "text-red-500" : connectionTestResult?.status === "Ok" ? "text-green-600" : "text-ink-muted"}`}>
+                    {remoteBackupMessage}
+                  </p>
                 )}
 
                 {/* Sync toggle */}
