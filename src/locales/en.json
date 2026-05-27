@@ -731,5 +731,15 @@
       "dragDropDesc": "Drop book files anywhere in the app to import them instantly",
       "cta": "Start Reading"
     }
+  },
+
+  "whatsNew": {
+    "bannerTitle": "Folio {{version}}",
+    "bannerSummary": "{{title}} and more",
+    "bannerCta": "See what's new",
+    "modalTitle": "What's New in Folio {{version}}",
+    "modalFullChangelog": "See full changelog",
+    "settingsButton": "Release Notes",
+    "trayLabel": "What's New"
   }
 }
