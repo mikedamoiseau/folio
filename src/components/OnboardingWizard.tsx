@@ -2,6 +2,7 @@ import { useEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { useOnboarding } from "../hooks/useOnboarding";
 import { useImport } from "../context/ImportContext";
+import { useFocusTrap } from "../lib/useFocusTrap";
 import BookStackIllustration from "./BookStackIllustration";
 
 interface OnboardingWizardProps {
@@ -31,7 +32,7 @@ function WelcomeStep({ onAdvance, onSkip }: { onAdvance: () => void; onSkip: () 
       <div className="mb-6 flex justify-center">
         <BookStackIllustration />
       </div>
-      <h2 className="font-serif text-2xl font-semibold text-ink mb-2">
+      <h2 id="onboarding-title" className="font-serif text-2xl font-semibold text-ink mb-2">
         {t("onboarding.welcome.title")}
       </h2>
       <p className="text-sm text-ink-muted leading-relaxed mb-8">
@@ -76,7 +77,7 @@ function ImportStep({
           </svg>
         </div>
       </div>
-      <h2 className="font-serif text-2xl font-semibold text-ink mb-2">
+      <h2 id="onboarding-title" className="font-serif text-2xl font-semibold text-ink mb-2">
         {t("onboarding.import.title")}
       </h2>
       <p className="text-sm text-ink-muted leading-relaxed mb-6">
@@ -166,7 +167,7 @@ function TipsStep({ onComplete }: { onComplete: () => void }) {
           </svg>
         </div>
       </div>
-      <h2 className="font-serif text-2xl font-semibold text-ink mb-2">
+      <h2 id="onboarding-title" className="font-serif text-2xl font-semibold text-ink mb-2">
         {t("onboarding.tips.title")}
       </h2>
       <p className="text-sm text-ink-muted leading-relaxed mb-6">
@@ -202,28 +203,31 @@ export default function OnboardingWizard({ onImport, onImportFolder }: Onboardin
   const { isActive, currentStep, advance, skip, complete } = useOnboarding();
   const importCtx = useImport();
   const prevCompletedRef = useRef(importCtx.lastCompletedAt);
+  const trapRef = useFocusTrap(skip);
 
-  // Auto-advance from Step 2 to Step 3 when an import completes
   useEffect(() => {
     if (currentStep !== 2) return;
     if (
       importCtx.lastCompletedAt !== null &&
-      importCtx.lastCompletedAt !== prevCompletedRef.current
+      importCtx.lastCompletedAt !== prevCompletedRef.current &&
+      importCtx.progress?.phase !== "cancelled"
     ) {
       prevCompletedRef.current = importCtx.lastCompletedAt;
       advance();
     }
-  }, [importCtx.lastCompletedAt, currentStep, advance]);
+  }, [importCtx.lastCompletedAt, importCtx.progress?.phase, currentStep, advance]);
 
   if (!isActive) return null;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center">
-      {/* Backdrop */}
       <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" />
 
-      {/* Modal */}
       <div
+        ref={trapRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="onboarding-title"
         className="relative bg-surface rounded-2xl shadow-2xl w-full max-w-[440px] mx-4 px-8 py-10 animate-[fade-in_0.2s_ease-out]"
       >
         <StepIndicator current={currentStep} />

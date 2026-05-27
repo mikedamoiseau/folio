@@ -10,7 +10,10 @@ vi.mock("react-i18next", () => ({
   }),
 }));
 
-// Mock ImportContext — SSR tests don't need real import functionality
+vi.mock("../lib/useFocusTrap", () => ({
+  useFocusTrap: () => ({ current: null }),
+}));
+
 vi.mock("../context/ImportContext", () => ({
   useImport: () => ({
     running: false,
@@ -58,6 +61,16 @@ describe("OnboardingWizard", () => {
       <OnboardingWizard onImport={noop} onImportFolder={noop} />
     );
     expect(html).toContain("onboarding.welcome.skip");
+  });
+
+  it("renders with dialog a11y attributes", () => {
+    const html = renderToString(
+      <OnboardingWizard onImport={noop} onImportFolder={noop} />
+    );
+    expect(html).toContain('role="dialog"');
+    expect(html).toContain('aria-modal="true"');
+    expect(html).toContain('aria-labelledby="onboarding-title"');
+    expect(html).toContain('id="onboarding-title"');
   });
 
   it("does not render when onboarding already completed", () => {
