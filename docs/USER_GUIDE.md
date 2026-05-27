@@ -689,9 +689,11 @@ The server runs on port 7788 by default. The port input is editable while the se
 When **Web UI** is enabled, open the URL in a browser. You'll see:
 
 - **Login screen** — enter the PIN you set in the desktop app
-- **Library** — a grid of book covers with a search bar. Tap any book to see its details.
+- **Library** — a grid of book covers with a search bar and sort dropdown. Tap any book to see its details.
 - **Book detail** — shows cover, title, author, and format. Tap **Read** to open the book or **Download** to save it to your device.
 - **Reader** — EPUBs show chapter content with prev/next navigation. PDFs and comics show page images with prev/next buttons.
+- **Reading Stats** — tap the bar chart icon in the header to view your reading stats: time read, sessions, pages, books finished, current and longest streaks, and a 30-day daily reading chart.
+- **Collections** — tap the folder icon in the header to browse your collections and series. Filter by name, sort alphabetically, and tap any collection or series to jump to a filtered library view.
 
 The web interface works entirely on your local network. No internet connection needed, no data leaves your WiFi.
 
