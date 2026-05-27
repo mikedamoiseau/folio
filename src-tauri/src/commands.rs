@@ -3972,7 +3972,24 @@ pub async fn save_backup_config(
     config: crate::backup::BackupConfig,
     state: State<'_, AppState>,
 ) -> Result<crate::backup::ConnectionTestResult, String> {
-    // Store secrets in OS keychain first
+    // Snapshot existing secrets for rollback on test failure
+    let old_secrets = {
+        let conn = state
+            .active_db()
+            .map_err(|e| e.to_string())?
+            .get()
+            .map_err(|e| e.to_string())?;
+        if let Some(json) = db::get_setting(&conn, "backup_config").map_err(|e| e.to_string())? {
+            let mut old_config: crate::backup::BackupConfig =
+                serde_json::from_str(&json).map_err(|e| e.to_string())?;
+            let _ = crate::backup::load_secrets(&mut old_config);
+            Some(old_config)
+        } else {
+            None
+        }
+    };
+
+    // Store new secrets in OS keychain
     let clean = crate::backup::store_secrets(&config).map_err(|e| e.to_string())?;
 
     // Test connection with the original config (secrets still in values map)
@@ -3983,8 +4000,8 @@ pub async fn save_backup_config(
         let _ = tx.send(result);
     });
     let test_result = rx
-        .recv()
-        .map_err(|e| format!("Connection test failed: {e}"))?;
+        .recv_timeout(std::time::Duration::from_secs(30))
+        .unwrap_or(crate::backup::ConnectionTestResult::Timeout);
 
     match &test_result {
         crate::backup::ConnectionTestResult::Ok { .. } => {
@@ -3998,8 +4015,12 @@ pub async fn save_backup_config(
             db::set_setting(&conn, "backup_config", &json).map_err(|e| e.to_string())?;
         }
         _ => {
-            // Test failed — rollback keychain entries
-            let _ = crate::backup::remove_secrets(&config);
+            // Rollback: restore old secrets or remove new ones
+            if let Some(old_config) = &old_secrets {
+                let _ = crate::backup::store_secrets(old_config);
+            } else {
+                let _ = crate::backup::remove_secrets(&config);
+            }
         }
     }
 
@@ -4015,8 +4036,9 @@ pub async fn test_backup_connection(
         let result = crate::backup::test_connection(&config);
         let _ = tx.send(result);
     });
-    rx.recv()
-        .map_err(|e| format!("Connection test failed: {e}"))
+    Ok(rx
+        .recv_timeout(std::time::Duration::from_secs(30))
+        .unwrap_or(crate::backup::ConnectionTestResult::Timeout))
 }
 
 #[tauri::command]
@@ -5399,7 +5421,7 @@ pub async fn sync_pull_book(
             let _ = db::set_setting(&conn, "last_sync_error_at", &now_unix_secs().to_string());
             let _ = db::set_setting(&conn, "last_sync_error_message", &msg);
             let _ = db::set_setting(&conn, "last_sync_error_kind", kind);
-            if kind == "auth_failed" || kind == "permission_denied" {
+            if kind == "auth_failed" {
                 let _ = app.emit("backup-auth-error", serde_json::json!({ "message": msg }));
             }
             log_activity(
@@ -5416,6 +5438,7 @@ pub async fn sync_pull_book(
             let msg = "Remote server did not respond within 5 seconds";
             let _ = db::set_setting(&conn, "last_sync_error_at", &now_unix_secs().to_string());
             let _ = db::set_setting(&conn, "last_sync_error_message", msg);
+            let _ = db::set_setting(&conn, "last_sync_error_kind", "timeout");
             log_activity(
                 &conn,
                 "sync_pull_failed",

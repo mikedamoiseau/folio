@@ -1223,42 +1223,6 @@ mod tests {
     /// runs often — pulling the full file each time would make backups
     /// slow, memory-heavy, or network-heavy against remote storage.
     #[test]
-    fn test_connection_ok_with_fs_provider() {
-        let dir = tempfile::tempdir().unwrap();
-        let mut values = std::collections::HashMap::new();
-        values.insert("root".to_string(), dir.path().to_string_lossy().to_string());
-        let config = BackupConfig {
-            provider_type: ProviderType::Fs,
-            values,
-        };
-        let result = test_connection(&config);
-        match result {
-            ConnectionTestResult::Ok { latency_ms } => {
-                assert!(latency_ms < 5000, "latency should be reasonable");
-            }
-            other => panic!("Expected Ok, got {:?}", other),
-        }
-        // Sentinel file should be cleaned up
-        assert!(!dir.path().join(".folio-connection-test").exists());
-    }
-
-    #[test]
-    fn test_connection_network_error_bad_path() {
-        let mut values = std::collections::HashMap::new();
-        values.insert("root".to_string(), "/nonexistent/path/that/does/not/exist".to_string());
-        let config = BackupConfig {
-            provider_type: ProviderType::Fs,
-            values,
-        };
-        let result = test_connection(&config);
-        match result {
-            ConnectionTestResult::NetworkError { .. } | ConnectionTestResult::PermissionDenied { .. } => {}
-            ConnectionTestResult::Ok { .. } => panic!("Expected error for nonexistent path"),
-            other => panic!("Expected NetworkError or PermissionDenied, got {:?}", other),
-        }
-    }
-
-    #[test]
     fn incremental_backup_skips_storage_get_when_remote_file_matches() {
         let remote_dir = tempfile::tempdir().unwrap();
         let config = BackupConfig {
@@ -1303,5 +1267,42 @@ mod tests {
             "storage.get must NOT be called when remote size matches, got: {:?}",
             mock.get_calls()
         );
+    }
+
+    /// Tests for connectivity verification
+    #[test]
+    fn test_connection_ok_with_fs_provider() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut values = std::collections::HashMap::new();
+        values.insert("root".to_string(), dir.path().to_string_lossy().to_string());
+        let config = BackupConfig {
+            provider_type: ProviderType::Fs,
+            values,
+        };
+        let result = test_connection(&config);
+        match result {
+            ConnectionTestResult::Ok { latency_ms } => {
+                assert!(latency_ms < 5000, "latency should be reasonable");
+            }
+            other => panic!("Expected Ok, got {:?}", other),
+        }
+        // Sentinel file should be cleaned up
+        assert!(!dir.path().join(".folio-connection-test").exists());
+    }
+
+    #[test]
+    fn test_connection_network_error_bad_path() {
+        let mut values = std::collections::HashMap::new();
+        values.insert("root".to_string(), "/nonexistent/path/that/does/not/exist".to_string());
+        let config = BackupConfig {
+            provider_type: ProviderType::Fs,
+            values,
+        };
+        let result = test_connection(&config);
+        match result {
+            ConnectionTestResult::NetworkError { .. } | ConnectionTestResult::PermissionDenied { .. } => {}
+            ConnectionTestResult::Ok { .. } => panic!("Expected error for nonexistent path"),
+            other => panic!("Expected NetworkError or PermissionDenied, got {:?}", other),
+        }
     }
 }
