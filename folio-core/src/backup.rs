@@ -70,6 +70,17 @@ pub fn load_secrets(config: &mut BackupConfig) -> FolioResult<()> {
     Ok(())
 }
 
+pub fn remove_secrets(config: &BackupConfig) -> FolioResult<()> {
+    let secrets = secret_keys(&config.provider_type);
+    for key in &secrets {
+        let service = format!("folio-backup-{:?}-{}", config.provider_type, key);
+        if let Ok(entry) = keyring::Entry::new(&service, "default") {
+            let _ = entry.delete_credential();
+        }
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum ProviderType {
@@ -130,6 +141,42 @@ pub fn classify_opendal_error(err: &opendal::Error) -> ConnectionTestResult {
             message: err.to_string(),
         },
     }
+}
+
+pub fn test_connection(config: &BackupConfig) -> ConnectionTestResult {
+    let start = std::time::Instant::now();
+
+    let op = match build_operator(config) {
+        Ok(op) => op,
+        Err(e) => {
+            return ConnectionTestResult::NetworkError {
+                message: e.to_string(),
+            }
+        }
+    };
+
+    // Step 1: List root — confirms authentication
+    if let Err(e) = op.list("/") {
+        return classify_opendal_error(&e);
+    }
+
+    // Step 2: Write sentinel — confirms write permission
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+        .to_string();
+    if let Err(e) = op.write(".folio-connection-test", timestamp.into_bytes()) {
+        return ConnectionTestResult::PermissionDenied {
+            message: e.to_string(),
+        };
+    }
+
+    // Step 3: Cleanup — best-effort, don't fail on delete errors
+    let _ = op.delete(".folio-connection-test");
+
+    let latency_ms = start.elapsed().as_millis() as u64;
+    ConnectionTestResult::Ok { latency_ms }
 }
 
 pub fn provider_schemas() -> Vec<ProviderInfo> {
@@ -1175,6 +1222,42 @@ mod tests {
     /// rating) bumps `updated_at` and enters the changed set, so this path
     /// runs often — pulling the full file each time would make backups
     /// slow, memory-heavy, or network-heavy against remote storage.
+    #[test]
+    fn test_connection_ok_with_fs_provider() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut values = std::collections::HashMap::new();
+        values.insert("root".to_string(), dir.path().to_string_lossy().to_string());
+        let config = BackupConfig {
+            provider_type: ProviderType::Fs,
+            values,
+        };
+        let result = test_connection(&config);
+        match result {
+            ConnectionTestResult::Ok { latency_ms } => {
+                assert!(latency_ms < 5000, "latency should be reasonable");
+            }
+            other => panic!("Expected Ok, got {:?}", other),
+        }
+        // Sentinel file should be cleaned up
+        assert!(!dir.path().join(".folio-connection-test").exists());
+    }
+
+    #[test]
+    fn test_connection_network_error_bad_path() {
+        let mut values = std::collections::HashMap::new();
+        values.insert("root".to_string(), "/nonexistent/path/that/does/not/exist".to_string());
+        let config = BackupConfig {
+            provider_type: ProviderType::Fs,
+            values,
+        };
+        let result = test_connection(&config);
+        match result {
+            ConnectionTestResult::NetworkError { .. } | ConnectionTestResult::PermissionDenied { .. } => {}
+            ConnectionTestResult::Ok { .. } => panic!("Expected error for nonexistent path"),
+            other => panic!("Expected NetworkError or PermissionDenied, got {:?}", other),
+        }
+    }
+
     #[test]
     fn incremental_backup_skips_storage_get_when_remote_file_matches() {
         let remote_dir = tempfile::tempdir().unwrap();
