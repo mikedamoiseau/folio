@@ -687,5 +687,15 @@
     "language": "Langue",
     "publisher": "\u00c9diteur",
     "multipleValues": "Valeurs multiples"
+  },
+
+  "whatsNew": {
+    "bannerTitle": "Folio {{version}}",
+    "bannerSummary": "{{title}} et plus",
+    "bannerCta": "Voir les nouveaut\u00e9s",
+    "modalTitle": "Nouveaut\u00e9s de Folio {{version}}",
+    "modalFullChangelog": "Voir le changelog complet",
+    "settingsButton": "Notes de version",
+    "trayLabel": "Nouveaut\u00e9s"
   }
 }
