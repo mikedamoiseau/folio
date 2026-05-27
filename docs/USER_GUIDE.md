@@ -252,6 +252,16 @@ Progress is saved automatically as you read. The library shows a percentage on e
 
 Folio also records reading sessions (time spent, pages read) for the reading stats dashboard.
 
+### Book completion celebration
+
+When you reach the last page or chapter of any book, Folio shows a celebratory modal with a confetti animation. The modal displays:
+
+- The book's cover image
+- Total reading time accumulated across all sessions
+- An interactive star rating — tap a star to rate the book immediately
+
+Click **Continue** to dismiss. The celebration only appears once per book; reopening a finished book won't trigger it again. The event is logged in the activity log as "Book Finished."
+
 ### Returning to the library
 
 Click the back arrow in the top-left corner or press `Escape`. Your progress is saved when you exit.
