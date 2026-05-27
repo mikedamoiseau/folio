@@ -701,5 +701,35 @@
     "language": "Language",
     "publisher": "Publisher",
     "multipleValues": "Multiple values"
+  },
+
+  "onboarding": {
+    "welcome": {
+      "title": "Welcome to Folio",
+      "subtitle": "Your personal reading companion. Let's get your first book on the shelf.",
+      "cta": "Add Your First Book",
+      "skip": "Skip",
+      "skipHint": "you can always import later"
+    },
+    "import": {
+      "title": "Import a Book",
+      "subtitle": "Choose how to add your first book",
+      "addFiles": "Add Files",
+      "addFilesHint": "EPUB, PDF, CBZ, CBR, MOBI",
+      "importFolder": "Import Folder",
+      "importFolderHint": "Add all books from a folder",
+      "dragDrop": "or drag & drop files here"
+    },
+    "tips": {
+      "title": "You're All Set",
+      "subtitle": "A few things to know",
+      "focus": "Focus Mode",
+      "focusDesc": "Press D while reading for a distraction-free experience",
+      "catalogs": "Online Catalogs",
+      "catalogsDesc": "Browse free books from Project Gutenberg, Standard Ebooks, and more",
+      "dragDrop": "Drag & Drop",
+      "dragDropDesc": "Drop book files anywhere in the app to import them instantly",
+      "cta": "Start Reading"
+    }
   }
 }
