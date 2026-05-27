@@ -1,6 +1,6 @@
 import { useState, useCallback } from "react";
 
-const STORAGE_KEY = "folio-onboarding-complete";
+export const STORAGE_KEY = "folio-onboarding-complete";
 
 type Step = 1 | 2 | 3;
 

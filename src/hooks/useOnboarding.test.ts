@@ -1,9 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach } from "vitest";
 import { renderHook, act } from "@testing-library/react";
-import { useOnboarding } from "./useOnboarding";
-
-const STORAGE_KEY = "folio-onboarding-complete";
+import { useOnboarding, STORAGE_KEY } from "./useOnboarding";
 
 describe("useOnboarding", () => {
   beforeEach(() => {
