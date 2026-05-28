@@ -160,7 +160,7 @@ Define rules and Folio populates the collection automatically. Available rule ty
 
 | Field | Operators |
 |-------|-----------|
-| Author | contains |
+| Author | contains, is |
 | Title | contains |
 | Series | contains, is |
 | Language | is, contains |
@@ -172,6 +172,17 @@ Define rules and Folio populates the collection automatically. Available rule ty
 | Reading progress | is unread / in progress / finished |
 
 Multiple rules are combined with AND logic — a book must match all rules to appear in the collection.
+
+### Smart suggestions
+
+Click **Suggest Collections** at the bottom of the sidebar. Folio analyzes your library and offers rule-based collection templates based on patterns it finds:
+
+- **Authors** with 3 or more books
+- **Series** with 2 or more books
+- **Reading status** — "Unread books" or "Finished books" when enough qualify
+- **Format** — non-dominant formats (e.g. "PDF Books" when most of your library is EPUB)
+
+Each suggestion card shows how many books match. You can **Add** (create immediately), **Edit** (tweak rules before creating), or dismiss. Suggestions that duplicate an existing automated collection are hidden automatically.
 
 ### Collection options
 
