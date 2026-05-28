@@ -2109,6 +2109,49 @@ pub fn get_collection_suggestions(
         }
     }
 
+    // Format heuristic: non-dominant formats with 3+ books
+    {
+        let total_books: usize =
+            conn.query_row("SELECT COUNT(*) FROM books", [], |row| row.get(0))?;
+        if total_books > 0 {
+            let mut stmt = conn.prepare(
+                "SELECT format, COUNT(*) as cnt FROM books \
+                 GROUP BY format HAVING cnt >= 3 \
+                 ORDER BY cnt DESC",
+            )?;
+            let rows = stmt.query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, usize>(1)?))
+            })?;
+            for row in rows {
+                let (format, count) = row?;
+                // Skip dominant format (≥ 75% of all books)
+                if count * 4 >= total_books * 3 {
+                    continue;
+                }
+                if existing_rules
+                    .iter()
+                    .any(|(f, o, v)| *f == "format" && *o == "equals" && *v == format)
+                {
+                    continue;
+                }
+                let display_name = format.to_uppercase();
+                suggestions.push(CollectionSuggestion {
+                    name: format!("{display_name} Books"),
+                    icon: "📄".to_string(),
+                    color: colors[color_idx % colors.len()].to_string(),
+                    rules: vec![NewRuleInput {
+                        field: "format".to_string(),
+                        operator: "equals".to_string(),
+                        value: format,
+                    }],
+                    matched_book_count: count,
+                    heuristic_type: "format".to_string(),
+                });
+                color_idx += 1;
+            }
+        }
+    }
+
     suggestions.sort_by(|a, b| b.matched_book_count.cmp(&a.matched_book_count));
     suggestions.truncate(8);
     Ok(suggestions)
@@ -3774,6 +3817,41 @@ mod tests {
         assert_eq!(series_suggestions[0].rules[0].field, "series");
         assert_eq!(series_suggestions[0].rules[0].operator, "equals");
         assert_eq!(series_suggestions[0].rules[0].value, "Discworld");
+    }
+
+    #[test]
+    fn test_suggest_format() {
+        let (_dir, conn) = setup();
+
+        // 10 EPUBs (dominant — should be skipped)
+        for i in 0..10 {
+            let mut book = sample_book(&format!("epub-{i}"));
+            book.title = format!("Epub Book {i}");
+            book.format = BookFormat::Epub;
+            book.file_path = format!("/tmp/epub-{i}.epub");
+            insert_book(&conn, &book).unwrap();
+        }
+        // 3 PDFs (non-dominant — should be suggested)
+        for i in 0..3 {
+            let mut book = sample_book(&format!("pdf-{i}"));
+            book.title = format!("PDF Book {i}");
+            book.format = BookFormat::Pdf;
+            book.file_path = format!("/tmp/pdf-{i}.pdf");
+            insert_book(&conn, &book).unwrap();
+        }
+
+        let suggestions = get_collection_suggestions(&conn, &[]).unwrap();
+        let format_suggestions: Vec<_> = suggestions
+            .iter()
+            .filter(|s| s.heuristic_type == "format")
+            .collect();
+
+        // EPUB >80% so skipped; PDF = 3 books so suggested
+        assert_eq!(format_suggestions.len(), 1);
+        assert_eq!(format_suggestions[0].name, "PDF Books");
+        assert_eq!(format_suggestions[0].matched_book_count, 3);
+        assert_eq!(format_suggestions[0].rules[0].field, "format");
+        assert_eq!(format_suggestions[0].rules[0].value, "pdf");
     }
 
     #[test]
