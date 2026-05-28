@@ -2050,6 +2050,65 @@ pub fn get_collection_suggestions(
         }
     }
 
+    // Reading status heuristic: unread and finished
+    {
+        // Unread: books with no reading_progress entry
+        let unread_count: usize = conn.query_row(
+            "SELECT COUNT(*) FROM books b \
+             LEFT JOIN reading_progress rp ON rp.book_id = b.id \
+             WHERE rp.book_id IS NULL",
+            [],
+            |row| row.get(0),
+        )?;
+        if unread_count >= 3
+            && !existing_rules
+                .iter()
+                .any(|(f, o, v)| *f == "reading_progress" && *o == "equals" && *v == "unread")
+        {
+            suggestions.push(CollectionSuggestion {
+                name: "Unread books".to_string(),
+                icon: "🎯".to_string(),
+                color: colors[color_idx % colors.len()].to_string(),
+                rules: vec![NewRuleInput {
+                    field: "reading_progress".to_string(),
+                    operator: "equals".to_string(),
+                    value: "unread".to_string(),
+                }],
+                matched_book_count: unread_count,
+                heuristic_type: "reading_status".to_string(),
+            });
+            color_idx += 1;
+        }
+
+        // Finished: books where chapter_index >= total_chapters - 1
+        let finished_count: usize = conn.query_row(
+            "SELECT COUNT(*) FROM books b \
+             JOIN reading_progress rp ON rp.book_id = b.id \
+             WHERE rp.chapter_index >= b.total_chapters - 1 AND b.total_chapters > 0",
+            [],
+            |row| row.get(0),
+        )?;
+        if finished_count >= 2
+            && !existing_rules
+                .iter()
+                .any(|(f, o, v)| *f == "reading_progress" && *o == "equals" && *v == "finished")
+        {
+            suggestions.push(CollectionSuggestion {
+                name: "Finished books".to_string(),
+                icon: "🏆".to_string(),
+                color: colors[color_idx % colors.len()].to_string(),
+                rules: vec![NewRuleInput {
+                    field: "reading_progress".to_string(),
+                    operator: "equals".to_string(),
+                    value: "finished".to_string(),
+                }],
+                matched_book_count: finished_count,
+                heuristic_type: "reading_status".to_string(),
+            });
+            color_idx += 1;
+        }
+    }
+
     suggestions.sort_by(|a, b| b.matched_book_count.cmp(&a.matched_book_count));
     suggestions.truncate(8);
     Ok(suggestions)
@@ -3643,6 +3702,51 @@ mod tests {
         assert_eq!(results.len(), 1);
         let results = search_highlights(&conn, "underXscore", 100).unwrap();
         assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_suggest_reading_status() {
+        let (_dir, conn) = setup();
+
+        // 4 books with no reading progress → "unread"
+        for i in 0..4 {
+            let mut book = sample_book(&format!("unread-{i}"));
+            book.title = format!("Unread Book {i}");
+            book.file_path = format!("/tmp/unread-{i}.epub");
+            insert_book(&conn, &book).unwrap();
+        }
+
+        // 3 finished books
+        for i in 0..3 {
+            let mut book = sample_book(&format!("finished-{i}"));
+            book.title = format!("Finished Book {i}");
+            book.total_chapters = 5;
+            book.file_path = format!("/tmp/finished-{i}.epub");
+            insert_book(&conn, &book).unwrap();
+            let progress = ReadingProgress {
+                book_id: format!("finished-{i}"),
+                chapter_index: 4, // >= total_chapters - 1
+                scroll_position: 1.0,
+                last_read_at: 1700000000,
+            };
+            upsert_reading_progress(&conn, &progress).unwrap();
+        }
+
+        let suggestions = get_collection_suggestions(&conn, &[]).unwrap();
+        let status_suggestions: Vec<_> = suggestions
+            .iter()
+            .filter(|s| s.heuristic_type == "reading_status")
+            .collect();
+
+        assert_eq!(status_suggestions.len(), 2);
+
+        let unread = status_suggestions.iter().find(|s| s.name == "Unread books").unwrap();
+        assert_eq!(unread.matched_book_count, 4);
+        assert_eq!(unread.rules[0].value, "unread");
+
+        let finished = status_suggestions.iter().find(|s| s.name == "Finished books").unwrap();
+        assert_eq!(finished.matched_book_count, 3);
+        assert_eq!(finished.rules[0].value, "finished");
     }
 
     #[test]
