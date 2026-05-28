@@ -1766,8 +1766,9 @@ fn build_rule_query(rules: &[CollectionRule]) -> (String, String, Vec<String>) {
                         join_clauses.push(format!(
                             "JOIN reading_progress {alias} ON {alias}.book_id = b.id"
                         ));
-                        where_clauses
-                            .push(format!("{alias}.chapter_index >= b.total_chapters - 1"));
+                        where_clauses.push(format!(
+                            "{alias}.chapter_index >= b.total_chapters - 1 AND b.total_chapters > 0"
+                        ));
                     }
                     _ => {}
                 }
@@ -3794,6 +3795,67 @@ mod tests {
         let finished = status_suggestions.iter().find(|s| s.name == "Finished books").unwrap();
         assert_eq!(finished.matched_book_count, 3);
         assert_eq!(finished.rules[0].value, "finished");
+    }
+
+    #[test]
+    fn test_finished_rule_excludes_zero_chapter_books() {
+        let (_dir, conn) = setup();
+
+        // Book with total_chapters = 0 and reading progress — must NOT count as finished
+        let mut book = sample_book("zero-ch");
+        book.total_chapters = 0;
+        book.file_path = "/tmp/zero-ch.epub".to_string();
+        insert_book(&conn, &book).unwrap();
+        upsert_reading_progress(
+            &conn,
+            &ReadingProgress {
+                book_id: "zero-ch".to_string(),
+                chapter_index: 0,
+                scroll_position: 0.0,
+                last_read_at: 1700000000,
+            },
+        )
+        .unwrap();
+
+        // 2 legitimately finished books
+        for i in 0..2 {
+            let mut b = sample_book(&format!("legit-{i}"));
+            b.total_chapters = 5;
+            b.file_path = format!("/tmp/legit-{i}.epub");
+            insert_book(&conn, &b).unwrap();
+            upsert_reading_progress(
+                &conn,
+                &ReadingProgress {
+                    book_id: format!("legit-{i}"),
+                    chapter_index: 4,
+                    scroll_position: 1.0,
+                    last_read_at: 1700000000,
+                },
+            )
+            .unwrap();
+        }
+
+        // Verify suggestion count excludes zero-chapter book
+        let suggestions = get_collection_suggestions(&conn, &[]).unwrap();
+        let finished = suggestions.iter().find(|s| s.name == "Finished books");
+        assert_eq!(finished.unwrap().matched_book_count, 2);
+
+        // Verify build_rule_query also excludes it
+        let rules = vec![CollectionRule {
+            id: "r1".to_string(),
+            collection_id: "c1".to_string(),
+            field: "reading_progress".to_string(),
+            operator: "equals".to_string(),
+            value: "finished".to_string(),
+        }];
+        let (joins, wheres, params) = build_rule_query(&rules);
+        let sql = format!(
+            "SELECT COUNT(*) FROM books b {joins} {wheres}",
+        );
+        let count: usize = conn
+            .query_row(&sql, rusqlite::params_from_iter(params), |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 2, "zero-chapter book must not match finished rule");
     }
 
     #[test]
