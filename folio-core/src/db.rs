@@ -1684,6 +1684,10 @@ fn build_rule_query(rules: &[CollectionRule]) -> (String, String, Vec<String>) {
                 where_clauses.push("b.author LIKE ?".to_string());
                 param_values.push(format!("%{}%", rule.value));
             }
+            ("author", "equals") => {
+                where_clauses.push("b.author = ?".to_string());
+                param_values.push(rule.value.clone());
+            }
             ("filename", "contains") => {
                 where_clauses.push("b.title LIKE ?".to_string());
                 param_values.push(format!("%{}%", rule.value));
@@ -1995,7 +1999,7 @@ pub fn get_collection_suggestions(
             let (author, count) = row?;
             if existing_rules
                 .iter()
-                .any(|(f, o, v)| *f == "author" && *o == "contains" && *v == author)
+                .any(|(f, o, v)| *f == "author" && *o == "equals" && *v == author)
             {
                 continue;
             }
@@ -2005,7 +2009,7 @@ pub fn get_collection_suggestions(
                 color: colors[color_idx % colors.len()].to_string(),
                 rules: vec![NewRuleInput {
                     field: "author".to_string(),
-                    operator: "contains".to_string(),
+                    operator: "equals".to_string(),
                     value: author,
                 }],
                 matched_book_count: count,
@@ -3844,7 +3848,7 @@ mod tests {
                 id: "rule-1".to_string(),
                 collection_id: "existing-1".to_string(),
                 field: "author".to_string(),
-                operator: "contains".to_string(),
+                operator: "equals".to_string(),
                 value: "Agatha Christie".to_string(),
             }],
         }];
@@ -3957,7 +3961,7 @@ mod tests {
         assert_eq!(author_suggestions[0].matched_book_count, 4);
         assert_eq!(author_suggestions[0].rules.len(), 1);
         assert_eq!(author_suggestions[0].rules[0].field, "author");
-        assert_eq!(author_suggestions[0].rules[0].operator, "contains");
+        assert_eq!(author_suggestions[0].rules[0].operator, "equals");
         assert_eq!(author_suggestions[0].rules[0].value, "J.R.R. Tolkien");
     }
 }

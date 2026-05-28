@@ -2405,6 +2405,7 @@ pub async fn get_all_book_tags(state: State<'_, AppState>) -> FolioResult<Vec<Bo
 /// Valid (field, operator) combinations for collection rules.
 const VALID_RULE_PAIRS: &[(&str, &str)] = &[
     ("author", "contains"),
+    ("author", "equals"),
     ("filename", "contains"),
     ("series", "contains"),
     ("series", "equals"),

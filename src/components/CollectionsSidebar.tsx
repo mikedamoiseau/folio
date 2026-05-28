@@ -88,6 +88,7 @@ function getOperatorOptions(t: (key: string) => string): Record<CollectionRule["
   return {
     author: [
       { value: "contains", label: t("collections.operatorContains") },
+      { value: "equals", label: t("collections.operatorIs") },
     ],
     filename: [
       { value: "contains", label: t("collections.operatorContains") },
