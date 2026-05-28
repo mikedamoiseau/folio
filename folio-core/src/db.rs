@@ -2157,7 +2157,7 @@ pub fn get_collection_suggestions(
         }
     }
 
-    suggestions.sort_by(|a, b| b.matched_book_count.cmp(&a.matched_book_count));
+    suggestions.sort_by_key(|s| std::cmp::Reverse(s.matched_book_count));
     suggestions.truncate(8);
     Ok(suggestions)
 }
