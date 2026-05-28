@@ -1,6 +1,7 @@
 #[cfg(test)]
 mod ci_workflow_test;
 pub mod commands;
+pub mod ipc_metrics;
 pub mod page_wire;
 #[cfg(test)]
 mod release_workflow_test;
@@ -150,6 +151,7 @@ pub fn run() {
                 }),
                 enrichment_registry,
                 web_server_handle: std::sync::Mutex::new(None),
+                ipc_metrics: crate::ipc_metrics::IpcMetrics::new(500, 500.0),
             });
 
             // Initialize system tray
@@ -367,6 +369,7 @@ pub fn run() {
             commands::bulk_update_metadata,
             commands::get_autostart_enabled,
             commands::set_autostart_enabled,
+            commands::get_ipc_metrics,
         ])
         .on_window_event(|window, event| {
             match event {

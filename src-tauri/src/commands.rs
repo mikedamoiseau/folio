@@ -15,6 +15,7 @@ use crate::models::{
 use crate::opds;
 use crate::openlibrary;
 use crate::page_cache;
+use crate::ipc_metrics::IpcMetrics;
 use crate::pdf;
 
 /// A simple LRU cache that bundles the data map and access order in a single
@@ -186,6 +187,8 @@ pub struct AppState {
     pub shared_pin_hash: std::sync::Arc<std::sync::Mutex<Option<String>>>,
     /// Handle to the running web server (lock #5).
     pub web_server_handle: std::sync::Mutex<Option<crate::web_server::WebServerHandle>>,
+    /// IPC command timing metrics (leaf lock — no ordering constraint).
+    pub ipc_metrics: IpcMetrics,
 }
 
 impl AppState {
@@ -5867,6 +5870,13 @@ pub async fn web_server_get_qr(state: State<'_, AppState>) -> FolioResult<String
         .map(|h| h.url.clone())
         .ok_or_else(|| FolioError::not_found("Web server is not running"))?;
     crate::web_server::auth::generate_qr_svg(&url)
+}
+
+#[tauri::command]
+pub async fn get_ipc_metrics(
+    state: State<'_, AppState>,
+) -> Result<crate::ipc_metrics::IpcMetricsResponse, String> {
+    Ok(state.ipc_metrics.response())
 }
 
 #[cfg(test)]
