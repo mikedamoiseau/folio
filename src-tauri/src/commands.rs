@@ -9,8 +9,8 @@ use crate::error::{FolioError, FolioResult};
 use crate::models::{
     AutoBackup, Book, BookFormat, BookGridItem, Bookmark, ChapterMeta, CleanupEntry,
     CleanupProgress, CleanupResult, Collection, CollectionRule, CollectionSuggestion,
-    CollectionType, CustomFont,
-    FeatureFlag, Highlight, HighlightSearchResult, NewRuleInput, ReadingProgress, SeriesInfo,
+    CollectionType, CustomFont, FeatureFlag, Highlight, HighlightSearchResult, NewRuleInput,
+    ReadingProgress, SeriesInfo,
 };
 use crate::opds;
 use crate::openlibrary;
