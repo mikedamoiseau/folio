@@ -343,6 +343,7 @@ pub fn run() {
             commands::set_enrichment_provider_order,
             commands::get_activity_log,
             commands::preview_collection_rules,
+            commands::get_collection_suggestions,
             commands::import_custom_font,
             commands::get_custom_fonts,
             commands::remove_custom_font,

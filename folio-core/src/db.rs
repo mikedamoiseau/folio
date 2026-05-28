@@ -5,8 +5,9 @@ use std::path::Path;
 use std::time::Duration;
 
 use crate::models::{
-    ActivityEntry, Book, BookGridItem, Bookmark, Collection, CollectionRule, CollectionType,
-    CustomFont, FeatureFlag, HighlightSearchResult, ReadingProgress, SeriesInfo,
+    ActivityEntry, Book, BookGridItem, Bookmark, Collection, CollectionRule, CollectionSuggestion,
+    CollectionType, CustomFont, FeatureFlag, HighlightSearchResult, NewRuleInput, ReadingProgress,
+    SeriesInfo,
 };
 
 pub type DbPool = Pool<SqliteConnectionManager>;
@@ -1683,6 +1684,10 @@ fn build_rule_query(rules: &[CollectionRule]) -> (String, String, Vec<String>) {
                 where_clauses.push("b.author LIKE ?".to_string());
                 param_values.push(format!("%{}%", rule.value));
             }
+            ("author", "equals") => {
+                where_clauses.push("b.author = ?".to_string());
+                param_values.push(rule.value.clone());
+            }
             ("filename", "contains") => {
                 where_clauses.push("b.title LIKE ?".to_string());
                 param_values.push(format!("%{}%", rule.value));
@@ -1761,8 +1766,9 @@ fn build_rule_query(rules: &[CollectionRule]) -> (String, String, Vec<String>) {
                         join_clauses.push(format!(
                             "JOIN reading_progress {alias} ON {alias}.book_id = b.id"
                         ));
-                        where_clauses
-                            .push(format!("{alias}.chapter_index >= b.total_chapters - 1"));
+                        where_clauses.push(format!(
+                            "{alias}.chapter_index >= b.total_chapters - 1 AND b.total_chapters > 0"
+                        ));
                     }
                     _ => {}
                 }
@@ -1956,6 +1962,204 @@ pub fn log_pin_change(conn: &Connection, source: &str) -> Result<()> {
         rusqlite::params![now, source],
     )?;
     Ok(())
+}
+
+pub fn get_collection_suggestions(
+    conn: &Connection,
+    existing_collections: &[Collection],
+) -> Result<Vec<CollectionSuggestion>> {
+    let mut suggestions = Vec::new();
+    let colors = [
+        "#c2714e", "#6b8f71", "#7a6b9a", "#4e7a8f", "#8f7a4e", "#8f4e4e", "#4e8f8a",
+        "#666666",
+    ];
+    let mut color_idx = 0;
+
+    let existing_rules: Vec<(&str, &str, &str)> = existing_collections
+        .iter()
+        .filter(|c| matches!(c.r#type, CollectionType::Automated))
+        .flat_map(|c| {
+            c.rules
+                .iter()
+                .map(|r| (r.field.as_str(), r.operator.as_str(), r.value.as_str()))
+        })
+        .collect();
+
+    // Author heuristic: authors with 3+ books
+    {
+        let mut stmt = conn.prepare(
+            "SELECT author, COUNT(*) as cnt FROM books \
+             WHERE author IS NOT NULL AND author != '' \
+             GROUP BY author HAVING cnt >= 3 \
+             ORDER BY cnt DESC LIMIT 5",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, usize>(1)?))
+        })?;
+        for row in rows {
+            let (author, count) = row?;
+            if existing_rules
+                .iter()
+                .any(|(f, o, v)| *f == "author" && *o == "equals" && *v == author)
+            {
+                continue;
+            }
+            suggestions.push(CollectionSuggestion {
+                name: format!("Books by {author}"),
+                icon: "📖".to_string(),
+                color: colors[color_idx % colors.len()].to_string(),
+                rules: vec![NewRuleInput {
+                    field: "author".to_string(),
+                    operator: "equals".to_string(),
+                    value: author,
+                }],
+                matched_book_count: count,
+                heuristic_type: "author".to_string(),
+            });
+            color_idx += 1;
+        }
+    }
+
+    // Series heuristic: series with 2+ books
+    {
+        let mut stmt = conn.prepare(
+            "SELECT series, COUNT(*) as cnt FROM books \
+             WHERE series IS NOT NULL AND series != '' \
+             GROUP BY series HAVING cnt >= 2 \
+             ORDER BY cnt DESC LIMIT 5",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, usize>(1)?))
+        })?;
+        for row in rows {
+            let (series, count) = row?;
+            if existing_rules
+                .iter()
+                .any(|(f, o, v)| *f == "series" && *o == "equals" && *v == series)
+            {
+                continue;
+            }
+            suggestions.push(CollectionSuggestion {
+                name: format!("{series} series"),
+                icon: "📚".to_string(),
+                color: colors[color_idx % colors.len()].to_string(),
+                rules: vec![NewRuleInput {
+                    field: "series".to_string(),
+                    operator: "equals".to_string(),
+                    value: series,
+                }],
+                matched_book_count: count,
+                heuristic_type: "series".to_string(),
+            });
+            color_idx += 1;
+        }
+    }
+
+    // Reading status heuristic: unread and finished
+    {
+        // Unread: books with no reading_progress entry
+        let unread_count: usize = conn.query_row(
+            "SELECT COUNT(*) FROM books b \
+             LEFT JOIN reading_progress rp ON rp.book_id = b.id \
+             WHERE rp.book_id IS NULL",
+            [],
+            |row| row.get(0),
+        )?;
+        if unread_count >= 3
+            && !existing_rules
+                .iter()
+                .any(|(f, o, v)| *f == "reading_progress" && *o == "equals" && *v == "unread")
+        {
+            suggestions.push(CollectionSuggestion {
+                name: "Unread books".to_string(),
+                icon: "🎯".to_string(),
+                color: colors[color_idx % colors.len()].to_string(),
+                rules: vec![NewRuleInput {
+                    field: "reading_progress".to_string(),
+                    operator: "equals".to_string(),
+                    value: "unread".to_string(),
+                }],
+                matched_book_count: unread_count,
+                heuristic_type: "reading_status".to_string(),
+            });
+            color_idx += 1;
+        }
+
+        // Finished: books where chapter_index >= total_chapters - 1
+        let finished_count: usize = conn.query_row(
+            "SELECT COUNT(*) FROM books b \
+             JOIN reading_progress rp ON rp.book_id = b.id \
+             WHERE rp.chapter_index >= b.total_chapters - 1 AND b.total_chapters > 0",
+            [],
+            |row| row.get(0),
+        )?;
+        if finished_count >= 2
+            && !existing_rules
+                .iter()
+                .any(|(f, o, v)| *f == "reading_progress" && *o == "equals" && *v == "finished")
+        {
+            suggestions.push(CollectionSuggestion {
+                name: "Finished books".to_string(),
+                icon: "🏆".to_string(),
+                color: colors[color_idx % colors.len()].to_string(),
+                rules: vec![NewRuleInput {
+                    field: "reading_progress".to_string(),
+                    operator: "equals".to_string(),
+                    value: "finished".to_string(),
+                }],
+                matched_book_count: finished_count,
+                heuristic_type: "reading_status".to_string(),
+            });
+            color_idx += 1;
+        }
+    }
+
+    // Format heuristic: non-dominant formats with 3+ books
+    {
+        let total_books: usize =
+            conn.query_row("SELECT COUNT(*) FROM books", [], |row| row.get(0))?;
+        if total_books > 0 {
+            let mut stmt = conn.prepare(
+                "SELECT format, COUNT(*) as cnt FROM books \
+                 GROUP BY format HAVING cnt >= 3 \
+                 ORDER BY cnt DESC",
+            )?;
+            let rows = stmt.query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, usize>(1)?))
+            })?;
+            for row in rows {
+                let (format, count) = row?;
+                // Skip dominant format (≥ 75% of all books)
+                if count * 4 >= total_books * 3 {
+                    continue;
+                }
+                if existing_rules
+                    .iter()
+                    .any(|(f, o, v)| *f == "format" && *o == "equals" && *v == format)
+                {
+                    continue;
+                }
+                let display_name = format.to_uppercase();
+                suggestions.push(CollectionSuggestion {
+                    name: format!("{display_name} Books"),
+                    icon: "📄".to_string(),
+                    color: colors[color_idx % colors.len()].to_string(),
+                    rules: vec![NewRuleInput {
+                        field: "format".to_string(),
+                        operator: "equals".to_string(),
+                        value: format,
+                    }],
+                    matched_book_count: count,
+                    heuristic_type: "format".to_string(),
+                });
+                color_idx += 1;
+            }
+        }
+    }
+
+    suggestions.sort_by(|a, b| b.matched_book_count.cmp(&a.matched_book_count));
+    suggestions.truncate(8);
+    Ok(suggestions)
 }
 
 #[cfg(test)]
@@ -3546,5 +3750,280 @@ mod tests {
         assert_eq!(results.len(), 1);
         let results = search_highlights(&conn, "underXscore", 100).unwrap();
         assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_suggest_reading_status() {
+        let (_dir, conn) = setup();
+
+        // 4 books with no reading progress → "unread"
+        for i in 0..4 {
+            let mut book = sample_book(&format!("unread-{i}"));
+            book.title = format!("Unread Book {i}");
+            book.file_path = format!("/tmp/unread-{i}.epub");
+            insert_book(&conn, &book).unwrap();
+        }
+
+        // 3 finished books
+        for i in 0..3 {
+            let mut book = sample_book(&format!("finished-{i}"));
+            book.title = format!("Finished Book {i}");
+            book.total_chapters = 5;
+            book.file_path = format!("/tmp/finished-{i}.epub");
+            insert_book(&conn, &book).unwrap();
+            let progress = ReadingProgress {
+                book_id: format!("finished-{i}"),
+                chapter_index: 4, // >= total_chapters - 1
+                scroll_position: 1.0,
+                last_read_at: 1700000000,
+            };
+            upsert_reading_progress(&conn, &progress).unwrap();
+        }
+
+        let suggestions = get_collection_suggestions(&conn, &[]).unwrap();
+        let status_suggestions: Vec<_> = suggestions
+            .iter()
+            .filter(|s| s.heuristic_type == "reading_status")
+            .collect();
+
+        assert_eq!(status_suggestions.len(), 2);
+
+        let unread = status_suggestions.iter().find(|s| s.name == "Unread books").unwrap();
+        assert_eq!(unread.matched_book_count, 4);
+        assert_eq!(unread.rules[0].value, "unread");
+
+        let finished = status_suggestions.iter().find(|s| s.name == "Finished books").unwrap();
+        assert_eq!(finished.matched_book_count, 3);
+        assert_eq!(finished.rules[0].value, "finished");
+    }
+
+    #[test]
+    fn test_finished_rule_excludes_zero_chapter_books() {
+        let (_dir, conn) = setup();
+
+        // Book with total_chapters = 0 and reading progress — must NOT count as finished
+        let mut book = sample_book("zero-ch");
+        book.total_chapters = 0;
+        book.file_path = "/tmp/zero-ch.epub".to_string();
+        insert_book(&conn, &book).unwrap();
+        upsert_reading_progress(
+            &conn,
+            &ReadingProgress {
+                book_id: "zero-ch".to_string(),
+                chapter_index: 0,
+                scroll_position: 0.0,
+                last_read_at: 1700000000,
+            },
+        )
+        .unwrap();
+
+        // 2 legitimately finished books
+        for i in 0..2 {
+            let mut b = sample_book(&format!("legit-{i}"));
+            b.total_chapters = 5;
+            b.file_path = format!("/tmp/legit-{i}.epub");
+            insert_book(&conn, &b).unwrap();
+            upsert_reading_progress(
+                &conn,
+                &ReadingProgress {
+                    book_id: format!("legit-{i}"),
+                    chapter_index: 4,
+                    scroll_position: 1.0,
+                    last_read_at: 1700000000,
+                },
+            )
+            .unwrap();
+        }
+
+        // Verify suggestion count excludes zero-chapter book
+        let suggestions = get_collection_suggestions(&conn, &[]).unwrap();
+        let finished = suggestions.iter().find(|s| s.name == "Finished books");
+        assert_eq!(finished.unwrap().matched_book_count, 2);
+
+        // Verify build_rule_query also excludes it
+        let rules = vec![CollectionRule {
+            id: "r1".to_string(),
+            collection_id: "c1".to_string(),
+            field: "reading_progress".to_string(),
+            operator: "equals".to_string(),
+            value: "finished".to_string(),
+        }];
+        let (joins, wheres, params) = build_rule_query(&rules);
+        let sql = format!(
+            "SELECT COUNT(*) FROM books b {joins} {wheres}",
+        );
+        let count: usize = conn
+            .query_row(&sql, rusqlite::params_from_iter(params), |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 2, "zero-chapter book must not match finished rule");
+    }
+
+    #[test]
+    fn test_suggest_series_collections() {
+        let (_dir, conn) = setup();
+
+        for i in 0..3 {
+            let mut book = sample_book(&format!("series-{i}"));
+            book.series = Some("Discworld".to_string());
+            book.volume = Some(i as u32 + 1);
+            book.title = format!("Discworld {}", i + 1);
+            book.file_path = format!("/tmp/series-{i}.epub");
+            insert_book(&conn, &book).unwrap();
+        }
+
+        let suggestions = get_collection_suggestions(&conn, &[]).unwrap();
+        let series_suggestions: Vec<_> = suggestions
+            .iter()
+            .filter(|s| s.heuristic_type == "series")
+            .collect();
+
+        assert_eq!(series_suggestions.len(), 1);
+        assert_eq!(series_suggestions[0].name, "Discworld series");
+        assert_eq!(series_suggestions[0].matched_book_count, 3);
+        assert_eq!(series_suggestions[0].rules[0].field, "series");
+        assert_eq!(series_suggestions[0].rules[0].operator, "equals");
+        assert_eq!(series_suggestions[0].rules[0].value, "Discworld");
+    }
+
+    #[test]
+    fn test_dedup_existing_collections() {
+        let (_dir, conn) = setup();
+
+        for i in 0..4 {
+            let mut book = sample_book(&format!("dedup-{i}"));
+            book.author = "Agatha Christie".to_string();
+            book.title = format!("Mystery {i}");
+            book.file_path = format!("/tmp/dedup-{i}.epub");
+            insert_book(&conn, &book).unwrap();
+        }
+
+        // Simulate existing automated collection with same author rule
+        let existing = vec![Collection {
+            id: "existing-1".to_string(),
+            name: "Christie Books".to_string(),
+            r#type: CollectionType::Automated,
+            icon: None,
+            color: None,
+            created_at: 0,
+            updated_at: 0,
+            rules: vec![CollectionRule {
+                id: "rule-1".to_string(),
+                collection_id: "existing-1".to_string(),
+                field: "author".to_string(),
+                operator: "equals".to_string(),
+                value: "Agatha Christie".to_string(),
+            }],
+        }];
+
+        let suggestions = get_collection_suggestions(&conn, &existing).unwrap();
+        let author_suggestions: Vec<_> = suggestions
+            .iter()
+            .filter(|s| s.heuristic_type == "author")
+            .collect();
+
+        assert_eq!(author_suggestions.len(), 0);
+    }
+
+    #[test]
+    fn test_no_suggestions_small_library() {
+        let (_dir, conn) = setup();
+
+        let mut book = sample_book("lonely-book");
+        book.file_path = "/tmp/lonely.epub".to_string();
+        insert_book(&conn, &book).unwrap();
+
+        let suggestions = get_collection_suggestions(&conn, &[]).unwrap();
+        assert!(suggestions.is_empty());
+    }
+
+    #[test]
+    fn test_suggestion_limit() {
+        let (_dir, conn) = setup();
+
+        // Create 10 distinct authors with 3+ books each → 10 potential suggestions
+        for a in 0..10 {
+            for i in 0..3 {
+                let mut book = sample_book(&format!("limit-{a}-{i}"));
+                book.author = format!("Author {a}");
+                book.title = format!("Book {a}-{i}");
+                book.file_path = format!("/tmp/limit-{a}-{i}.epub");
+                insert_book(&conn, &book).unwrap();
+            }
+        }
+
+        let suggestions = get_collection_suggestions(&conn, &[]).unwrap();
+        assert!(suggestions.len() <= 8);
+    }
+
+    #[test]
+    fn test_suggest_format() {
+        let (_dir, conn) = setup();
+
+        // 10 EPUBs (dominant — should be skipped)
+        for i in 0..10 {
+            let mut book = sample_book(&format!("epub-{i}"));
+            book.title = format!("Epub Book {i}");
+            book.format = BookFormat::Epub;
+            book.file_path = format!("/tmp/epub-{i}.epub");
+            insert_book(&conn, &book).unwrap();
+        }
+        // 3 PDFs (non-dominant — should be suggested)
+        for i in 0..3 {
+            let mut book = sample_book(&format!("pdf-{i}"));
+            book.title = format!("PDF Book {i}");
+            book.format = BookFormat::Pdf;
+            book.file_path = format!("/tmp/pdf-{i}.pdf");
+            insert_book(&conn, &book).unwrap();
+        }
+
+        let suggestions = get_collection_suggestions(&conn, &[]).unwrap();
+        let format_suggestions: Vec<_> = suggestions
+            .iter()
+            .filter(|s| s.heuristic_type == "format")
+            .collect();
+
+        // EPUB ≥75% so skipped; PDF = 3 books so suggested
+        assert_eq!(format_suggestions.len(), 1);
+        assert_eq!(format_suggestions[0].name, "PDF Books");
+        assert_eq!(format_suggestions[0].matched_book_count, 3);
+        assert_eq!(format_suggestions[0].rules[0].field, "format");
+        assert_eq!(format_suggestions[0].rules[0].value, "pdf");
+    }
+
+    #[test]
+    fn test_suggest_author_collections() {
+        let (_dir, conn) = setup();
+
+        for i in 0..4 {
+            let id = format!("author-test-{i}");
+            let mut book = sample_book(&id);
+            book.author = "J.R.R. Tolkien".to_string();
+            book.title = format!("Book {i}");
+            book.file_path = format!("/tmp/{id}.epub");
+            insert_book(&conn, &book).unwrap();
+        }
+        // Add 2 books by another author (below threshold)
+        for i in 0..2 {
+            let id = format!("other-{i}");
+            let mut book = sample_book(&id);
+            book.author = "Other Author".to_string();
+            book.title = format!("Other {i}");
+            book.file_path = format!("/tmp/{id}.epub");
+            insert_book(&conn, &book).unwrap();
+        }
+
+        let suggestions = get_collection_suggestions(&conn, &[]).unwrap();
+        let author_suggestions: Vec<_> = suggestions
+            .iter()
+            .filter(|s| s.heuristic_type == "author")
+            .collect();
+
+        assert_eq!(author_suggestions.len(), 1);
+        assert_eq!(author_suggestions[0].name, "Books by J.R.R. Tolkien");
+        assert_eq!(author_suggestions[0].matched_book_count, 4);
+        assert_eq!(author_suggestions[0].rules.len(), 1);
+        assert_eq!(author_suggestions[0].rules[0].field, "author");
+        assert_eq!(author_suggestions[0].rules[0].operator, "equals");
+        assert_eq!(author_suggestions[0].rules[0].value, "J.R.R. Tolkien");
     }
 }
