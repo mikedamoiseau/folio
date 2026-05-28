@@ -66,7 +66,7 @@ impl IpcMetrics {
             timestamp,
             success,
         };
-        let mut guard = self.entries.lock().unwrap();
+        let mut guard = self.entries.lock().unwrap_or_else(|e| e.into_inner());
         if guard.len() >= self.capacity {
             guard.pop_front();
         }
@@ -74,11 +74,16 @@ impl IpcMetrics {
     }
 
     pub fn entries(&self) -> Vec<MetricEntry> {
-        self.entries.lock().unwrap().iter().cloned().collect()
+        self.entries
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .iter()
+            .cloned()
+            .collect()
     }
 
     pub fn summary(&self) -> Vec<CommandSummary> {
-        let guard = self.entries.lock().unwrap();
+        let guard = self.entries.lock().unwrap_or_else(|e| e.into_inner());
         Self::compute_summary(&guard, self.slow_threshold_ms)
     }
 
@@ -98,10 +103,10 @@ impl IpcMetrics {
             .map(|(command, mut times)| {
                 let count = times.len() as u64;
                 let avg_ms = times.iter().sum::<f64>() / times.len() as f64;
-                let max_ms = times.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
                 let slow_count = times.iter().filter(|&&t| t > slow_threshold_ms).count() as u64;
 
-                times.sort_by(|a, b| a.partial_cmp(b).unwrap());
+                times.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+                let max_ms = times.last().copied().unwrap_or(0.0);
                 let p95_idx = ((count as f64 * 0.95).ceil() as usize).saturating_sub(1);
                 let p95_ms = times.get(p95_idx).copied().unwrap_or(0.0);
 
@@ -121,7 +126,7 @@ impl IpcMetrics {
     }
 
     pub fn response(&self) -> IpcMetricsResponse {
-        let guard = self.entries.lock().unwrap();
+        let guard = self.entries.lock().unwrap_or_else(|e| e.into_inner());
         let total_entries = guard.len();
         let summary = Self::compute_summary(&guard, self.slow_threshold_ms);
         let recent: Vec<MetricEntry> = guard.iter().rev().take(20).cloned().collect();
@@ -133,7 +138,10 @@ impl IpcMetrics {
     }
 
     pub fn clear(&self) {
-        self.entries.lock().unwrap().clear();
+        self.entries
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
     }
 }
 
@@ -148,12 +156,21 @@ impl<'a> TimingGuard<'a> {
     pub fn mark_error(&mut self) {
         self.error = true;
     }
+
+    pub fn run<T, E, F: FnOnce() -> Result<T, E>>(mut self, f: F) -> Result<T, E> {
+        let result = f();
+        if result.is_err() {
+            self.error = true;
+        }
+        result
+    }
 }
 
 impl<'a> Drop for TimingGuard<'a> {
     fn drop(&mut self) {
         let elapsed_ms = self.start.elapsed().as_secs_f64() * 1000.0;
-        self.metrics.record(self.command, elapsed_ms, !self.error);
+        let success = !self.error && !std::thread::panicking();
+        self.metrics.record(self.command, elapsed_ms, success);
     }
 }
 
@@ -270,6 +287,28 @@ mod tests {
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].command, "fail_cmd");
         assert!(!entries[0].success);
+    }
+
+    #[test]
+    fn run_records_error_on_failure() {
+        let m = IpcMetrics::new(100, 500.0);
+        let result: Result<(), &str> = m.time("will_fail").run(|| Err("boom"));
+        assert!(result.is_err());
+        let entries = m.entries();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].command, "will_fail");
+        assert!(!entries[0].success);
+    }
+
+    #[test]
+    fn run_records_success_on_ok() {
+        let m = IpcMetrics::new(100, 500.0);
+        let result: Result<i32, &str> = m.time("will_pass").run(|| Ok(42));
+        assert_eq!(result.unwrap(), 42);
+        let entries = m.entries();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].command, "will_pass");
+        assert!(entries[0].success);
     }
 
     #[test]
