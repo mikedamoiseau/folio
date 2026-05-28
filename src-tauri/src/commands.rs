@@ -6,6 +6,7 @@ use crate::cbz;
 use crate::db::{self, DbPool};
 use crate::epub;
 use crate::error::{FolioError, FolioResult};
+use crate::ipc_metrics::IpcMetrics;
 use crate::models::{
     AutoBackup, Book, BookFormat, BookGridItem, Bookmark, ChapterMeta, CleanupEntry,
     CleanupProgress, CleanupResult, Collection, CollectionRule, CollectionSuggestion,
@@ -15,7 +16,6 @@ use crate::models::{
 use crate::opds;
 use crate::openlibrary;
 use crate::page_cache;
-use crate::ipc_metrics::IpcMetrics;
 use crate::pdf;
 
 /// A simple LRU cache that bundles the data map and access order in a single
