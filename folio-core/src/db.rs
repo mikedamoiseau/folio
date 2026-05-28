@@ -3820,6 +3820,76 @@ mod tests {
     }
 
     #[test]
+    fn test_dedup_existing_collections() {
+        let (_dir, conn) = setup();
+
+        for i in 0..4 {
+            let mut book = sample_book(&format!("dedup-{i}"));
+            book.author = "Agatha Christie".to_string();
+            book.title = format!("Mystery {i}");
+            book.file_path = format!("/tmp/dedup-{i}.epub");
+            insert_book(&conn, &book).unwrap();
+        }
+
+        // Simulate existing automated collection with same author rule
+        let existing = vec![Collection {
+            id: "existing-1".to_string(),
+            name: "Christie Books".to_string(),
+            r#type: CollectionType::Automated,
+            icon: None,
+            color: None,
+            created_at: 0,
+            updated_at: 0,
+            rules: vec![CollectionRule {
+                id: "rule-1".to_string(),
+                collection_id: "existing-1".to_string(),
+                field: "author".to_string(),
+                operator: "equals".to_string(),
+                value: "Agatha Christie".to_string(),
+            }],
+        }];
+
+        let suggestions = get_collection_suggestions(&conn, &existing).unwrap();
+        let author_suggestions: Vec<_> = suggestions
+            .iter()
+            .filter(|s| s.heuristic_type == "author")
+            .collect();
+
+        assert_eq!(author_suggestions.len(), 0);
+    }
+
+    #[test]
+    fn test_no_suggestions_small_library() {
+        let (_dir, conn) = setup();
+
+        let mut book = sample_book("lonely-book");
+        book.file_path = "/tmp/lonely.epub".to_string();
+        insert_book(&conn, &book).unwrap();
+
+        let suggestions = get_collection_suggestions(&conn, &[]).unwrap();
+        assert!(suggestions.is_empty());
+    }
+
+    #[test]
+    fn test_suggestion_limit() {
+        let (_dir, conn) = setup();
+
+        // Create 10 distinct authors with 3+ books each → 10 potential suggestions
+        for a in 0..10 {
+            for i in 0..3 {
+                let mut book = sample_book(&format!("limit-{a}-{i}"));
+                book.author = format!("Author {a}");
+                book.title = format!("Book {a}-{i}");
+                book.file_path = format!("/tmp/limit-{a}-{i}.epub");
+                insert_book(&conn, &book).unwrap();
+            }
+        }
+
+        let suggestions = get_collection_suggestions(&conn, &[]).unwrap();
+        assert!(suggestions.len() <= 8);
+    }
+
+    #[test]
     fn test_suggest_format() {
         let (_dir, conn) = setup();
 
