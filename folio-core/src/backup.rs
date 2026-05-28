@@ -146,6 +146,26 @@ pub fn classify_opendal_error(err: &opendal::Error) -> ConnectionTestResult {
 pub fn test_connection(config: &BackupConfig) -> ConnectionTestResult {
     let start = std::time::Instant::now();
 
+    // Pre-flight: verify SSH key file exists if configured
+    if config.provider_type == ProviderType::Sftp {
+        if let Some(key_path) = config.values.get("key") {
+            if !key_path.is_empty() {
+                let expanded = if key_path.starts_with("~/") {
+                    dirs::home_dir()
+                        .map(|h| h.join(&key_path[2..]))
+                        .unwrap_or_else(|| std::path::PathBuf::from(key_path))
+                } else {
+                    std::path::PathBuf::from(key_path)
+                };
+                if !expanded.exists() {
+                    return ConnectionTestResult::AuthFailed {
+                        message: format!("SSH key not found: {}", expanded.display()),
+                    };
+                }
+            }
+        }
+    }
+
     let op = match build_operator(config) {
         Ok(op) => op,
         Err(e) => {
