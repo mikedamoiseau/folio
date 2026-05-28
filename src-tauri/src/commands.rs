@@ -8,7 +8,8 @@ use crate::epub;
 use crate::error::{FolioError, FolioResult};
 use crate::models::{
     AutoBackup, Book, BookFormat, BookGridItem, Bookmark, ChapterMeta, CleanupEntry,
-    CleanupProgress, CleanupResult, Collection, CollectionRule, CollectionType, CustomFont,
+    CleanupProgress, CleanupResult, Collection, CollectionRule, CollectionSuggestion,
+    CollectionType, CustomFont,
     FeatureFlag, Highlight, HighlightSearchResult, NewRuleInput, ReadingProgress, SeriesInfo,
 };
 use crate::opds;
@@ -4988,6 +4989,15 @@ pub async fn preview_collection_rules(
 ) -> FolioResult<usize> {
     let conn = state.active_db()?.get()?;
     Ok(db::preview_collection_rules(&conn, &rules)?)
+}
+
+#[tauri::command]
+pub async fn get_collection_suggestions(
+    state: State<'_, AppState>,
+) -> FolioResult<Vec<CollectionSuggestion>> {
+    let conn = state.active_db()?.get()?;
+    let collections = db::list_collections(&conn)?;
+    Ok(db::get_collection_suggestions(&conn, &collections)?)
 }
 
 fn derive_font_name(file_name: &str) -> String {
