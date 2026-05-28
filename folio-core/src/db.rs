@@ -5,8 +5,9 @@ use std::path::Path;
 use std::time::Duration;
 
 use crate::models::{
-    ActivityEntry, Book, BookGridItem, Bookmark, Collection, CollectionRule, CollectionType,
-    CustomFont, FeatureFlag, HighlightSearchResult, ReadingProgress, SeriesInfo,
+    ActivityEntry, Book, BookGridItem, Bookmark, Collection, CollectionRule, CollectionSuggestion,
+    CollectionType, CustomFont, FeatureFlag, HighlightSearchResult, NewRuleInput, ReadingProgress,
+    SeriesInfo,
 };
 
 pub type DbPool = Pool<SqliteConnectionManager>;
@@ -1958,6 +1959,67 @@ pub fn log_pin_change(conn: &Connection, source: &str) -> Result<()> {
     Ok(())
 }
 
+pub fn get_collection_suggestions(
+    conn: &Connection,
+    existing_collections: &[Collection],
+) -> Result<Vec<CollectionSuggestion>> {
+    let mut suggestions = Vec::new();
+    let colors = [
+        "#c2714e", "#6b8f71", "#7a6b9a", "#4e7a8f", "#8f7a4e", "#8f4e4e", "#4e8f8a",
+        "#666666",
+    ];
+    let mut color_idx = 0;
+
+    let existing_rules: Vec<(&str, &str, &str)> = existing_collections
+        .iter()
+        .filter(|c| matches!(c.r#type, CollectionType::Automated))
+        .flat_map(|c| {
+            c.rules
+                .iter()
+                .map(|r| (r.field.as_str(), r.operator.as_str(), r.value.as_str()))
+        })
+        .collect();
+
+    // Author heuristic: authors with 3+ books
+    {
+        let mut stmt = conn.prepare(
+            "SELECT author, COUNT(*) as cnt FROM books \
+             WHERE author IS NOT NULL AND author != '' \
+             GROUP BY author HAVING cnt >= 3 \
+             ORDER BY cnt DESC LIMIT 5",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, usize>(1)?))
+        })?;
+        for row in rows {
+            let (author, count) = row?;
+            if existing_rules
+                .iter()
+                .any(|(f, o, v)| *f == "author" && *o == "equals" && *v == author)
+            {
+                continue;
+            }
+            suggestions.push(CollectionSuggestion {
+                name: format!("Books by {author}"),
+                icon: "📖".to_string(),
+                color: colors[color_idx % colors.len()].to_string(),
+                rules: vec![NewRuleInput {
+                    field: "author".to_string(),
+                    operator: "equals".to_string(),
+                    value: author,
+                }],
+                matched_book_count: count,
+                heuristic_type: "author".to_string(),
+            });
+            color_idx += 1;
+        }
+    }
+
+    suggestions.sort_by(|a, b| b.matched_book_count.cmp(&a.matched_book_count));
+    suggestions.truncate(8);
+    Ok(suggestions)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3546,5 +3608,42 @@ mod tests {
         assert_eq!(results.len(), 1);
         let results = search_highlights(&conn, "underXscore", 100).unwrap();
         assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_suggest_author_collections() {
+        let (_dir, conn) = setup();
+
+        for i in 0..4 {
+            let id = format!("author-test-{i}");
+            let mut book = sample_book(&id);
+            book.author = "J.R.R. Tolkien".to_string();
+            book.title = format!("Book {i}");
+            book.file_path = format!("/tmp/{id}.epub");
+            insert_book(&conn, &book).unwrap();
+        }
+        // Add 2 books by another author (below threshold)
+        for i in 0..2 {
+            let id = format!("other-{i}");
+            let mut book = sample_book(&id);
+            book.author = "Other Author".to_string();
+            book.title = format!("Other {i}");
+            book.file_path = format!("/tmp/{id}.epub");
+            insert_book(&conn, &book).unwrap();
+        }
+
+        let suggestions = get_collection_suggestions(&conn, &[]).unwrap();
+        let author_suggestions: Vec<_> = suggestions
+            .iter()
+            .filter(|s| s.heuristic_type == "author")
+            .collect();
+
+        assert_eq!(author_suggestions.len(), 1);
+        assert_eq!(author_suggestions[0].name, "Books by J.R.R. Tolkien");
+        assert_eq!(author_suggestions[0].matched_book_count, 4);
+        assert_eq!(author_suggestions[0].rules.len(), 1);
+        assert_eq!(author_suggestions[0].rules[0].field, "author");
+        assert_eq!(author_suggestions[0].rules[0].operator, "equals");
+        assert_eq!(author_suggestions[0].rules[0].value, "J.R.R. Tolkien");
     }
 }
