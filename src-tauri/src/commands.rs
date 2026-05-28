@@ -6,6 +6,7 @@ use crate::cbz;
 use crate::db::{self, DbPool};
 use crate::epub;
 use crate::error::{FolioError, FolioResult};
+use crate::ipc_metrics::IpcMetrics;
 use crate::models::{
     AutoBackup, Book, BookFormat, BookGridItem, Bookmark, ChapterMeta, CleanupEntry,
     CleanupProgress, CleanupResult, Collection, CollectionRule, CollectionSuggestion,
@@ -186,6 +187,8 @@ pub struct AppState {
     pub shared_pin_hash: std::sync::Arc<std::sync::Mutex<Option<String>>>,
     /// Handle to the running web server (lock #5).
     pub web_server_handle: std::sync::Mutex<Option<crate::web_server::WebServerHandle>>,
+    /// IPC command timing metrics (leaf lock — no ordering constraint).
+    pub ipc_metrics: IpcMetrics,
 }
 
 impl AppState {
@@ -502,6 +505,7 @@ pub async fn import_book(
     state: State<'_, AppState>,
     _app: AppHandle,
 ) -> FolioResult<Book> {
+    let _t = state.ipc_metrics.time("import_book");
     let db_pool = state.active_db()?;
     let storage = state.active_storage()?;
     let covers_storage = state.covers_storage()?;
@@ -1085,12 +1089,14 @@ pub(crate) fn import_book_inner(
 
 #[tauri::command]
 pub async fn get_library(state: State<'_, AppState>) -> FolioResult<Vec<Book>> {
+    let _t = state.ipc_metrics.time("get_library");
     let conn = state.active_db()?.get()?;
     Ok(db::list_books(&conn)?)
 }
 
 #[tauri::command]
 pub async fn get_library_grid(state: State<'_, AppState>) -> FolioResult<Vec<BookGridItem>> {
+    let _t = state.ipc_metrics.time("get_library_grid");
     let conn = state.active_db()?.get()?;
     Ok(db::list_books_grid(&conn)?)
 }
@@ -1206,6 +1212,8 @@ pub async fn scan_folder_for_books(
     folder_path: String,
     app: AppHandle,
 ) -> FolioResult<Vec<String>> {
+    let _state = app.state::<AppState>();
+    let _t = _state.ipc_metrics.time("scan_folder_for_books");
     let dir = std::path::Path::new(&folder_path);
     if !dir.is_dir() {
         return Err(FolioError::invalid(format!(
@@ -1430,6 +1438,7 @@ pub async fn get_chapter_content(
     chapter_index: u32,
     state: State<'_, AppState>,
 ) -> FolioResult<String> {
+    let _t = state.ipc_metrics.time("get_chapter_content");
     let (file_path, format) = {
         let conn = state.active_db()?.get()?;
         let book = db::get_book(&conn, &book_id)?
@@ -1484,6 +1493,7 @@ pub async fn search_book_content(
     query: String,
     state: State<'_, AppState>,
 ) -> FolioResult<Vec<crate::models::SearchResult>> {
+    let _t = state.ipc_metrics.time("search_book_content");
     if query.trim().is_empty() {
         return Ok(Vec::new());
     }
@@ -1637,6 +1647,7 @@ pub async fn get_all_chapters(
     book_id: String,
     state: State<'_, AppState>,
 ) -> FolioResult<Vec<String>> {
+    let _t = state.ipc_metrics.time("get_all_chapters");
     let (file_path, total_chapters, format) = {
         let conn = state.active_db()?.get()?;
         let book = db::get_book(&conn, &book_id)?
@@ -1702,6 +1713,7 @@ pub async fn get_toc(
     book_id: String,
     state: State<'_, AppState>,
 ) -> FolioResult<Vec<crate::models::TocEntry>> {
+    let _t = state.ipc_metrics.time("get_toc");
     let (file_path, format) = {
         let conn = state.active_db()?.get()?;
         let book = db::get_book(&conn, &book_id)?
@@ -1985,6 +1997,7 @@ pub async fn get_comic_page_bytes(
     state: State<'_, AppState>,
     app: AppHandle,
 ) -> FolioResult<tauri::ipc::Response> {
+    let _t = state.ipc_metrics.time("get_comic_page_bytes");
     let start = std::time::Instant::now();
     let target_width = target_width.filter(|&w| w > 0).map(|w| w.min(9600));
 
@@ -2044,6 +2057,7 @@ pub async fn prepare_comic(
     state: State<'_, AppState>,
     app: AppHandle,
 ) -> FolioResult<page_cache::CacheManifest> {
+    let _t = state.ipc_metrics.time("prepare_comic");
     let (book, max_size_mb) = {
         let conn = state.active_db()?.get()?;
         let book = db::get_book(&conn, &book_id)?
@@ -2105,6 +2119,7 @@ pub async fn prepare_pdf(
     state: State<'_, AppState>,
     app: AppHandle,
 ) -> FolioResult<page_cache::CacheManifest> {
+    let _t = state.ipc_metrics.time("prepare_pdf");
     const PDF_PREWARM_PAGES: u32 = 10;
 
     let (book, max_size_mb) = {
@@ -2728,6 +2743,7 @@ pub async fn enrich_book_from_openlibrary(
     openlibrary_key: String,
     state: State<'_, AppState>,
 ) -> FolioResult<Book> {
+    let _t = state.ipc_metrics.time("enrich_book_from_openlibrary");
     // Fetch detailed metadata from OpenLibrary (on a separate thread)
     let key = openlibrary_key.clone();
     let (tx, rx) = std::sync::mpsc::channel();
@@ -3876,6 +3892,7 @@ pub async fn get_pdf_page_bytes(
     state: State<'_, AppState>,
     app: AppHandle,
 ) -> FolioResult<tauri::ipc::Response> {
+    let _t = state.ipc_metrics.time("get_pdf_page_bytes");
     let render_width = width.filter(|&w| w > 0).map(|w| w.min(9600));
 
     let book = {
@@ -4105,6 +4122,7 @@ pub async fn run_backup(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
 ) -> FolioResult<crate::backup::SyncResult> {
+    let _t = state.ipc_metrics.time("run_backup");
     let profile_name = {
         let ps = state.profile_state.lock()?;
         ps.active.clone()
@@ -4420,6 +4438,7 @@ pub async fn start_folder_import(
     state: State<'_, AppState>,
     app: AppHandle,
 ) -> FolioResult<()> {
+    let _t = state.ipc_metrics.time("start_folder_import");
     // Validate the root folder up front so the IPC call surfaces obvious
     // mistakes (typo, deleted folder, file picked instead of directory,
     // permission denied, vanished network mount) instead of silently
@@ -5867,6 +5886,13 @@ pub async fn web_server_get_qr(state: State<'_, AppState>) -> FolioResult<String
         .map(|h| h.url.clone())
         .ok_or_else(|| FolioError::not_found("Web server is not running"))?;
     crate::web_server::auth::generate_qr_svg(&url)
+}
+
+#[tauri::command]
+pub async fn get_ipc_metrics(
+    state: State<'_, AppState>,
+) -> Result<crate::ipc_metrics::IpcMetricsResponse, String> {
+    Ok(state.ipc_metrics.response())
 }
 
 #[cfg(test)]
