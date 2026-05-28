@@ -1298,6 +1298,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn test_connection_network_error_bad_path() {
         let mut values = std::collections::HashMap::new();
         values.insert(
