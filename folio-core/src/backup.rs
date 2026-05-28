@@ -161,19 +161,21 @@ pub fn test_connection(config: &BackupConfig) -> ConnectionTestResult {
     }
 
     // Step 2: Write sentinel — confirms write permission
-    let timestamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs()
-        .to_string();
-    if let Err(e) = op.write(".folio-connection-test", timestamp.into_bytes()) {
+    let probe_path = format!(
+        ".folio-connection-test/{}.tmp",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    );
+    if let Err(e) = op.write(&probe_path, b"ok".to_vec()) {
         return ConnectionTestResult::PermissionDenied {
             message: e.to_string(),
         };
     }
 
     // Step 3: Cleanup — best-effort, don't fail on delete errors
-    let _ = op.delete(".folio-connection-test");
+    let _ = op.delete(&probe_path);
 
     let latency_ms = start.elapsed().as_millis() as u64;
     ConnectionTestResult::Ok { latency_ms }
@@ -1286,8 +1288,13 @@ mod tests {
             }
             other => panic!("Expected Ok, got {:?}", other),
         }
-        // Sentinel file should be cleaned up
-        assert!(!dir.path().join(".folio-connection-test").exists());
+        // Sentinel dir should be cleaned up (probe uses unique filename under it)
+        let probe_dir = dir.path().join(".folio-connection-test");
+        let has_leftover = probe_dir.exists()
+            && std::fs::read_dir(&probe_dir)
+                .map(|mut d| d.next().is_some())
+                .unwrap_or(false);
+        assert!(!has_leftover, "probe file should be cleaned up");
     }
 
     #[test]
