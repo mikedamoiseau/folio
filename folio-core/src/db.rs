@@ -3982,7 +3982,7 @@ mod tests {
             .filter(|s| s.heuristic_type == "format")
             .collect();
 
-        // EPUB >80% so skipped; PDF = 3 books so suggested
+        // EPUB ≥75% so skipped; PDF = 3 books so suggested
         assert_eq!(format_suggestions.len(), 1);
         assert_eq!(format_suggestions[0].name, "PDF Books");
         assert_eq!(format_suggestions[0].matched_book_count, 3);

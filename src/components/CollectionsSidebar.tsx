@@ -671,6 +671,7 @@ export default function CollectionsSidebar({
   };
 
   const handleAcceptSuggestion = async (suggestion: CollectionSuggestion) => {
+    setSuggestions((prev) => prev.filter((s) => s !== suggestion));
     await onCreate({
       name: suggestion.name,
       type: "automated",
@@ -678,7 +679,6 @@ export default function CollectionsSidebar({
       color: suggestion.color,
       rules: suggestion.rules,
     });
-    setSuggestions((prev) => prev.filter((s) => s !== suggestion));
   };
 
   const handleEditSuggestion = (suggestion: CollectionSuggestion) => {
