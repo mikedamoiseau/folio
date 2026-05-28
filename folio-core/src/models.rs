@@ -160,6 +160,17 @@ pub struct Collection {
     pub rules: Vec<CollectionRule>,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct CollectionSuggestion {
+    pub name: String,
+    pub icon: String,
+    pub color: String,
+    pub rules: Vec<NewRuleInput>,
+    pub matched_book_count: usize,
+    pub heuristic_type: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FeatureFlag {
