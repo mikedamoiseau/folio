@@ -2015,6 +2015,41 @@ pub fn get_collection_suggestions(
         }
     }
 
+    // Series heuristic: series with 2+ books
+    {
+        let mut stmt = conn.prepare(
+            "SELECT series, COUNT(*) as cnt FROM books \
+             WHERE series IS NOT NULL AND series != '' \
+             GROUP BY series HAVING cnt >= 2 \
+             ORDER BY cnt DESC LIMIT 5",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, usize>(1)?))
+        })?;
+        for row in rows {
+            let (series, count) = row?;
+            if existing_rules
+                .iter()
+                .any(|(f, o, v)| *f == "series" && *o == "equals" && *v == series)
+            {
+                continue;
+            }
+            suggestions.push(CollectionSuggestion {
+                name: format!("{series} series"),
+                icon: "📚".to_string(),
+                color: colors[color_idx % colors.len()].to_string(),
+                rules: vec![NewRuleInput {
+                    field: "series".to_string(),
+                    operator: "equals".to_string(),
+                    value: series,
+                }],
+                matched_book_count: count,
+                heuristic_type: "series".to_string(),
+            });
+            color_idx += 1;
+        }
+    }
+
     suggestions.sort_by(|a, b| b.matched_book_count.cmp(&a.matched_book_count));
     suggestions.truncate(8);
     Ok(suggestions)
@@ -3608,6 +3643,33 @@ mod tests {
         assert_eq!(results.len(), 1);
         let results = search_highlights(&conn, "underXscore", 100).unwrap();
         assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_suggest_series_collections() {
+        let (_dir, conn) = setup();
+
+        for i in 0..3 {
+            let mut book = sample_book(&format!("series-{i}"));
+            book.series = Some("Discworld".to_string());
+            book.volume = Some(i as u32 + 1);
+            book.title = format!("Discworld {}", i + 1);
+            book.file_path = format!("/tmp/series-{i}.epub");
+            insert_book(&conn, &book).unwrap();
+        }
+
+        let suggestions = get_collection_suggestions(&conn, &[]).unwrap();
+        let series_suggestions: Vec<_> = suggestions
+            .iter()
+            .filter(|s| s.heuristic_type == "series")
+            .collect();
+
+        assert_eq!(series_suggestions.len(), 1);
+        assert_eq!(series_suggestions[0].name, "Discworld series");
+        assert_eq!(series_suggestions[0].matched_book_count, 3);
+        assert_eq!(series_suggestions[0].rules[0].field, "series");
+        assert_eq!(series_suggestions[0].rules[0].operator, "equals");
+        assert_eq!(series_suggestions[0].rules[0].value, "Discworld");
     }
 
     #[test]
