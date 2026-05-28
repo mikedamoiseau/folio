@@ -431,7 +431,17 @@
     "pageCacheUsage": "Utilisation : {{size}} ({{count}} livres)",
     "pageCacheUsageEmpty": "Le cache est vide",
     "clearPageCache": "Vider le cache",
-    "clearPageCacheConfirm": "Cache vid\u00e9"
+    "clearPageCacheConfirm": "Cache vid\u00e9",
+    "saveAndTest": "Save & Test",
+    "testConnection": "Test Connection",
+    "testingConnection": "Testing connection\u2026",
+    "connected": "Connected ({{ms}}ms)",
+    "authFailed": "Authentication failed \u2014 check your credentials",
+    "writePermissionDenied": "Write permission denied \u2014 check bucket/folder permissions",
+    "networkError": "Could not connect to remote storage",
+    "connectionTimeout": "Connection timed out",
+    "noConfigSaved": "No backup configuration saved",
+    "testFailed": "Connection test failed: {{error}}"
   },
 
   "collections": {
@@ -697,5 +707,9 @@
     "modalFullChangelog": "Voir le changelog complet",
     "settingsButton": "Notes de version",
     "trayLabel": "Nouveaut\u00e9s"
+  },
+
+  "toast": {
+    "backupAuthFailed": "Backup authentication failed \u2014 check credentials in Settings"
   }
 }

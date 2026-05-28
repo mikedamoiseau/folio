@@ -54,7 +54,10 @@ pub struct BookSyncFile {
 
 #[derive(Debug)]
 pub enum SyncError {
-    Transport(String),
+    Transport {
+        message: String,
+        kind: Option<opendal::ErrorKind>,
+    },
     Timeout,
     Malformed(String),
 }
@@ -62,7 +65,7 @@ pub enum SyncError {
 impl fmt::Display for SyncError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            SyncError::Transport(msg) => write!(f, "Transport error: {msg}"),
+            SyncError::Transport { message, .. } => write!(f, "Transport error: {message}"),
             SyncError::Timeout => write!(f, "Sync operation timed out"),
             SyncError::Malformed(msg) => write!(f, "Malformed sync data: {msg}"),
         }
@@ -75,7 +78,7 @@ impl From<SyncError> for crate::error::FolioError {
     fn from(e: SyncError) -> Self {
         use crate::error::FolioError;
         match e {
-            SyncError::Transport(msg) => FolioError::network(msg),
+            SyncError::Transport { message, .. } => FolioError::network(message),
             SyncError::Timeout => FolioError::network("Sync operation timed out"),
             SyncError::Malformed(msg) => FolioError::invalid(format!("Malformed sync data: {msg}")),
         }
@@ -322,7 +325,13 @@ pub fn fetch_remote_sync(
     let data = match op.read(&path) {
         Ok(buf) => buf,
         Err(e) if e.kind() == opendal::ErrorKind::NotFound => return Ok(None),
-        Err(e) => return Err(SyncError::Transport(format!("Failed to read {path}: {e}"))),
+        Err(e) => {
+            let kind = Some(e.kind());
+            return Err(SyncError::Transport {
+                message: format!("Failed to read {path}: {e}"),
+                kind,
+            });
+        }
     };
     let file: BookSyncFile = serde_json::from_slice(&data.to_vec())
         .map_err(|e| SyncError::Malformed(format!("Failed to parse {path}: {e}")))?;
@@ -343,8 +352,13 @@ pub fn push_remote_sync(
     let path = sync_path(file_hash);
     let json = serde_json::to_string(payload)
         .map_err(|e| SyncError::Malformed(format!("Failed to serialize sync payload: {e}")))?;
-    op.write(&path, json.into_bytes())
-        .map_err(|e| SyncError::Transport(format!("Failed to write {path}: {e}")))?;
+    op.write(&path, json.into_bytes()).map_err(|e| {
+        let kind = Some(e.kind());
+        SyncError::Transport {
+            message: format!("Failed to write {path}: {e}"),
+            kind,
+        }
+    })?;
     Ok(())
 }
 
@@ -510,8 +524,17 @@ mod tests {
 
     #[test]
     fn sync_error_display() {
-        let transport = SyncError::Transport("connection refused".to_string());
-        assert_eq!(transport.to_string(), "Transport error: connection refused");
+        let transport = SyncError::Transport {
+            message: "connection refused".to_string(),
+            kind: None,
+        };
+        assert!(transport.to_string().contains("connection refused"));
+
+        let transport_with_kind = SyncError::Transport {
+            message: "access denied".to_string(),
+            kind: Some(opendal::ErrorKind::PermissionDenied),
+        };
+        assert!(transport_with_kind.to_string().contains("access denied"));
 
         let timeout = SyncError::Timeout;
         assert_eq!(timeout.to_string(), "Sync operation timed out");
