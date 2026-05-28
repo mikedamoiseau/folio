@@ -30,6 +30,15 @@ export interface CreateCollectionData {
   rules: Omit<CollectionRule, "id">[];
 }
 
+interface CollectionSuggestion {
+  name: string;
+  icon: string;
+  color: string;
+  rules: Omit<CollectionRule, "id">[];
+  matchedBookCount: number;
+  heuristicType: string;
+}
+
 interface CollectionsSidebarProps {
   open: boolean;
   collections: Collection[];
@@ -639,7 +648,56 @@ export default function CollectionsSidebar({
   onDropBook,
 }: CollectionsSidebarProps) {
   const { t } = useTranslation();
-  const [formMode, setFormMode] = useState<{ mode: "create" } | { mode: "edit"; collection: Collection } | null>(null);
+  const [formMode, setFormMode] = useState<
+    | { mode: "create"; prefill?: CreateCollectionData }
+    | { mode: "edit"; collection: Collection }
+    | null
+  >(null);
+
+  const [suggestions, setSuggestions] = useState<CollectionSuggestion[]>([]);
+  const [showSuggestions, setShowSuggestions] = useState(false);
+  const [loadingSuggestions, setLoadingSuggestions] = useState(false);
+
+  const handleSuggest = async () => {
+    setLoadingSuggestions(true);
+    try {
+      const result = await invoke<CollectionSuggestion[]>("get_collection_suggestions");
+      setSuggestions(result);
+      setShowSuggestions(true);
+    } finally {
+      setLoadingSuggestions(false);
+    }
+  };
+
+  const handleAcceptSuggestion = async (suggestion: CollectionSuggestion) => {
+    await onCreate({
+      name: suggestion.name,
+      type: "automated",
+      icon: suggestion.icon,
+      color: suggestion.color,
+      rules: suggestion.rules,
+    });
+    setSuggestions((prev) => prev.filter((s) => s !== suggestion));
+  };
+
+  const handleEditSuggestion = (suggestion: CollectionSuggestion) => {
+    setFormMode({
+      mode: "create",
+      prefill: {
+        name: suggestion.name,
+        type: "automated",
+        icon: suggestion.icon,
+        color: suggestion.color,
+        rules: suggestion.rules,
+      },
+    });
+    setSuggestions((prev) => prev.filter((s) => s !== suggestion));
+  };
+
+  const handleDismissSuggestion = (suggestion: CollectionSuggestion) => {
+    setSuggestions((prev) => prev.filter((s) => s !== suggestion));
+    if (suggestions.length <= 1) setShowSuggestions(false);
+  };
 
   if (!open) return null;
 
@@ -658,6 +716,14 @@ export default function CollectionsSidebar({
     <aside className="fixed left-0 top-0 bottom-0 w-64 bg-surface border-r border-warm-border z-20 flex flex-col shadow-[4px_0_24px_-4px_rgba(44,34,24,0.12)] animate-slide-in-left">
         {formMode?.mode === "create" ? (
           <CollectionForm
+            initial={formMode.prefill ? {
+              id: "",
+              name: formMode.prefill.name,
+              type: formMode.prefill.type,
+              icon: formMode.prefill.icon,
+              color: formMode.prefill.color,
+              rules: formMode.prefill.rules.map((r, i) => ({ ...r, id: `prefill-${i}` })),
+            } : undefined}
             onSave={handleCreate}
             onCancel={() => setFormMode(null)}
           />
@@ -757,6 +823,59 @@ export default function CollectionsSidebar({
               )}
             </nav>
 
+            {/* Suggestion cards */}
+            {showSuggestions && suggestions.length > 0 && (
+              <div className="px-3 py-2 border-t border-warm-border overflow-y-auto">
+                <div className="text-[10px] uppercase tracking-wider text-ink-muted/50 mb-2 font-medium">
+                  {t("collections.suggested", "Suggested")}
+                </div>
+                <div className="space-y-2">
+                  {suggestions.map((s, i) => (
+                    <div
+                      key={`${s.heuristicType}-${s.name}-${i}`}
+                      className="border border-warm-border rounded-lg p-2.5 bg-warm-subtle/30"
+                    >
+                      <div className="flex items-center gap-2 mb-2">
+                        <span className="text-lg">{s.icon}</span>
+                        <div className="flex-1 min-w-0">
+                          <div className="text-xs font-semibold truncate">{s.name}</div>
+                          <div className="text-[10px] text-ink-muted/50">
+                            {s.matchedBookCount} {t("collections.booksMatch", "books match")} &bull; {s.heuristicType}
+                          </div>
+                        </div>
+                      </div>
+                      <div className="flex gap-1.5">
+                        <button
+                          onClick={() => handleAcceptSuggestion(s)}
+                          className="flex-1 text-[11px] py-1 px-2 rounded font-medium text-white transition-colors"
+                          style={{ backgroundColor: s.color }}
+                        >
+                          {t("collections.add", "Add")}
+                        </button>
+                        <button
+                          onClick={() => handleEditSuggestion(s)}
+                          className="text-[11px] py-1 px-2 rounded text-ink-muted hover:bg-warm-border transition-colors"
+                        >
+                          {t("collections.edit", "Edit")}
+                        </button>
+                        <button
+                          onClick={() => handleDismissSuggestion(s)}
+                          className="text-[11px] py-1 px-2 rounded text-ink-muted/40 hover:text-ink-muted transition-colors"
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+            {showSuggestions && suggestions.length === 0 && !loadingSuggestions && (
+              <div className="px-3 py-3 border-t border-warm-border text-center text-xs text-ink-muted/50">
+                {t("collections.noSuggestions", "No suggestions — your library is well-organized!")}
+              </div>
+            )}
+
             {/* Footer */}
             <div className="px-3 py-3 border-t border-warm-border shrink-0">
               <button
@@ -767,6 +886,23 @@ export default function CollectionsSidebar({
                   <path d="M10 4v12M4 10h12" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
                 </svg>
                 {t("collections.newCollection")}
+              </button>
+              <button
+                onClick={handleSuggest}
+                disabled={loadingSuggestions}
+                className="w-full flex items-center justify-center gap-1.5 py-2 mt-1.5 text-xs font-medium text-ink-muted hover:bg-warm-border rounded-lg transition-colors disabled:opacity-50"
+              >
+                {loadingSuggestions ? (
+                  <svg className="animate-spin" width="13" height="13" viewBox="0 0 24 24" fill="none">
+                    <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2" opacity="0.25" />
+                    <path d="M12 2a10 10 0 0 1 10 10" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                  </svg>
+                ) : (
+                  <svg width="13" height="13" viewBox="0 0 20 20" fill="none">
+                    <path d="M10 2l2.5 5.5L18 10l-5.5 2.5L10 18l-2.5-5.5L2 10l5.5-2.5z" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" />
+                  </svg>
+                )}
+                {t("collections.suggest", "Suggest Collections")}
               </button>
             </div>
           </>
