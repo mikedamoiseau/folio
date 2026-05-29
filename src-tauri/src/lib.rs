@@ -89,6 +89,9 @@ pub fn run() {
 
             // Load existing profile databases
             let data_dir = app.path().app_data_dir()?;
+            // Initialize structured logging as early as the data dir allows.
+            // Dev logs to stderr; prod writes a daily-rolling file under logs/.
+            let log_guard = observability::init_tracing(Some(data_dir.join("logs")));
             let mut profiles = std::collections::HashMap::new();
             if let Ok(entries) = std::fs::read_dir(&data_dir) {
                 for entry in entries.flatten() {
@@ -153,6 +156,7 @@ pub fn run() {
                 enrichment_registry,
                 web_server_handle: std::sync::Mutex::new(None),
                 ipc_metrics: crate::ipc_metrics::IpcMetrics::new(500, 500.0),
+                _log_guard: log_guard,
             });
 
             // Initialize system tray
