@@ -4986,6 +4986,29 @@ pub async fn get_activity_log(
 }
 
 #[tauri::command]
+pub async fn export_activity_log(
+    dest_path: String,
+    state: State<'_, AppState>,
+) -> FolioResult<String> {
+    let conn = state.active_db()?.get()?;
+    let rows = db::get_all_activity(&conn)?;
+    let json = serde_json::to_string_pretty(&rows)?;
+    std::fs::write(&dest_path, json)?;
+    Ok(dest_path)
+}
+
+#[tauri::command]
+pub async fn prune_activity_log(
+    keep: Option<u32>,
+    max_age_days: Option<u32>,
+    state: State<'_, AppState>,
+) -> FolioResult<usize> {
+    let conn = state.active_db()?.get()?;
+    let deleted = db::prune_activity_log(&conn, keep.unwrap_or(1000), max_age_days.unwrap_or(90))?;
+    Ok(deleted)
+}
+
+#[tauri::command]
 pub async fn preview_collection_rules(
     rules: Vec<crate::models::NewRuleInput>,
     state: State<'_, AppState>,
@@ -5874,6 +5897,33 @@ pub async fn get_ipc_metrics(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn export_activity_log_writes_parseable_json() {
+        use folio_core::db;
+        let dir = tempfile::tempdir().unwrap();
+        let conn = db::init_db(&dir.path().join("t.db")).unwrap();
+
+        log_event(
+            &conn,
+            folio_core::activity::ActivityEvent::BookImported {
+                id: "b1".into(),
+                title: "Title".into(),
+                format: "EPUB".into(),
+                author: "Auth".into(),
+            },
+        );
+
+        let rows = db::get_all_activity(&conn).unwrap();
+        let dest = dir.path().join("activity.json");
+        std::fs::write(&dest, serde_json::to_string_pretty(&rows).unwrap()).unwrap();
+
+        let parsed: Vec<folio_core::models::ActivityEntry> =
+            serde_json::from_str(&std::fs::read_to_string(&dest).unwrap()).unwrap();
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0].action, "book_imported");
+        assert_eq!(parsed[0].detail.as_deref(), Some("EPUB by Auth"));
+    }
 
     fn temp_covers_storage() -> (tempfile::TempDir, folio_core::storage::LocalStorage) {
         let dir = tempfile::tempdir().unwrap();
