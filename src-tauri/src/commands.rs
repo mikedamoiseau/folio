@@ -1,6 +1,8 @@
 use tauri::{AppHandle, Emitter, Manager, State};
 use uuid::Uuid;
 
+use folio_core::activity::ActivityEvent;
+
 use crate::cbr;
 use crate::cbz;
 use crate::db::{self, DbPool};
@@ -338,28 +340,22 @@ fn ensure_mobi_cached(
 
 // --- Activity logging ---
 
-fn log_activity(
-    conn: &rusqlite::Connection,
-    action: &str,
-    entity_type: &str,
-    entity_id: Option<&str>,
-    entity_name: Option<&str>,
-    detail: Option<&str>,
-) {
+fn log_event(conn: &rusqlite::Connection, event: ActivityEvent) {
+    let f = event.into_fields();
     let entry = crate::models::ActivityEntry {
         id: Uuid::new_v4().to_string(),
         timestamp: std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs() as i64,
-        action: action.to_string(),
-        entity_type: entity_type.to_string(),
-        entity_id: entity_id.map(|s| s.to_string()),
-        entity_name: entity_name.map(|s| s.to_string()),
-        detail: detail.map(|s| s.to_string()),
+        action: f.action.to_string(),
+        entity_type: f.entity_type.to_string(),
+        entity_id: f.entity_id,
+        entity_name: f.entity_name,
+        detail: f.detail,
     };
     let _ = db::insert_activity(conn, &entry);
-    let _ = db::prune_activity_log(conn, 1000);
+    let _ = db::prune_activity_log(conn, 1000, 90);
 }
 
 // --- Cover helpers (#64 M3) ---
@@ -1073,13 +1069,14 @@ pub(crate) fn import_book_inner(
         return Err(e.into());
     }
 
-    log_activity(
+    log_event(
         &tx,
-        "book_imported",
-        "book",
-        Some(&book.id),
-        Some(&book.title),
-        Some(&format!("{} by {}", book.format, book.author)),
+        ActivityEvent::BookImported {
+            id: book.id.clone(),
+            title: book.title.clone(),
+            format: book.format.to_string(),
+            author: book.author.clone(),
+        },
     );
 
     tx.commit().map_err(|e| {
@@ -1118,13 +1115,12 @@ pub async fn remove_book(book_id: String, state: State<'_, AppState>) -> FolioRe
     let existing_book = db::get_book(&conn, &book_id)?;
     let file_path = existing_book.as_ref().map(|b| b.file_path.clone());
 
-    log_activity(
+    log_event(
         &conn,
-        "book_deleted",
-        "book",
-        Some(&book_id),
-        existing_book.as_ref().map(|b| b.title.as_str()),
-        None,
+        ActivityEvent::BookDeleted {
+            id: book_id.clone(),
+            title: existing_book.as_ref().map(|b| b.title.clone()),
+        },
     );
 
     // #64 M2: resolve the storage handle and library folder *before* the
@@ -1428,13 +1424,13 @@ pub async fn update_book_metadata(
     }
     if !changes.is_empty() {
         let detail = format!("Changed: {}", changes.join(", "));
-        log_activity(
+        log_event(
             &conn,
-            "book_updated",
-            "book",
-            Some(&book_id),
-            Some(&book.title),
-            Some(&detail),
+            ActivityEvent::BookUpdated {
+                id: book_id.clone(),
+                title: book.title.clone(),
+                detail,
+            },
         );
     }
 
@@ -1895,13 +1891,12 @@ pub async fn save_reading_progress(
     db::upsert_reading_progress(&conn, &progress)?;
 
     if is_on_last_chapter && !was_completed_before {
-        log_activity(
+        log_event(
             &conn,
-            "book_completed",
-            "book",
-            Some(&book_id),
-            Some(&book.title),
-            None,
+            ActivityEvent::BookCompleted {
+                id: book_id.clone(),
+                title: book.title.clone(),
+            },
         );
         let _ = app.emit(
             "book-completed",
@@ -2519,13 +2514,12 @@ pub async fn create_collection(
     let conn = state.active_db()?.get()?;
     db::insert_collection(&conn, &collection)?;
 
-    log_activity(
+    log_event(
         &conn,
-        "collection_created",
-        "collection",
-        Some(&collection.id),
-        Some(&collection.name),
-        None,
+        ActivityEvent::CollectionCreated {
+            id: collection.id.clone(),
+            name: collection.name.clone(),
+        },
     );
 
     Ok(collection)
@@ -2584,13 +2578,12 @@ pub async fn update_collection(
 
     db::update_collection(&conn, &collection)?;
 
-    log_activity(
+    log_event(
         &conn,
-        "collection_updated",
-        "collection",
-        Some(&collection.id),
-        Some(&collection.name),
-        None,
+        ActivityEvent::CollectionUpdated {
+            id: collection.id.clone(),
+            name: collection.name.clone(),
+        },
     );
 
     Ok(collection)
@@ -2605,14 +2598,7 @@ pub async fn get_collections(state: State<'_, AppState>) -> FolioResult<Vec<Coll
 #[tauri::command]
 pub async fn delete_collection(id: String, state: State<'_, AppState>) -> FolioResult<()> {
     let conn = state.active_db()?.get()?;
-    log_activity(
-        &conn,
-        "collection_deleted",
-        "collection",
-        Some(&id),
-        None,
-        None,
-    );
+    log_event(&conn, ActivityEvent::CollectionDeleted { id: id.clone() });
     Ok(db::delete_collection(&conn, &id)?)
 }
 
@@ -2634,13 +2620,12 @@ pub async fn add_book_to_collection(
         ));
     }
     db::add_book_to_collection(&conn, &book_id, &collection_id)?;
-    log_activity(
+    log_event(
         &conn,
-        "collection_modified",
-        "collection",
-        Some(&collection_id),
-        None,
-        Some(&format!("Added book {}", book_id)),
+        ActivityEvent::CollectionModified {
+            id: collection_id.clone(),
+            detail: format!("Added book {}", book_id),
+        },
     );
     Ok(())
 }
@@ -2653,13 +2638,12 @@ pub async fn remove_book_from_collection(
 ) -> FolioResult<()> {
     let conn = state.active_db()?.get()?;
     db::remove_book_from_collection(&conn, &book_id, &collection_id)?;
-    log_activity(
+    log_event(
         &conn,
-        "collection_modified",
-        "collection",
-        Some(&collection_id),
-        None,
-        Some(&format!("Removed book {}", book_id)),
+        ActivityEvent::CollectionModified {
+            id: collection_id.clone(),
+            detail: format!("Removed book {}", book_id),
+        },
     );
     Ok(())
 }
@@ -2824,14 +2808,7 @@ pub async fn enrich_book_from_openlibrary(
     book.isbn = isbn;
     book.openlibrary_key = Some(openlibrary_key);
 
-    log_activity(
-        &conn,
-        "book_enriched",
-        "book",
-        Some(&book_id),
-        None,
-        Some("Enriched from OpenLibrary"),
-    );
+    log_event(&conn, ActivityEvent::BookEnriched { id: book_id });
 
     Ok(book)
 }
@@ -3367,14 +3344,7 @@ pub async fn switch_profile(name: String, state: State<'_, AppState>) -> FolioRe
     }
 
     let conn = state.active_db()?.get()?;
-    log_activity(
-        &conn,
-        "profile_switched",
-        "profile",
-        None,
-        Some(&name),
-        None,
-    );
+    log_event(&conn, ActivityEvent::ProfileSwitched { name });
 
     Ok(())
 }
@@ -3605,13 +3575,13 @@ pub async fn copy_to_library(book_id: String, state: State<'_, AppState>) -> Fol
 
     db::update_book_path(&conn, &book.id, &key, true)?;
 
-    log_activity(
+    log_event(
         &conn,
-        "book_updated",
-        "book",
-        Some(&book.id),
-        Some(&book.title),
-        Some("Copied to library"),
+        ActivityEvent::BookUpdated {
+            id: book.id.clone(),
+            title: book.title.clone(),
+            detail: "Copied to library".to_string(),
+        },
     );
 
     db::get_book(&conn, &book_id)?
@@ -3738,13 +3708,11 @@ pub async fn export_library(
     } else {
         "Metadata only"
     };
-    log_activity(
+    log_event(
         &conn,
-        "library_exported",
-        "library",
-        None,
-        None,
-        Some(export_detail),
+        ActivityEvent::LibraryExported {
+            detail: export_detail.to_string(),
+        },
     );
 
     Ok(dest_path)
@@ -3861,13 +3829,11 @@ pub async fn import_library_backup(
         }
     }
 
-    log_activity(
+    log_event(
         &conn,
-        "library_imported",
-        "library",
-        None,
-        None,
-        Some("Restored from backup"),
+        ActivityEvent::LibraryImported {
+            detail: "Restored from backup".to_string(),
+        },
     );
 
     Ok(imported)
@@ -4186,29 +4152,25 @@ pub async fn run_backup(
     let log_conn = state.active_db()?.get()?;
     match &result {
         Ok(sync_result) => {
-            log_activity(
+            log_event(
                 &log_conn,
-                "backup_completed",
-                "library",
-                None,
-                None,
-                Some(&format!(
-                    "Provider: {:?} — {} books, {} bookmarks, {} highlights pushed",
-                    provider_name,
-                    sync_result.books_pushed,
-                    sync_result.bookmarks_pushed,
-                    sync_result.highlights_pushed,
-                )),
+                ActivityEvent::BackupCompleted {
+                    detail: format!(
+                        "Provider: {:?} — {} books, {} bookmarks, {} highlights pushed",
+                        provider_name,
+                        sync_result.books_pushed,
+                        sync_result.bookmarks_pushed,
+                        sync_result.highlights_pushed,
+                    ),
+                },
             );
         }
         Err(e) => {
-            log_activity(
+            log_event(
                 &log_conn,
-                "backup_failed",
-                "library",
-                None,
-                None,
-                Some(&format!("Provider: {:?} — {}", provider_name, e)),
+                ActivityEvent::BackupFailed {
+                    detail: format!("Provider: {:?} — {}", provider_name, e),
+                },
             );
         }
     }
@@ -4873,29 +4835,26 @@ pub async fn scan_single_book(book_id: String, state: State<'_, AppState>) -> Fo
             let updated_book = db::get_book(&conn, &book_id)?
                 .ok_or_else(|| FolioError::not_found("Book not found"))?;
             let tried = result.providers_tried.join(", ");
-            log_activity(
+            log_event(
                 &conn,
-                "book_scanned",
-                "book",
-                Some(&book_id),
-                Some(&updated_book.title),
-                Some(&format!(
-                    "Matched via {} (searched: {})",
-                    result.data.source, tried
-                )),
+                ActivityEvent::BookScanned {
+                    id: book_id.clone(),
+                    title: updated_book.title.clone(),
+                    detail: format!("Matched via {} (searched: {})", result.data.source, tried),
+                },
             );
             Ok(updated_book)
         }
         None => {
             db::set_enrichment_status(&conn, &book_id, "skipped")?;
             let tried = enabled_provider_names.join(", ");
-            log_activity(
+            log_event(
                 &conn,
-                "book_scanned",
-                "book",
-                Some(&book_id),
-                Some(&book.title),
-                Some(&format!("No match found (searched: {})", tried)),
+                ActivityEvent::BookScanned {
+                    id: book_id.clone(),
+                    title: book.title.clone(),
+                    detail: format!("No match found (searched: {})", tried),
+                },
             );
             Err(FolioError::not_found("No match found"))
         }
@@ -5024,6 +4983,29 @@ pub async fn get_activity_log(
         offset.unwrap_or(0),
         action_filter.as_deref(),
     )?)
+}
+
+#[tauri::command]
+pub async fn export_activity_log(
+    dest_path: String,
+    state: State<'_, AppState>,
+) -> FolioResult<String> {
+    let conn = state.active_db()?.get()?;
+    let rows = db::get_all_activity(&conn)?;
+    let json = serde_json::to_string_pretty(&rows)?;
+    std::fs::write(&dest_path, json)?;
+    Ok(dest_path)
+}
+
+#[tauri::command]
+pub async fn prune_activity_log(
+    keep: Option<u32>,
+    max_age_days: Option<u32>,
+    state: State<'_, AppState>,
+) -> FolioResult<usize> {
+    let conn = state.active_db()?.get()?;
+    let deleted = db::prune_activity_log(&conn, keep.unwrap_or(1000), max_age_days.unwrap_or(90))?;
+    Ok(deleted)
 }
 
 #[tauri::command]
@@ -5269,13 +5251,12 @@ pub async fn cleanup_library(
             let _ = delete_book_images(&*images, &book.id);
         }
 
-        log_activity(
+        log_event(
             &conn,
-            "book_removed_cleanup",
-            "book",
-            Some(&book.id),
-            Some(&book.title),
-            None,
+            ActivityEvent::BookRemovedCleanup {
+                id: book.id.clone(),
+                title: book.title.clone(),
+            },
         );
 
         removed_books.push(CleanupEntry {
@@ -5451,13 +5432,13 @@ pub async fn sync_pull_book(
             let _ = db::set_setting(&conn, "last_sync_success_at", &now_unix_secs().to_string());
             if merge_result.has_changes() {
                 let summary = merge_result_summary(&merge_result);
-                log_activity(
+                log_event(
                     &conn,
-                    "sync_pull_success",
-                    "book",
-                    Some(&book_id),
-                    Some(&book.title),
-                    Some(&summary),
+                    ActivityEvent::SyncPullSuccess {
+                        book_id: book_id.clone(),
+                        title: book.title.clone(),
+                        detail: summary,
+                    },
                 );
                 let _ = app.emit("sync-applied", &book_id);
                 if merge_result.progress_updated {
@@ -5478,13 +5459,13 @@ pub async fn sync_pull_book(
             if kind == "auth_failed" {
                 let _ = app.emit("backup-auth-error", serde_json::json!({ "message": msg }));
             }
-            log_activity(
+            log_event(
                 &conn,
-                "sync_pull_failed",
-                "book",
-                Some(&book_id),
-                Some(&book.title),
-                Some(&e.to_string()),
+                ActivityEvent::SyncPullFailed {
+                    book_id: book_id.clone(),
+                    title: book.title.clone(),
+                    detail: e.to_string(),
+                },
             );
         }
         Err(_) => {
@@ -5493,13 +5474,13 @@ pub async fn sync_pull_book(
             let _ = db::set_setting(&conn, "last_sync_error_at", &now_unix_secs().to_string());
             let _ = db::set_setting(&conn, "last_sync_error_message", msg);
             let _ = db::set_setting(&conn, "last_sync_error_kind", "timeout");
-            log_activity(
+            log_event(
                 &conn,
-                "sync_pull_failed",
-                "book",
-                Some(&book_id),
-                Some(&book.title),
-                Some("timeout after 5s"),
+                ActivityEvent::SyncPullFailed {
+                    book_id: book_id.clone(),
+                    title: book.title.clone(),
+                    detail: "timeout after 5s".to_string(),
+                },
             );
         }
     }
@@ -5553,13 +5534,13 @@ pub async fn sync_push_book(book_id: String, state: State<'_, AppState>) -> Foli
                     "last_sync_success_at",
                     &now_unix_secs().to_string(),
                 );
-                log_activity(
+                log_event(
                     &bg_conn,
-                    "sync_push_success",
-                    "book",
-                    Some(&book_id),
-                    Some(&book_title),
-                    Some("progress and annotations pushed"),
+                    ActivityEvent::SyncPushSuccess {
+                        book_id: book_id.clone(),
+                        title: book_title.clone(),
+                        detail: "progress and annotations pushed".to_string(),
+                    },
                 );
             }
             Err(e) => {
@@ -5568,13 +5549,13 @@ pub async fn sync_push_book(book_id: String, state: State<'_, AppState>) -> Foli
                     db::set_setting(&bg_conn, "last_sync_error_at", &now_unix_secs().to_string());
                 let _ = db::set_setting(&bg_conn, "last_sync_error_message", &msg);
                 let _ = db::set_setting(&bg_conn, "last_sync_error_kind", sync_error_kind_str(&e));
-                log_activity(
+                log_event(
                     &bg_conn,
-                    "sync_push_failed",
-                    "book",
-                    Some(&book_id),
-                    Some(&book_title),
-                    Some(&e.to_string()),
+                    ActivityEvent::SyncPushFailed {
+                        book_id: book_id.clone(),
+                        title: book_title.clone(),
+                        detail: e.to_string(),
+                    },
                 );
             }
         }
@@ -5593,13 +5574,11 @@ pub async fn bulk_delete_books(
     let conn = state.active_db()?.get()?;
     let ids_ref: Vec<&str> = book_ids.iter().map(|s| s.as_str()).collect();
     db::bulk_delete_books(&conn, &ids_ref)?;
-    log_activity(
+    log_event(
         &conn,
-        "bulk_delete",
-        "book",
-        None,
-        None,
-        Some(&format!("{} books deleted", book_ids.len())),
+        ActivityEvent::BulkDelete {
+            count: book_ids.len(),
+        },
     );
     Ok(book_ids.len() as u32)
 }
@@ -5688,13 +5667,11 @@ pub async fn bulk_update_metadata(
         publisher.as_deref(),
     )?;
 
-    log_activity(
+    log_event(
         &conn,
-        "bulk_edit",
-        "book",
-        None,
-        None,
-        Some(&format!("{} books updated", count)),
+        ActivityEvent::BulkEdit {
+            count: count as usize,
+        },
     );
 
     Ok(count)
@@ -5805,13 +5782,11 @@ pub async fn web_server_set_modes(
     // 4. Audit log.
     {
         let conn = state.active_db()?.get()?;
-        log_activity(
+        log_event(
             &conn,
-            "web_server_modes_changed",
-            "system",
-            None,
-            None,
-            Some(&format!("web_ui={web_ui} opds={opds}")),
+            ActivityEvent::WebServerModesChanged {
+                detail: format!("web_ui={web_ui} opds={opds}"),
+            },
         );
     }
 
@@ -5922,6 +5897,33 @@ pub async fn get_ipc_metrics(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn export_activity_log_writes_parseable_json() {
+        use folio_core::db;
+        let dir = tempfile::tempdir().unwrap();
+        let conn = db::init_db(&dir.path().join("t.db")).unwrap();
+
+        log_event(
+            &conn,
+            folio_core::activity::ActivityEvent::BookImported {
+                id: "b1".into(),
+                title: "Title".into(),
+                format: "EPUB".into(),
+                author: "Auth".into(),
+            },
+        );
+
+        let rows = db::get_all_activity(&conn).unwrap();
+        let dest = dir.path().join("activity.json");
+        std::fs::write(&dest, serde_json::to_string_pretty(&rows).unwrap()).unwrap();
+
+        let parsed: Vec<folio_core::models::ActivityEntry> =
+            serde_json::from_str(&std::fs::read_to_string(&dest).unwrap()).unwrap();
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0].action, "book_imported");
+        assert_eq!(parsed[0].detail.as_deref(), Some("EPUB by Auth"));
+    }
 
     fn temp_covers_storage() -> (tempfile::TempDir, folio_core::storage::LocalStorage) {
         let dir = tempfile::tempdir().unwrap();

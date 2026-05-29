@@ -1873,13 +1873,31 @@ pub fn get_activity_log(
     rows.collect()
 }
 
-pub fn prune_activity_log(conn: &Connection, keep: u32) -> Result<()> {
-    let cutoff = chrono::Utc::now().timestamp() - 90 * 24 * 60 * 60;
-    conn.execute(
+pub fn get_all_activity(conn: &Connection) -> Result<Vec<ActivityEntry>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, timestamp, action, entity_type, entity_id, entity_name, detail FROM activity_log ORDER BY timestamp DESC",
+    )?;
+    let rows = stmt.query_map([], |row| {
+        Ok(ActivityEntry {
+            id: row.get(0)?,
+            timestamp: row.get(1)?,
+            action: row.get(2)?,
+            entity_type: row.get(3)?,
+            entity_id: row.get(4)?,
+            entity_name: row.get(5)?,
+            detail: row.get(6)?,
+        })
+    })?;
+    rows.collect()
+}
+
+pub fn prune_activity_log(conn: &Connection, keep: u32, max_age_days: u32) -> Result<usize> {
+    let cutoff = chrono::Utc::now().timestamp() - (max_age_days as i64) * 24 * 60 * 60;
+    let deleted = conn.execute(
         "DELETE FROM activity_log WHERE id NOT IN (SELECT id FROM activity_log ORDER BY timestamp DESC LIMIT ?1) AND timestamp < ?2",
         params![keep, cutoff],
     )?;
-    Ok(())
+    Ok(deleted)
 }
 
 pub fn insert_custom_font(conn: &Connection, font: &CustomFont) -> Result<()> {
@@ -2647,7 +2665,7 @@ mod tests {
             .unwrap();
         }
 
-        prune_activity_log(&conn, 3).unwrap();
+        prune_activity_log(&conn, 3, 90).unwrap();
 
         let results = get_activity_log(&conn, 100, 0, None).unwrap();
         assert_eq!(results.len(), 3);
@@ -2684,12 +2702,41 @@ mod tests {
         .unwrap();
 
         // keep=2 means old entries outside top 2 AND older than 90 days are pruned
-        prune_activity_log(&conn, 2).unwrap();
+        prune_activity_log(&conn, 2, 90).unwrap();
 
         let results = get_activity_log(&conn, 100, 0, None).unwrap();
         assert_eq!(results.len(), 2);
         assert_eq!(results[0].id, "act-new2");
         assert_eq!(results[1].id, "act-new1");
+    }
+
+    #[test]
+    fn test_prune_respects_custom_max_age_and_returns_count() {
+        let (_dir, conn) = setup();
+        let now = chrono::Utc::now().timestamp();
+        insert_activity(&conn, &sample_activity("a-40a", "import", now - 40 * 86400)).unwrap();
+        insert_activity(&conn, &sample_activity("a-40b", "import", now - 41 * 86400)).unwrap();
+        insert_activity(&conn, &sample_activity("a-5", "import", now - 5 * 86400)).unwrap();
+
+        // keep=0, max_age_days=30 -> both 40-day rows pruned, 5-day row kept.
+        let deleted = prune_activity_log(&conn, 0, 30).unwrap();
+        assert_eq!(deleted, 2);
+
+        let results = get_activity_log(&conn, 100, 0, None).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].id, "a-5");
+    }
+
+    #[test]
+    fn test_get_all_activity_returns_all_newest_first() {
+        let (_dir, conn) = setup();
+        let now = chrono::Utc::now().timestamp();
+        insert_activity(&conn, &sample_activity("g1", "import", now - 30)).unwrap();
+        insert_activity(&conn, &sample_activity("g2", "import", now - 10)).unwrap();
+        let all = get_all_activity(&conn).unwrap();
+        assert_eq!(all.len(), 2);
+        assert_eq!(all[0].id, "g2");
+        assert_eq!(all[1].id, "g1");
     }
 
     #[test]

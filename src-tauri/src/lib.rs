@@ -349,6 +349,8 @@ pub fn run() {
             commands::set_enrichment_provider_config,
             commands::set_enrichment_provider_order,
             commands::get_activity_log,
+            commands::export_activity_log,
+            commands::prune_activity_log,
             commands::preview_collection_rules,
             commands::get_collection_suggestions,
             commands::import_custom_font,
