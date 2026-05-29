@@ -7,6 +7,7 @@
 //!
 //! See `docs/ROADMAP.md` #63 for the extraction plan.
 
+pub mod activity;
 pub mod backup;
 pub mod cbr;
 pub mod cbz;
