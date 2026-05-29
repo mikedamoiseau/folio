@@ -504,12 +504,14 @@ pub async fn get_supported_formats() -> FolioResult<Vec<&'static str>> {
 }
 
 #[tauri::command]
+#[tracing::instrument(skip(state, _app))]
 pub async fn import_book(
     file_path: String,
     state: State<'_, AppState>,
     _app: AppHandle,
 ) -> FolioResult<Book> {
     let _t = state.ipc_metrics.time("import_book");
+    tracing::info!("importing book");
     let db_pool = state.active_db()?;
     let storage = state.active_storage()?;
     let covers_storage = state.covers_storage()?;
@@ -2743,12 +2745,14 @@ pub async fn search_openlibrary(
 }
 
 #[tauri::command]
+#[tracing::instrument(skip(state))]
 pub async fn enrich_book_from_openlibrary(
     book_id: String,
     openlibrary_key: String,
     state: State<'_, AppState>,
 ) -> FolioResult<Book> {
     let _t = state.ipc_metrics.time("enrich_book_from_openlibrary");
+    tracing::info!("enriching book from openlibrary");
     // Fetch detailed metadata from OpenLibrary (on a separate thread)
     let key = openlibrary_key.clone();
     let (tx, rx) = std::sync::mpsc::channel();
