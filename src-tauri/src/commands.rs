@@ -504,7 +504,10 @@ pub async fn get_supported_formats() -> FolioResult<Vec<&'static str>> {
 }
 
 #[tauri::command]
-#[tracing::instrument(skip(state, _app))]
+#[tracing::instrument(
+    skip(file_path, state, _app),
+    fields(ext = std::path::Path::new(&file_path).extension().and_then(|e| e.to_str()))
+)]
 pub async fn import_book(
     file_path: String,
     state: State<'_, AppState>,
@@ -2745,7 +2748,7 @@ pub async fn search_openlibrary(
 }
 
 #[tauri::command]
-#[tracing::instrument(skip(state))]
+#[tracing::instrument(skip(openlibrary_key, state))]
 pub async fn enrich_book_from_openlibrary(
     book_id: String,
     openlibrary_key: String,
