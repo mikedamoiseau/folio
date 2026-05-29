@@ -2,6 +2,7 @@
 mod ci_workflow_test;
 pub mod commands;
 pub mod ipc_metrics;
+pub mod observability;
 pub mod page_wire;
 #[cfg(test)]
 mod release_workflow_test;
