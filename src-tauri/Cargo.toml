@@ -20,6 +20,9 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 folio-core = { path = "../folio-core" }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+tracing-appender = { workspace = true }
 tauri = { version = "2", features = ["protocol-asset", "tray-icon"] }
 tauri-plugin-opener = "2"
 tauri-plugin-dialog = "2"
