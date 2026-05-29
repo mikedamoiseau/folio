@@ -1178,18 +1178,30 @@ pub async fn remove_book(book_id: String, state: State<'_, AppState>) -> FolioRe
         if !p.is_absolute() {
             // M4 storage key — delete directly.
             if let Err(e) = storage.delete(&path) {
-                log::warn!("could not delete library file '{}': {}", path, e);
+                log::warn!(
+                    "could not delete library file for book '{}' (storage_key): {}",
+                    book_id,
+                    e
+                );
             }
         } else if let Some(key) = book_key_from_path(&path, &library_folder) {
             if let Err(e) = storage.delete(&key) {
-                log::warn!("could not delete library file '{}': {}", path, e);
+                log::warn!(
+                    "could not delete library file for book '{}' (library_absolute): {}",
+                    book_id,
+                    e
+                );
             }
         } else {
             // Fallback: absolute path that isn't under the library folder
             // (legacy import, profile migration, etc.). Remove directly.
             if let Err(e) = std::fs::remove_file(&path) {
                 if e.kind() != std::io::ErrorKind::NotFound {
-                    log::warn!("could not delete library file '{}': {}", path, e);
+                    log::warn!(
+                        "could not delete library file for book '{}' (external_legacy_absolute): {}",
+                        book_id,
+                        e
+                    );
                 }
             }
         }
