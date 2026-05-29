@@ -1135,9 +1135,10 @@ pub async fn remove_book(book_id: String, state: State<'_, AppState>) -> FolioRe
         match (state.active_library_folder(), state.active_storage()) {
             (Ok(folder), Ok(storage)) => Some((folder, storage)),
             (Err(e), _) | (_, Err(e)) => {
-                eprintln!(
-                    "Warning: could not resolve library storage for delete of '{}': {}",
-                    book_id, e
+                log::warn!(
+                    "could not resolve library storage for delete of '{}': {}",
+                    book_id,
+                    e
                 );
                 None
             }
@@ -1172,18 +1173,18 @@ pub async fn remove_book(book_id: String, state: State<'_, AppState>) -> FolioRe
         if !p.is_absolute() {
             // M4 storage key — delete directly.
             if let Err(e) = storage.delete(&path) {
-                eprintln!("Warning: could not delete library file '{}': {}", path, e);
+                log::warn!("could not delete library file '{}': {}", path, e);
             }
         } else if let Some(key) = book_key_from_path(&path, &library_folder) {
             if let Err(e) = storage.delete(&key) {
-                eprintln!("Warning: could not delete library file '{}': {}", path, e);
+                log::warn!("could not delete library file '{}': {}", path, e);
             }
         } else {
             // Fallback: absolute path that isn't under the library folder
             // (legacy import, profile migration, etc.). Remove directly.
             if let Err(e) = std::fs::remove_file(&path) {
                 if e.kind() != std::io::ErrorKind::NotFound {
-                    eprintln!("Warning: could not delete library file '{}': {}", path, e);
+                    log::warn!("could not delete library file '{}': {}", path, e);
                 }
             }
         }

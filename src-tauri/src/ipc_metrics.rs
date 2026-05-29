@@ -54,7 +54,7 @@ impl IpcMetrics {
 
     pub fn record(&self, command: &'static str, elapsed_ms: f64, success: bool) {
         if elapsed_ms > self.slow_threshold_ms {
-            eprintln!("[ipc-metrics] slow: {} took {:.1}ms", command, elapsed_ms);
+            tracing::warn!(command, elapsed_ms, "ipc slow call");
         }
         let timestamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
