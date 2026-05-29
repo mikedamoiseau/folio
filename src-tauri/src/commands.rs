@@ -189,6 +189,10 @@ pub struct AppState {
     pub web_server_handle: std::sync::Mutex<Option<crate::web_server::WebServerHandle>>,
     /// IPC command timing metrics (leaf lock — no ordering constraint).
     pub ipc_metrics: IpcMetrics,
+    /// Keeps the non-blocking tracing file writer alive for the app's
+    /// lifetime so buffered log records flush on shutdown. Held only for
+    /// its `Drop`; never read. `None` when logging to stderr (dev).
+    pub _log_guard: Option<tracing_appender::non_blocking::WorkerGuard>,
 }
 
 impl AppState {
@@ -500,12 +504,17 @@ pub async fn get_supported_formats() -> FolioResult<Vec<&'static str>> {
 }
 
 #[tauri::command]
+#[tracing::instrument(
+    skip(file_path, state, _app),
+    fields(ext = std::path::Path::new(&file_path).extension().and_then(|e| e.to_str()))
+)]
 pub async fn import_book(
     file_path: String,
     state: State<'_, AppState>,
     _app: AppHandle,
 ) -> FolioResult<Book> {
     let _t = state.ipc_metrics.time("import_book");
+    tracing::info!("importing book");
     let db_pool = state.active_db()?;
     let storage = state.active_storage()?;
     let covers_storage = state.covers_storage()?;
@@ -1131,9 +1140,10 @@ pub async fn remove_book(book_id: String, state: State<'_, AppState>) -> FolioRe
         match (state.active_library_folder(), state.active_storage()) {
             (Ok(folder), Ok(storage)) => Some((folder, storage)),
             (Err(e), _) | (_, Err(e)) => {
-                eprintln!(
-                    "Warning: could not resolve library storage for delete of '{}': {}",
-                    book_id, e
+                log::warn!(
+                    "could not resolve library storage for delete of '{}': {}",
+                    book_id,
+                    e
                 );
                 None
             }
@@ -1168,18 +1178,30 @@ pub async fn remove_book(book_id: String, state: State<'_, AppState>) -> FolioRe
         if !p.is_absolute() {
             // M4 storage key — delete directly.
             if let Err(e) = storage.delete(&path) {
-                eprintln!("Warning: could not delete library file '{}': {}", path, e);
+                log::warn!(
+                    "could not delete library file for book '{}' (storage_key): {}",
+                    book_id,
+                    e
+                );
             }
         } else if let Some(key) = book_key_from_path(&path, &library_folder) {
             if let Err(e) = storage.delete(&key) {
-                eprintln!("Warning: could not delete library file '{}': {}", path, e);
+                log::warn!(
+                    "could not delete library file for book '{}' (library_absolute): {}",
+                    book_id,
+                    e
+                );
             }
         } else {
             // Fallback: absolute path that isn't under the library folder
             // (legacy import, profile migration, etc.). Remove directly.
             if let Err(e) = std::fs::remove_file(&path) {
                 if e.kind() != std::io::ErrorKind::NotFound {
-                    eprintln!("Warning: could not delete library file '{}': {}", path, e);
+                    log::warn!(
+                        "could not delete library file for book '{}' (external_legacy_absolute): {}",
+                        book_id,
+                        e
+                    );
                 }
             }
         }
@@ -2738,12 +2760,14 @@ pub async fn search_openlibrary(
 }
 
 #[tauri::command]
+#[tracing::instrument(skip(openlibrary_key, state))]
 pub async fn enrich_book_from_openlibrary(
     book_id: String,
     openlibrary_key: String,
     state: State<'_, AppState>,
 ) -> FolioResult<Book> {
     let _t = state.ipc_metrics.time("enrich_book_from_openlibrary");
+    tracing::info!("enriching book from openlibrary");
     // Fetch detailed metadata from OpenLibrary (on a separate thread)
     let key = openlibrary_key.clone();
     let (tx, rx) = std::sync::mpsc::channel();

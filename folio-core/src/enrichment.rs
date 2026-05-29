@@ -142,12 +142,17 @@ pub fn title_similarity(a: &str, b: &str) -> f64 {
     }
 }
 
+#[tracing::instrument(
+    skip(title, author, isbn, registry),
+    fields(has_isbn = isbn.is_some())
+)]
 pub fn enrich_book(
     title: &str,
     author: &str,
     isbn: Option<&str>,
     registry: &crate::providers::ProviderRegistry,
 ) -> Option<EnrichmentResult> {
+    tracing::info!("enriching book");
     let mut all_tried = Vec::new();
 
     // Tier 1: ISBN lookup
