@@ -5,9 +5,18 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.1.0] - 2026-05-30
+
+A feature release on top of the 2.0 platform: side-by-side reading, richer
+library cues, and a production-hardened remote-access server (audit trails, a
+GDPR data export, and backup pre-flight checks). The `2.0.1`–`2.0.3` tags in
+between were `folio-core` crate point-releases; this is the next user-facing app
+release.
+
 ### Performance
 - **PDF page disk cache** (ROADMAP "perf + comics" #3). Rendered PDF pages now survive app restarts. On first open of a PDF, `prepare_pdf` renders the first ten pages at a fixed canonical width (2400 px) into the shared `page-cache/{hash}/` namespace and returns the page count so the reader can skip a second `get_pdf_page_count` round-trip. Subsequent reads hit disk and resize down to the viewport width, bypassing pdfium entirely. Cache misses render at the canonical width, write best-effort, and trigger a coalesced background eviction every 25 lazy writes. Eviction reads filesystem-truth via `book_disk_size_bytes` so a stale manifest snapshot cannot drift the size budget. Shares the same Settings size cap and LRU / 7-day eviction as the comic cache. Linked / unhashed PDFs (or storage errors) gracefully fall back to live render at the viewport width — pre-spec performance preserved.
 - **Page images served at viewport resolution over binary IPC** (ROADMAP P2). PDF / CBZ / CBR pages are now resized to the viewport width on the Rust side, transmitted as raw bytes through Tauri IPC, and wrapped as `Blob` + `URL.createObjectURL` in the frontend. Cuts IPC payloads by roughly 70–90 % on typical pages, removes the base64 encode/decode round-trip, and lowers steady-state renderer memory. Landed across m1–m4: viewport-resize support in `folio-core`, binary page commands, frontend blob URLs with revoke-on-eviction, and retirement of the legacy data-URI commands.
+- **Reader screen code-splitting** (F-4-6). The Reader route is lazy-loaded via a Vite dynamic import, so the library/home view no longer ships the reader bundle up front — smaller initial download and faster first paint.
 
 ### Added
 - **Split view** (ROADMAP #40). Read two books side-by-side. A new header button (or the `\` shortcut) toggles split mode; the companion pane opens a library picker so the pairing can be any two books. Each pane writes its own reading progress (the persistence guard collapses to primary-only when both panes happen to show the same book). The active pane gets a subtle accent ring so keyboard navigation routes there; click the other pane to swap focus. Split state and companion bookId persist per book in `localStorage` so reopening restores the layout. Includes a swap-panes button on the primary header (navigates to the companion bookId and seeds the new primary's split state) and an X to close the companion pane from the companion header. Built from a structural extraction that split the 2200-line Reader screen into a thin shell + a reusable `ReaderPane` component, then layered the layout shell + book picker + focus routing on top across four milestones.
@@ -17,6 +26,18 @@ This project adheres to [Semantic Versioning](https://semver.org/).
   - Directional prefetch + distance-from-current load ordering: pages near the current page decode first, and a scroll-direction-biased prefetch window keeps the next viewport already decoded by the time it lands.
   - Per-tile loading / error / loaded states with retry-on-click for failed tiles. Empty tiles render transparent (no border / background) so the strip stays quiet while many pages decode.
   - Subtle motion: strip slide-up enter, per-tile fade-up, active-tile shadow + accent number label, edge mask fading thumbs into the surface. All animations honour `prefers-reduced-motion`.
+- **Reading status indicators** (F-1-4). Each library card's top-right pill now conveys reading status by colour: **Active** (sage, shows %) for books read within the last 14 days, **Paused** (amber, shows %) for in-progress books idle longer than that, and **Finished** (a checkmark) for completed books. Unread books show no pill. Status is derived at render time from existing progress + last-read data — no new storage, no database writes. A pure `getReadingStatus` helper carries the logic with unit tests for every state and the 14-day boundary.
+- **Smart collection auto-suggestions** (F-1-6). Folio proposes collections based on your reading history and library shape, bridging the gap between manual collections and rule-based smart collections.
+
+### Security & remote access
+- **GDPR data export endpoint** (F-3-6). `GET /api/data-export` on the embedded web server returns a timestamped ZIP of your personal data — books metadata, reading progress, bookmarks, highlights, the activity log, and settings — as a single JSON document. Credentials are never exported (backup configuration and metadata-provider API keys are redacted; the web PIN lives in the OS keyring). The endpoint requires authentication and is refused entirely unless a web PIN is configured, so it never serves your data on an open server.
+- **Web server login audit trail** (F-3-1). Login attempts against the remote-access server are recorded to a dedicated `web_session_log` (timestamp, IP, user-agent, outcome) so you can review access. Web PIN-screen attempts log all outcomes; OPDS reader-app connections log only failures. The PIN is never written. Entries are pruned after 90 days / 5,000 rows, and the trail is readable via `GET /api/audit/login-history`. Logging is best-effort and never blocks or fails a login.
+- **Backup connectivity verification & secret rotation** (F-3-7). Backup credentials are tested before they are saved, with an atomic DB + keychain update and rollback on failure, so silent backup misconfiguration no longer goes unnoticed.
+
+### Internal
+- **Structured activity audit log** (F-2-2). A typed `ActivityEvent` enum replaces loose string-based activity writes and is the single source of truth for the action/entity wire contract consumed by the frontend; adds activity-log export and configurable pruning.
+- **Observability primitives** (F-2-3). Structured logging via `tracing` is initialised at startup (with a retained appender guard) and previously-silent `eprintln` warnings are routed through it; key operations (`import_book`, `enrich_book`) are instrumented.
+- **IPC response metrics middleware** (F-4-8). A ring-buffer metrics layer times hot-path Tauri commands (count, avg, p95, max, slow-call warnings) and exposes them via a `get_ipc_metrics` command, with panic-safe, poison-recovering aggregation.
 
 ### Fixed
 - **PageViewer re-animated the current page on layout reflow.** The slide-in animation re-fired when the load-spread effect re-ran for reasons other than a real page turn (for example, the thumbnail strip mounting and shifting the page-image cache key). Tracked the last-animated page index so the animation only plays on actual navigation.
