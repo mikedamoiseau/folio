@@ -27,7 +27,7 @@ computation per card.
 ## Scope
 
 - **In:** A pure status-deriving helper; a `status` prop on `BookCard`; tinting
-  the existing top-right pill (and the cover-foot progress bar) by status.
+  the existing top-right progress pill by status.
 - **Out:** No DB schema change, no new Tauri command, no persistent writes. The
   status filter dropdown (All / In progress / Finished) is **unchanged**. No
   changes to the reader screen.
@@ -81,8 +81,9 @@ with Vitest.
 - When `status` is undefined (caller didn't supply it), the pill keeps its
   current neutral `bg-ink/70` `{progress}%` appearance — backward compatible for
   any other BookCard usage.
-- The thin cover-foot progress bar (added as part of this card view) is tinted
-  the same hue: sage for active, ochre for paused, accent for finished/default.
+- **No new cover element.** BookCard has no progress bar today; this feature only
+  restyles the existing pill. (The mockup showed a tinted bar; it is intentionally
+  out of scope here to avoid adding card chrome.)
 - Status colours are added as Tailwind theme tokens (or arbitrary values keyed to
   the existing `--accent` etc.) so light/dark themes both work; finished reuses
   the existing accent token.
@@ -105,7 +106,7 @@ with Vitest.
 get_all_reading_progress (existing IPC, already called)
   → progressMap + lastReadMap (existing state)
   → toCardData(book): status = getReadingStatus(progress, lastReadAt, now)
-  → <BookCard status=…>  → tinted top-right pill + bar
+  → <BookCard status=…>  → tinted top-right pill
 ```
 
 ## Accessibility
