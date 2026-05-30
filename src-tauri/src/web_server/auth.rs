@@ -8,6 +8,7 @@ use axum::{
 use std::net::SocketAddr;
 
 use super::WebState;
+use crate::db;
 use crate::error::{FolioError, FolioResult};
 
 const KEYRING_SERVICE: &str = "folio-web-server";
@@ -210,6 +211,69 @@ pub fn generate_qr_svg(url: &str) -> FolioResult<String> {
     Ok(svg)
 }
 
+/// Which authentication mechanism produced a login attempt.
+#[derive(Clone, Copy)]
+pub enum WebAuthMethod {
+    Session,
+    Basic,
+}
+
+impl WebAuthMethod {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            WebAuthMethod::Session => "session",
+            WebAuthMethod::Basic => "basic",
+        }
+    }
+}
+
+/// The result of a login attempt.
+#[derive(Clone, Copy)]
+pub enum LoginOutcome {
+    Success,
+    InvalidPin,
+    RateLimited,
+}
+
+impl LoginOutcome {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            LoginOutcome::Success => "success",
+            LoginOutcome::InvalidPin => "invalid_pin",
+            LoginOutcome::RateLimited => "rate_limited",
+        }
+    }
+}
+
+/// Record a web-server login attempt in `web_session_log`.
+///
+/// Best-effort: a DB failure must never block or fail a login. Errors are
+/// logged via `tracing::warn!` and swallowed. Never stores the PIN or its hash.
+pub fn log_login_attempt(
+    conn: &rusqlite::Connection,
+    ip: &str,
+    user_agent: Option<&str>,
+    method: WebAuthMethod,
+    outcome: LoginOutcome,
+) {
+    let entry = crate::models::WebSessionEntry {
+        id: uuid::Uuid::new_v4().to_string(),
+        timestamp: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64,
+        ip: ip.to_string(),
+        method: method.as_str().to_string(),
+        outcome: outcome.as_str().to_string(),
+        user_agent: user_agent.map(|s| s.to_string()),
+    };
+    if let Err(e) = db::insert_web_session_log(conn, &entry) {
+        tracing::warn!(error = %e, "failed to record web login attempt");
+        return;
+    }
+    let _ = db::prune_web_session_log(conn, 5000, 90);
+}
+
 /// Auth middleware — checks for valid session or Basic Auth PIN.
 pub async fn auth_middleware(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
@@ -254,8 +318,22 @@ pub async fn auth_middleware(
     // Check HTTP Basic Auth (for OPDS clients) — rate-limited like /api/auth
     if let Some(pin) = extract_basic_pin(&req) {
         let client_ip = addr.ip().to_string();
+        let user_agent = req
+            .headers()
+            .get("user-agent")
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.to_string());
 
         if !state.login_limiter.attempt(&client_ip) {
+            if let Ok(conn) = state.conn() {
+                log_login_attempt(
+                    &conn,
+                    &client_ip,
+                    user_agent.as_deref(),
+                    WebAuthMethod::Basic,
+                    LoginOutcome::RateLimited,
+                );
+            }
             return (
                 StatusCode::TOO_MANY_REQUESTS,
                 "Too many login attempts. Try again later.",
@@ -273,6 +351,17 @@ pub async fn auth_middleware(
         if valid {
             state.login_limiter.clear(&client_ip);
             return next.run(req).await;
+        }
+
+        // Basic-Auth credential present but invalid — record the failure.
+        if let Ok(conn) = state.conn() {
+            log_login_attempt(
+                &conn,
+                &client_ip,
+                user_agent.as_deref(),
+                WebAuthMethod::Basic,
+                LoginOutcome::InvalidPin,
+            );
         }
     }
 
@@ -464,5 +553,37 @@ mod tests {
     fn test_validate_pin_accepts_strong() {
         let result = validate_pin("834719");
         assert_eq!(result, Ok(PinStrength::Strong));
+    }
+
+    #[test]
+    fn web_auth_method_as_str() {
+        assert_eq!(WebAuthMethod::Session.as_str(), "session");
+        assert_eq!(WebAuthMethod::Basic.as_str(), "basic");
+    }
+
+    #[test]
+    fn login_outcome_as_str() {
+        assert_eq!(LoginOutcome::Success.as_str(), "success");
+        assert_eq!(LoginOutcome::InvalidPin.as_str(), "invalid_pin");
+        assert_eq!(LoginOutcome::RateLimited.as_str(), "rate_limited");
+    }
+
+    #[test]
+    fn log_login_attempt_inserts_row() {
+        let dir = tempfile::tempdir().unwrap();
+        let conn = crate::db::init_db(&dir.path().join("t.db")).unwrap();
+        log_login_attempt(
+            &conn,
+            "198.51.100.4",
+            Some("curl/8.0"),
+            WebAuthMethod::Basic,
+            LoginOutcome::InvalidPin,
+        );
+        let rows = crate::db::get_web_session_log(&conn, 10).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].ip, "198.51.100.4");
+        assert_eq!(rows[0].method, "basic");
+        assert_eq!(rows[0].outcome, "invalid_pin");
+        assert_eq!(rows[0].user_agent.as_deref(), Some("curl/8.0"));
     }
 }

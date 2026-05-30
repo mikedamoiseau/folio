@@ -6,6 +6,7 @@ use axum::{
     Json, Router,
 };
 
+use super::auth::{log_login_attempt, LoginOutcome, WebAuthMethod};
 use super::{folio_status, WebState};
 use crate::db;
 use crate::models::BookFormat;
@@ -39,6 +40,7 @@ pub fn routes(state: WebState) -> Router<WebState> {
         .route("/series", get(list_series))
         .route("/collections", get(list_collections))
         .route("/collections/{id}/books", get(get_collection_books))
+        .route("/audit/login-history", get(login_history))
         .with_state(state)
 }
 
@@ -66,8 +68,24 @@ async fn login(
     // Use the actual peer IP from the TCP connection (not spoofable headers)
     let client_ip = addr.ip().to_string();
 
+    // Capture the user-agent before the request body is consumed below.
+    let user_agent = req
+        .headers()
+        .get("user-agent")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string());
+
     // R2-2: Atomically check rate limit and record the attempt
     if !state.login_limiter.attempt(&client_ip) {
+        if let Ok(conn) = state.conn() {
+            log_login_attempt(
+                &conn,
+                &client_ip,
+                user_agent.as_deref(),
+                WebAuthMethod::Session,
+                LoginOutcome::RateLimited,
+            );
+        }
         return Err((
             StatusCode::TOO_MANY_REQUESTS,
             "Too many login attempts. Try again later.".to_string(),
@@ -96,6 +114,15 @@ async fn login(
         .unwrap_or(false);
 
     if !valid {
+        if let Ok(conn) = state.conn() {
+            log_login_attempt(
+                &conn,
+                &client_ip,
+                user_agent.as_deref(),
+                WebAuthMethod::Session,
+                LoginOutcome::InvalidPin,
+            );
+        }
         return Err((StatusCode::UNAUTHORIZED, "Invalid PIN".into()));
     }
 
@@ -103,12 +130,39 @@ async fn login(
     state.login_limiter.clear(&client_ip);
 
     let token = super::auth::create_session(&state).map_err(folio_status)?;
+
+    // Log success only after the session token was actually created.
+    if let Ok(conn) = state.conn() {
+        log_login_attempt(
+            &conn,
+            &client_ip,
+            user_agent.as_deref(),
+            WebAuthMethod::Session,
+            LoginOutcome::Success,
+        );
+    }
+
     let cookie = format!("folio_session={token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=86400");
     let body = Json(LoginResponse {
         token: token.clone(),
     });
 
     Ok(([(header::SET_COOKIE, cookie)], body).into_response())
+}
+
+#[derive(serde::Deserialize)]
+struct HistoryQuery {
+    limit: Option<u32>,
+}
+
+async fn login_history(
+    State(state): State<WebState>,
+    Query(params): Query<HistoryQuery>,
+) -> Result<Json<Vec<crate::models::WebSessionEntry>>, (StatusCode, String)> {
+    let conn = state.conn().map_err(folio_status)?;
+    let rows = db::get_web_session_log(&conn, params.limit.unwrap_or(100).min(1000))
+        .map_err(folio_status)?;
+    Ok(Json(rows))
 }
 
 // ── Books ────────────────────────────────────────────────────────────────────

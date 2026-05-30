@@ -351,6 +351,7 @@ pub fn run() {
             commands::get_activity_log,
             commands::export_activity_log,
             commands::prune_activity_log,
+            commands::get_login_history,
             commands::preview_collection_rules,
             commands::get_collection_suggestions,
             commands::import_custom_font,

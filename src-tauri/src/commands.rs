@@ -4986,6 +4986,18 @@ pub async fn get_activity_log(
 }
 
 #[tauri::command]
+pub async fn get_login_history(
+    limit: Option<u32>,
+    state: State<'_, AppState>,
+) -> FolioResult<Vec<crate::models::WebSessionEntry>> {
+    let conn = state.active_db()?.get()?;
+    Ok(db::get_web_session_log(
+        &conn,
+        limit.unwrap_or(100).min(1000),
+    )?)
+}
+
+#[tauri::command]
 pub async fn export_activity_log(
     dest_path: String,
     state: State<'_, AppState>,
@@ -5897,6 +5909,30 @@ pub async fn get_ipc_metrics(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn get_login_history_reads_web_session_rows() {
+        use folio_core::db;
+        let dir = tempfile::tempdir().unwrap();
+        let conn = db::init_db(&dir.path().join("t.db")).unwrap();
+        db::insert_web_session_log(
+            &conn,
+            &folio_core::models::WebSessionEntry {
+                id: "x1".into(),
+                timestamp: 1000,
+                ip: "203.0.113.9".into(),
+                method: "session".into(),
+                outcome: "success".into(),
+                user_agent: None,
+            },
+        )
+        .unwrap();
+
+        let rows = db::get_web_session_log(&conn, 100).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].outcome, "success");
+        assert_eq!(rows[0].ip, "203.0.113.9");
+    }
 
     #[test]
     fn export_activity_log_writes_parseable_json() {
