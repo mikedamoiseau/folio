@@ -1943,11 +1943,19 @@ pub fn get_web_session_log(conn: &Connection, limit: u32) -> Result<Vec<WebSessi
 
 pub fn prune_web_session_log(conn: &Connection, keep: u32, max_age_days: u32) -> Result<usize> {
     let cutoff = chrono::Utc::now().timestamp() - (max_age_days as i64) * 24 * 60 * 60;
-    let deleted = conn.execute(
-        "DELETE FROM web_session_log WHERE id NOT IN (SELECT id FROM web_session_log ORDER BY timestamp DESC LIMIT ?1) AND timestamp < ?2",
-        params![keep, cutoff],
+    // Enforce age and count bounds independently — web_session_log is fed by
+    // network clients (incl. rate-limited spam), so the count cap must hold even
+    // when all rows are recent. (activity_log is user-driven and bounded, so it
+    // can get away with the combined AND condition; this table cannot.)
+    let by_age = conn.execute(
+        "DELETE FROM web_session_log WHERE timestamp < ?1",
+        params![cutoff],
     )?;
-    Ok(deleted)
+    let by_count = conn.execute(
+        "DELETE FROM web_session_log WHERE id NOT IN (SELECT id FROM web_session_log ORDER BY timestamp DESC LIMIT ?1)",
+        params![keep],
+    )?;
+    Ok(by_age + by_count)
 }
 
 pub fn insert_custom_font(conn: &Connection, font: &CustomFont) -> Result<()> {
@@ -2864,12 +2872,31 @@ mod tests {
         )
         .unwrap();
 
-        // keep=0, max_age_days=90 -> both >90d rows pruned, recent kept.
-        let deleted = prune_web_session_log(&conn, 0, 90).unwrap();
+        // keep=100 (no count pressure), max_age_days=90 -> both >90d rows pruned, recent kept.
+        let deleted = prune_web_session_log(&conn, 100, 90).unwrap();
         assert_eq!(deleted, 2);
         let rows = get_web_session_log(&conn, 10).unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].id, "new1");
+    }
+
+    #[test]
+    fn test_prune_web_session_log_enforces_count_cap_when_recent() {
+        let (_dir, conn) = setup();
+        let now = chrono::Utc::now().timestamp();
+        // 10 rows, all well within the age window.
+        for i in 0..10 {
+            insert_web_session_log(
+                &conn,
+                &sample_web_session(&format!("c{i}"), "rate_limited", now - i),
+            )
+            .unwrap();
+        }
+        // keep=3, generous age -> count cap drops the 7 oldest even though all recent.
+        let deleted = prune_web_session_log(&conn, 3, 90).unwrap();
+        assert_eq!(deleted, 7);
+        let rows = get_web_session_log(&conn, 100).unwrap();
+        assert_eq!(rows.len(), 3);
     }
 
     #[test]
