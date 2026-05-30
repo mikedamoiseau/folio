@@ -318,8 +318,22 @@ pub async fn auth_middleware(
     // Check HTTP Basic Auth (for OPDS clients) — rate-limited like /api/auth
     if let Some(pin) = extract_basic_pin(&req) {
         let client_ip = addr.ip().to_string();
+        let user_agent = req
+            .headers()
+            .get("user-agent")
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.to_string());
 
         if !state.login_limiter.attempt(&client_ip) {
+            if let Ok(conn) = state.conn() {
+                log_login_attempt(
+                    &conn,
+                    &client_ip,
+                    user_agent.as_deref(),
+                    WebAuthMethod::Basic,
+                    LoginOutcome::RateLimited,
+                );
+            }
             return (
                 StatusCode::TOO_MANY_REQUESTS,
                 "Too many login attempts. Try again later.",
@@ -337,6 +351,17 @@ pub async fn auth_middleware(
         if valid {
             state.login_limiter.clear(&client_ip);
             return next.run(req).await;
+        }
+
+        // Basic-Auth credential present but invalid — record the failure.
+        if let Ok(conn) = state.conn() {
+            log_login_attempt(
+                &conn,
+                &client_ip,
+                user_agent.as_deref(),
+                WebAuthMethod::Basic,
+                LoginOutcome::InvalidPin,
+            );
         }
     }
 
