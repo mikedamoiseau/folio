@@ -25,7 +25,7 @@ fn build_gdpr_export(
 ) -> Result<serde_json::Value, (StatusCode, String)> {
     let mut value = db::build_core_export(conn).map_err(folio_status)?;
 
-    let activity = db::get_activity_log(conn, 100_000, 0, None).map_err(folio_status)?;
+    let activity = db::get_all_activity(conn).map_err(folio_status)?;
     let activity_val = serde_json::to_value(activity).map_err(folio_status)?;
 
     let settings: serde_json::Map<String, serde_json::Value> = db::list_settings(conn)
