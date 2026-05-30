@@ -71,8 +71,11 @@ reads cleaner) that:
 3. Adds `settings`: a JSON object built from `db::list_settings(conn)`, with
    the redaction denylist applied.
 
-**Redaction denylist:** `["backup_config"]`. Keys in the denylist are omitted
-from the exported `settings` object. All other settings are exported verbatim.
+**Redaction denylist:** `["backup_config", "enrichment_providers"]`. Keys in the
+denylist are omitted from the exported `settings` object; all other settings are
+exported verbatim. `enrichment_providers` stores per-provider config including
+plaintext API keys in the settings table (unlike the web PIN and backup
+credentials, which live in the OS keyring), so it must be redacted too.
 
 ### 3. Web endpoint — `web_server/api.rs`
 
