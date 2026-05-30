@@ -11,11 +11,12 @@ use super::{folio_status, WebState};
 use crate::db;
 use crate::models::BookFormat;
 
-/// Settings keys excluded from the GDPR export. Defense-in-depth: live secrets
-/// (web PIN, backup credentials) are stored in the OS keyring, not in settings,
-/// but `backup_config` can carry remote endpoint details or pre-keyring secret
-/// values, so it is never exported.
-const EXPORT_SETTINGS_DENYLIST: &[&str] = &["backup_config"];
+/// Settings keys excluded from the GDPR export. Defense-in-depth: the web PIN
+/// and backup credentials live in the OS keyring (not in settings), but two
+/// settings DO carry sensitive data and are never exported:
+/// - `backup_config`: remote endpoint details / pre-keyring secret values
+/// - `enrichment_providers`: per-provider config including plaintext API keys
+const EXPORT_SETTINGS_DENYLIST: &[&str] = &["backup_config", "enrichment_providers"];
 
 /// Build the full GDPR export document: the shared core metadata plus the
 /// activity log and a redacted settings map.
@@ -924,6 +925,12 @@ mod tests {
         let pool = crate::db::create_pool(&std::path::PathBuf::from(":memory:")).unwrap();
         let conn = pool.get().unwrap();
         db::set_setting(&conn, "backup_config", "{\"secret\":\"x\"}").unwrap();
+        db::set_setting(
+            &conn,
+            "enrichment_providers",
+            "{\"google\":{\"enabled\":true,\"apiKey\":\"SECRET\"}}",
+        )
+        .unwrap();
         db::set_setting(&conn, "import_mode", "copy").unwrap();
 
         let value = build_gdpr_export(&conn).expect("build_gdpr_export");
@@ -932,8 +939,15 @@ mod tests {
             !settings.contains_key("backup_config"),
             "backup_config must be redacted"
         );
+        assert!(
+            !settings.contains_key("enrichment_providers"),
+            "enrichment_providers (carries API keys) must be redacted"
+        );
         assert_eq!(settings["import_mode"], "copy");
         assert!(value["activity_log"].is_array());
+
+        let serialized = serde_json::to_string(&value).unwrap();
+        assert!(!serialized.contains("SECRET"), "API key leaked into export");
     }
 
     #[test]
