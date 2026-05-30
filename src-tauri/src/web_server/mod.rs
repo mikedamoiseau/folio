@@ -820,6 +820,112 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn data_export_requires_auth() {
+        let state = test_state();
+        *state.pin_hash.lock().unwrap() = Some(auth::hash_pin("1234"));
+
+        let router = build_router(
+            state,
+            ServerModes {
+                web_ui: true,
+                opds: true,
+            },
+        );
+        let listener = tokio::net::TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], 0)))
+            .await
+            .unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (tx, rx) = oneshot::channel::<()>();
+        tokio::spawn(async move {
+            axum::serve(
+                listener,
+                router.into_make_service_with_connect_info::<SocketAddr>(),
+            )
+            .with_graceful_shutdown(async {
+                let _ = rx.await;
+            })
+            .await
+            .ok();
+        });
+
+        let resp = reqwest::Client::new()
+            .get(format!("http://127.0.0.1:{port}/api/data-export"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 401);
+        let _ = tx.send(());
+    }
+
+    #[tokio::test]
+    async fn data_export_returns_zip_for_authed_request() {
+        let state = test_state();
+        *state.pin_hash.lock().unwrap() = Some(auth::hash_pin("1234"));
+
+        let router = build_router(
+            state,
+            ServerModes {
+                web_ui: true,
+                opds: true,
+            },
+        );
+        let listener = tokio::net::TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], 0)))
+            .await
+            .unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (tx, rx) = oneshot::channel::<()>();
+        tokio::spawn(async move {
+            axum::serve(
+                listener,
+                router.into_make_service_with_connect_info::<SocketAddr>(),
+            )
+            .with_graceful_shutdown(async {
+                let _ = rx.await;
+            })
+            .await
+            .ok();
+        });
+
+        // Authenticate via HTTP Basic Auth (PIN as password).
+        let resp = reqwest::Client::new()
+            .get(format!("http://127.0.0.1:{port}/api/data-export"))
+            .basic_auth("folio", Some("1234"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+        assert_eq!(
+            resp.headers().get("content-type").unwrap(),
+            "application/zip"
+        );
+        let disp = resp
+            .headers()
+            .get("content-disposition")
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string();
+        assert!(disp.contains("folio-export-"));
+        assert!(disp.ends_with(".zip\""));
+
+        let bytes = resp.bytes().await.unwrap();
+        let reader = std::io::Cursor::new(bytes.to_vec());
+        let mut archive = zip::ZipArchive::new(reader).expect("valid zip");
+        assert_eq!(archive.len(), 1);
+        let mut entry = archive.by_index(0).unwrap();
+        assert!(entry.name().starts_with("folio-export-"));
+        assert!(entry.name().ends_with(".json"));
+        let mut contents = String::new();
+        std::io::Read::read_to_string(&mut entry, &mut contents).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&contents).expect("valid json");
+        assert!(parsed["books"].is_array());
+        assert!(parsed["activity_log"].is_array());
+        assert!(parsed["settings"].is_object());
+
+        let _ = tx.send(());
+    }
+
+    #[tokio::test]
     async fn build_router_neither_serves_nothing() {
         let state = test_state();
         let modes = ServerModes {
