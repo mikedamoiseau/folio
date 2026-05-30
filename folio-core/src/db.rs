@@ -495,30 +495,27 @@ pub fn list_books(conn: &Connection) -> Result<Vec<Book>> {
 /// collections, tags, and book→tag links.
 pub fn build_core_export(conn: &Connection) -> Result<serde_json::Value> {
     let books = list_books(conn)?;
-    let progress: Vec<_> = books
-        .iter()
-        .filter_map(|b| get_reading_progress(conn, &b.id).ok().flatten())
-        .collect();
-    let bookmarks: Vec<_> = books
-        .iter()
-        .flat_map(|b| list_bookmarks(conn, &b.id).unwrap_or_default())
-        .collect();
-    let highlights: Vec<_> = books
-        .iter()
-        .flat_map(|b| list_highlights(conn, &b.id).unwrap_or_default())
-        .collect();
+    // Propagate DB errors instead of swallowing them: a failed read must abort
+    // the export, not silently drop personal data (GDPR completeness). Only
+    // `Ok(None)` reading progress is treated as genuine absence.
+    let mut progress = Vec::new();
+    let mut bookmarks = Vec::new();
+    let mut highlights = Vec::new();
+    let mut book_tags: Vec<(String, String, String)> = Vec::new();
+    for b in &books {
+        if let Some(p) = get_reading_progress(conn, &b.id)? {
+            progress.push(p);
+        }
+        bookmarks.extend(list_bookmarks(conn, &b.id)?);
+        highlights.extend(list_highlights(conn, &b.id)?);
+        book_tags.extend(
+            get_book_tags(conn, &b.id)?
+                .into_iter()
+                .map(|(tag_id, tag_name)| (b.id.clone(), tag_id, tag_name)),
+        );
+    }
     let collections = list_collections(conn)?;
     let tags = list_tags(conn)?;
-    let book_tags: Vec<(String, String, String)> = books
-        .iter()
-        .flat_map(|b| {
-            get_book_tags(conn, &b.id)
-                .unwrap_or_default()
-                .into_iter()
-                .map(|(tag_id, tag_name)| (b.id.clone(), tag_id, tag_name))
-                .collect::<Vec<_>>()
-        })
-        .collect();
 
     Ok(serde_json::json!({
         "version": 1,
