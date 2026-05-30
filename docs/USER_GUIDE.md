@@ -103,7 +103,14 @@ When you import a book, Folio copies the file into its own managed library folde
 
 ### Viewing your books
 
-Books are shown as a cover grid. Each card displays the cover image, title, author, star rating (if set), a progress percentage badge, and a format badge for non-EPUB books.
+Books are shown as a cover grid. Each card displays the cover image, title, author, star rating (if set), a reading-status badge, and a format badge for non-EPUB books.
+
+The status badge (top-right of the cover) reflects where you are with a book:
+
+- **Active** (green, shows the percentage) — in progress and read within the last 14 days
+- **Paused** (amber, shows the percentage) — in progress but untouched for more than 14 days
+- **Finished** (a checkmark) — read to the end
+- **Unread** books show no badge
 
 In the full library view, a **"Continue Reading"** row at the top shows your most recently read books, and a **"Discover"** row shows popular titles from your configured OPDS catalogs. Both sections are hidden when viewing a collection or series, so you see only the relevant books.
 
