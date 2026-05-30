@@ -490,6 +490,48 @@ pub fn list_books(conn: &Connection) -> Result<Vec<Book>> {
     rows.collect()
 }
 
+/// Build the metadata object shared by the desktop library export and the
+/// web GDPR export: version + books, reading progress, bookmarks, highlights,
+/// collections, tags, and book→tag links.
+pub fn build_core_export(conn: &Connection) -> Result<serde_json::Value> {
+    let books = list_books(conn)?;
+    let progress: Vec<_> = books
+        .iter()
+        .filter_map(|b| get_reading_progress(conn, &b.id).ok().flatten())
+        .collect();
+    let bookmarks: Vec<_> = books
+        .iter()
+        .flat_map(|b| list_bookmarks(conn, &b.id).unwrap_or_default())
+        .collect();
+    let highlights: Vec<_> = books
+        .iter()
+        .flat_map(|b| list_highlights(conn, &b.id).unwrap_or_default())
+        .collect();
+    let collections = list_collections(conn)?;
+    let tags = list_tags(conn)?;
+    let book_tags: Vec<(String, String, String)> = books
+        .iter()
+        .flat_map(|b| {
+            get_book_tags(conn, &b.id)
+                .unwrap_or_default()
+                .into_iter()
+                .map(|(tag_id, tag_name)| (b.id.clone(), tag_id, tag_name))
+                .collect::<Vec<_>>()
+        })
+        .collect();
+
+    Ok(serde_json::json!({
+        "version": 1,
+        "books": books,
+        "reading_progress": progress,
+        "bookmarks": bookmarks,
+        "highlights": highlights,
+        "collections": collections,
+        "tags": tags,
+        "book_tags": book_tags,
+    }))
+}
+
 const GRID_COLUMNS: &str = "id, title, author, cover_path, total_chapters, added_at, format, series, volume, rating, language, publish_year, is_imported";
 
 /// Grid columns prefixed with table alias `b.` for JOIN queries.
@@ -4232,5 +4274,26 @@ mod tests {
         assert_eq!(author_suggestions[0].rules[0].field, "author");
         assert_eq!(author_suggestions[0].rules[0].operator, "equals");
         assert_eq!(author_suggestions[0].rules[0].value, "J.R.R. Tolkien");
+    }
+
+    #[test]
+    fn build_core_export_has_expected_keys() {
+        let (_tmp, conn) = setup();
+        let value = build_core_export(&conn).expect("build_core_export");
+        let obj = value.as_object().expect("export is a JSON object");
+        for key in [
+            "version",
+            "books",
+            "reading_progress",
+            "bookmarks",
+            "highlights",
+            "collections",
+            "tags",
+            "book_tags",
+        ] {
+            assert!(obj.contains_key(key), "missing key: {key}");
+        }
+        assert_eq!(obj["version"], 1);
+        assert!(obj["books"].is_array());
     }
 }
