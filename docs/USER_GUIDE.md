@@ -748,8 +748,19 @@ The system tray shows the same two toggles (Web UI: ON/OFF, OPDS: ON/OFF). Click
 - Your PIN is hashed (SHA-256) and stored in your operating system's keychain
 - Web sessions expire after 24 hours
 - Login attempts are rate-limited (5 tries per 5 minutes per device)
+- Login attempts are recorded to an audit trail (see below)
 - The server is read-only — nobody can modify your library from the web interface
 - All served content is sanitized to prevent malicious scripts in EPUB files
+
+### Login audit trail
+
+Folio keeps a security audit log of login attempts against the remote-access server, so you can review who has been trying to reach your library.
+
+- Each entry records the timestamp, the device's IP address, the connecting app (user-agent), and the outcome — **success**, **invalid PIN**, or **rate-limited**.
+- Web login attempts (the PIN screen) record all outcomes. OPDS reader-app connections record only failed attempts, to avoid filling the log with one entry per page an app loads.
+- Your PIN is never written to the log — only whether an attempt succeeded.
+- Entries are kept for 90 days (and capped at the most recent 5,000) and then pruned automatically.
+- The trail is readable only by an authenticated client, via `GET /api/audit/login-history` on the running server.
 
 ### Stopping the server
 
