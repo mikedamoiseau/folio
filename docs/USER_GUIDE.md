@@ -762,6 +762,15 @@ Folio keeps a security audit log of login attempts against the remote-access ser
 - Entries are kept for 90 days (and capped at the most recent 5,000) and then pruned automatically.
 - The trail is readable only by an authenticated client, via `GET /api/audit/login-history` on the running server.
 
+### Data export
+
+Folio can export a copy of your personal data from the remote-access server, for backup or data-portability (GDPR) purposes.
+
+- Request `GET /api/data-export` from an authenticated client. The server returns a timestamped ZIP (`folio-export-YYYYMMDD.zip`) containing a single JSON document.
+- The export includes your books metadata, reading progress, bookmarks, highlights, the activity log, and your settings.
+- Credentials are never exported: backup configuration and metadata-provider API keys are excluded, and your PIN (stored separately) is never included.
+- The endpoint requires authentication, and is refused entirely unless a web PIN is configured — it will not serve your data on an open, unauthenticated server.
+
 ### Stopping the server
 
 Untick both checkboxes (or use the tray menu). The server also stops automatically when you close the Folio app.

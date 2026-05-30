@@ -490,6 +490,45 @@ pub fn list_books(conn: &Connection) -> Result<Vec<Book>> {
     rows.collect()
 }
 
+/// Build the metadata object shared by the desktop library export and the
+/// web GDPR export: version + books, reading progress, bookmarks, highlights,
+/// collections, tags, and book→tag links.
+pub fn build_core_export(conn: &Connection) -> Result<serde_json::Value> {
+    let books = list_books(conn)?;
+    // Propagate DB errors instead of swallowing them: a failed read must abort
+    // the export, not silently drop personal data (GDPR completeness). Only
+    // `Ok(None)` reading progress is treated as genuine absence.
+    let mut progress = Vec::new();
+    let mut bookmarks = Vec::new();
+    let mut highlights = Vec::new();
+    let mut book_tags: Vec<(String, String, String)> = Vec::new();
+    for b in &books {
+        if let Some(p) = get_reading_progress(conn, &b.id)? {
+            progress.push(p);
+        }
+        bookmarks.extend(list_bookmarks(conn, &b.id)?);
+        highlights.extend(list_highlights(conn, &b.id)?);
+        book_tags.extend(
+            get_book_tags(conn, &b.id)?
+                .into_iter()
+                .map(|(tag_id, tag_name)| (b.id.clone(), tag_id, tag_name)),
+        );
+    }
+    let collections = list_collections(conn)?;
+    let tags = list_tags(conn)?;
+
+    Ok(serde_json::json!({
+        "version": 1,
+        "books": books,
+        "reading_progress": progress,
+        "bookmarks": bookmarks,
+        "highlights": highlights,
+        "collections": collections,
+        "tags": tags,
+        "book_tags": book_tags,
+    }))
+}
+
 const GRID_COLUMNS: &str = "id, title, author, cover_path, total_chapters, added_at, format, series, volume, rating, language, publish_year, is_imported";
 
 /// Grid columns prefixed with table alias `b.` for JOIN queries.
@@ -762,6 +801,20 @@ pub fn get_setting(conn: &Connection, key: &str) -> Result<Option<String>> {
     } else {
         Ok(None)
     }
+}
+
+/// Return every row of the `settings` table as `(key, value)` pairs,
+/// ordered by key.
+pub fn list_settings(conn: &Connection) -> Result<Vec<(String, String)>> {
+    let mut stmt = conn.prepare("SELECT key, value FROM settings ORDER BY key")?;
+    let rows = stmt.query_map([], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    })?;
+    let mut out = Vec::new();
+    for r in rows {
+        out.push(r?);
+    }
+    Ok(out)
 }
 
 pub fn set_setting(conn: &Connection, key: &str, value: &str) -> Result<()> {
@@ -4232,5 +4285,37 @@ mod tests {
         assert_eq!(author_suggestions[0].rules[0].field, "author");
         assert_eq!(author_suggestions[0].rules[0].operator, "equals");
         assert_eq!(author_suggestions[0].rules[0].value, "J.R.R. Tolkien");
+    }
+
+    #[test]
+    fn build_core_export_has_expected_keys() {
+        let (_tmp, conn) = setup();
+        let value = build_core_export(&conn).expect("build_core_export");
+        let obj = value.as_object().expect("export is a JSON object");
+        for key in [
+            "version",
+            "books",
+            "reading_progress",
+            "bookmarks",
+            "highlights",
+            "collections",
+            "tags",
+            "book_tags",
+        ] {
+            assert!(obj.contains_key(key), "missing key: {key}");
+        }
+        assert_eq!(obj["version"], 1);
+        assert!(obj["books"].is_array());
+    }
+
+    #[test]
+    fn list_settings_round_trips() {
+        let (_tmp, conn) = setup();
+        set_setting(&conn, "import_mode", "copy").unwrap();
+        set_setting(&conn, "web_server_port", "1421").unwrap();
+
+        let settings = list_settings(&conn).expect("list_settings");
+        assert!(settings.contains(&("import_mode".to_string(), "copy".to_string())));
+        assert!(settings.contains(&("web_server_port".to_string(), "1421".to_string())));
     }
 }

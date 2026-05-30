@@ -11,6 +11,125 @@ use super::{folio_status, WebState};
 use crate::db;
 use crate::models::BookFormat;
 
+/// Settings keys excluded from the GDPR export. Defense-in-depth: the web PIN
+/// and backup credentials live in the OS keyring (not in settings), but two
+/// settings DO carry sensitive data and are never exported:
+/// - `backup_config`: remote endpoint details / pre-keyring secret values
+/// - `enrichment_providers`: per-provider config including plaintext API keys
+const EXPORT_SETTINGS_DENYLIST: &[&str] = &["backup_config", "enrichment_providers"];
+
+/// Build the full GDPR export document: the shared core metadata plus the
+/// activity log and a redacted settings map.
+fn build_gdpr_export(
+    conn: &rusqlite::Connection,
+) -> Result<serde_json::Value, (StatusCode, String)> {
+    let mut value = db::build_core_export(conn).map_err(folio_status)?;
+
+    let activity = db::get_all_activity(conn).map_err(folio_status)?;
+    let activity_val = serde_json::to_value(activity).map_err(folio_status)?;
+
+    let settings: serde_json::Map<String, serde_json::Value> = db::list_settings(conn)
+        .map_err(folio_status)?
+        .into_iter()
+        .filter(|(k, _)| !EXPORT_SETTINGS_DENYLIST.contains(&k.as_str()))
+        .map(|(k, v)| (k, serde_json::Value::String(v)))
+        .collect();
+
+    if let Some(obj) = value.as_object_mut() {
+        obj.insert("activity_log".to_string(), activity_val);
+        obj.insert("settings".to_string(), serde_json::Value::Object(settings));
+    }
+    Ok(value)
+}
+
+/// Current UTC date as `YYYYMMDD`, used for the export filenames.
+fn export_datestamp() -> String {
+    chrono::Utc::now().format("%Y%m%d").to_string()
+}
+
+/// Best-effort: record the export in the activity log. A failure is logged and
+/// swallowed so it never fails the download (mirrors the login-audit pattern).
+fn log_export_event(conn: &rusqlite::Connection) {
+    use folio_core::activity::ActivityEvent;
+    let f = ActivityEvent::LibraryExported {
+        detail: "GDPR data export (web)".to_string(),
+    }
+    .into_fields();
+    let entry = crate::models::ActivityEntry {
+        id: uuid::Uuid::new_v4().to_string(),
+        timestamp: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0),
+        action: f.action.to_string(),
+        entity_type: f.entity_type.to_string(),
+        entity_id: f.entity_id,
+        entity_name: f.entity_name,
+        detail: f.detail,
+    };
+    if let Err(e) = db::insert_activity(conn, &entry) {
+        tracing::warn!(error = %e, "failed to log GDPR export to activity log");
+    }
+}
+
+async fn data_export(State(state): State<WebState>) -> Result<Response, (StatusCode, String)> {
+    use std::io::Write;
+
+    // Defense-in-depth: `auth_middleware` lets every route through when no PIN
+    // is configured. That open-access posture is acceptable for individual
+    // reads, but this endpoint bulk-dumps personal data that has no other web
+    // route (bookmarks, highlights, reading progress, full activity log,
+    // settings). Refuse to serve it on an unauthenticated server — the GDPR
+    // export requires that web auth actually be set up. Poisoned mutex → fail
+    // closed (500), never open access (mirrors `auth_middleware`).
+    let has_pin = match state.pin_hash.lock() {
+        Ok(guard) => guard.is_some(),
+        Err(_) => {
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Internal server error".to_string(),
+            ))
+        }
+    };
+    if !has_pin {
+        return Err((
+            StatusCode::FORBIDDEN,
+            "Data export requires a configured web PIN.".to_string(),
+        ));
+    }
+
+    let conn = state.conn().map_err(folio_status)?;
+    let value = build_gdpr_export(&conn)?;
+    let json = serde_json::to_string_pretty(&value).map_err(folio_status)?;
+
+    let date = export_datestamp();
+    let inner_name = format!("folio-export-{date}.json");
+    let zip_name = format!("folio-export-{date}.zip");
+
+    let buf = {
+        let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        let options = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
+        zip.start_file(&inner_name, options).map_err(folio_status)?;
+        zip.write_all(json.as_bytes()).map_err(folio_status)?;
+        zip.finish().map_err(folio_status)?.into_inner()
+    };
+
+    log_export_event(&conn);
+
+    Ok((
+        [
+            (header::CONTENT_TYPE, "application/zip".to_string()),
+            (
+                header::CONTENT_DISPOSITION,
+                format!("attachment; filename=\"{zip_name}\""),
+            ),
+        ],
+        buf,
+    )
+        .into_response())
+}
+
 /// Build all `/api/` routes.
 pub fn routes(state: WebState) -> Router<WebState> {
     Router::new()
@@ -41,6 +160,7 @@ pub fn routes(state: WebState) -> Router<WebState> {
         .route("/collections", get(list_collections))
         .route("/collections/{id}/books", get(get_collection_books))
         .route("/audit/login-history", get(login_history))
+        .route("/data-export", get(data_export))
         .with_state(state)
 }
 
@@ -819,6 +939,38 @@ mod tests {
         assert_eq!(json["bookCount"], 5);
         assert_eq!(json["name"], "Test");
         assert_eq!(json["icon"], "\u{1F4DA}");
+    }
+
+    #[test]
+    fn gdpr_export_redacts_backup_config() {
+        // `run_schema` is private to folio-core; build a schema-migrated
+        // in-memory connection through the pool helper (same as `test_state`).
+        let pool = crate::db::create_pool(&std::path::PathBuf::from(":memory:")).unwrap();
+        let conn = pool.get().unwrap();
+        db::set_setting(&conn, "backup_config", "{\"secret\":\"x\"}").unwrap();
+        db::set_setting(
+            &conn,
+            "enrichment_providers",
+            "{\"google\":{\"enabled\":true,\"apiKey\":\"SECRET\"}}",
+        )
+        .unwrap();
+        db::set_setting(&conn, "import_mode", "copy").unwrap();
+
+        let value = build_gdpr_export(&conn).expect("build_gdpr_export");
+        let settings = value["settings"].as_object().expect("settings object");
+        assert!(
+            !settings.contains_key("backup_config"),
+            "backup_config must be redacted"
+        );
+        assert!(
+            !settings.contains_key("enrichment_providers"),
+            "enrichment_providers (carries API keys) must be redacted"
+        );
+        assert_eq!(settings["import_mode"], "copy");
+        assert!(value["activity_log"].is_array());
+
+        let serialized = serde_json::to_string(&value).unwrap();
+        assert!(!serialized.contains("SECRET"), "API key leaked into export");
     }
 
     #[test]
