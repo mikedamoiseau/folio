@@ -207,6 +207,17 @@ pub struct ActivityEntry {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct WebSessionEntry {
+    pub id: String,
+    pub timestamp: i64,
+    pub ip: String,
+    pub method: String,
+    pub outcome: String,
+    pub user_agent: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CustomFont {
     pub id: String,
     pub name: String,

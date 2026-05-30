@@ -7,7 +7,7 @@ use std::time::Duration;
 use crate::models::{
     ActivityEntry, Book, BookGridItem, Bookmark, Collection, CollectionRule, CollectionSuggestion,
     CollectionType, CustomFont, FeatureFlag, HighlightSearchResult, NewRuleInput, ReadingProgress,
-    SeriesInfo,
+    SeriesInfo, WebSessionEntry,
 };
 
 pub type DbPool = Pool<SqliteConnectionManager>;
@@ -203,6 +203,15 @@ fn run_schema(conn: &Connection) -> Result<()> {
             entity_id TEXT,
             entity_name TEXT,
             detail TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS web_session_log (
+            id TEXT PRIMARY KEY,
+            timestamp INTEGER NOT NULL,
+            ip TEXT NOT NULL,
+            method TEXT NOT NULL,
+            outcome TEXT NOT NULL,
+            user_agent TEXT
         );
 
         CREATE TABLE IF NOT EXISTS custom_fonts (
@@ -1900,6 +1909,47 @@ pub fn prune_activity_log(conn: &Connection, keep: u32, max_age_days: u32) -> Re
     Ok(deleted)
 }
 
+pub fn insert_web_session_log(conn: &Connection, entry: &WebSessionEntry) -> Result<()> {
+    conn.execute(
+        "INSERT INTO web_session_log (id, timestamp, ip, method, outcome, user_agent) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        params![
+            entry.id,
+            entry.timestamp,
+            entry.ip,
+            entry.method,
+            entry.outcome,
+            entry.user_agent
+        ],
+    )?;
+    Ok(())
+}
+
+pub fn get_web_session_log(conn: &Connection, limit: u32) -> Result<Vec<WebSessionEntry>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, timestamp, ip, method, outcome, user_agent FROM web_session_log ORDER BY timestamp DESC LIMIT ?1",
+    )?;
+    let rows = stmt.query_map(params![limit], |row| {
+        Ok(WebSessionEntry {
+            id: row.get(0)?,
+            timestamp: row.get(1)?,
+            ip: row.get(2)?,
+            method: row.get(3)?,
+            outcome: row.get(4)?,
+            user_agent: row.get(5)?,
+        })
+    })?;
+    rows.collect()
+}
+
+pub fn prune_web_session_log(conn: &Connection, keep: u32, max_age_days: u32) -> Result<usize> {
+    let cutoff = chrono::Utc::now().timestamp() - (max_age_days as i64) * 24 * 60 * 60;
+    let deleted = conn.execute(
+        "DELETE FROM web_session_log WHERE id NOT IN (SELECT id FROM web_session_log ORDER BY timestamp DESC LIMIT ?1) AND timestamp < ?2",
+        params![keep, cutoff],
+    )?;
+    Ok(deleted)
+}
+
 pub fn insert_custom_font(conn: &Connection, font: &CustomFont) -> Result<()> {
     conn.execute(
         "INSERT INTO custom_fonts (id, name, file_name, file_path, created_at)
@@ -2737,6 +2787,89 @@ mod tests {
         assert_eq!(all.len(), 2);
         assert_eq!(all[0].id, "g2");
         assert_eq!(all[1].id, "g1");
+    }
+
+    fn sample_web_session(
+        id: &str,
+        outcome: &str,
+        timestamp: i64,
+    ) -> crate::models::WebSessionEntry {
+        crate::models::WebSessionEntry {
+            id: id.to_string(),
+            timestamp,
+            ip: "203.0.113.7".to_string(),
+            method: "session".to_string(),
+            outcome: outcome.to_string(),
+            user_agent: Some("Mozilla/5.0".to_string()),
+        }
+    }
+
+    #[test]
+    fn test_web_session_log_insert_and_get_newest_first() {
+        let (_dir, conn) = setup();
+        let now = chrono::Utc::now().timestamp();
+        insert_web_session_log(&conn, &sample_web_session("w1", "invalid_pin", now - 20)).unwrap();
+        insert_web_session_log(&conn, &sample_web_session("w2", "success", now - 5)).unwrap();
+
+        let rows = get_web_session_log(&conn, 10).unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].id, "w2"); // newest first
+        assert_eq!(rows[1].id, "w1");
+        assert_eq!(rows[0].outcome, "success");
+        assert_eq!(rows[0].user_agent.as_deref(), Some("Mozilla/5.0"));
+    }
+
+    #[test]
+    fn test_web_session_log_get_respects_limit() {
+        let (_dir, conn) = setup();
+        let now = chrono::Utc::now().timestamp();
+        for i in 0..5 {
+            insert_web_session_log(
+                &conn,
+                &sample_web_session(&format!("w{i}"), "success", now - 10 + i),
+            )
+            .unwrap();
+        }
+        let rows = get_web_session_log(&conn, 2).unwrap();
+        assert_eq!(rows.len(), 2);
+    }
+
+    #[test]
+    fn test_web_session_log_null_user_agent() {
+        let (_dir, conn) = setup();
+        let mut e = sample_web_session("wn", "rate_limited", chrono::Utc::now().timestamp());
+        e.user_agent = None;
+        insert_web_session_log(&conn, &e).unwrap();
+        let rows = get_web_session_log(&conn, 10).unwrap();
+        assert_eq!(rows[0].user_agent, None);
+    }
+
+    #[test]
+    fn test_prune_web_session_log_age_and_count() {
+        let (_dir, conn) = setup();
+        let now = chrono::Utc::now().timestamp();
+        insert_web_session_log(
+            &conn,
+            &sample_web_session("old1", "invalid_pin", now - 100 * 86400),
+        )
+        .unwrap();
+        insert_web_session_log(
+            &conn,
+            &sample_web_session("old2", "invalid_pin", now - 91 * 86400),
+        )
+        .unwrap();
+        insert_web_session_log(
+            &conn,
+            &sample_web_session("new1", "success", now - 5 * 86400),
+        )
+        .unwrap();
+
+        // keep=0, max_age_days=90 -> both >90d rows pruned, recent kept.
+        let deleted = prune_web_session_log(&conn, 0, 90).unwrap();
+        assert_eq!(deleted, 2);
+        let rows = get_web_session_log(&conn, 10).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].id, "new1");
     }
 
     #[test]
