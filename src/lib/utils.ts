@@ -325,3 +325,28 @@ export function sanitizeCss(css: string): string {
   }
   return sanitized;
 }
+
+export type ReadingStatus = "unread" | "active" | "paused" | "finished";
+
+/** Days of inactivity after which an in-progress book is considered paused. */
+export const PAUSED_AFTER_DAYS = 14;
+
+/**
+ * Derive a book's reading status from its progress and last-read time.
+ * Pure: callers pass `nowSecs` (unix seconds) so it is deterministic/testable.
+ * - progress >= 100        → finished
+ * - progress <= 0          → unread
+ * - in progress, read <=14d ago → active
+ * - in progress, older or no timestamp → paused
+ */
+export function getReadingStatus(
+  progress: number,
+  lastReadAt: number | undefined,
+  nowSecs: number,
+): ReadingStatus {
+  if (progress >= 100) return "finished";
+  if (progress <= 0) return "unread";
+  if (!lastReadAt) return "paused";
+  const ageDays = (nowSecs - lastReadAt) / 86400;
+  return ageDays <= PAUSED_AFTER_DAYS ? "active" : "paused";
+}
