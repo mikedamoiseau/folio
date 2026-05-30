@@ -75,6 +75,29 @@ fn log_export_event(conn: &rusqlite::Connection) {
 async fn data_export(State(state): State<WebState>) -> Result<Response, (StatusCode, String)> {
     use std::io::Write;
 
+    // Defense-in-depth: `auth_middleware` lets every route through when no PIN
+    // is configured. That open-access posture is acceptable for individual
+    // reads, but this endpoint bulk-dumps personal data that has no other web
+    // route (bookmarks, highlights, reading progress, full activity log,
+    // settings). Refuse to serve it on an unauthenticated server — the GDPR
+    // export requires that web auth actually be set up. Poisoned mutex → fail
+    // closed (500), never open access (mirrors `auth_middleware`).
+    let has_pin = match state.pin_hash.lock() {
+        Ok(guard) => guard.is_some(),
+        Err(_) => {
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Internal server error".to_string(),
+            ))
+        }
+    };
+    if !has_pin {
+        return Err((
+            StatusCode::FORBIDDEN,
+            "Data export requires a configured web PIN.".to_string(),
+        ));
+    }
+
     let conn = state.conn().map_err(folio_status)?;
     let value = build_gdpr_export(&conn)?;
     let json = serde_json::to_string_pretty(&value).map_err(folio_status)?;

@@ -858,6 +858,47 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn data_export_forbidden_without_pin() {
+        // No PIN configured: `auth_middleware` lets every route through, but the
+        // bulk personal-data export must still refuse to serve on an
+        // unauthenticated server.
+        let state = test_state();
+        assert!(state.pin_hash.lock().unwrap().is_none());
+
+        let router = build_router(
+            state,
+            ServerModes {
+                web_ui: true,
+                opds: true,
+            },
+        );
+        let listener = tokio::net::TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], 0)))
+            .await
+            .unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (tx, rx) = oneshot::channel::<()>();
+        tokio::spawn(async move {
+            axum::serve(
+                listener,
+                router.into_make_service_with_connect_info::<SocketAddr>(),
+            )
+            .with_graceful_shutdown(async {
+                let _ = rx.await;
+            })
+            .await
+            .ok();
+        });
+
+        let resp = reqwest::Client::new()
+            .get(format!("http://127.0.0.1:{port}/api/data-export"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 403);
+        let _ = tx.send(());
+    }
+
+    #[tokio::test]
     async fn data_export_returns_zip_for_authed_request() {
         let state = test_state();
         *state.pin_hash.lock().unwrap() = Some(auth::hash_pin("1234"));
