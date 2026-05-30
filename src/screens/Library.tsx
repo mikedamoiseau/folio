@@ -19,7 +19,7 @@ import KeyboardShortcutsHelp from "../components/KeyboardShortcutsHelp";
 import TagFilter from "../components/TagFilter";
 import { startDrag, endDrag, isDragging, getDraggedCoverSrc, subscribe } from "../lib/dragState";
 import { friendlyError } from "../lib/errors";
-import { pickSupportedOpdsLink } from "../lib/utils";
+import { pickSupportedOpdsLink, getReadingStatus } from "../lib/utils";
 import { FALLBACK_FORMATS, getSupportedFormats, useSupportedFormats } from "../lib/supportedFormats";
 import HighlightSearchModal from "../components/HighlightSearchModal";
 import SeriesStackCard from "../components/SeriesStackCard";
@@ -583,13 +583,18 @@ export default function Library({ catalogImportedBookIds }: LibraryProps = {}) {
     totalChapters: book.total_chapters,
     format: book.format,
     progress: progressMap[book.id] ?? 0,
+    status: getReadingStatus(
+      progressMap[book.id] ?? 0,
+      lastReadMap[book.id],
+      Date.now() / 1000,
+    ),
     language: book.language,
     publishYear: book.publish_year,
     series: book.series,
     volume: book.volume,
     rating: book.rating,
     isImported: book.is_imported,
-  }), [progressMap]);
+  }), [progressMap, lastReadMap]);
 
   // Drag ghost: track mouse position and drag state
   const bookDragging = useSyncExternalStore(subscribe, isDragging);
