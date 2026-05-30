@@ -74,7 +74,7 @@ jobs:
     runs-on: ${{ matrix.platform }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install system dependencies (Linux)
         if: matrix.platform == 'ubuntu-latest'
@@ -134,7 +134,7 @@ jobs:
       - name: Cache libmobi (Windows)
         if: matrix.platform == 'windows-latest' && contains(matrix.args, '--features mobi')
         id: cache-libmobi-windows
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: .libmobi-windows
           # Suffix encodes the build flavor (link kind + which optional
@@ -275,12 +275,12 @@ jobs:
           }
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v6
         with:
           version: 10
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: 22
           cache: pnpm
@@ -298,7 +298,7 @@ jobs:
 
       - name: Cache pdfium
         id: cache-pdfium
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: src-tauri/resources
           key: pdfium-${{ env.PDFIUM_VERSION }}-${{ matrix.pdfium_archive }}

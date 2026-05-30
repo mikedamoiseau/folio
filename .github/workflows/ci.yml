@@ -24,7 +24,7 @@ jobs:
     name: Rust Tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install system dependencies
         run: |
@@ -47,7 +47,7 @@ jobs:
 
       - name: Cache pdfium
         id: cache-pdfium
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: src-tauri/resources
           key: pdfium-${{ env.PDFIUM_VERSION }}-linux-x64
@@ -89,7 +89,7 @@ jobs:
       # includes the script hash, so any edit to URLs or pinned hashes
       # invalidates the cache automatically.
       - name: Cache MOBI test corpus
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: src-tauri/test-fixtures
           key: mobi-corpus-${{ hashFiles('scripts/fetch-mobi-test-corpus.sh') }}
@@ -109,7 +109,7 @@ jobs:
     name: Rust Lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install system dependencies
         run: |
@@ -157,7 +157,7 @@ jobs:
     name: Rust Tests (macOS, --features mobi)
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install libmobi
         run: brew install libmobi
@@ -175,7 +175,7 @@ jobs:
 
       - name: Cache pdfium
         id: cache-pdfium
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: src-tauri/resources
           key: pdfium-${{ env.PDFIUM_VERSION }}-macos-univ
@@ -216,7 +216,7 @@ jobs:
     name: Rust Tests (Windows, --features mobi)
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -242,7 +242,7 @@ jobs:
 
       - name: Cache libmobi (Windows)
         id: cache-libmobi-windows
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: .libmobi-windows
           # Suffix encodes the build flavor (link kind + which optional
@@ -353,15 +353,15 @@ jobs:
     name: Frontend TypeScript Check
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v6
         with:
           version: 10
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: 22
           cache: pnpm
