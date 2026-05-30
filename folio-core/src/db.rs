@@ -806,6 +806,20 @@ pub fn get_setting(conn: &Connection, key: &str) -> Result<Option<String>> {
     }
 }
 
+/// Return every row of the `settings` table as `(key, value)` pairs,
+/// ordered by key.
+pub fn list_settings(conn: &Connection) -> Result<Vec<(String, String)>> {
+    let mut stmt = conn.prepare("SELECT key, value FROM settings ORDER BY key")?;
+    let rows = stmt.query_map([], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    })?;
+    let mut out = Vec::new();
+    for r in rows {
+        out.push(r?);
+    }
+    Ok(out)
+}
+
 pub fn set_setting(conn: &Connection, key: &str, value: &str) -> Result<()> {
     conn.execute(
         "INSERT INTO settings (key, value) VALUES (?1, ?2)
@@ -4295,5 +4309,16 @@ mod tests {
         }
         assert_eq!(obj["version"], 1);
         assert!(obj["books"].is_array());
+    }
+
+    #[test]
+    fn list_settings_round_trips() {
+        let (_tmp, conn) = setup();
+        set_setting(&conn, "import_mode", "copy").unwrap();
+        set_setting(&conn, "web_server_port", "1421").unwrap();
+
+        let settings = list_settings(&conn).expect("list_settings");
+        assert!(settings.contains(&("import_mode".to_string(), "copy".to_string())));
+        assert!(settings.contains(&("web_server_port".to_string(), "1421".to_string())));
     }
 }
