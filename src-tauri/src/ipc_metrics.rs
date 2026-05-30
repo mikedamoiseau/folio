@@ -121,7 +121,7 @@ impl IpcMetrics {
             })
             .collect();
 
-        summaries.sort_by(|a, b| b.count.cmp(&a.count));
+        summaries.sort_by_key(|s| std::cmp::Reverse(s.count));
         summaries
     }
 
