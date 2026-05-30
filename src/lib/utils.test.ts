@@ -12,6 +12,8 @@ import {
   sanitizeCss,
   pickSupportedOpdsLink,
   resolveBookmarkScrollTop,
+  getReadingStatus,
+  PAUSED_AFTER_DAYS,
   type BookLike,
 } from "./utils";
 
@@ -621,5 +623,41 @@ describe("isExternalUrl", () => {
     expect(isExternalUrl("")).toBe(false);
     expect(isExternalUrl("   ")).toBe(false);
     expect(isExternalUrl("not a url")).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// getReadingStatus
+// ---------------------------------------------------------------------------
+describe("getReadingStatus", () => {
+  const DAY = 86400;
+  const now = 1_700_000_000; // fixed reference (unix seconds)
+
+  it("returns unread when progress is 0", () => {
+    expect(getReadingStatus(0, now, now)).toBe("unread");
+    expect(getReadingStatus(0, undefined, now)).toBe("unread");
+  });
+
+  it("returns finished when progress is 100 or more", () => {
+    expect(getReadingStatus(100, now, now)).toBe("finished");
+    expect(getReadingStatus(150, now - 999 * DAY, now)).toBe("finished");
+  });
+
+  it("returns active for in-progress read within the window", () => {
+    expect(getReadingStatus(34, now, now)).toBe("active");
+    expect(getReadingStatus(34, now - 13 * DAY, now)).toBe("active");
+  });
+
+  it("treats exactly 14 days as still active (inclusive boundary)", () => {
+    expect(getReadingStatus(34, now - PAUSED_AFTER_DAYS * DAY, now)).toBe("active");
+  });
+
+  it("returns paused for in-progress read older than the window", () => {
+    expect(getReadingStatus(34, now - 15 * DAY, now)).toBe("paused");
+  });
+
+  it("returns paused for in-progress book with no/zero last-read timestamp", () => {
+    expect(getReadingStatus(34, undefined, now)).toBe("paused");
+    expect(getReadingStatus(34, 0, now)).toBe("paused");
   });
 });
