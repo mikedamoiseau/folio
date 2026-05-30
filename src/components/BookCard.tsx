@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import { convertFileSrc } from "@tauri-apps/api/core";
-import { formatMetadataPills } from "../lib/utils";
+import { formatMetadataPills, type ReadingStatus } from "../lib/utils";
 import StarRating from "./StarRating";
 
 export interface BookCardData {
@@ -19,6 +19,7 @@ export interface BookCardData {
   volume?: number | null;
   rating?: number | null;
   isImported?: boolean;
+  status?: ReadingStatus;
 }
 
 export interface BookCardActions {
@@ -38,7 +39,7 @@ interface BookCardProps {
 }
 
 export default function BookCard({ book, actions, isScanning, isSelected }: BookCardProps) {
-  const { id, title, author, coverPath, format, progress, language, publishYear, series, volume, rating, isImported } = book;
+  const { id, title, author, coverPath, format, progress, language, publishYear, series, volume, rating, isImported, status } = book;
   const { onClick, onDelete, onEdit, onInfo, onRemoveFromCollection, onScanForMetadata } = actions;
   const { t } = useTranslation();
   const coverSrc = coverPath ? convertFileSrc(coverPath) : null;
@@ -131,12 +132,45 @@ export default function BookCard({ book, actions, isScanning, isSelected }: Book
           </div>
         )}
 
-        {/* Progress badge */}
-        {progress != null && progress > 0 && !confirming && (
-          <span className="absolute top-2 right-2 bg-ink/70 text-paper text-[10px] font-medium px-2 py-0.5 rounded-full backdrop-blur-sm">
-            {progress}%
-          </span>
-        )}
+        {/* Progress / reading-status badge */}
+        {progress != null && progress > 0 && !confirming && (() => {
+          const bg =
+            status === "active" ? "bg-[#5e8c61]"
+            : status === "paused" ? "bg-[#c2924e]"
+            : status === "finished" ? "bg-accent"
+            : "bg-ink/70";
+          const label =
+            status === "finished" ? t("bookCard.statusFinished", { defaultValue: "Finished" })
+            : status === "active" ? t("bookCard.statusActive", { defaultValue: "Active — {{p}}%", p: progress })
+            : status === "paused" ? t("bookCard.statusPaused", { defaultValue: "Paused — {{p}}%", p: progress })
+            : t("bookCard.progressRead", { defaultValue: "{{p}}% read", p: progress });
+          return (
+            <span
+              className={`absolute top-2 right-2 inline-flex items-center gap-1 text-paper text-[10px] font-medium px-2 py-0.5 rounded-full backdrop-blur-sm ${bg}`}
+              title={label}
+              aria-label={label}
+            >
+              {status === "finished" ? (
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                  <path d="M5 13l4 4L19 7" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+              ) : (
+                <>
+                  {status === "active" && (
+                    <span className="w-1.5 h-1.5 rounded-full bg-paper" aria-hidden="true" />
+                  )}
+                  {status === "paused" && (
+                    <svg width="9" height="9" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                      <rect x="6" y="5" width="4" height="14" rx="1" />
+                      <rect x="14" y="5" width="4" height="14" rx="1" />
+                    </svg>
+                  )}
+                  {progress}%
+                </>
+              )}
+            </span>
+          );
+        })()}
 
         {/* Metadata action buttons — top-left, vertical stack */}
         {!confirming && (
