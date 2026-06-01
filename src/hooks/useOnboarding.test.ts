@@ -20,7 +20,7 @@ describe("useOnboarding", () => {
     expect(result.current.isActive).toBe(false);
   });
 
-  it("advance() increments step from 1 to 2 to 3", () => {
+  it("advance() increments step from 1 up to 4", () => {
     const { result } = renderHook(() => useOnboarding());
     expect(result.current.currentStep).toBe(1);
 
@@ -29,14 +29,29 @@ describe("useOnboarding", () => {
 
     act(() => result.current.advance());
     expect(result.current.currentStep).toBe(3);
+
+    act(() => result.current.advance());
+    expect(result.current.currentStep).toBe(4);
   });
 
-  it("advance() does not go past step 3", () => {
+  it("advance() does not go past step 4", () => {
     const { result } = renderHook(() => useOnboarding());
     act(() => result.current.advance());
     act(() => result.current.advance());
     act(() => result.current.advance());
-    expect(result.current.currentStep).toBe(3);
+    act(() => result.current.advance());
+    expect(result.current.currentStep).toBe(4);
+  });
+
+  it("restart() reactivates, resets to step 1, clears flag", () => {
+    localStorage.setItem(STORAGE_KEY, "true");
+    const { result } = renderHook(() => useOnboarding());
+    expect(result.current.isActive).toBe(false);
+
+    act(() => result.current.restart());
+    expect(result.current.isActive).toBe(true);
+    expect(result.current.currentStep).toBe(1);
+    expect(localStorage.getItem(STORAGE_KEY)).toBe(null);
   });
 
   it("skip() sets localStorage flag and isActive to false", () => {

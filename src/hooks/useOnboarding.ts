@@ -2,7 +2,7 @@ import { useState, useCallback } from "react";
 
 export const STORAGE_KEY = "folio-onboarding-complete";
 
-type Step = 1 | 2 | 3;
+type Step = 1 | 2 | 3 | 4;
 
 export interface UseOnboarding {
   isActive: boolean;
@@ -10,6 +10,7 @@ export interface UseOnboarding {
   advance: () => void;
   skip: () => void;
   complete: () => void;
+  restart: () => void;
 }
 
 export function useOnboarding(): UseOnboarding {
@@ -24,8 +25,14 @@ export function useOnboarding(): UseOnboarding {
   }, []);
 
   const advance = useCallback(() => {
-    setCurrentStep((s) => (s < 3 ? ((s + 1) as Step) : s));
+    setCurrentStep((s) => (s < 4 ? ((s + 1) as Step) : s));
   }, []);
 
-  return { isActive, currentStep, advance, skip: dismiss, complete: dismiss };
+  const restart = useCallback(() => {
+    localStorage.removeItem(STORAGE_KEY);
+    setCurrentStep(1);
+    setIsActive(true);
+  }, []);
+
+  return { isActive, currentStep, advance, skip: dismiss, complete: dismiss, restart };
 }
