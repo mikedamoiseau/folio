@@ -1,8 +1,12 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { useOnboarding } from "../hooks/useOnboarding";
+import { invoke } from "@tauri-apps/api/core";
+import { useOnboardingContext } from "../context/OnboardingContext";
 import { useImport } from "../context/ImportContext";
 import { useFocusTrap } from "../lib/useFocusTrap";
+import { useTheme, MIN_FONT_SIZE, MAX_FONT_SIZE } from "../context/ThemeContext";
+import { FONT_OPTIONS, type ColorMode } from "../lib/themes";
+import { LANGUAGES } from "../i18n";
 import BookStackIllustration from "./BookStackIllustration";
 
 interface OnboardingWizardProps {
@@ -10,10 +14,10 @@ interface OnboardingWizardProps {
   onImportFolder: () => Promise<void>;
 }
 
-function StepIndicator({ current }: { current: 1 | 2 | 3 | 4 }) {
+function StepIndicator({ current, total }: { current: number; total: number }) {
   return (
     <div className="flex gap-1.5 justify-center mb-6">
-      {([1, 2, 3] as const).map((step) => (
+      {Array.from({ length: total }, (_, i) => i + 1).map((step) => (
         <div
           key={step}
           className={`w-6 h-1 rounded-full transition-colors duration-200 ${
@@ -199,14 +203,185 @@ function TipsStep({ onComplete }: { onComplete: () => void }) {
   );
 }
 
+const THEME_CHOICES: { mode: ColorMode; labelKey: string }[] = [
+  { mode: "light", labelKey: "onboarding.preferences.themeLight" },
+  { mode: "dark", labelKey: "onboarding.preferences.themeDark" },
+  { mode: "system", labelKey: "onboarding.preferences.themeSystem" },
+  { mode: "sepia", labelKey: "onboarding.preferences.themeSepia" },
+];
+
+function PreferencesStep({ onContinue }: { onContinue: () => void }) {
+  const { t, i18n } = useTranslation();
+  const { mode, setMode, fontFamily, setFontFamily, fontSize, setFontSize } = useTheme();
+  const [importMode, setImportMode] = useState<"import" | "link">("import");
+
+  useEffect(() => {
+    invoke<string | null>("get_setting_value", { key: "import_mode" })
+      .then((v) => {
+        if (v === "import" || v === "link") setImportMode(v);
+      })
+      .catch(() => {});
+  }, []);
+
+  const changeImportMode = async (next: "import" | "link") => {
+    setImportMode(next);
+    await invoke("set_setting_value", { key: "import_mode", value: next });
+  };
+
+  return (
+    <div className="text-center">
+      <h2 id="onboarding-title" className="font-serif text-2xl font-semibold text-ink mb-2">
+        {t("onboarding.preferences.title")}
+      </h2>
+      <p className="text-sm text-ink-muted leading-relaxed mb-6">
+        {t("onboarding.preferences.subtitle")}
+      </p>
+
+      <div className="flex flex-col gap-5 text-left mb-8">
+        {/* Language */}
+        <div>
+          <label className="text-xs font-medium text-ink-muted mb-2 block">
+            {t("onboarding.preferences.language")}
+          </label>
+          <div className="flex gap-1 bg-warm-subtle rounded-xl p-1">
+            {LANGUAGES.map((lang) => (
+              <button
+                type="button"
+                key={lang.code}
+                onClick={() => i18n.changeLanguage(lang.code)}
+                className={`flex-1 px-3 py-2 text-sm rounded-lg transition-all duration-150 flex items-center justify-center gap-1.5 ${
+                  i18n.language === lang.code
+                    ? "bg-surface text-ink shadow-sm font-medium"
+                    : "text-ink-muted hover:text-ink"
+                }`}
+              >
+                <span>{lang.flag}</span>
+                <span>{lang.label}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Theme */}
+        <div>
+          <label className="text-xs font-medium text-ink-muted mb-2 block">
+            {t("onboarding.preferences.theme")}
+          </label>
+          <div className="grid grid-cols-4 gap-1 bg-warm-subtle rounded-xl p-1">
+            {THEME_CHOICES.map((choice) => (
+              <button
+                type="button"
+                key={choice.mode}
+                onClick={() => setMode(choice.mode)}
+                className={`px-2 py-2 text-sm rounded-lg transition-all duration-150 ${
+                  mode === choice.mode
+                    ? "bg-surface text-ink shadow-sm font-medium"
+                    : "text-ink-muted hover:text-ink"
+                }`}
+              >
+                {t(choice.labelKey)}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Font family */}
+        <div>
+          <label className="text-xs font-medium text-ink-muted mb-2 block">
+            {t("onboarding.preferences.font")}
+          </label>
+          <div className="flex flex-col gap-1">
+            {FONT_OPTIONS.map((option) => (
+              <button
+                type="button"
+                key={option.key}
+                onClick={() => setFontFamily(option.key)}
+                className={`w-full text-left px-3 py-2 text-sm rounded-lg transition-all duration-150 ${
+                  fontFamily === option.key
+                    ? "bg-accent-light text-accent font-medium"
+                    : "text-ink-muted hover:text-ink hover:bg-warm-subtle"
+                }`}
+                style={{ fontFamily: option.css }}
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Font size */}
+        <div>
+          <label className="text-xs font-medium text-ink-muted mb-2 block">
+            {t("onboarding.preferences.fontSize")}
+          </label>
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={() => setFontSize(fontSize - 1)}
+              disabled={fontSize <= MIN_FONT_SIZE}
+              className="w-9 h-9 rounded-lg bg-warm-subtle text-ink disabled:opacity-40 hover:bg-warm-border transition-colors"
+              aria-label="Decrease font size"
+            >
+              −
+            </button>
+            <span className="flex-1 text-center text-sm text-ink">{fontSize}px</span>
+            <button
+              type="button"
+              onClick={() => setFontSize(fontSize + 1)}
+              disabled={fontSize >= MAX_FONT_SIZE}
+              className="w-9 h-9 rounded-lg bg-warm-subtle text-ink disabled:opacity-40 hover:bg-warm-border transition-colors"
+              aria-label="Increase font size"
+            >
+              +
+            </button>
+          </div>
+        </div>
+
+        {/* Import mode */}
+        <div>
+          <label className="text-xs font-medium text-ink-muted mb-2 block">
+            {t("onboarding.preferences.importMode")}
+          </label>
+          <div className="flex gap-1 bg-warm-subtle rounded-xl p-1">
+            {(["import", "link"] as const).map((option) => (
+              <button
+                type="button"
+                key={option}
+                onClick={() => changeImportMode(option)}
+                className={`flex-1 px-3 py-2 text-sm rounded-lg transition-all duration-150 ${
+                  importMode === option
+                    ? "bg-surface text-ink shadow-sm font-medium"
+                    : "text-ink-muted hover:text-ink"
+                }`}
+              >
+                {option === "import"
+                  ? t("onboarding.preferences.importModeCopy")
+                  : t("onboarding.preferences.importModeLink")}
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <button
+        type="button"
+        onClick={onContinue}
+        className="w-full px-5 py-3 bg-accent text-white text-sm font-medium rounded-xl hover:bg-accent-hover focus:outline-2 focus:outline-accent focus:outline-offset-2 active:scale-[0.97] transition-all duration-150 shadow-sm"
+      >
+        {t("onboarding.preferences.cta")}
+      </button>
+    </div>
+  );
+}
+
 export default function OnboardingWizard({ onImport, onImportFolder }: OnboardingWizardProps) {
-  const { isActive, currentStep, advance, skip, complete } = useOnboarding();
+  const { isActive, currentStep, advance, skip, complete } = useOnboardingContext();
   const importCtx = useImport();
   const prevCompletedRef = useRef(importCtx.lastCompletedAt);
   const trapRef = useFocusTrap(skip);
 
   useEffect(() => {
-    if (currentStep !== 2) return;
+    if (currentStep !== 3) return;
     if (
       importCtx.lastCompletedAt !== null &&
       importCtx.lastCompletedAt !== prevCompletedRef.current &&
@@ -230,19 +405,22 @@ export default function OnboardingWizard({ onImport, onImportFolder }: Onboardin
         aria-labelledby="onboarding-title"
         className="relative bg-surface rounded-2xl shadow-2xl w-full max-w-[440px] mx-4 px-8 py-10 animate-[fade-in_0.2s_ease-out]"
       >
-        <StepIndicator current={currentStep} />
+        <StepIndicator current={currentStep} total={4} />
 
         {currentStep === 1 && (
           <WelcomeStep onAdvance={advance} onSkip={skip} />
         )}
         {currentStep === 2 && (
+          <PreferencesStep onContinue={advance} />
+        )}
+        {currentStep === 3 && (
           <ImportStep
             onImport={onImport}
             onImportFolder={onImportFolder}
             onSkip={skip}
           />
         )}
-        {currentStep === 3 && (
+        {currentStep === 4 && (
           <TipsStep onComplete={complete} />
         )}
       </div>
