@@ -722,6 +722,22 @@
       "skip": "Skip",
       "skipHint": "you can always import later"
     },
+    "preferences": {
+      "title": "Make It Yours",
+      "subtitle": "Set up the basics — you can change these any time in Settings.",
+      "language": "Language",
+      "theme": "Theme",
+      "themeLight": "Light",
+      "themeDark": "Dark",
+      "themeSystem": "System",
+      "themeSepia": "Sepia",
+      "font": "Reading font",
+      "fontSize": "Font size",
+      "importMode": "When importing books",
+      "importModeCopy": "Copy to library",
+      "importModeLink": "Link to original",
+      "cta": "Continue"
+    },
     "import": {
       "title": "Import a Book",
       "subtitle": "Choose how to add your first book",
