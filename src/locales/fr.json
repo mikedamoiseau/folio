@@ -700,6 +700,51 @@
     "multipleValues": "Valeurs multiples"
   },
 
+  "onboarding": {
+    "welcome": {
+      "title": "Bienvenue dans Folio",
+      "subtitle": "Votre compagnon de lecture personnel. Configurons l'essentiel en quelques étapes.",
+      "cta": "Commencer",
+      "skip": "Passer",
+      "skipHint": "vous pourrez tout configurer plus tard"
+    },
+    "preferences": {
+      "title": "Personnalisez Folio",
+      "subtitle": "Réglez l'essentiel — vous pourrez modifier ces options à tout moment dans les réglages.",
+      "language": "Langue",
+      "theme": "Thème",
+      "themeLight": "Clair",
+      "themeDark": "Sombre",
+      "themeSystem": "Système",
+      "themeSepia": "Sépia",
+      "font": "Police de lecture",
+      "fontSize": "Taille de police",
+      "importMode": "Lors de l'import de livres",
+      "importModeCopy": "Copier dans la bibliothèque",
+      "importModeLink": "Lier au fichier original",
+      "cta": "Continuer"
+    },
+    "import": {
+      "title": "Importer un livre",
+      "subtitle": "Choisissez comment ajouter votre premier livre",
+      "addFiles": "Ajouter des fichiers",
+      "addFilesHint": "EPUB, PDF, CBZ, CBR, MOBI",
+      "importFolder": "Importer un dossier",
+      "importFolderHint": "Ajouter tous les livres d'un dossier",
+      "dragDrop": "ou glissez-déposez vos fichiers ici"
+    },
+    "tips": {
+      "title": "Tout est prêt",
+      "subtitle": "Quelques points à connaître",
+      "focus": "Mode Focus",
+      "focusDesc": "Appuyez sur D pendant la lecture pour une expérience sans distraction",
+      "catalogs": "Catalogues en ligne",
+      "catalogsDesc": "Parcourez des livres gratuits depuis Project Gutenberg, Standard Ebooks, et plus encore",
+      "dragDrop": "Glisser-déposer",
+      "dragDropDesc": "Déposez des fichiers de livres n'importe où dans l'application pour les importer instantanément",
+      "cta": "Commencer la lecture"
+    }
+  },
   "whatsNew": {
     "bannerTitle": "Folio {{version}}",
     "bannerSummary": "{{title}} et plus",
