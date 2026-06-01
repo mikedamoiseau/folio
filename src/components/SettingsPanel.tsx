@@ -6,6 +6,7 @@ import { open as openFilePicker } from "@tauri-apps/plugin-dialog";
 import { useTranslation } from "react-i18next";
 import { useTheme, MIN_FONT_SIZE, MAX_FONT_SIZE, type ColorTokens } from "../context/ThemeContext";
 import { friendlyError } from "../lib/errors";
+import { useOnboardingContext } from "../context/OnboardingContext";
 import { useToast } from "./Toast";
 import {
   SEPIA_TOKENS,
@@ -338,6 +339,7 @@ function formatBytes(bytes: number): string {
 export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
   const { t } = useTranslation();
   const { addToast } = useToast();
+  const { restart: restartOnboarding } = useOnboardingContext();
   const { mode, setMode, customColors, setCustomColors, fontSize, setFontSize, fontFamily, setFontFamily, scrollMode, setScrollMode, typography, setTypography, customCss, setCustomCss, dualPage, setDualPage, mangaMode, setMangaMode, pageAnimation, setPageAnimation, loadTheme } =
     useTheme();
   const [openSection, setOpenSection] = useState<string | null>("appearance");
@@ -1612,6 +1614,16 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                 className="w-full px-3 py-2 text-sm text-ink-muted hover:text-ink bg-warm-subtle hover:bg-warm-border rounded-xl transition-colors text-left"
               >
                 {t("settings.viewActivityLog")}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  onClose();
+                  restartOnboarding();
+                }}
+                className="w-full px-3 py-2 text-sm text-ink-muted hover:text-ink bg-warm-subtle hover:bg-warm-border rounded-xl transition-colors text-left"
+              >
+                {t("settings.rerunWizard")}
               </button>
 
               <div className="mt-3 pt-3 border-t border-warm-border/50">
