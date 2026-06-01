@@ -344,6 +344,7 @@
     "enrichmentSourcesOrder": "Essayés dans l'ordre de haut en bas",
     "apiKeyPlaceholder": "Cl\u00e9 API (optionnel)",
     "viewActivityLog": "Voir le journal d\u2019activit\u00e9",
+    "rerunWizard": "Relancer l\u2019assistant de configuration",
     "general": "G\u00e9n\u00e9ral",
     "launchAtStartup": "Lancer au d\u00e9marrage",
     "launchAtStartupHint": "D\u00e9marrer Folio automatiquement \u00e0 la connexion",
