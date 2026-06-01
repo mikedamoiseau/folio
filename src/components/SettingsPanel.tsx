@@ -11,6 +11,7 @@ import {
   SEPIA_TOKENS,
   LIGHT_TOKENS,
   deriveTokensFromBase,
+  FONT_OPTIONS,
 } from "../lib/themes";
 import ActivityLog from "./ActivityLog";
 import SavedThemesList from "./SavedThemesList";
@@ -1303,12 +1304,7 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
               <label className="text-xs font-medium text-ink-muted mb-2 block">{t("settings.readingFont")}</label>
               <div className="flex flex-col gap-1">
                 {/* Built-in fonts */}
-                {([
-                  { key: "serif", label: "Lora", css: '"Lora Variable", Georgia, serif' },
-                  { key: "literata", label: "Literata", css: '"Literata Variable", Georgia, serif' },
-                  { key: "sans-serif", label: "DM Sans", css: '"DM Sans Variable", system-ui, sans-serif' },
-                  { key: "dyslexic", label: "OpenDyslexic", css: '"OpenDyslexic", sans-serif' },
-                ] as const).map((option) => (
+                {FONT_OPTIONS.map((option) => (
                   <button
                     type="button"
                     key={option.key}

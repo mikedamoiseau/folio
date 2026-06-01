@@ -116,3 +116,18 @@ export function clearRootTokens(): void {
     root.style.removeProperty(`--${name}`);
   }
 }
+
+// ── Built-in reading fonts ──────────────────────────────────
+
+export interface FontOption {
+  key: string;
+  label: string;
+  css: string;
+}
+
+export const FONT_OPTIONS: readonly FontOption[] = [
+  { key: "serif", label: "Lora", css: '"Lora Variable", Georgia, serif' },
+  { key: "literata", label: "Literata", css: '"Literata Variable", Georgia, serif' },
+  { key: "sans-serif", label: "DM Sans", css: '"DM Sans Variable", system-ui, sans-serif' },
+  { key: "dyslexic", label: "OpenDyslexic", css: '"OpenDyslexic", sans-serif' },
+] as const;
