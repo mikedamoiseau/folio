@@ -345,6 +345,7 @@
     "enrichmentSourcesOrder": "Tried in order from top to bottom",
     "apiKeyPlaceholder": "API key (optional)",
     "viewActivityLog": "View activity log",
+    "rerunWizard": "Re-run setup wizard",
     "general": "General",
     "launchAtStartup": "Launch at startup",
     "launchAtStartupHint": "Start Folio automatically when you log in",
@@ -717,10 +718,26 @@
   "onboarding": {
     "welcome": {
       "title": "Welcome to Folio",
-      "subtitle": "Your personal reading companion. Let's get your first book on the shelf.",
-      "cta": "Add Your First Book",
+      "subtitle": "Your personal reading companion. Let's get you set up in a few quick steps.",
+      "cta": "Get Started",
       "skip": "Skip",
-      "skipHint": "you can always import later"
+      "skipHint": "you can set everything up later"
+    },
+    "preferences": {
+      "title": "Make It Yours",
+      "subtitle": "Set up the basics — you can change these any time in Settings.",
+      "language": "Language",
+      "theme": "Theme",
+      "themeLight": "Light",
+      "themeDark": "Dark",
+      "themeSystem": "System",
+      "themeSepia": "Sepia",
+      "font": "Reading font",
+      "fontSize": "Font size",
+      "importMode": "When importing books",
+      "importModeCopy": "Copy to library",
+      "importModeLink": "Link to original",
+      "cta": "Continue"
     },
     "import": {
       "title": "Import a Book",
