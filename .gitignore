@@ -51,6 +51,7 @@ lerna-debug.log*
 # Claude Code config
 .claude-bw/
 .claude/
+CLAUDE.local.md
 
 # E2E test artifacts
 tests/e2e/screenshots/
