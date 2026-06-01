@@ -718,10 +718,10 @@
   "onboarding": {
     "welcome": {
       "title": "Welcome to Folio",
-      "subtitle": "Your personal reading companion. Let's get your first book on the shelf.",
-      "cta": "Add Your First Book",
+      "subtitle": "Your personal reading companion. Let's get you set up in a few quick steps.",
+      "cta": "Get Started",
       "skip": "Skip",
-      "skipHint": "you can always import later"
+      "skipHint": "you can set everything up later"
     },
     "preferences": {
       "title": "Make It Yours",
