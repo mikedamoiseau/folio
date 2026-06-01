@@ -10,7 +10,7 @@ interface OnboardingWizardProps {
   onImportFolder: () => Promise<void>;
 }
 
-function StepIndicator({ current }: { current: 1 | 2 | 3 }) {
+function StepIndicator({ current }: { current: 1 | 2 | 3 | 4 }) {
   return (
     <div className="flex gap-1.5 justify-center mb-6">
       {([1, 2, 3] as const).map((step) => (

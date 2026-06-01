@@ -4,6 +4,7 @@ import { listen } from "@tauri-apps/api/event";
 import { useTranslation } from "react-i18next";
 import { ThemeProvider } from "./context/ThemeContext";
 import { ImportProvider } from "./context/ImportContext";
+import { OnboardingProvider } from "./context/OnboardingContext";
 import { ToastProvider, useToast } from "./components/Toast";
 import SettingsPanel from "./components/SettingsPanel";
 import ReadingStats from "./components/ReadingStats";
@@ -145,9 +146,11 @@ function App() {
     <ThemeProvider>
       <ToastProvider>
         <ImportProvider>
-          <BrowserRouter>
-            <AppShell />
-          </BrowserRouter>
+          <OnboardingProvider>
+            <BrowserRouter>
+              <AppShell />
+            </BrowserRouter>
+          </OnboardingProvider>
         </ImportProvider>
       </ToastProvider>
     </ThemeProvider>
