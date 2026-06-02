@@ -114,6 +114,8 @@ The status badge (top-right of the cover) reflects where you are with a book:
 
 In the full library view, a **"Continue Reading"** row at the top shows your most recently read books, and a **"Discover"** row shows popular titles from your configured OPDS catalogs. Both sections are hidden when viewing a collection or series, so you see only the relevant books.
 
+The grid is built for large libraries: covers are stored as lightweight thumbnails and only the rows currently on screen are rendered, so scrolling stays smooth even with thousands of books.
+
 ### Searching and filtering
 
 - **Search:** Type in the search bar to filter by title or author. Results update as you type.
