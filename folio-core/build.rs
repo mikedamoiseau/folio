@@ -18,16 +18,25 @@ fn build_libmobi_bindings() {
     println!("cargo:rerun-if-env-changed=PKG_CONFIG_PATH");
     println!("cargo:rerun-if-env-changed=LIBMOBI_INCLUDE_DIR");
     println!("cargo:rerun-if-env-changed=LIBMOBI_LIB_DIR");
+    println!("cargo:rerun-if-env-changed=LIBMOBI_STATIC");
 
     let (include_paths, link_dir) = resolve_libmobi_paths();
 
-    // Windows ships a statically-linked libmobi (`mobi.lib`) baked
-    // into folio.exe — so the release artifact is a single self-
-    // contained executable, with no `mobi.dll` next to it that the
-    // Tauri bundler would have to place where the OS loader can
-    // find it. Linux/macOS keep dynamic linkage so users can swap
-    // libmobi via their distro package manager (apt, brew).
-    let link_kind = if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
+    // Static linkage bakes libmobi into the binary so the shipped
+    // artifact is self-contained — no `mobi.dll` / `libmobi.dylib`
+    // next to it that the OS loader (or an absolute Homebrew path)
+    // must resolve at runtime. We link statically when:
+    //   * Windows — always (release ships a single self-contained
+    //     `folio.exe`), or
+    //   * `LIBMOBI_STATIC` is set — the macOS release build points this
+    //     at a from-source static `libmobi.a` so end users no longer
+    //     need `brew install libmobi` (without it the app crashed on
+    //     launch with a dyld "Library not loaded" error).
+    // Otherwise (local dev, Linux, CI tests) keep dynamic linkage so
+    // libmobi can come from the distro package manager (apt, brew).
+    let link_kind = if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows")
+        || env::var_os("LIBMOBI_STATIC").is_some()
+    {
         "static"
     } else {
         "dylib"

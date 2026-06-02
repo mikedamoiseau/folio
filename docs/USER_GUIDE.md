@@ -844,8 +844,8 @@ Folio supports **EPUB** (versions 2 and 3), **PDF**, **CBZ**, and **CBR** on eve
 
 MOBI support uses [libmobi](https://github.com/bfabiszewski/libmobi) (LGPL v3+). How libmobi is delivered depends on the platform:
 
-- **macOS (arm64 / Apple Silicon):** `brew install libmobi` — Folio dynamically links against the Homebrew-installed shared library, so it **must be installed before first launch** or the app fails to start.
-- **Linux (Debian / Ubuntu):** `sudo apt install libmobi0` (the `.deb` declares this as a dependency, so an `apt install` of Folio will pull it in automatically). Same dynamic-linking model as macOS.
+- **macOS (arm64 / Apple Silicon):** No installation step needed. The arm64 macOS build statically links libmobi into the app, so it is fully self-contained.
+- **Linux (Debian / Ubuntu):** `sudo apt install libmobi0` (the `.deb` declares this as a dependency, so an `apt install` of Folio will pull it in automatically). Linux uses dynamic linking.
 - **Linux (Fedora / RHEL):** `sudo dnf install libmobi`.
 - **Windows:** No installation step needed. The Windows build statically links libmobi into `folio.exe`, so the installer is fully self-contained.
 

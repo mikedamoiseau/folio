@@ -88,18 +88,40 @@ jobs:
             patchelf \
             libmobi-dev
 
-      # libmobi (LGPL v3+) is required for the `mobi` feature. Installed from
-      # Homebrew at build time; end users need libmobi installed on their
-      # system (brew install libmobi) or the app will fail to start when
-      # MOBI support is loaded. See docs/USER_GUIDE.md.
+      # libmobi (LGPL) is required for the `mobi` feature. We build it from
+      # source as a STATIC archive and bake it into the binary — mirroring
+      # the Windows path — so the shipped .app is self-contained. Previously
+      # the arm64 Mac build dynamically linked Homebrew's libmobi at the
+      # absolute path /opt/homebrew/opt/libmobi/lib/libmobi.0.dylib, so every
+      # user without `brew install libmobi` got a dyld "Library not loaded"
+      # crash on launch.
       #
-      # Only the arm64 Mac build links against libmobi — the x86_64 matrix
-      # entry ships without MOBI (see matrix comment above), so installing
-      # an arm64 .dylib there is wasted work and would also trick the linker
-      # into picking it up if a stray `--features mobi` ever crept in.
-      - name: Install libmobi (macOS)
+      # USE_ZLIB=OFF / USE_LIBXML2=OFF select libmobi's bundled miniz and
+      # internal xmlwriter, avoiding any external runtime dependency. CMake
+      # compiles miniz only for its CLI tools (not into libmobi.a), so — as on
+      # Windows — we compile miniz.c ourselves and merge it into the archive
+      # with `libtool -static`, otherwise `_mz_crc32` / `_mz_uncompress` are
+      # undefined at link time. Only the arm64 Mac entry enables MOBI; the
+      # x86_64 entry ships without it (see matrix comment above).
+      - name: Build libmobi (macOS, static)
         if: matrix.platform == 'macos-latest' && contains(matrix.args, 'aarch64-apple-darwin')
-        run: brew install libmobi
+        run: |
+          set -euo pipefail
+          SRC="$RUNNER_TEMP/libmobi-src"
+          OUT="${GITHUB_WORKSPACE}/.libmobi-macos"
+          git clone --quiet https://github.com/bfabiszewski/libmobi.git "$SRC"
+          git -C "$SRC" checkout --quiet "${LIBMOBI_VERSION}"
+          cmake -S "$SRC" -B "$SRC/build" \
+            -DBUILD_SHARED_LIBS=OFF -DUSE_ZLIB=OFF -DUSE_LIBXML2=OFF \
+            -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES=arm64
+          # Build only the `mobi` library target — the bundled CLI tools
+          # (e.g. mobidrm) don't link cleanly with miniz excluded and we
+          # don't ship them.
+          cmake --build "$SRC/build" --target mobi --config Release
+          cc -O2 -arch arm64 -I "$SRC/src" -c "$SRC/src/miniz.c" -o "$SRC/miniz.o"
+          mkdir -p "$OUT/lib" "$OUT/include"
+          libtool -static -o "$OUT/lib/libmobi.a" "$SRC/build/src/libmobi.a" "$SRC/miniz.o"
+          cp "$SRC/src/mobi.h" "$OUT/include/"
 
       # libmobi has no Windows package in vcpkg or any other registry
       # we ship against, but it does have first-class CMake support
@@ -333,15 +355,19 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # folio-core/build.rs uses pkg-config first, then falls back
-          # to LIBMOBI_INCLUDE_DIR / LIBMOBI_LIB_DIR. MSVC has no
-          # pkg-config in PATH on a stock runner, so the fallback is
-          # the actually exercised path on Windows. On Linux/macOS
-          # these env vars are empty strings — pkg-config takes over
-          # via the libmobi-dev / brew install — and `Option::filter`
-          # in the build script ignores empty paths gracefully.
-          LIBMOBI_INCLUDE_DIR: ${{ matrix.platform == 'windows-latest' && format('{0}\.libmobi-windows\include', github.workspace) || '' }}
-          LIBMOBI_LIB_DIR: ${{ matrix.platform == 'windows-latest' && format('{0}\.libmobi-windows\lib', github.workspace) || '' }}
+          # folio-core/build.rs uses pkg-config first, then falls back to
+          # LIBMOBI_INCLUDE_DIR / LIBMOBI_LIB_DIR. Neither Windows (MSVC) nor
+          # the macOS runner (no brew libmobi) has libmobi on the pkg-config
+          # path, so the fallback is the exercised path on both. On Linux
+          # these are empty strings — pkg-config takes over via libmobi-dev —
+          # and `Option::filter` in the build script ignores empty paths.
+          #
+          # LIBMOBI_STATIC forces static linkage in build.rs (Windows already
+          # forces it unconditionally; arm64 macOS opts in here so it links
+          # the from-source `libmobi.a` built above instead of a dylib).
+          LIBMOBI_STATIC: ${{ (matrix.platform == 'macos-latest' && contains(matrix.args, 'aarch64-apple-darwin')) && '1' || '' }}
+          LIBMOBI_INCLUDE_DIR: ${{ matrix.platform == 'windows-latest' && format('{0}\.libmobi-windows\include', github.workspace) || (contains(matrix.args, 'aarch64-apple-darwin') && format('{0}/.libmobi-macos/include', github.workspace) || '') }}
+          LIBMOBI_LIB_DIR: ${{ matrix.platform == 'windows-latest' && format('{0}\.libmobi-windows\lib', github.workspace) || (contains(matrix.args, 'aarch64-apple-darwin') && format('{0}/.libmobi-macos/lib', github.workspace) || '') }}
         with:
           tagName: ${{ github.ref_name }}
           releaseName: 'Folio ${{ github.ref_name }}'
@@ -350,7 +376,7 @@ jobs:
 
             > **macOS note:** Because this app is not notarized, macOS Gatekeeper may show a "damaged" or "unidentified developer" warning. See the [installation guide](https://github.com/mikedamoiseau/folio/blob/main/docs/USER_GUIDE.md#installing) for the one-line fix.
             >
-            > **MOBI / AZW / AZW3 support:** MOBI import is included on Linux, arm64 macOS, and Windows. Linux and macOS dynamically link against libmobi — install it before first MOBI open with `sudo apt install libmobi0` (Debian / Ubuntu) or `brew install libmobi` (macOS). The Windows build statically links libmobi, so no extra install is needed there. EPUB / PDF / CBZ / CBR do not need libmobi. The x86_64 (Intel) macOS build does not include MOBI support — use a different format on that platform.
+            > **MOBI / AZW / AZW3 support:** MOBI import is included on Linux, arm64 macOS, and Windows. The arm64 macOS and Windows builds statically link libmobi, so no extra install is needed. Linux dynamically links against libmobi — install it before first MOBI open with `sudo apt install libmobi0` (Debian / Ubuntu). EPUB / PDF / CBZ / CBR do not need libmobi. The x86_64 (Intel) macOS build does not include MOBI support — use a different format on that platform.
           releaseDraft: false
           prerelease: false
           args: ${{ matrix.args }}

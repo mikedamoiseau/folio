@@ -17,12 +17,15 @@
 //!   `USE_LIBXML2=OFF` so the build has no external deps to satisfy.
 //!   The libmobi artifact is cached so a rerun on an unchanged pin is
 //!   fast.
-//! * Windows MOBI linkage is **static** (`BUILD_SHARED_LIBS=OFF`,
-//!   producing `mobi.lib` only). This keeps the Windows release as a
-//!   single self-contained `folio.exe` — no `mobi.dll` to ship next to
-//!   the binary, no Tauri bundler gymnastics for OS-loader DLL search
-//!   path. Linux/macOS keep dynamic linking; the platform difference
-//!   lives in `folio-core/build.rs`.
+//! * Windows AND arm64 macOS MOBI linkage is **static**
+//!   (`BUILD_SHARED_LIBS=OFF`). Windows produces `mobi.lib`; macOS builds
+//!   `libmobi.a` from source and merges in miniz, then `build.rs` links it
+//!   statically (gated on the `LIBMOBI_STATIC` env var). This keeps both
+//!   releases self-contained — no `mobi.dll` / `libmobi.dylib` to ship, and
+//!   crucially no runtime dependency on a Homebrew `libmobi.0.dylib` at an
+//!   absolute path (which crashed the app on launch for users without
+//!   `brew install libmobi`). Linux keeps dynamic linking (apt libmobi);
+//!   the platform difference lives in `folio-core/build.rs`.
 
 #[cfg(test)]
 mod tests {
@@ -275,6 +278,36 @@ mod tests {
              `matrix.platform == 'windows-latest'` — without the guard it \
              would also run on the Linux/macOS matrix entries and fail \
              (no MSVC toolchain). Got: {next_300}"
+        );
+    }
+
+    /// arm64 macOS builds libmobi from source as a static archive and links
+    /// it statically (via `LIBMOBI_STATIC`), so the shipped `.app` carries no
+    /// runtime dependency on a Homebrew `libmobi.0.dylib`. Regression guard:
+    /// reverting to `brew install libmobi` (dynamic) reintroduces the
+    /// launch-time dyld "Library not loaded" crash for users without it.
+    #[test]
+    fn aarch64_macos_libmobi_build_is_static_and_gated() {
+        let needle = "Build libmobi (macOS, static)";
+        assert!(
+            RELEASE_YML.contains(needle),
+            "release.yml must include a step named `{needle}` that builds a \
+             static libmobi from source for arm64 macOS — dynamic linkage to \
+             Homebrew's dylib crashes the app on launch for users without \
+             `brew install libmobi`."
+        );
+        let after = RELEASE_YML.split_once(needle).expect("checked above").1;
+        let window = &after[..after.len().min(400)];
+        assert!(
+            window.contains("aarch64-apple-darwin"),
+            "the `{needle}` step must gate on the aarch64 macOS matrix entry. \
+             Got: {window}"
+        );
+        assert!(
+            RELEASE_YML.contains("LIBMOBI_STATIC:"),
+            "release.yml must export `LIBMOBI_STATIC` so folio-core/build.rs \
+             links the from-source `libmobi.a` statically on macOS instead of \
+             a dylib."
         );
     }
 }
