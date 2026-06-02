@@ -5,6 +5,12 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.2.0] - 2026-06-02
+
+A performance release focused on large libraries: cover images and the book
+grid no longer scale their cost with the number of books, so scrolling stays
+smooth into the thousands.
+
 ### Performance
 - **Cover thumbnails for the library grid.** Covers are now downscaled to a 320 px-wide JPEG thumbnail (`{book_id}/thumb.jpg`) on import and served to the grid, instead of decoding the full-resolution cover — often 1,500–1,900 px wide (~5 MP) — just to paint a 160 px card. Existing libraries are backfilled in a background thread at startup; covers already at or below 320 px are left untouched (a cheap header probe, no full decode), so only the genuinely large ones are re-encoded. The full-resolution cover is still used in the book detail view. Cuts cover decode work by roughly 95 % and, on a ~1,800-book library, total cover storage from ~950 MB to a few tens of MB.
 - **Virtualized library grid.** The main library view renders only the rows near the viewport instead of mounting every book card into the DOM at once. A new windowed grid (built on `react-virtuoso`; it chunks the flat book list into rows whose column count tracks the window width and reuses the page's existing scroll container, so the Continue Reading / Discover headers still scroll above it) keeps DOM size, style recalculation, and paint cost proportional to what is on screen rather than to library size — scrolling stays smooth into the thousands of books. Library cards were also lightened: the hover action buttons mount only on hover/focus, and the badge backdrop-blur (expensive to composite) was dropped.
