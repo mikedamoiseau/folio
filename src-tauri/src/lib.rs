@@ -164,6 +164,27 @@ pub fn run() {
                 log::error!("Failed to initialize tray: {}", e);
             }
 
+            // Backfill grid thumbnails for covers imported before the
+            // thumbnail feature. Runs off-thread so it never blocks startup;
+            // re-checks are cheap (header probe only) for already-handled
+            // covers, so running every launch is fine.
+            let thumb_handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                let (pool, storage) = {
+                    let state = thumb_handle.state::<AppState>();
+                    match state.covers_storage() {
+                        Ok(s) => (state.db.clone(), s),
+                        Err(e) => {
+                            log::warn!("thumbnail backfill: no covers storage: {e}");
+                            return;
+                        }
+                    }
+                };
+                tauri::async_runtime::spawn_blocking(move || {
+                    commands::run_thumbnail_backfill(pool, storage);
+                });
+            });
+
             // Auto-start web server based on persisted modes. Runs the legacy
             // migration on first launch with new code so existing users with
             // web_server_enabled=true keep getting Both mode.

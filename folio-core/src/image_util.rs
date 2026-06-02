@@ -26,6 +26,74 @@ use std::io::Cursor;
 /// Re-encode quality used when a downscale happens. Matches PDF render path.
 const JPEG_QUALITY: u8 = 90;
 
+/// Re-encode quality for grid thumbnails. Lower than [`JPEG_QUALITY`] —
+/// thumbnails render in a ~160 px card, so q80 is visually indistinguishable
+/// while shaving file size.
+const THUMB_QUALITY: u8 = 80;
+
+/// Produce a small JPEG thumbnail of `bytes` clamped to `target_width`.
+///
+/// Returns `Ok(None)` — meaning "no thumbnail needed, use the original" —
+/// when the source is already at or below `target_width`, or when the
+/// format is animation-capable (GIF/WebP, which may carry frames). The
+/// `None` path costs only a header probe, never a full decode, so callers
+/// can cheaply re-check every cover on each startup without paying to
+/// decode the many already-small covers.
+///
+/// Returns `Ok(Some(jpeg_bytes))` when a real downscale happened: decode,
+/// Lanczos3 to `(target_width, scaled_height)`, composite alpha over white,
+/// encode JPEG quality 80.
+pub fn make_thumbnail(bytes: &[u8], target_width: u32) -> FolioResult<Option<Vec<u8>>> {
+    if target_width == 0 {
+        return Ok(None);
+    }
+
+    let reader = image::ImageReader::new(Cursor::new(bytes))
+        .with_guessed_format()
+        .map_err(|e| FolioError::invalid(format!("cannot probe image format: {e}")))?;
+
+    // Animation-capable formats may carry multiple frames; a single-frame
+    // decode would silently drop the rest. Covers are virtually never
+    // animated, so keeping the original is the safe trade-off.
+    if matches!(
+        reader.format(),
+        Some(image::ImageFormat::Gif) | Some(image::ImageFormat::WebP)
+    ) {
+        return Ok(None);
+    }
+
+    let (src_w, src_h) = reader
+        .into_dimensions()
+        .map_err(|e| FolioError::invalid(format!("cannot read image dimensions: {e}")))?;
+    if src_w <= target_width {
+        return Ok(None);
+    }
+
+    let img = image::load_from_memory(bytes)
+        .map_err(|e| FolioError::invalid(format!("image decode failed: {e}")))?;
+
+    let target_h = (((src_h as u64) * (target_width as u64)) / (src_w as u64)).max(1) as u32;
+    let resized = img.resize_exact(
+        target_width,
+        target_h,
+        image::imageops::FilterType::Lanczos3,
+    );
+
+    let rgb = if resized.color().has_alpha() {
+        composite_over_white(&resized)
+    } else {
+        resized.to_rgb8()
+    };
+
+    let mut out: Vec<u8> = Vec::new();
+    let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, THUMB_QUALITY);
+    encoder
+        .encode_image(&rgb)
+        .map_err(|e| FolioError::internal(format!("JPEG thumbnail encode failed: {e}")))?;
+
+    Ok(Some(out))
+}
+
 /// Clamp page image width to `target_width` when both are known and the
 /// source is wider. Returns the (possibly transformed) bytes + mime.
 ///
@@ -277,5 +345,72 @@ mod tests {
         let (out, mime) = maybe_resize_to_jpeg(src.clone(), "image/gif".into(), Some(500)).unwrap();
         assert_eq!(out, src, "GIF bytes must be unchanged");
         assert_eq!(mime, "image/gif");
+    }
+
+    #[test]
+    fn thumbnail_none_when_source_at_or_below_target() {
+        // Already-small cover → no thumbnail, caller uses the original.
+        assert!(make_thumbnail(&encode_jpeg(320, 480), 320).unwrap().is_none());
+        assert!(make_thumbnail(&encode_jpeg(200, 300), 320).unwrap().is_none());
+    }
+
+    #[test]
+    fn thumbnail_none_when_target_is_zero() {
+        assert!(make_thumbnail(&encode_jpeg(1000, 1500), 0).unwrap().is_none());
+    }
+
+    #[test]
+    fn thumbnail_downscales_to_target_width_jpeg() {
+        let out = make_thumbnail(&encode_jpeg(1920, 2880), 320)
+            .unwrap()
+            .expect("wide cover must produce a thumbnail");
+        let (w, h) = dims_of(&out);
+        assert_eq!(w, 320);
+        // 1920×2880 → aspect 1.5 → 320 wide → 480 tall.
+        assert_eq!(h, 480);
+    }
+
+    #[test]
+    fn thumbnail_from_png_transcodes_and_shrinks() {
+        let src = encode_png(2000, 3000);
+        let out = make_thumbnail(&src, 320).unwrap().expect("should thumbnail");
+        let (w, _h) = dims_of(&out);
+        assert_eq!(w, 320);
+        assert!(out.len() < src.len(), "thumbnail must be smaller than source");
+        // Output is JPEG regardless of PNG input.
+        assert_eq!(
+            image::ImageReader::new(Cursor::new(&out))
+                .with_guessed_format()
+                .unwrap()
+                .format(),
+            Some(image::ImageFormat::Jpeg)
+        );
+    }
+
+    #[test]
+    fn thumbnail_transparent_png_composites_over_white() {
+        let out = make_thumbnail(&encode_png_with_transparency(1000, 400), 320)
+            .unwrap()
+            .expect("should thumbnail");
+        let decoded = image::load_from_memory(&out).unwrap().to_rgb8();
+        let (w, h) = decoded.dimensions();
+        let px = decoded.get_pixel(w / 8, h / 2).0;
+        assert!(
+            px[0] > 220 && px[1] > 220 && px[2] > 220,
+            "transparent region should composite near white, got {px:?}"
+        );
+    }
+
+    #[test]
+    fn thumbnail_gif_returns_none() {
+        assert!(make_thumbnail(&encode_gif(1200, 800), 320).unwrap().is_none());
+    }
+
+    #[test]
+    fn thumbnail_invalid_bytes_error() {
+        assert!(matches!(
+            make_thumbnail(b"not an image", 320),
+            Err(FolioError::InvalidInput { .. })
+        ));
     }
 }

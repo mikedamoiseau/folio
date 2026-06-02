@@ -368,6 +368,83 @@ pub fn cover_storage_key(book_id: &str, ext: &str) -> String {
     format!("{book_id}/cover.{ext}")
 }
 
+/// Target width (px) for grid thumbnails. The library card renders the
+/// cover in a 160 px box; 320 px is 2× for crisp rendering on Retina
+/// displays without paying the multi-megapixel decode cost of the full
+/// cover on every scroll-mounted row.
+pub const THUMB_WIDTH: u32 = 320;
+
+/// Storage key for a book's grid thumbnail, sibling to its `cover.{ext}`.
+pub fn thumb_storage_key(book_id: &str) -> String {
+    format!("{book_id}/thumb.jpg")
+}
+
+/// One-time backfill of grid thumbnails for covers imported before the
+/// thumbnail feature existed. Reads each book's cover from disk, generates
+/// a thumbnail when the cover is larger than [`THUMB_WIDTH`], and writes it
+/// to `{book_id}/thumb.jpg`. Covers that already have a thumbnail, or that
+/// are already small, are skipped — the skip path only probes image
+/// headers, never a full decode, so re-running on every startup is cheap.
+///
+/// CPU-bound and I/O-bound; call from a background thread so it never
+/// blocks app startup. All failures are non-fatal and logged.
+pub fn run_thumbnail_backfill(
+    pool: db::DbPool,
+    storage: std::sync::Arc<dyn folio_core::storage::Storage>,
+) {
+    let items =
+        match pool.get().map_err(Into::into).and_then(|conn| {
+            db::list_books_grid(&conn).map_err(folio_core::error::FolioError::from)
+        }) {
+            Ok(items) => items,
+            Err(e) => {
+                log::warn!("thumbnail backfill: could not list books: {e}");
+                return;
+            }
+        };
+
+    let mut made = 0usize;
+    for item in items {
+        let Some(cover_path) = item.cover_path else {
+            continue;
+        };
+        let tkey = thumb_storage_key(&item.id);
+        if matches!(storage.exists(&tkey), Ok(true)) {
+            continue;
+        }
+        let bytes = match std::fs::read(&cover_path) {
+            Ok(b) => b,
+            Err(_) => continue,
+        };
+        if let Ok(Some(thumb)) = folio_core::image_util::make_thumbnail(&bytes, THUMB_WIDTH) {
+            if storage.put(&tkey, &thumb).is_ok() {
+                made += 1;
+            }
+        }
+    }
+    if made > 0 {
+        log::info!("thumbnail backfill: generated {made} cover thumbnail(s)");
+    }
+}
+
+/// Rewrite each grid item's `cover_path` to its thumbnail when one exists
+/// on disk. Items whose cover is already small (no thumbnail was generated)
+/// keep their original `cover_path`. Best-effort: any storage error leaves
+/// the item pointing at the full cover.
+fn apply_grid_thumbnails(storage: &dyn folio_core::storage::Storage, items: &mut [BookGridItem]) {
+    for item in items.iter_mut() {
+        if item.cover_path.is_none() {
+            continue;
+        }
+        let key = thumb_storage_key(&item.id);
+        if let Ok(true) = storage.exists(&key) {
+            if let Ok(p) = storage.local_path(&key) {
+                item.cover_path = Some(p.to_string_lossy().to_string());
+            }
+        }
+    }
+}
+
 /// Decode a `data:<mime>;base64,<payload>` cover URI. Returns the raw
 /// image bytes plus a sanitized file extension (`png` / `jpg` / `webp`
 /// / `gif`). Callers persist the bytes via [`Storage::put`] rather than
@@ -407,6 +484,19 @@ fn save_cover_via_storage(
     if let Err(e) = storage.put(&key, bytes) {
         log::warn!("cover extraction failed for book {book_id}: could not write cover: {e}");
         return None;
+    }
+    // Best-effort grid thumbnail. A failure here is non-fatal: the grid
+    // falls back to serving the full cover. `Ok(None)` means the cover is
+    // already small enough to use directly.
+    match folio_core::image_util::make_thumbnail(bytes, THUMB_WIDTH) {
+        Ok(Some(thumb)) => {
+            let tkey = thumb_storage_key(book_id);
+            if let Err(e) = storage.put(&tkey, &thumb) {
+                log::warn!("thumbnail write failed for book {book_id}: {e}");
+            }
+        }
+        Ok(None) => {}
+        Err(e) => log::warn!("thumbnail generation failed for book {book_id}: {e}"),
     }
     match storage.local_path(&key) {
         Ok(p) => Some(p.to_string_lossy().to_string()),
@@ -1104,7 +1194,11 @@ pub async fn get_library(state: State<'_, AppState>) -> FolioResult<Vec<Book>> {
 pub async fn get_library_grid(state: State<'_, AppState>) -> FolioResult<Vec<BookGridItem>> {
     let _t = state.ipc_metrics.time("get_library_grid");
     let conn = state.active_db()?.get()?;
-    Ok(db::list_books_grid(&conn)?)
+    let mut items = db::list_books_grid(&conn)?;
+    if let Ok(storage) = state.covers_storage() {
+        apply_grid_thumbnails(&*storage, &mut items);
+    }
+    Ok(items)
 }
 
 #[tauri::command]
@@ -2663,7 +2757,11 @@ pub async fn get_books_in_collection_grid(
     state: State<'_, AppState>,
 ) -> FolioResult<Vec<BookGridItem>> {
     let conn = state.active_db()?.get()?;
-    Ok(db::get_books_in_collection_grid(&conn, &collection_id)?)
+    let mut items = db::get_books_in_collection_grid(&conn, &collection_id)?;
+    if let Ok(storage) = state.covers_storage() {
+        apply_grid_thumbnails(&*storage, &mut items);
+    }
+    Ok(items)
 }
 
 // --- Share Collections ---
