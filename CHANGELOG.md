@@ -5,6 +5,11 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.2.1] - 2026-06-02
+
+### Fixed
+- **arm64 macOS app crashed on launch unless `brew install libmobi` was present.** The Apple Silicon release dynamically linked libmobi against the absolute Homebrew path `/opt/homebrew/opt/libmobi/lib/libmobi.0.dylib`, so any user without that exact install hit a `dyld: Library not loaded` abort before the app even started. The arm64 macOS build now builds libmobi from source as a static archive (mirroring the Windows build — `BUILD_SHARED_LIBS=OFF`, bundled miniz merged in) and links it statically, so the `.app` is self-contained and needs no Homebrew install. `folio-core/build.rs` gains a `LIBMOBI_STATIC` opt-in for this; local dev and Linux keep dynamic linkage.
+
 ## [2.2.0] - 2026-06-02
 
 A performance release focused on large libraries: cover images and the book
