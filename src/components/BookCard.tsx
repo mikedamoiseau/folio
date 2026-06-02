@@ -46,6 +46,12 @@ export default function BookCard({ book, actions, isScanning, isSelected }: Book
   const [confirming, setConfirming] = useState(false);
   const pills = formatMetadataPills({ language, publishYear, series, volume });
 
+  // The cover-overlay action buttons (edit/scan/info/delete/remove) only need
+  // to exist while the card is hovered or focused. Mounting them on demand
+  // keeps each card's DOM subtree small, so rows mount faster during fast
+  // virtualized scrolling. `interactive` also covers keyboard focus for a11y.
+  const [interactive, setInteractive] = useState(false);
+
   const handleDeleteClick = (e: React.MouseEvent) => {
     e.stopPropagation();
     setConfirming(true);
@@ -65,6 +71,12 @@ export default function BookCard({ book, actions, isScanning, isSelected }: Book
       type="button"
       onClick={onClick}
       aria-pressed={isSelected}
+      onMouseEnter={() => setInteractive(true)}
+      onMouseLeave={() => setInteractive(false)}
+      onFocus={() => setInteractive(true)}
+      onBlur={(e) => {
+        if (!e.currentTarget.contains(e.relatedTarget as Node)) setInteractive(false);
+      }}
       className={`w-full h-full group text-left rounded-xl bg-surface border overflow-hidden cursor-pointer transition-all duration-200 ease-out shadow-sm hover:shadow-[0_8px_24px_-4px_rgba(44,34,24,0.18)] hover:-translate-y-1 focus:outline-2 focus:outline-accent focus:outline-offset-2 ${
         isSelected
           ? "border-accent ring-2 ring-accent ring-offset-2 ring-offset-paper"
@@ -78,6 +90,7 @@ export default function BookCard({ book, actions, isScanning, isSelected }: Book
             src={coverSrc}
             alt={t("bookCard.coverAlt", { title })}
             loading="lazy"
+            decoding="async"
             className="w-full h-full object-cover transition-all duration-300 group-hover:scale-[1.02] animate-fade-in"
           />
         ) : (
@@ -113,13 +126,13 @@ export default function BookCard({ book, actions, isScanning, isSelected }: Book
         {!confirming && ((format && format !== "epub") || isImported === false) && (
           <div className="absolute bottom-2 left-2 flex items-center gap-1">
             {format && format !== "epub" && (
-              <span className="bg-ink/70 text-paper text-[9px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded backdrop-blur-sm">
+              <span className="bg-ink/80 text-paper text-[9px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded">
                 {format}
               </span>
             )}
             {isImported === false && (
               <span
-                className="bg-ink/70 text-paper text-[9px] px-1.5 py-0.5 rounded backdrop-blur-sm flex items-center gap-0.5"
+                className="bg-ink/80 text-paper text-[9px] px-1.5 py-0.5 rounded flex items-center gap-0.5"
                 title={t("bookCard.linkedBadge")}
               >
                 <svg width="9" height="9" viewBox="0 0 16 16" fill="none">
@@ -146,7 +159,7 @@ export default function BookCard({ book, actions, isScanning, isSelected }: Book
             : t("bookCard.progressRead", { defaultValue: "{{p}}% read", p: progress });
           return (
             <span
-              className={`absolute top-2 right-2 inline-flex items-center gap-1 text-paper text-[10px] font-medium px-2 py-0.5 rounded-full backdrop-blur-sm ${bg}`}
+              className={`absolute top-2 right-2 inline-flex items-center gap-1 text-paper text-[10px] font-medium px-2 py-0.5 rounded-full ${bg}`}
               title={label}
               aria-label={label}
             >
@@ -172,8 +185,9 @@ export default function BookCard({ book, actions, isScanning, isSelected }: Book
           );
         })()}
 
-        {/* Metadata action buttons — top-left, vertical stack */}
-        {!confirming && (
+        {/* Metadata action buttons — top-left, vertical stack.
+            Mounted only while hovered/focused to keep off-hover cards light. */}
+        {interactive && !confirming && (
           <div className="absolute top-2 left-2 flex flex-col gap-1 opacity-0 group-hover:opacity-100 transition-opacity duration-150">
             {onEdit && (
               <button
@@ -221,7 +235,7 @@ export default function BookCard({ book, actions, isScanning, isSelected }: Book
         )}
 
         {/* Delete button — bottom-right, separate */}
-        {onDelete && !confirming && (
+        {onDelete && interactive && !confirming && (
           <button
             type="button"
             onClick={handleDeleteClick}
@@ -235,7 +249,7 @@ export default function BookCard({ book, actions, isScanning, isSelected }: Book
         )}
 
         {/* Remove from collection button — bottom-left, only when in a manual collection */}
-        {onRemoveFromCollection && !confirming && (
+        {onRemoveFromCollection && interactive && !confirming && (
           <button
             type="button"
             onClick={(e) => { e.stopPropagation(); onRemoveFromCollection(); }}

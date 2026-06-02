@@ -6,6 +6,7 @@ import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import BookCard, { type BookCardData } from "../components/BookCard";
+import VirtualizedBookGrid from "../components/VirtualizedBookGrid";
 import BulkEditDialog from "../components/BulkEditDialog";
 import EmptyState from "../components/EmptyState";
 import ImportButton from "../components/ImportButton";
@@ -130,6 +131,16 @@ export default function Library({ catalogImportedBookIds }: LibraryProps = {}) {
     return stored === "stacked" ? "stacked" : "expanded";
   });
   const contentRef = useRef<HTMLDivElement>(null);
+  // The content area is the scroll container; capture it as state so
+  // VirtualizedBookGrid can virtualize within it (a ref alone won't trigger the
+  // re-render needed once the element mounts). A callback ref is used instead
+  // of a mount-only effect because the content div is absent during the initial
+  // loading skeleton — an effect would capture null and never re-run.
+  const [scrollEl, setScrollEl] = useState<HTMLDivElement | null>(null);
+  const setContentNode = useCallback((node: HTMLDivElement | null) => {
+    contentRef.current = node;
+    setScrollEl(node);
+  }, []);
   const scrollBeforeDrillRef = useRef<{ collectionId: string | null; scrollTop: number } | null>(null);
   useEffect(() => { localStorage.setItem("folio-series-view-mode", seriesViewMode); }, [seriesViewMode]);
 
@@ -1014,7 +1025,7 @@ export default function Library({ catalogImportedBookIds }: LibraryProps = {}) {
       <OnboardingWizard onImport={handleImport} onImportFolder={handleImportFolder} />
 
       {/* Content area */}
-      <div ref={contentRef} className="flex-1 overflow-y-auto p-6">
+      <div ref={setContentNode} className="flex-1 overflow-y-auto p-6">
         {!hasBooks && activeCollectionId ? (
           <div className="flex flex-col items-center justify-center h-full text-center">
             <p className="text-base font-medium text-ink">{t("library.collectionEmpty")}</p>
@@ -1034,8 +1045,9 @@ export default function Library({ catalogImportedBookIds }: LibraryProps = {}) {
         ) : !hasBooks ? (
           <EmptyState onImport={handleImport} onImportFolder={handleImportFolder} />
         ) : hasResults ? (
-          <>
-          <div className="grid grid-cols-[repeat(auto-fill,160px)] justify-center gap-5">
+          (() => {
+            const topSections = (
+              <>
           {/* Continue Reading — recently opened books */}
           {showContinueReading && !search && !activeCollectionId && !activeSeries && recentlyRead.length > 0 && (
             <div className="mb-1 col-[1/-1]">
@@ -1211,8 +1223,12 @@ export default function Library({ catalogImportedBookIds }: LibraryProps = {}) {
               <div className="flex-1 border-t border-warm-border/50" />
             </div>
           ) : null}
-            {sortBy === "series" ? (
-              (() => {
+              </>
+            );
+            return sortBy === "series" ? (
+              <div className="grid grid-cols-[repeat(auto-fill,160px)] justify-center gap-5">
+                {topSections}
+                {(() => {
                 const seriesBooks = filtered.filter((b) => b.series);
                 const nonSeriesBooks = filtered.filter((b) => !b.series);
                 const groups: Record<string, typeof filtered> = {};
@@ -1431,12 +1447,18 @@ export default function Library({ catalogImportedBookIds }: LibraryProps = {}) {
                     ))}
                   </>
                 );
-              })()
+              })()}
+              </div>
             ) : (
-              filtered.map((book) => (
+              <VirtualizedBookGrid
+                scrollParent={scrollEl}
+                items={filtered}
+                itemKey={(b) => b.id}
+                header={topSections}
+                renderItem={(_index, book) => (
                 <div
                   key={book.id}
-                  className="relative card-cv"
+                  className="relative"
                   onMouseDown={() => !selectMode && startDrag(book.id, book.cover_path ? convertFileSrc(book.cover_path) : undefined)}
                   onMouseUp={() => !selectMode && endDrag()}
                   onDragStart={(e) => e.preventDefault()}
@@ -1475,10 +1497,10 @@ export default function Library({ catalogImportedBookIds }: LibraryProps = {}) {
                     isSelected={selectMode && selectedIds.has(book.id)}
                   />
                 </div>
-              ))
-            )}
-          </div>
-          </>
+                )}
+              />
+            );
+          })()
         ) : (
           <div className="flex flex-col items-center justify-center h-full text-center">
             <p className="text-base font-medium text-ink">

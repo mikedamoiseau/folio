@@ -17,7 +17,7 @@ vi.mock("react-i18next", () => ({
 import BookCard from "./BookCard";
 
 describe("BookCard", () => {
-  it("renders cover image with loading=lazy attribute", () => {
+  it("renders cover image (lazy + async-decoded)", () => {
     const html = renderToString(
       <BookCard
         book={{
@@ -30,7 +30,10 @@ describe("BookCard", () => {
         actions={{ onClick: () => {} }}
       />
     );
+    expect(html).toContain("<img");
+    expect(html).toContain("asset://localhost//covers/test.jpg");
     expect(html).toContain('loading="lazy"');
+    expect(html).toContain('decoding="async"');
   });
 
   it("renders placeholder when no cover path", () => {
