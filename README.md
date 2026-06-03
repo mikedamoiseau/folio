@@ -34,6 +34,7 @@ Folio is for the opposite case: you already have the files, and you want a bette
 - Custom fonts and custom CSS override for EPUB content
 
 ### Library
+- Built for large libraries — a virtualized cover grid and lightweight thumbnails stay smooth with thousands of books
 - Import via file picker, drag-and-drop, direct URL, or folder scan
 - Copy-on-import into an app-managed library folder
 - Duplicate detection using SHA-256 file hashing
@@ -56,6 +57,17 @@ Folio is for the opposite case: you already have the files, and you want a bette
 - Restore from backup archive
 - Activity log for imports, edits, deletes, collection changes, and more
 - Reading stats dashboard
+
+### Remote access
+- Read your library from any device on the same WiFi — phone, tablet, or another computer, no install required
+- Built-in web reader with QR-code pairing and PIN login
+- OPDS server so ebook apps (KOReader, Thorium, Calibre, Moon+ Reader) can connect directly
+- Read-only and sanitized; PIN hashed in your OS keychain, with rate-limited logins and a login audit trail
+- System tray toggles to flip the Web UI and OPDS server on or off
+
+### Interface
+- Multi-language UI — English and French, with OS-language auto-detection
+- Cross-platform desktop app for macOS, Windows, and Linux
 
 ## Screenshots
 
@@ -99,6 +111,12 @@ Folio is for the opposite case: you already have the files, and you want a bette
 <summary>OPDS catalogs</summary>
 
 ![Book catalogs](screenshots/08-catalogs.png)
+</details>
+
+<details>
+<summary>Remote access</summary>
+
+![Remote access & backup settings](screenshots/21-settings-remote-backup.png)
 </details>
 
 <details>

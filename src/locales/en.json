@@ -318,6 +318,8 @@
     "storageFolder": "Storage folder",
     "bookCount": "{{count}} book",
     "booksCount": "{{count}} books",
+    "importedCount": "{{count}} imported",
+    "linkedCount": "{{count}} linked",
     "changeFolder": "Change folder\u2026",
     "backupRestore": "Backup & Restore",
     "includeBookFiles": "Include book files",
@@ -644,6 +646,7 @@
 
   "stats": {
     "title": "Reading Stats",
+    "totalBooks": "Books",
     "timeReading": "Time Reading",
     "sessions": "Sessions",
     "pagesRead": "Pages Read",

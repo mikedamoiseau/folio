@@ -317,6 +317,8 @@
     "storageFolder": "Dossier de stockage",
     "bookCount": "{{count}} livre",
     "booksCount": "{{count}} livres",
+    "importedCount": "{{count}} importés",
+    "linkedCount": "{{count}} liés",
     "changeFolder": "Changer de dossier\u2026",
     "backupRestore": "Sauvegarde et restauration",
     "includeBookFiles": "Inclure les fichiers de livres",
@@ -629,6 +631,7 @@
 
   "stats": {
     "title": "Statistiques de lecture",
+    "totalBooks": "Livres",
     "timeReading": "Temps de lecture",
     "sessions": "Sessions",
     "pagesRead": "Pages lues",

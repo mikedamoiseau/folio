@@ -979,6 +979,7 @@ mod tests {
             total_reading_time_secs: 3600,
             total_sessions: 10,
             total_pages_read: 200,
+            total_books: 5,
             books_finished: 2,
             current_streak_days: 3,
             longest_streak_days: 7,

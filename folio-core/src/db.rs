@@ -1257,6 +1257,7 @@ pub struct ReadingStats {
     pub total_reading_time_secs: i64,
     pub total_sessions: i64,
     pub total_pages_read: i64,
+    pub total_books: i64,
     pub books_finished: i64,
     pub current_streak_days: i64,
     pub longest_streak_days: i64,
@@ -1278,6 +1279,8 @@ pub fn get_reading_stats(conn: &Connection) -> Result<ReadingStats> {
         [],
         |row| row.get(0),
     )?;
+    let total_books: i64 =
+        conn.query_row("SELECT COUNT(*) FROM books", [], |row| row.get(0))?;
     let books_finished: i64 = conn.query_row(
         "SELECT COUNT(*) FROM reading_progress rp JOIN books b ON rp.book_id = b.id WHERE rp.chapter_index >= b.total_chapters - 1",
         [],
@@ -1346,6 +1349,7 @@ pub fn get_reading_stats(conn: &Connection) -> Result<ReadingStats> {
         total_reading_time_secs,
         total_sessions,
         total_pages_read,
+        total_books,
         books_finished,
         current_streak_days: current_streak,
         longest_streak_days: longest_streak,

@@ -575,7 +575,7 @@ Folio keeps a log of data-changing actions (imports, edits, deletes, collection 
 
 ### Library folder and import mode
 
-In Settings > Library, you can view your current library folder path, file count, and total storage used. You can change the library folder — Folio will offer to move existing files to the new location or keep them in place.
+In Settings > Library, you can view your current library folder path, the number of imported books (copied into the folder) and total storage used, plus a count of linked books that live outside the folder. You can change the library folder — Folio will offer to move existing files to the new location or keep them in place.
 
 ![Library settings](../screenshots/06-settings-library.png)
 
@@ -689,6 +689,7 @@ Open the reading stats dashboard from the library toolbar (bar chart icon).
 
 **Tracked metrics:**
 
+- **Books** — total number of books in your library
 - **Time Reading** — total time spent in the reader
 - **Sessions** — number of reading sessions
 - **Pages Read** — total pages turned (PDF/CBZ/CBR)
@@ -728,7 +729,7 @@ When **Web UI** is enabled, open the URL in a browser. You'll see:
 - **Library** — a grid of book covers with a search bar and sort dropdown. Tap any book to see its details.
 - **Book detail** — shows cover, title, author, and format. Tap **Read** to open the book or **Download** to save it to your device.
 - **Reader** — EPUBs show chapter content with prev/next navigation. PDFs and comics show page images with prev/next buttons.
-- **Reading Stats** — tap the bar chart icon in the header to view your reading stats: time read, sessions, pages, books finished, current and longest streaks, and a 30-day daily reading chart.
+- **Reading Stats** — tap the bar chart icon in the header to view your reading stats: total books, time read, sessions, pages, books finished, current and longest streaks, and a 30-day daily reading chart.
 - **Collections** — tap the folder icon in the header to browse your collections and series. Filter by name, sort alphabetically, and tap any collection or series to jump to a filtered library view.
 
 The web interface works entirely on your local network. No internet connection needed, no data leaves your WiFi.
