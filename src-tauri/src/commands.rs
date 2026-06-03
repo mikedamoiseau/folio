@@ -6779,9 +6779,19 @@ mod tests {
     // full IPC wrappers need a Tauri State which is impractical to build in
     // a unit test. The atomics are the only state the wrappers consult, so
     // the contract is the same.
+    //
+    // The atomics are process-global statics, so these tests must not run
+    // concurrently with each other (cargo runs tests multithreaded by
+    // default) or one test's store/swap races another's assertion. Each
+    // acquires this lock first to serialize access; poison is recovered
+    // since a panicking test leaves the atomics in a known-reset state.
+    static IMPORT_ATOMICS_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     #[test]
     fn import_atomics_default_false() {
+        let _guard = IMPORT_ATOMICS_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         // Note: tests in the same binary share statics. Reset before checking
         // the invariant we care about.
         IMPORT_RUNNING.store(false, Ordering::SeqCst);
@@ -6792,6 +6802,9 @@ mod tests {
 
     #[test]
     fn import_running_swap_blocks_second_acquire() {
+        let _guard = IMPORT_ATOMICS_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         IMPORT_RUNNING.store(false, Ordering::SeqCst);
         // First acquire succeeds (returns the previous value, false).
         assert!(!IMPORT_RUNNING.swap(true, Ordering::SeqCst));
@@ -6803,6 +6816,9 @@ mod tests {
 
     #[test]
     fn cancel_import_sets_flag() {
+        let _guard = IMPORT_ATOMICS_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         IMPORT_CANCEL.store(false, Ordering::SeqCst);
         // The Tauri command body is just this store; calling it through the
         // tokio runtime would force an async harness, so call the underlying
