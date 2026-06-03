@@ -3471,6 +3471,7 @@ pub async fn delete_profile(name: String, state: State<'_, AppState>) -> FolioRe
 pub struct LibraryFolderInfo {
     pub path: String,
     pub file_count: u64,
+    pub linked_count: u64,
     pub total_size_bytes: u64,
 }
 
@@ -3511,13 +3512,17 @@ pub async fn get_library_folder_info(state: State<'_, AppState>) -> FolioResult<
         format!("{}/", path)
     };
     let mut file_count = 0u64;
+    let mut linked_count = 0u64;
     let mut total_size_bytes = 0u64;
     for book in &books {
         let resolved = match state.resolve_book_path(book) {
             Ok(p) => p,
             Err(_) => continue,
         };
+        // Books whose resolved path lives outside the storage folder are
+        // linked (remote) rather than imported into the library.
         if !resolved.starts_with(&prefix) {
+            linked_count += 1;
             continue;
         }
         if let Ok(meta) = std::fs::metadata(&resolved) {
@@ -3531,6 +3536,7 @@ pub async fn get_library_folder_info(state: State<'_, AppState>) -> FolioResult<
     Ok(LibraryFolderInfo {
         path,
         file_count,
+        linked_count,
         total_size_bytes,
     })
 }

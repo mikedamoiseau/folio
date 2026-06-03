@@ -7,6 +7,7 @@ interface ReadingStatsData {
   totalReadingTimeSecs: number;
   totalSessions: number;
   totalPagesRead: number;
+  totalBooks: number;
   booksFinished: number;
   currentStreakDays: number;
   longestStreakDays: number;
@@ -64,6 +65,7 @@ export default function ReadingStats({ onClose }: ReadingStatsProps) {
             <div className="px-5 py-4 space-y-5">
               {/* Stat cards */}
               <div className="grid grid-cols-2 gap-3">
+                <StatCard label={t("stats.totalBooks")} value={stats.totalBooks.toString()} />
                 <StatCard label={t("stats.timeReading")} value={formatDuration(stats.totalReadingTimeSecs)} />
                 <StatCard label={t("stats.sessions")} value={stats.totalSessions.toString()} />
                 <StatCard label={t("stats.pagesRead")} value={stats.totalPagesRead.toString()} />

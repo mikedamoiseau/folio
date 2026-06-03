@@ -269,6 +269,7 @@ interface SettingsPanelProps {
 interface LibraryFolderInfo {
   path: string;
   file_count: number;
+  linked_count: number;
   total_size_bytes: number;
 }
 
@@ -1592,7 +1593,8 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                 </p>
                 {libraryInfo && (
                   <p className="text-xs text-ink-muted mt-1.5">
-                    {libraryInfo.file_count === 1 ? t("settings.bookCount", { count: libraryInfo.file_count }) : t("settings.booksCount", { count: libraryInfo.file_count })} · {formatBytes(libraryInfo.total_size_bytes)}
+                    {t("settings.importedCount", { count: libraryInfo.file_count })} · {formatBytes(libraryInfo.total_size_bytes)}
+                    {libraryInfo.linked_count > 0 && <> · {t("settings.linkedCount", { count: libraryInfo.linked_count })}</>}
                   </p>
                 )}
               </div>
