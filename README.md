@@ -34,6 +34,7 @@ Folio is for the opposite case: you already have the files, and you want a bette
 - Custom fonts and custom CSS override for EPUB content
 
 ### Library
+- Built for large libraries — a virtualized cover grid and lightweight thumbnails stay smooth with thousands of books
 - Import via file picker, drag-and-drop, direct URL, or folder scan
 - Copy-on-import into an app-managed library folder
 - Duplicate detection using SHA-256 file hashing
