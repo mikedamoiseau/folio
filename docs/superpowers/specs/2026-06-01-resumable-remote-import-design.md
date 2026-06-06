@@ -47,6 +47,13 @@ source of truth on every mismatch or path-miss.
 
 ## Data model
 
+> **Implementation note (2026-06-06):** built as **import-only metadata**, not
+> fields on the `Book` domain struct. The three columns are written via a
+> dedicated `db::set_book_source` UPDATE after insert and read via
+> `db::get_book_by_source_path` (returns a small `BookSourceRef`, not a `Book`).
+> `Book`, `BOOK_COLUMNS`, `row_to_book`, and `insert_book` are untouched — a far
+> smaller surface than threading three fields through every `Book` literal.
+
 Additive migration in `folio-core/src/db.rs::run_schema` (same `ALTER TABLE … ADD
 COLUMN` pattern as `file_hash`):
 
