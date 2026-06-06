@@ -481,6 +481,52 @@ pub fn get_book_by_file_path(conn: &Connection, file_path: &str) -> Result<Optio
     }
 }
 
+/// Lightweight source-tracking row for the fast skip-before-hash re-import
+/// path. Deliberately NOT part of the `Book` domain struct — this is import
+/// bookkeeping, not a book property.
+pub struct BookSourceRef {
+    pub id: String,
+    pub source_size: Option<i64>,
+    pub source_mtime: Option<i64>,
+}
+
+/// Record where a book was imported from (the exact path string the folder
+/// walk produced) plus its size and mtime, for cheap re-import skipping.
+pub fn set_book_source(
+    conn: &Connection,
+    book_id: &str,
+    source_path: &str,
+    source_size: i64,
+    source_mtime: i64,
+) -> Result<()> {
+    conn.execute(
+        "UPDATE books SET source_path = ?1, source_size = ?2, source_mtime = ?3 WHERE id = ?4",
+        params![source_path, source_size, source_mtime, book_id],
+    )?;
+    Ok(())
+}
+
+/// Look up a book by the import source path. Returns `None` for legacy rows
+/// (NULL `source_path`) and unknown paths. Used by the fast-path before
+/// hashing — never the duplicate backstop (that remains `file_hash`).
+pub fn get_book_by_source_path(
+    conn: &Connection,
+    source_path: &str,
+) -> Result<Option<BookSourceRef>> {
+    let mut stmt =
+        conn.prepare("SELECT id, source_size, source_mtime FROM books WHERE source_path = ?1")?;
+    let mut rows = stmt.query(params![source_path])?;
+    if let Some(row) = rows.next()? {
+        Ok(Some(BookSourceRef {
+            id: row.get(0)?,
+            source_size: row.get(1)?,
+            source_mtime: row.get(2)?,
+        }))
+    } else {
+        Ok(None)
+    }
+}
+
 pub fn get_book_by_file_hash(conn: &Connection, hash: &str) -> Result<Option<Book>> {
     let sql = format!("SELECT {} FROM books WHERE file_hash = ?1", BOOK_COLUMNS);
     let mut stmt = conn.prepare(&sql)?;
@@ -4352,5 +4398,50 @@ mod tests {
         let settings = list_settings(&conn).expect("list_settings");
         assert!(settings.contains(&("import_mode".to_string(), "copy".to_string())));
         assert!(settings.contains(&("web_server_port".to_string(), "1421".to_string())));
+    }
+
+    #[test]
+    fn set_and_get_book_source_round_trips() {
+        let dir = tempfile::tempdir().unwrap();
+        let conn = init_db(&dir.path().join("library.db")).unwrap();
+        conn.execute(
+            "INSERT INTO books (id, title, author, file_path, total_chapters, added_at, format, updated_at)
+             VALUES ('b1', 'T', 'A', '/storage/b1.epub', 0, 100, 'epub', 100)",
+            [],
+        ).unwrap();
+
+        set_book_source(&conn, "b1", "/mnt/nas/T.epub", 4096, 1700000000).unwrap();
+
+        let found = get_book_by_source_path(&conn, "/mnt/nas/T.epub")
+            .unwrap()
+            .unwrap();
+        assert_eq!(found.id, "b1");
+        assert_eq!(found.source_size, Some(4096));
+        assert_eq!(found.source_mtime, Some(1700000000));
+    }
+
+    #[test]
+    fn get_book_by_source_path_missing_returns_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let conn = init_db(&dir.path().join("library.db")).unwrap();
+        assert!(get_book_by_source_path(&conn, "/nope/x.epub")
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn get_book_by_source_path_ignores_legacy_null_rows() {
+        let dir = tempfile::tempdir().unwrap();
+        let conn = init_db(&dir.path().join("library.db")).unwrap();
+        // Legacy row: no source_path written.
+        conn.execute(
+            "INSERT INTO books (id, title, author, file_path, total_chapters, added_at, format, updated_at)
+             VALUES ('legacy', 'T', 'A', '/storage/legacy.epub', 0, 100, 'epub', 100)",
+            [],
+        ).unwrap();
+        // Querying by the storage path must not match a NULL source_path row.
+        assert!(get_book_by_source_path(&conn, "/storage/legacy.epub")
+            .unwrap()
+            .is_none());
     }
 }
