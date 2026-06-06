@@ -265,6 +265,15 @@ fn run_schema(conn: &Connection) -> Result<()> {
     let _ = conn.execute_batch("ALTER TABLE books ADD COLUMN publisher TEXT;");
     let _ = conn.execute_batch("ALTER TABLE books ADD COLUMN publish_year INTEGER;");
 
+    // Fast skip-before-hash re-import: cheap (path, size, mtime) match avoids
+    // re-streaming unchanged files over a remote mount. Hash stays the source
+    // of truth on every mismatch. Index is intentionally NON-unique.
+    let _ = conn.execute_batch("ALTER TABLE books ADD COLUMN source_path TEXT;");
+    let _ = conn.execute_batch("ALTER TABLE books ADD COLUMN source_size INTEGER;");
+    let _ = conn.execute_batch("ALTER TABLE books ADD COLUMN source_mtime INTEGER;");
+    let _ = conn
+        .execute_batch("CREATE INDEX IF NOT EXISTS idx_books_source_path ON books(source_path);");
+
     // Incremental backup: ensure updated_at columns exist
     let _ =
         conn.execute_batch("ALTER TABLE books ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0;");
@@ -2621,6 +2630,28 @@ mod tests {
             })
             .unwrap();
         assert_eq!(val, 100);
+    }
+
+    #[test]
+    fn source_columns_exist_after_migration() {
+        let dir = tempfile::tempdir().unwrap();
+        let conn = init_db(&dir.path().join("library.db")).unwrap();
+        // Inserting with the new columns must succeed (proves columns exist).
+        conn.execute(
+            "INSERT INTO books (id, title, author, file_path, total_chapters, added_at, format, updated_at, source_path, source_size, source_mtime)
+             VALUES ('s1', 'T', 'A', '/storage/s1.epub', 0, 100, 'epub', 100, '/mnt/nas/T.epub', 1234, 1700000000)",
+            [],
+        ).unwrap();
+        let (sp, ss, sm): (String, i64, i64) = conn
+            .query_row(
+                "SELECT source_path, source_size, source_mtime FROM books WHERE id = 's1'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(sp, "/mnt/nas/T.epub");
+        assert_eq!(ss, 1234);
+        assert_eq!(sm, 1700000000);
     }
 
     #[test]
