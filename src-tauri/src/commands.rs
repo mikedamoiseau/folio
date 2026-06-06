@@ -7033,6 +7033,73 @@ mod tests {
             .unwrap();
         assert_eq!(count, 1);
     }
+
+    #[test]
+    fn reimport_fast_path_skips_when_hash_would_miss() {
+        let _guard = IMPORT_ATOMICS_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+
+        let work = tempfile::tempdir().unwrap();
+        let db_pool = db::create_pool(&work.path().join("library.db")).unwrap();
+        let storage: std::sync::Arc<dyn folio_core::storage::Storage> = std::sync::Arc::new(
+            folio_core::storage::LocalStorage::new(work.path().join("library")).unwrap(),
+        );
+        let covers: std::sync::Arc<dyn folio_core::storage::Storage> = std::sync::Arc::new(
+            folio_core::storage::LocalStorage::new(work.path().join("covers")).unwrap(),
+        );
+
+        let src = write_minimal_epub(work.path(), "book");
+        let src_path_string = src.to_string_lossy().to_string();
+
+        let first = import_book_inner(
+            src_path_string.clone(),
+            db_pool.clone(),
+            storage.clone(),
+            covers.clone(),
+            "link",
+            false,
+        )
+        .unwrap();
+        let first_id = first.into_book().id;
+
+        // Sabotage the stored content hash so hash-based dedup CANNOT match on
+        // re-import. The source_path/size/mtime row stays intact, so ONLY the
+        // fast-path can still recognize this as a duplicate. If the fast-path were
+        // broken, the re-import would hash the file, find no hash match, and import
+        // a SECOND book (count == 2).
+        {
+            let conn = db_pool.get().unwrap();
+            conn.execute(
+                "UPDATE books SET file_hash = 'deadbeef-not-a-real-hash' WHERE id = ?1",
+                rusqlite::params![first_id],
+            )
+            .unwrap();
+        }
+
+        let second = import_book_inner(
+            src_path_string.clone(),
+            db_pool.clone(),
+            storage.clone(),
+            covers.clone(),
+            "link",
+            false,
+        )
+        .unwrap();
+        match second {
+            ImportOutcome::Duplicate(b) => assert_eq!(b.id, first_id),
+            _ => panic!("fast-path should have returned the existing book as Duplicate"),
+        }
+
+        let conn = db_pool.get().unwrap();
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM books", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(
+            count, 1,
+            "fast-path must skip without creating a second row"
+        );
+    }
 }
 
 // ── Autostart ──────────────────────────────────────────────
