@@ -1188,6 +1188,9 @@ pub(crate) fn import_book_inner(
         return Err(e.into());
     }
 
+    // Store 0 when mtime was unavailable at import: a real file never reports
+    // epoch-0 mtime, so the read-side fast-path (which also requires
+    // source_mtime.is_some()) can never wrongly skip on it.
     if let Err(e) = db::set_book_source(
         &tx,
         &book.id,
@@ -6915,10 +6918,9 @@ mod tests {
 
     #[test]
     fn reimport_same_path_fast_skips_without_rehash() {
-        let _guard = IMPORT_ATOMICS_TEST_LOCK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-
+        // No shared global state: isolated tempdir + private pool per test, and
+        // import_book_inner does not touch the import-running atomics, so these
+        // tests need no serialization.
         let work = tempfile::tempdir().unwrap();
         let db_pool = db::create_pool(&work.path().join("library.db")).unwrap();
         let storage: std::sync::Arc<dyn folio_core::storage::Storage> = std::sync::Arc::new(
@@ -6976,10 +6978,6 @@ mod tests {
 
     #[test]
     fn reimport_with_changed_mtime_falls_through_to_hash() {
-        let _guard = IMPORT_ATOMICS_TEST_LOCK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-
         let work = tempfile::tempdir().unwrap();
         let db_pool = db::create_pool(&work.path().join("library.db")).unwrap();
         let storage: std::sync::Arc<dyn folio_core::storage::Storage> = std::sync::Arc::new(
@@ -7036,10 +7034,6 @@ mod tests {
 
     #[test]
     fn reimport_fast_path_skips_when_hash_would_miss() {
-        let _guard = IMPORT_ATOMICS_TEST_LOCK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-
         let work = tempfile::tempdir().unwrap();
         let db_pool = db::create_pool(&work.path().join("library.db")).unwrap();
         let storage: std::sync::Arc<dyn folio_core::storage::Storage> = std::sync::Arc::new(
