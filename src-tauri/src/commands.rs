@@ -699,19 +699,22 @@ pub(crate) fn import_book_inner(
     // its size + mtime are unchanged, return the existing book without reading
     // a single byte. Any mismatch / path-miss falls through to the hash, which
     // remains the duplicate source of truth.
-    if let Some(src_ref) = {
+    // One pooled connection serves both reads; scoped so it is released before
+    // the hash read below never holds a connection during byte streaming.
+    if let Some(existing) = {
         let conn = db_pool.get()?;
-        db::get_book_by_source_path(&conn, &file_path)?
-    } {
-        if src_ref.source_size == Some(source_size)
-            && source_mtime.is_some()
-            && src_ref.source_mtime == source_mtime
-        {
-            let conn = db_pool.get()?;
-            if let Some(existing) = db::get_book(&conn, &src_ref.id)? {
-                return Ok(ImportOutcome::Duplicate(existing));
+        match db::get_book_by_source_path(&conn, &file_path)? {
+            Some(src_ref)
+                if src_ref.source_size == Some(source_size)
+                    && source_mtime.is_some()
+                    && src_ref.source_mtime == source_mtime =>
+            {
+                db::get_book(&conn, &src_ref.id)?
             }
+            _ => None,
         }
+    } {
+        return Ok(ImportOutcome::Duplicate(existing));
     }
 
     let hash: Option<String> = {
@@ -732,6 +735,18 @@ pub(crate) fn import_book_inner(
         {
             let conn = db_pool.get()?;
             if let Some(existing) = db::get_book_by_file_hash(&conn, &computed)? {
+                // Re-arm the fast-path: refresh this book's source tracking to
+                // the current path/size/mtime so a content-identical file whose
+                // mtime drifted (re-copy, restore, cloud resync) fast-skips next
+                // time instead of re-hashing forever. Best-effort — dedup itself
+                // already succeeded.
+                let _ = db::set_book_source(
+                    &conn,
+                    &existing.id,
+                    &file_path,
+                    source_size,
+                    source_mtime.unwrap_or(0),
+                );
                 return Ok(ImportOutcome::Duplicate(existing));
             }
         }
@@ -7092,6 +7107,89 @@ mod tests {
         assert_eq!(
             count, 1,
             "fast-path must skip without creating a second row"
+        );
+    }
+
+    #[test]
+    fn reimport_hash_match_refreshes_source_tracking() {
+        // When the fast-path misses (drifted mtime) but the content hash still
+        // dedups, the stored source_size/mtime must be refreshed to the file's
+        // current values so the NEXT re-import fast-skips instead of re-hashing
+        // forever. Without the refresh the fast-path never warms back up.
+        let work = tempfile::tempdir().unwrap();
+        let db_pool = db::create_pool(&work.path().join("library.db")).unwrap();
+        let storage: std::sync::Arc<dyn folio_core::storage::Storage> = std::sync::Arc::new(
+            folio_core::storage::LocalStorage::new(work.path().join("library")).unwrap(),
+        );
+        let covers: std::sync::Arc<dyn folio_core::storage::Storage> = std::sync::Arc::new(
+            folio_core::storage::LocalStorage::new(work.path().join("covers")).unwrap(),
+        );
+
+        let src = write_minimal_epub(work.path(), "book");
+        let src_path_string = src.to_string_lossy().to_string();
+
+        let first = import_book_inner(
+            src_path_string.clone(),
+            db_pool.clone(),
+            storage.clone(),
+            covers.clone(),
+            "link",
+            false,
+        )
+        .unwrap();
+        let first_id = first.into_book().id;
+
+        // The real mtime recorded on first import.
+        let real_mtime = {
+            let conn = db_pool.get().unwrap();
+            db::get_book_by_source_path(&conn, &src_path_string)
+                .unwrap()
+                .unwrap()
+                .source_mtime
+        };
+
+        // Simulate mtime drift on a content-identical file: clobber the stored
+        // mtime so the fast-path cannot fire and we go through the hash.
+        {
+            let conn = db_pool.get().unwrap();
+            conn.execute(
+                "UPDATE books SET source_mtime = 1 WHERE id = ?1",
+                rusqlite::params![first_id],
+            )
+            .unwrap();
+        }
+
+        let second = import_book_inner(
+            src_path_string.clone(),
+            db_pool.clone(),
+            storage.clone(),
+            covers.clone(),
+            "link",
+            false,
+        )
+        .unwrap();
+        match second {
+            ImportOutcome::Duplicate(b) => assert_eq!(b.id, first_id),
+            _ => panic!("expected Duplicate by hash"),
+        }
+
+        // The hash-match path must have refreshed the stored mtime back to the
+        // file's real value — re-arming the fast-path for future re-imports.
+        let refreshed = {
+            let conn = db_pool.get().unwrap();
+            db::get_book_by_source_path(&conn, &src_path_string)
+                .unwrap()
+                .unwrap()
+                .source_mtime
+        };
+        assert_eq!(
+            refreshed, real_mtime,
+            "hash-match re-import must refresh stored source_mtime"
+        );
+        assert_ne!(
+            refreshed,
+            Some(1),
+            "stale sentinel mtime must be overwritten"
         );
     }
 }

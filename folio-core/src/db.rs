@@ -508,13 +508,16 @@ pub fn set_book_source(
 
 /// Look up a book by the import source path. Returns `None` for legacy rows
 /// (NULL `source_path`) and unknown paths. Used by the fast-path before
-/// hashing — never the duplicate backstop (that remains `file_hash`).
+/// hashing — never the duplicate backstop (that remains `file_hash`). The
+/// `source_path` index is non-unique, so `ORDER BY rowid DESC LIMIT 1` makes
+/// the result deterministic, preferring the most recently inserted row.
 pub fn get_book_by_source_path(
     conn: &Connection,
     source_path: &str,
 ) -> Result<Option<BookSourceRef>> {
-    let mut stmt =
-        conn.prepare("SELECT id, source_size, source_mtime FROM books WHERE source_path = ?1")?;
+    let mut stmt = conn.prepare(
+        "SELECT id, source_size, source_mtime FROM books WHERE source_path = ?1 ORDER BY rowid DESC LIMIT 1",
+    )?;
     let mut rows = stmt.query(params![source_path])?;
     if let Some(row) = rows.next()? {
         Ok(Some(BookSourceRef {
