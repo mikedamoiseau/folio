@@ -101,6 +101,8 @@ Click the **+ Add books** button in the top-right corner to open the import menu
 
 When you import a book, Folio copies the file into its own managed library folder (default `~/Documents/folio/`). The original file is not modified or moved. Duplicate files are detected by content hash and skipped automatically.
 
+**Re-scanning a folder is fast.** If you import the same folder again — for example to resume after an interrupted batch, or to pick up newly added books — Folio skips files it has already imported without re-reading their contents, as long as the file is unchanged (same path, size, and modification time). Only new or changed files are read in full. This makes re-importing a large folder from a network drive or external disk quick, even with thousands of books.
+
 ### Viewing your books
 
 Books are shown as a cover grid. Each card displays the cover image, title, author, star rating (if set), a reading-status badge, and a format badge for non-EPUB books.
