@@ -674,6 +674,16 @@ pub(crate) fn import_book_inner(
         )));
     }
 
+    // Source identity for the fast skip-before-hash re-import path. mtime is
+    // best-effort: if the platform/FS can't report it, treat as absent and
+    // fall through to hashing (never skip without a confirmed size+mtime match).
+    let source_size = source_metadata.len() as i64;
+    let source_mtime: Option<i64> = source_metadata
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs() as i64);
+
     // Step 2: callers that own the file (e.g. OPDS-downloaded temp files)
     // must set `force_copy` so `link` mode still copies into the library.
     // The path string itself is unreliable as a signal — OPDS hands us a
@@ -685,6 +695,28 @@ pub(crate) fn import_book_inner(
     // linked books need a stable content hash too. Hashing also guards
     // against duplicate library entries when the same file is reached
     // through different path spellings (symlinks, alternate mounts, …).
+    // Fast skip-before-hash: if this exact source path was imported before and
+    // its size + mtime are unchanged, return the existing book without reading
+    // a single byte. Any mismatch / path-miss falls through to the hash, which
+    // remains the duplicate source of truth.
+    // One pooled connection serves both reads; scoped so it is released before
+    // the hash read below never holds a connection during byte streaming.
+    if let Some(existing) = {
+        let conn = db_pool.get()?;
+        match db::get_book_by_source_path(&conn, &file_path)? {
+            Some(src_ref)
+                if src_ref.source_size == Some(source_size)
+                    && source_mtime.is_some()
+                    && src_ref.source_mtime == source_mtime =>
+            {
+                db::get_book(&conn, &src_ref.id)?
+            }
+            _ => None,
+        }
+    } {
+        return Ok(ImportOutcome::Duplicate(existing));
+    }
+
     let hash: Option<String> = {
         use sha2::{Digest, Sha256};
         use std::io::Read;
@@ -703,6 +735,18 @@ pub(crate) fn import_book_inner(
         {
             let conn = db_pool.get()?;
             if let Some(existing) = db::get_book_by_file_hash(&conn, &computed)? {
+                // Re-arm the fast-path: refresh this book's source tracking to
+                // the current path/size/mtime so a content-identical file whose
+                // mtime drifted (re-copy, restore, cloud resync) fast-skips next
+                // time instead of re-hashing forever. Best-effort — dedup itself
+                // already succeeded.
+                let _ = db::set_book_source(
+                    &conn,
+                    &existing.id,
+                    &file_path,
+                    source_size,
+                    source_mtime.unwrap_or(0),
+                );
                 return Ok(ImportOutcome::Duplicate(existing));
             }
         }
@@ -1150,6 +1194,25 @@ pub(crate) fn import_book_inner(
             }
             return Ok(ImportOutcome::Duplicate(existing));
         }
+        if should_copy {
+            let _ = std::fs::remove_file(&final_path);
+        }
+        if cover_saved {
+            let _ = delete_book_covers(&*covers_storage, &book.id);
+        }
+        return Err(e.into());
+    }
+
+    // Store 0 when mtime was unavailable at import: a real file never reports
+    // epoch-0 mtime, so the read-side fast-path (which also requires
+    // source_mtime.is_some()) can never wrongly skip on it.
+    if let Err(e) = db::set_book_source(
+        &tx,
+        &book.id,
+        &file_path,
+        source_size,
+        source_mtime.unwrap_or(0),
+    ) {
         if should_copy {
             let _ = std::fs::remove_file(&final_path);
         }
@@ -6826,6 +6889,308 @@ mod tests {
         IMPORT_CANCEL.store(true, Ordering::SeqCst);
         assert!(IMPORT_CANCEL.load(Ordering::SeqCst));
         IMPORT_CANCEL.store(false, Ordering::SeqCst);
+    }
+
+    /// Write a minimal but valid EPUB to `dir/name.epub` so `import_book_inner`
+    /// can parse it (container.xml -> OPF; empty spine yields zero chapters,
+    /// which the importer accepts). Returns the on-disk path.
+    fn write_minimal_epub(dir: &std::path::Path, name: &str) -> std::path::PathBuf {
+        let path = dir.join(format!("{name}.epub"));
+        let file = std::fs::File::create(&path).unwrap();
+        let mut zip = zip::ZipWriter::new(file);
+        let options = zip::write::SimpleFileOptions::default();
+        zip.start_file("mimetype", options).unwrap();
+        std::io::Write::write_all(&mut zip, b"application/epub+zip").unwrap();
+        zip.start_file("META-INF/container.xml", options).unwrap();
+        std::io::Write::write_all(
+            &mut zip,
+            br#"<?xml version="1.0"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles>
+    <rootfile full-path="content.opf" media-type="application/oebps-package+xml"/>
+  </rootfiles>
+</container>"#,
+        )
+        .unwrap();
+        zip.start_file("content.opf", options).unwrap();
+        std::io::Write::write_all(
+            &mut zip,
+            br#"<?xml version="1.0"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:title>Fast Path Test Book</dc:title>
+    <dc:creator>Test Author</dc:creator>
+    <dc:language>en</dc:language>
+  </metadata>
+  <manifest/>
+  <spine/>
+</package>"#,
+        )
+        .unwrap();
+        zip.finish().unwrap();
+        path
+    }
+
+    #[test]
+    fn reimport_same_path_fast_skips_without_rehash() {
+        // No shared global state: isolated tempdir + private pool per test, and
+        // import_book_inner does not touch the import-running atomics, so these
+        // tests need no serialization.
+        let work = tempfile::tempdir().unwrap();
+        let db_pool = db::create_pool(&work.path().join("library.db")).unwrap();
+        let storage: std::sync::Arc<dyn folio_core::storage::Storage> = std::sync::Arc::new(
+            folio_core::storage::LocalStorage::new(work.path().join("library")).unwrap(),
+        );
+        let covers: std::sync::Arc<dyn folio_core::storage::Storage> = std::sync::Arc::new(
+            folio_core::storage::LocalStorage::new(work.path().join("covers")).unwrap(),
+        );
+
+        let src = write_minimal_epub(work.path(), "book");
+        let src_path_string = src.to_string_lossy().to_string();
+
+        let first = import_book_inner(
+            src_path_string.clone(),
+            db_pool.clone(),
+            storage.clone(),
+            covers.clone(),
+            "link",
+            false,
+        )
+        .unwrap();
+        let first_id = first.into_book().id;
+
+        // Sanity: the source row was recorded with the file's real size.
+        {
+            let conn = db_pool.get().unwrap();
+            let meta = std::fs::metadata(&src).unwrap();
+            let rec = db::get_book_by_source_path(&conn, &src_path_string)
+                .unwrap()
+                .unwrap();
+            assert_eq!(rec.id, first_id);
+            assert_eq!(rec.source_size, Some(meta.len() as i64));
+        }
+
+        // Second import of the SAME path -> Duplicate with same id, one row.
+        let second = import_book_inner(
+            src_path_string.clone(),
+            db_pool.clone(),
+            storage.clone(),
+            covers.clone(),
+            "link",
+            false,
+        )
+        .unwrap();
+        match second {
+            ImportOutcome::Duplicate(b) => assert_eq!(b.id, first_id),
+            _ => panic!("expected Duplicate outcome"),
+        }
+        let conn = db_pool.get().unwrap();
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM books", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn reimport_with_changed_mtime_falls_through_to_hash() {
+        let work = tempfile::tempdir().unwrap();
+        let db_pool = db::create_pool(&work.path().join("library.db")).unwrap();
+        let storage: std::sync::Arc<dyn folio_core::storage::Storage> = std::sync::Arc::new(
+            folio_core::storage::LocalStorage::new(work.path().join("library")).unwrap(),
+        );
+        let covers: std::sync::Arc<dyn folio_core::storage::Storage> = std::sync::Arc::new(
+            folio_core::storage::LocalStorage::new(work.path().join("covers")).unwrap(),
+        );
+
+        let src = write_minimal_epub(work.path(), "book");
+        let src_path_string = src.to_string_lossy().to_string();
+
+        let first = import_book_inner(
+            src_path_string.clone(),
+            db_pool.clone(),
+            storage.clone(),
+            covers.clone(),
+            "link",
+            false,
+        )
+        .unwrap();
+        let first_id = first.into_book().id;
+
+        // Force a stored mtime mismatch so the fast path cannot fire.
+        {
+            let conn = db_pool.get().unwrap();
+            conn.execute(
+                "UPDATE books SET source_mtime = 1 WHERE id = ?1",
+                rusqlite::params![first_id],
+            )
+            .unwrap();
+        }
+
+        // Falls through to the hash, which still dedups to the same book.
+        let second = import_book_inner(
+            src_path_string.clone(),
+            db_pool.clone(),
+            storage.clone(),
+            covers.clone(),
+            "link",
+            false,
+        )
+        .unwrap();
+        match second {
+            ImportOutcome::Duplicate(b) => assert_eq!(b.id, first_id),
+            _ => panic!("expected Duplicate by hash"),
+        }
+        let conn = db_pool.get().unwrap();
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM books", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn reimport_fast_path_skips_when_hash_would_miss() {
+        let work = tempfile::tempdir().unwrap();
+        let db_pool = db::create_pool(&work.path().join("library.db")).unwrap();
+        let storage: std::sync::Arc<dyn folio_core::storage::Storage> = std::sync::Arc::new(
+            folio_core::storage::LocalStorage::new(work.path().join("library")).unwrap(),
+        );
+        let covers: std::sync::Arc<dyn folio_core::storage::Storage> = std::sync::Arc::new(
+            folio_core::storage::LocalStorage::new(work.path().join("covers")).unwrap(),
+        );
+
+        let src = write_minimal_epub(work.path(), "book");
+        let src_path_string = src.to_string_lossy().to_string();
+
+        let first = import_book_inner(
+            src_path_string.clone(),
+            db_pool.clone(),
+            storage.clone(),
+            covers.clone(),
+            "link",
+            false,
+        )
+        .unwrap();
+        let first_id = first.into_book().id;
+
+        // Sabotage the stored content hash so hash-based dedup CANNOT match on
+        // re-import. The source_path/size/mtime row stays intact, so ONLY the
+        // fast-path can still recognize this as a duplicate. If the fast-path were
+        // broken, the re-import would hash the file, find no hash match, and import
+        // a SECOND book (count == 2).
+        {
+            let conn = db_pool.get().unwrap();
+            conn.execute(
+                "UPDATE books SET file_hash = 'deadbeef-not-a-real-hash' WHERE id = ?1",
+                rusqlite::params![first_id],
+            )
+            .unwrap();
+        }
+
+        let second = import_book_inner(
+            src_path_string.clone(),
+            db_pool.clone(),
+            storage.clone(),
+            covers.clone(),
+            "link",
+            false,
+        )
+        .unwrap();
+        match second {
+            ImportOutcome::Duplicate(b) => assert_eq!(b.id, first_id),
+            _ => panic!("fast-path should have returned the existing book as Duplicate"),
+        }
+
+        let conn = db_pool.get().unwrap();
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM books", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(
+            count, 1,
+            "fast-path must skip without creating a second row"
+        );
+    }
+
+    #[test]
+    fn reimport_hash_match_refreshes_source_tracking() {
+        // When the fast-path misses (drifted mtime) but the content hash still
+        // dedups, the stored source_size/mtime must be refreshed to the file's
+        // current values so the NEXT re-import fast-skips instead of re-hashing
+        // forever. Without the refresh the fast-path never warms back up.
+        let work = tempfile::tempdir().unwrap();
+        let db_pool = db::create_pool(&work.path().join("library.db")).unwrap();
+        let storage: std::sync::Arc<dyn folio_core::storage::Storage> = std::sync::Arc::new(
+            folio_core::storage::LocalStorage::new(work.path().join("library")).unwrap(),
+        );
+        let covers: std::sync::Arc<dyn folio_core::storage::Storage> = std::sync::Arc::new(
+            folio_core::storage::LocalStorage::new(work.path().join("covers")).unwrap(),
+        );
+
+        let src = write_minimal_epub(work.path(), "book");
+        let src_path_string = src.to_string_lossy().to_string();
+
+        let first = import_book_inner(
+            src_path_string.clone(),
+            db_pool.clone(),
+            storage.clone(),
+            covers.clone(),
+            "link",
+            false,
+        )
+        .unwrap();
+        let first_id = first.into_book().id;
+
+        // The real mtime recorded on first import.
+        let real_mtime = {
+            let conn = db_pool.get().unwrap();
+            db::get_book_by_source_path(&conn, &src_path_string)
+                .unwrap()
+                .unwrap()
+                .source_mtime
+        };
+
+        // Simulate mtime drift on a content-identical file: clobber the stored
+        // mtime so the fast-path cannot fire and we go through the hash.
+        {
+            let conn = db_pool.get().unwrap();
+            conn.execute(
+                "UPDATE books SET source_mtime = 1 WHERE id = ?1",
+                rusqlite::params![first_id],
+            )
+            .unwrap();
+        }
+
+        let second = import_book_inner(
+            src_path_string.clone(),
+            db_pool.clone(),
+            storage.clone(),
+            covers.clone(),
+            "link",
+            false,
+        )
+        .unwrap();
+        match second {
+            ImportOutcome::Duplicate(b) => assert_eq!(b.id, first_id),
+            _ => panic!("expected Duplicate by hash"),
+        }
+
+        // The hash-match path must have refreshed the stored mtime back to the
+        // file's real value — re-arming the fast-path for future re-imports.
+        let refreshed = {
+            let conn = db_pool.get().unwrap();
+            db::get_book_by_source_path(&conn, &src_path_string)
+                .unwrap()
+                .unwrap()
+                .source_mtime
+        };
+        assert_eq!(
+            refreshed, real_mtime,
+            "hash-match re-import must refresh stored source_mtime"
+        );
+        assert_ne!(
+            refreshed,
+            Some(1),
+            "stale sentinel mtime must be overwritten"
+        );
     }
 }
 
