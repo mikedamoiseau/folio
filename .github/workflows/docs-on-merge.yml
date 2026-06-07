@@ -90,13 +90,42 @@ jobs:
                  lives in the UI and the steps to use it. Be as thorough as needed;
                  the brevity rule does NOT apply to this file.
 
-            5. Website + published docs on damoiseau.xyz (/folio, /docs/folio/,
-               /docs/folio/user-guide/) live in a SEPARATE repository that is NOT
-               checked out in this job. Do NOT try to edit website files here.
-               Instead, in your PR description, list exactly what should change on
-               those three pages so it can be applied in the website repo later.
-               (When that repo is wired in — see the commented block in the workflow
-               file — these become a real cross-repo step.)
+            5. The website (damoiseau.xyz) lives in a separate repo owned by a
+               different Claude Code agent. Do NOT edit or commit any website files.
+               Instead, compose a self-contained HANDOFF BRIEF and place it in the
+               docs PR body (step 8) — do not write it to a file. The brief must be
+               readable by that agent without seeing folio. Use exactly this
+               structure, and mark a section "No change needed" when the merged
+               change doesn't affect it (most changes touch only one or two):
+
+               ---
+               # Website update brief — folio PR #${{ github.event.pull_request.number }}
+
+               **Source change:** "${{ github.event.pull_request.title }}"
+               **Classification:** <New | Improved | Fixed | Breaking>
+               **Affected platforms:** <macOS / Windows / Linux, or "all">
+
+               **Canonical change (end-user wording):**
+               <the 2–4 sentence canonical entry from step 3>
+
+               Apply the updates below to damoiseau.xyz. Match the tone and
+               terminology already on each page; do NOT invent capabilities the app
+               doesn't have. Open a PR in the website repo for review — don't push
+               to main.
+
+               ## 1. /folio  (project page)
+               <"No change needed", or: what to change + suggested copy. Update only
+               if the pitch or capability list changes. Keep it short.>
+
+               ## 2. /docs/folio/  (project overview)
+               <"No change needed", or: what to change + suggested copy. Keep short;
+               it currently links out to the user guide, so preserve that structure.>
+
+               ## 3. /docs/folio/user-guide/  (published user guide)
+               <"No change needed", or: the how-to section to add/revise, mirroring
+               the docs/USER_GUIDE.md change from step 4. This page can be thorough.>
+
+               ---
 
             6. Voice per surface: changelog = terse imperative ("Add…", "Fix…");
                user guide = second-person instructional ("To …, open …");
@@ -108,36 +137,27 @@ jobs:
                PR description so a human can decide.
 
             8. Output: create a branch named `docs/pr-${{ github.event.pull_request.number }}`,
-               commit the edits, and open a pull request whose title starts with
-               "docs:" (this is what keeps the workflow from re-triggering on itself).
-               In the PR body, include: the canonical entry, its classification,
-               affected platforms, the list of in-repo files changed, the proposed
-               website changes from step 5, and any drift flagged in step 7.
+               commit ONLY the in-repo doc edits (CHANGELOG / README / USER_GUIDE),
+               and open a pull request whose title starts with "docs:" (this is what
+               keeps the workflow from re-triggering on itself). In the PR body,
+               include: the canonical entry, its classification, affected platforms,
+               the list of in-repo files changed, the full website handoff brief from
+               step 5 (under a clear "## Website handoff brief" heading so it can be
+               copied straight to the website agent), and any drift flagged in step 7.
                Do NOT push to main directly.
 
             Keep changelog, README, and website notes short — long notes don't get
             read. The user guide is the one place to be thorough.
 
 # ---------------------------------------------------------------------------
-# CROSS-REPO EXTENSION (enable once you tell me the website repo + generator)
+# WEBSITE (damoiseau.xyz) — handled OUT OF BAND, on purpose.
 #
-# Option A — edit the website repo in the same job:
-#   Add a second checkout before the Claude step, using a PAT or GitHub App token
-#   that has write access to the website repo:
+# This workflow does NOT touch the Bitbucket website repo and commits no website
+# files. Step 5 puts a handoff brief in the docs PR body (under "## Website
+# handoff brief"). To update the site, copy that section and hand it to the
+# Claude Code agent that owns the damoiseau.xyz repo; it applies the changes and
+# opens its own Bitbucket PR.
 #
-#     - name: Checkout website
-#       uses: actions/checkout@v4
-#       with:
-#         repository: mikedamoiseau/<WEBSITE_REPO>
-#         token: ${{ secrets.WEBSITE_REPO_TOKEN }}
-#         path: website
-#
-#   Then extend step 5 of the prompt to edit the real source paths under
-#   website/ (e.g. content/folio/, content/docs/folio/user-guide/) and open a
-#   second PR in that repo.
-#
-# Option B — hand off to the website repo's own workflow:
-#   Replace step 5 with a `peter-evans/repository-dispatch` (or `gh api`) call
-#   that sends a repository_dispatch event carrying the canonical entry, and let
-#   a workflow in the website repo apply it. Keeps each repo's CI self-contained.
+# No Bitbucket credentials, app passwords, or cross-platform API calls live in
+# this repo — the brief text is the only thing that crosses over.
 # ---------------------------------------------------------------------------
