@@ -7,6 +7,7 @@ use serde::Serialize;
 use std::sync::{Arc, Mutex};
 
 use crate::error::FolioResult;
+use crate::storage::Storage;
 
 /// A simple LRU cache that bundles the data map and access order in a single
 /// structure, so only one Mutex is needed. This eliminates the risk of lock
@@ -236,10 +237,81 @@ impl<V: Send> ManagedCache for MemoryCacheAdapter<V> {
     }
 }
 
+/// Lifecycle adapter over the on-disk page cache (PDF/CBZ/CBR), delegating
+/// to the existing `page_cache` functions. Internals stay in `page_cache`.
+pub struct DiskPageCacheAdapter {
+    storage: Arc<dyn Storage>,
+}
+
+impl DiskPageCacheAdapter {
+    pub fn new(storage: Arc<dyn Storage>) -> Self {
+        Self { storage }
+    }
+}
+
+impl ManagedCache for DiskPageCacheAdapter {
+    fn name(&self) -> &'static str {
+        "pages"
+    }
+
+    fn kind(&self) -> CacheKind {
+        CacheKind::Disk
+    }
+
+    fn stats(&self) -> CacheSectionStats {
+        let s = crate::page_cache::get_cache_stats(self.storage.as_ref());
+        CacheSectionStats {
+            name: "pages".to_string(),
+            kind: CacheKind::Disk,
+            entry_count: s.book_count,
+            total_bytes: Some(s.total_size_bytes),
+        }
+    }
+
+    fn clear(&self) -> FolioResult<()> {
+        crate::page_cache::clear_cache(self.storage.as_ref())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Registry helpers
+// ---------------------------------------------------------------------------
+
+pub fn unified_stats(registry: &[Box<dyn ManagedCache>]) -> UnifiedCacheStats {
+    let sections: Vec<CacheSectionStats> = registry.iter().map(|c| c.stats()).collect();
+    let total_bytes = sections.iter().filter_map(|s| s.total_bytes).sum();
+    UnifiedCacheStats {
+        sections,
+        total_bytes,
+    }
+}
+
+/// Clear every cache, attempting all of them even when one fails — a failed
+/// disk clear must not leave the memory caches uncleared, and vice versa.
+/// Returns the first error encountered, if any.
+pub fn clear_all(registry: &[Box<dyn ManagedCache>]) -> FolioResult<()> {
+    let mut first_err = None;
+    for cache in registry {
+        if let Err(e) = cache.clear() {
+            if first_err.is_none() {
+                first_err = Some(e);
+            }
+        }
+    }
+    match first_err {
+        Some(e) => Err(e),
+        None => Ok(()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::sync::{Arc, Mutex};
+    use crate::models::BookFormat;
+    use crate::page_cache::{self, CacheManifest};
+    use crate::storage::{LocalStorage, Storage};
+    use tempfile::TempDir;
 
     // #52: PDF cache memory limits (moved from src-tauri commands.rs)
     #[test]
@@ -337,5 +409,99 @@ mod tests {
 
         assert!(cache.lock().unwrap().is_empty());
         assert_eq!(cache.lock().unwrap().total_bytes(), 0);
+    }
+
+    /// Seed one fake cached book (manifest + 2 pages of 50 bytes each)
+    /// under page_cache's key layout, mirroring page_cache's own test
+    /// helper.
+    fn seed_disk_cache(storage: &dyn Storage) {
+        for i in 0..2u32 {
+            storage
+                .put(&format!("page-cache/hash_a/{i:03}.jpg"), &[0u8; 50])
+                .unwrap();
+        }
+        let manifest = CacheManifest {
+            book_id: "a".to_string(),
+            book_hash: "hash_a".to_string(),
+            page_count: 2,
+            total_size_bytes: 100,
+            extracted_at: "2026-01-01T00:00:00Z".to_string(),
+            last_accessed: "2026-01-01T00:00:00Z".to_string(),
+            pages: vec!["000.jpg".to_string(), "001.jpg".to_string()],
+            format: BookFormat::Cbz,
+            canonical_width: None,
+        };
+        page_cache::write_manifest(storage, "hash_a", &manifest).unwrap();
+    }
+
+    #[test]
+    fn disk_adapter_stats_match_page_cache() {
+        let dir = TempDir::new().unwrap();
+        let storage: Arc<dyn Storage> = Arc::new(LocalStorage::new(dir.path()).unwrap());
+        seed_disk_cache(storage.as_ref());
+
+        let adapter = DiskPageCacheAdapter::new(Arc::clone(&storage));
+        let stats = adapter.stats();
+        assert_eq!(stats.name, "pages");
+        assert!(matches!(stats.kind, CacheKind::Disk));
+        assert_eq!(stats.entry_count, 1); // one book
+        assert_eq!(stats.total_bytes, Some(100)); // 2 pages x 50 bytes, manifest excluded
+    }
+
+    #[test]
+    fn disk_adapter_clear_wipes_all_keys() {
+        let dir = TempDir::new().unwrap();
+        let storage: Arc<dyn Storage> = Arc::new(LocalStorage::new(dir.path()).unwrap());
+        seed_disk_cache(storage.as_ref());
+
+        let adapter = DiskPageCacheAdapter::new(Arc::clone(&storage));
+        adapter.clear().unwrap();
+
+        assert!(storage.list("page-cache/").unwrap().is_empty());
+    }
+
+    #[test]
+    fn unified_stats_aggregates_known_bytes_only() {
+        let dir = TempDir::new().unwrap();
+        let storage: Arc<dyn Storage> = Arc::new(LocalStorage::new(dir.path()).unwrap());
+        seed_disk_cache(storage.as_ref());
+
+        let epub = Arc::new(Mutex::new(LruCache::<String>::new(10)));
+        epub.lock().unwrap().insert("e".to_string(), "v".to_string());
+        let mobi = Arc::new(Mutex::new(LruCache::<String>::new(10)));
+        mobi.lock()
+            .unwrap()
+            .insert_with_size("m".to_string(), "v".to_string(), 7);
+
+        let registry: Vec<Box<dyn ManagedCache>> = vec![
+            Box::new(MemoryCacheAdapter::new("epub", false, epub)),
+            Box::new(MemoryCacheAdapter::new("mobi", true, mobi)),
+            Box::new(DiskPageCacheAdapter::new(storage)),
+        ];
+
+        let stats = unified_stats(&registry);
+        assert_eq!(stats.sections.len(), 3);
+        // epub contributes None; total = mobi 7 + disk 100
+        assert_eq!(stats.total_bytes, 107);
+    }
+
+    #[test]
+    fn clear_all_clears_every_cache_in_registry() {
+        let dir = TempDir::new().unwrap();
+        let storage: Arc<dyn Storage> = Arc::new(LocalStorage::new(dir.path()).unwrap());
+        seed_disk_cache(storage.as_ref());
+
+        let epub = Arc::new(Mutex::new(LruCache::<String>::new(10)));
+        epub.lock().unwrap().insert("e".to_string(), "v".to_string());
+
+        let registry: Vec<Box<dyn ManagedCache>> = vec![
+            Box::new(MemoryCacheAdapter::new("epub", false, Arc::clone(&epub))),
+            Box::new(DiskPageCacheAdapter::new(Arc::clone(&storage))),
+        ];
+
+        clear_all(&registry).unwrap();
+
+        assert!(epub.lock().unwrap().is_empty());
+        assert!(storage.list("page-cache/").unwrap().is_empty());
     }
 }
