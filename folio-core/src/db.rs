@@ -548,6 +548,17 @@ pub fn list_books(conn: &Connection) -> Result<Vec<Book>> {
     rows.collect()
 }
 
+/// `(id, updated_at)` for every book — the ETag input for OPDS conditional
+/// requests. Deliberately not part of `Book`: feeds need the pair list
+/// without widening the Book struct and its many literal constructors.
+pub fn book_etag_pairs(conn: &Connection) -> Result<std::collections::HashMap<String, i64>> {
+    let mut stmt = conn.prepare("SELECT id, updated_at FROM books")?;
+    let rows = stmt.query_map([], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+    })?;
+    rows.collect()
+}
+
 /// Build the metadata object shared by the desktop library export and the
 /// web GDPR export: version + books, reading progress, bookmarks, highlights,
 /// collections, tags, and book→tag links.
@@ -4446,5 +4457,35 @@ mod tests {
         assert!(get_book_by_source_path(&conn, "/storage/legacy.epub")
             .unwrap()
             .is_none());
+    }
+
+    #[test]
+    fn book_etag_pairs_returns_id_updated_at_map() {
+        let (_dir, conn) = setup();
+
+        // Insert two books with different timestamps
+        let mut b1 = sample_book("etag-b1");
+        b1.added_at = 100;
+        b1.file_path = "/tmp/test1.epub".to_string();
+        insert_book(&conn, &b1).unwrap();
+
+        let mut b2 = sample_book("etag-b2");
+        b2.added_at = 200;
+        b2.file_path = "/tmp/test2.epub".to_string();
+        insert_book(&conn, &b2).unwrap();
+
+        // book_etag_pairs should return (id, updated_at) pairs
+        let pairs = book_etag_pairs(&conn).unwrap();
+        assert_eq!(pairs.len(), 2);
+        // insert_book writes added_at into the updated_at column
+        assert_eq!(pairs.get("etag-b1"), Some(&100));
+        assert_eq!(pairs.get("etag-b2"), Some(&200));
+
+        // A mutation bumping updated_at is reflected
+        conn.execute("UPDATE books SET updated_at = 999 WHERE id = 'etag-b1'", [])
+            .unwrap();
+        let pairs = book_etag_pairs(&conn).unwrap();
+        assert_eq!(pairs.get("etag-b1"), Some(&999));
+        assert_eq!(pairs.get("etag-b2"), Some(&200));
     }
 }
