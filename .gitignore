@@ -60,6 +60,7 @@ tests/e2e/package-lock.json
 # Superpowers brainstorming artifacts
 .superpowers/
 .gitnexus
+docs/superpowers/
 
 # PR review artifacts (~/bin/pr-review.sh outputs)
 .pr-reviews/
