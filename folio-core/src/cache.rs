@@ -3,6 +3,11 @@
 //! `LruCache` is the in-memory LRU (moved here from the app crate);
 //! `ManagedCache` + adapters arrive in later tasks.
 
+use serde::Serialize;
+use std::sync::{Arc, Mutex};
+
+use crate::error::FolioResult;
+
 /// A simple LRU cache that bundles the data map and access order in a single
 /// structure, so only one Mutex is needed. This eliminates the risk of lock
 /// poisoning or inversion that arises from guarding the map and order with
@@ -134,9 +139,107 @@ impl<V> LruCache<V> {
     }
 }
 
+// ---------------------------------------------------------------------------
+// ManagedCache — unified lifecycle (stats/clear) over heterogeneous caches.
+// Deliberately NOT a get/put abstraction: payload types differ per cache
+// (parsed EPUB archive vs parsed MOBI book vs page bytes on disk).
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CacheKind {
+    Memory,
+    Disk,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CacheSectionStats {
+    pub name: String,
+    pub kind: CacheKind,
+    pub entry_count: usize,
+    /// `None` when the cache does not track byte sizes (epub).
+    pub total_bytes: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct UnifiedCacheStats {
+    pub sections: Vec<CacheSectionStats>,
+    /// Sum of the known (`Some`) section bytes.
+    pub total_bytes: u64,
+}
+
+pub trait ManagedCache: Send + Sync {
+    /// Stable identifier for this cache section ("epub", "mobi", "pages").
+    /// Used as the section key in stats payloads.
+    fn name(&self) -> &'static str;
+
+    /// Whether entries live in memory or on disk.
+    fn kind(&self) -> CacheKind;
+
+    /// Best-effort snapshot. Must not fail: implementations degrade to an empty
+    /// section when state is unreadable (e.g. poisoned lock).
+    fn stats(&self) -> CacheSectionStats;
+
+    /// Drop all cached entries. Errors propagate — callers decide whether a
+    /// partial clear matters.
+    fn clear(&self) -> FolioResult<()>;
+}
+
+/// Lifecycle adapter over an in-memory `LruCache` shared behind
+/// `Arc<Mutex<..>>` (the same handle `AppState` holds).
+pub struct MemoryCacheAdapter<V: Send + 'static> {
+    name: &'static str,
+    /// Explicit flag — not inferred from a zero byte count, so an empty
+    /// byte-tracked cache still reports `Some(0)` rather than `None`.
+    tracks_bytes: bool,
+    cache: Arc<Mutex<LruCache<V>>>,
+}
+
+impl<V: Send> MemoryCacheAdapter<V> {
+    pub fn new(name: &'static str, tracks_bytes: bool, cache: Arc<Mutex<LruCache<V>>>) -> Self {
+        Self {
+            name,
+            tracks_bytes,
+            cache,
+        }
+    }
+}
+
+impl<V: Send> ManagedCache for MemoryCacheAdapter<V> {
+    fn name(&self) -> &'static str {
+        self.name
+    }
+
+    fn kind(&self) -> CacheKind {
+        CacheKind::Memory
+    }
+
+    fn stats(&self) -> CacheSectionStats {
+        // A poisoned lock degrades to an empty section rather than failing
+        // the whole stats call — stats are informational.
+        let (entry_count, bytes) = match self.cache.lock() {
+            Ok(c) => (c.len(), c.total_bytes() as u64),
+            Err(_) => (0, 0),
+        };
+        CacheSectionStats {
+            name: self.name.to_string(),
+            kind: CacheKind::Memory,
+            entry_count,
+            total_bytes: self.tracks_bytes.then_some(bytes),
+        }
+    }
+
+    fn clear(&self) -> FolioResult<()> {
+        let mut c = self.cache.lock()?;
+        c.clear();
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Arc, Mutex};
 
     // #52: PDF cache memory limits (moved from src-tauri commands.rs)
     #[test]
@@ -182,5 +285,57 @@ mod tests {
         // Still usable after clear
         cache.insert("again".to_string(), "v".to_string());
         assert_eq!(cache.len(), 1);
+    }
+
+    #[test]
+    fn memory_adapter_stats_tracked_bytes() {
+        let cache = Arc::new(Mutex::new(LruCache::<String>::new(10)));
+        cache
+            .lock()
+            .unwrap()
+            .insert_with_size("k".to_string(), "v".to_string(), 42);
+
+        let adapter = MemoryCacheAdapter::new("mobi", true, cache);
+        let stats = adapter.stats();
+        assert_eq!(stats.name, "mobi");
+        assert!(matches!(stats.kind, CacheKind::Memory));
+        assert_eq!(stats.entry_count, 1);
+        assert_eq!(stats.total_bytes, Some(42));
+    }
+
+    #[test]
+    fn memory_adapter_stats_untracked_bytes_is_none() {
+        let cache = Arc::new(Mutex::new(LruCache::<String>::new(10)));
+        cache
+            .lock()
+            .unwrap()
+            .insert("k".to_string(), "v".to_string());
+
+        let adapter = MemoryCacheAdapter::new("epub", false, cache);
+        let stats = adapter.stats();
+        assert_eq!(stats.entry_count, 1);
+        assert_eq!(stats.total_bytes, None);
+    }
+
+    #[test]
+    fn memory_adapter_tracked_but_empty_reports_some_zero() {
+        let cache = Arc::new(Mutex::new(LruCache::<String>::new(10)));
+        let adapter = MemoryCacheAdapter::new("mobi", true, cache);
+        assert_eq!(adapter.stats().total_bytes, Some(0));
+    }
+
+    #[test]
+    fn memory_adapter_clear_empties_underlying_cache() {
+        let cache = Arc::new(Mutex::new(LruCache::<String>::new(10)));
+        cache
+            .lock()
+            .unwrap()
+            .insert_with_size("k".to_string(), "v".to_string(), 42);
+
+        let adapter = MemoryCacheAdapter::new("mobi", true, Arc::clone(&cache));
+        adapter.clear().unwrap();
+
+        assert!(cache.lock().unwrap().is_empty());
+        assert_eq!(cache.lock().unwrap().total_bytes(), 0);
     }
 }
