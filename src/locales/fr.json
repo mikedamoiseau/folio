@@ -682,6 +682,7 @@
     "corrupt": "Ce fichier semble endommag\u00e9 et ne peut pas \u00eatre ouvert.",
     "timeout": "La requ\u00eate a expir\u00e9. Le serveur est peut-\u00eatre lent ou inaccessible.",
     "networkError": "Impossible de se connecter au serveur. V\u00e9rifiez votre connexion internet.",
+    "rateLimited": "Le service de m\u00e9tadonn\u00e9es limite les requ\u00eates. R\u00e9essayez dans quelques minutes.",
     "urlBlocked": "Cette URL a \u00e9t\u00e9 bloqu\u00e9e pour des raisons de s\u00e9curit\u00e9.",
     "tooLarge": "Le fichier ou la r\u00e9ponse est trop volumineuse.",
     "notZip": "Ce fichier n\u2019est pas une archive ZIP/CBZ valide. Il s\u2019agit peut-\u00eatre d\u2019un fichier RAR avec une extension .cbz \u2014 essayez de le renommer en .cbr.",
