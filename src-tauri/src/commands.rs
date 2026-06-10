@@ -650,6 +650,39 @@ pub struct OpdsImportResult {
     pub newly_imported: bool,
 }
 
+/// Detects the macOS smbfs lookup bug: files whose path contains non-ASCII
+/// characters on an SMB share (mounted under `/Volumes/`) are listed by
+/// directory enumeration but fail `stat()`/`open()` with `NotFound`. The
+/// file is intact on the server, and no userland API can open it (POSIX
+/// `open`, `openat` with raw readdir bytes, and Cocoa `FileHandle` all
+/// fail), so the only fixes are server-side. Returns a user-facing
+/// workaround hint when the failure pattern matches.
+fn smb_unicode_hint(path: &str, kind: std::io::ErrorKind) -> Option<String> {
+    if kind == std::io::ErrorKind::NotFound && path.starts_with("/Volumes/") && !path.is_ascii() {
+        Some(
+            "This looks like a macOS SMB bug: files with accented names on network \
+             shares can be listed but not opened. The file is intact on the server. \
+             Workarounds: rename it on the NAS (e.g. via its web file manager), copy \
+             it over SSH (scp/rsync), or mount the share via NFS — see Troubleshooting \
+             in the User Guide."
+                .to_string(),
+        )
+    } else {
+        None
+    }
+}
+
+/// Appends the [`smb_unicode_hint`] workaround text to an import error
+/// message when running on macOS and the failure pattern matches.
+fn with_smb_hint(base: String, path: &str, err: &std::io::Error) -> String {
+    if cfg!(target_os = "macos") {
+        if let Some(hint) = smb_unicode_hint(path, err.kind()) {
+            return format!("{base} {hint}");
+        }
+    }
+    base
+}
+
 /// Body of [`import_book`], extracted so background tasks can call it without
 /// going through Tauri's `State`/`invoke` machinery. All resources that the
 /// importer touches are passed in explicitly so the same code runs from the
@@ -665,8 +698,8 @@ pub(crate) fn import_book_inner(
     // Step 1: single stat — used for size guard, mode-dependent dedup, and to
     // avoid extra round trips on slow filesystems (network shares).
     const MAX_IMPORT_SIZE_BYTES: u64 = 500 * 1024 * 1024;
-    let source_metadata =
-        std::fs::metadata(&file_path).map_err(|e| format!("Cannot stat file: {e}"))?;
+    let source_metadata = std::fs::metadata(&file_path)
+        .map_err(|e| with_smb_hint(format!("Cannot stat file: {e}"), &file_path, &e))?;
     if source_metadata.len() > MAX_IMPORT_SIZE_BYTES {
         let size_mb = source_metadata.len() / (1024 * 1024);
         return Err(FolioError::invalid(format!(
@@ -721,8 +754,8 @@ pub(crate) fn import_book_inner(
         use sha2::{Digest, Sha256};
         use std::io::Read;
         let mut hasher = Sha256::new();
-        let mut file =
-            std::fs::File::open(&file_path).map_err(|e| format!("Cannot open file: {e}"))?;
+        let mut file = std::fs::File::open(&file_path)
+            .map_err(|e| with_smb_hint(format!("Cannot open file: {e}"), &file_path, &e))?;
         let mut buf = [0u8; 65536];
         loop {
             let n = file.read(&mut buf)?;
@@ -1960,9 +1993,13 @@ pub async fn get_all_reading_progress(
 fn validate_file_exists(file_path: &str) -> FolioResult<()> {
     let path = std::path::Path::new(file_path);
     if !path.exists() {
-        return Err(FolioError::not_found(format!(
+        let base = format!(
             "Book file not found at '{}'. It may have been moved or deleted.",
             file_path
+        );
+        let not_found = std::io::Error::from(std::io::ErrorKind::NotFound);
+        return Err(FolioError::not_found(with_smb_hint(
+            base, file_path, &not_found,
         )));
     }
     // Reject symlinks to prevent traversal attacks
@@ -7191,6 +7228,68 @@ mod tests {
             Some(1),
             "stale sentinel mtime must be overwritten"
         );
+    }
+
+    #[test]
+    fn smb_unicode_hint_fires_for_accented_name_on_volumes() {
+        let hint = smb_unicode_hint(
+            "/Volumes/home/BOOKS/04 - Quitte ou double à Quito.pdf",
+            std::io::ErrorKind::NotFound,
+        );
+        let msg = hint.expect("accented name on /Volumes/ with ENOENT must produce a hint");
+        assert!(msg.contains("SMB"), "hint must name the SMB bug: {msg}");
+        assert!(msg.contains("User Guide"), "hint must point at docs: {msg}");
+    }
+
+    #[test]
+    fn smb_unicode_hint_fires_for_accented_directory_component() {
+        // The lookup bug hits accented *path components* too, not just the
+        // file name itself.
+        assert!(smb_unicode_hint(
+            "/Volumes/nas/Intégrales/Tome 4.cbz",
+            std::io::ErrorKind::NotFound,
+        )
+        .is_some());
+    }
+
+    #[test]
+    fn smb_unicode_hint_silent_for_ascii_path() {
+        assert!(smb_unicode_hint(
+            "/Volumes/home/BOOKS/The Spider King.cbr",
+            std::io::ErrorKind::NotFound,
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn smb_unicode_hint_silent_outside_volumes() {
+        assert!(smb_unicode_hint(
+            "/Users/mike/Books/Quitte ou double à Quito.pdf",
+            std::io::ErrorKind::NotFound,
+        )
+        .is_none());
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")] // hint is appended only on macOS (with_smb_hint cfg gate)
+    fn validate_file_exists_appends_smb_hint_for_accented_volumes_path() {
+        // Linked books keep their share path; a reader command on a file hit
+        // by the smbfs bug must explain it rather than claim the file moved.
+        let err = validate_file_exists("/Volumes/nas/Intégrales/Tome 4.cbz").unwrap_err();
+        let msg = format!("{err:?}");
+        assert!(
+            msg.contains("SMB"),
+            "reader error must carry the hint: {msg}"
+        );
+    }
+
+    #[test]
+    fn smb_unicode_hint_silent_for_other_error_kinds() {
+        assert!(smb_unicode_hint(
+            "/Volumes/home/BOOKS/Quitte ou double à Quito.pdf",
+            std::io::ErrorKind::PermissionDenied,
+        )
+        .is_none());
     }
 }
 
