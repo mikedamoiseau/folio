@@ -9,6 +9,7 @@
 
 pub mod activity;
 pub mod backup;
+pub mod cache;
 pub mod cbr;
 pub mod cbz;
 pub mod db;
