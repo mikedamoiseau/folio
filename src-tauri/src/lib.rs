@@ -20,7 +20,7 @@ pub use folio_core::{
 };
 
 use commands::{AppState, LruCache, ProfileState};
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -86,6 +86,16 @@ pub fn run() {
             });
 
             pdf::set_pdfium_library_path(pdfium_path);
+
+            // F-2-7: surface provider retry/backoff in the UI. The observer
+            // is process-wide and write-once; registered here so every
+            // enrichment call site reports without plumbing.
+            {
+                let handle = app.handle().clone();
+                folio_core::http_retry::set_retry_observer(Box::new(move |ev| {
+                    let _ = handle.emit("enrichment-retry", ev);
+                }));
+            }
 
             // Load existing profile databases
             let data_dir = app.path().app_data_dir()?;
