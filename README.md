@@ -151,6 +151,10 @@ xattr -cr /Applications/Folio.app
 
 Then launch the app normally.
 
+#### macOS SMB shares: import fails for accented filenames
+
+Importing from an SMB network share (NAS) can fail with `No such file or directory (os error 2)` for files whose names contain accented characters (`é`, `à`, …). This is a macOS SMB-client bug, not a Folio one — the file is intact on the server but macOS cannot open it by name, in any application. Workarounds (rename on the server, copy via SSH, or mount over NFS) are described in the [User Guide](docs/USER_GUIDE.md#macos--import-from-a-network-share-fails-with-no-such-file-or-directory-os-error-2).
+
 ### Windows
 
 Run the `.msi` installer and follow the prompts. MOBI support is statically linked into `folio.exe` — no separate libmobi install is needed.

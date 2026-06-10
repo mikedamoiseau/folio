@@ -841,6 +841,16 @@ Press `?` at any time to see the shortcut reference.
 
 The file is probably corrupted or uses a format variant the parser can't handle. Try re-downloading the file, or open it in another reader to check if the file itself is the problem.
 
+### macOS — import from a network share fails with "No such file or directory (os error 2)"
+
+If importing from an SMB network share (a NAS mounted under `/Volumes/...`) fails with `Cannot stat file: No such file or directory (os error 2)` — typically for files with accented characters in their names (`é`, `à`, `è`, …) — the file itself is fine. This is a bug in macOS's SMB client: the file shows up when listing the folder, but macOS fails to open it by name. It affects every application on the Mac, not just Folio — even `cat` in Terminal fails on the same file.
+
+Workarounds, in order of convenience:
+
+- **Rename the file on the server** (e.g. via your NAS's web file manager) to remove the accented characters, then import normally.
+- **Copy the file to your Mac without going through the SMB mount**, e.g. with `scp` or `rsync` over SSH, and import the local copy.
+- **Mount the share over NFS instead of SMB** if your NAS supports it — the NFS client does not have this bug.
+
 ### Supported formats
 
 Folio supports **EPUB** (versions 2 and 3), **PDF**, **CBZ**, and **CBR** on every platform. **MOBI**, **AZW**, and **AZW3** are supported on arm64 macOS, Linux, and Windows release builds; the Intel (x86_64) macOS build is the only release that ships without MOBI support. DjVu is not supported.
