@@ -323,6 +323,14 @@ interface SyncManifest {
   deviceId: string;
 }
 
+type CacheSection = {
+  name: string;
+  kind: "memory" | "disk";
+  entry_count: number;
+  total_bytes: number | null;
+};
+type UnifiedCacheStats = { sections: CacheSection[]; total_bytes: number };
+
 interface MigrationDialogState {
   currentFolder: string;
   newFolder: string;
@@ -439,7 +447,7 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
 
   // Page cache settings
   const [pageCacheLimit, setPageCacheLimit] = useState("500");
-  const [cacheStats, setCacheStats] = useState<{ total_size_bytes: number; book_count: number } | null>(null);
+  const [cacheStats, setCacheStats] = useState<UnifiedCacheStats | null>(null);
 
   // Metadata scan settings
   const [autoScanImport, setAutoScanImport] = useState(true);
@@ -572,7 +580,7 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
     try {
       const limit = await invoke<string | null>("get_setting_value", { key: "page_cache_max_size_mb" });
       if (limit) setPageCacheLimit(limit);
-      const stats = await invoke<{ total_size_bytes: number; book_count: number }>("get_cache_stats");
+      const stats = await invoke<UnifiedCacheStats>("get_unified_cache_stats");
       setCacheStats(stats);
     } catch {
       // Cache stats unavailable
@@ -722,11 +730,20 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
   const handleClearCache = useCallback(async () => {
     try {
       await invoke("clear_page_cache");
-      setCacheStats({ total_size_bytes: 0, book_count: 0 });
+      await loadCacheInfo();
     } catch {
       // Clear failed
     }
-  }, []);
+  }, [loadCacheInfo]);
+
+  const handleClearAllCaches = useCallback(async () => {
+    try {
+      await invoke("clear_all_caches");
+      await loadCacheInfo();
+    } catch {
+      // Clear failed
+    }
+  }, [loadCacheInfo]);
 
   const handleSetModes = useCallback(
     async (next: { webUi?: boolean; opds?: boolean; port?: number }) => {
@@ -1036,6 +1053,20 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
   };
 
   if (!open) return null;
+
+  const diskCacheSection = cacheStats?.sections.find((s) => s.name === "pages") ?? null;
+  const cacheSectionLabel = (name: string) => {
+    switch (name) {
+      case "epub":
+        return t("settings.cacheSectionEpub");
+      case "mobi":
+        return t("settings.cacheSectionMobi");
+      case "pages":
+        return t("settings.cacheSectionPages");
+      default:
+        return name;
+    }
+  };
 
   return (
     <>
@@ -1672,21 +1703,51 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                 <p className="mt-1 text-xs text-ink-muted">{t("settings.pageCacheLimitHelp")}</p>
 
                 <div className="mt-2 text-sm text-ink-muted">
-                  {cacheStats && cacheStats.book_count > 0
+                  {diskCacheSection && diskCacheSection.entry_count > 0
                     ? t("settings.pageCacheUsage", {
-                        size: formatBytes(cacheStats.total_size_bytes),
-                        count: cacheStats.book_count,
+                        size: formatBytes(diskCacheSection.total_bytes ?? 0),
+                        count: diskCacheSection.entry_count,
                       })
                     : t("settings.pageCacheUsageEmpty")}
                 </div>
 
-                {cacheStats && cacheStats.book_count > 0 && (
+                {diskCacheSection && diskCacheSection.entry_count > 0 && (
                   <button
                     onClick={handleClearCache}
                     className="w-full mt-2 px-3 py-2 text-sm text-ink-muted hover:text-ink bg-warm-subtle hover:bg-warm-border rounded-xl transition-colors text-left"
                   >
                     {t("settings.clearPageCache")}
                   </button>
+                )}
+
+                {cacheStats && (
+                  <div className="mt-3 pt-3 border-t border-warm-border/50">
+                    <ul className="space-y-1">
+                      {cacheStats.sections.map((s) => (
+                        <li key={s.name} className="flex items-center justify-between text-xs text-ink-muted">
+                          <span>
+                            {cacheSectionLabel(s.name)}
+                            <span className="ml-1.5 rounded bg-warm-subtle px-1.5 py-0.5">
+                              {s.kind === "memory" ? t("settings.cacheKindMemory") : t("settings.cacheKindDisk")}
+                            </span>
+                          </span>
+                          <span>
+                            {t("settings.cacheEntries", { count: s.entry_count })}
+                            {s.total_bytes !== null ? ` · ${formatBytes(s.total_bytes)}` : " · —"}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                    <div className="mt-2 text-xs text-ink-muted">
+                      {t("settings.cacheTotal", { size: formatBytes(cacheStats.total_bytes) })}
+                    </div>
+                    <button
+                      onClick={handleClearAllCaches}
+                      className="w-full mt-2 px-3 py-2 text-sm text-ink-muted hover:text-ink bg-warm-subtle hover:bg-warm-border rounded-xl transition-colors text-left"
+                    >
+                      {t("settings.clearAllCaches")}
+                    </button>
+                  </div>
                 )}
               </div>
             </div>
