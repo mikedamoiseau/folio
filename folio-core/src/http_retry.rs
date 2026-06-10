@@ -8,6 +8,8 @@
 //! keeps working. An optional process-wide observer receives a
 //! [`RetryEvent`] before each retry so the UI layer can surface feedback.
 
+use crate::error::{FolioError, FolioResult};
+use std::sync::OnceLock;
 use std::time::Duration;
 
 /// Retry behavior knobs. One default policy is shared by all call sites.
@@ -64,11 +66,205 @@ pub fn retry_delay(attempt: u32, retry_after: Option<Duration>, policy: &RetryPo
         .min(policy.max_delay)
 }
 
+/// Emitted to the registered observer immediately before each retry sleep.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RetryEvent {
+    /// Provider tag passed to [`send_with_retry`] (e.g. `"openlibrary"`).
+    pub provider: String,
+    /// The attempt about to be made (2..=max_attempts).
+    pub attempt: u32,
+    pub max_attempts: u32,
+    pub delay_ms: u64,
+}
+
+type ObserverFn = Box<dyn Fn(&RetryEvent) + Send + Sync>;
+
+static OBSERVER: OnceLock<ObserverFn> = OnceLock::new();
+
+/// Register a process-wide retry observer. Write-once: later calls are
+/// silently ignored. When unset (tests, headless), retries are log-only.
+pub fn set_retry_observer(f: Box<dyn Fn(&RetryEvent) + Send + Sync>) {
+    let _ = OBSERVER.set(f);
+}
+
+fn notify_observer(ev: &RetryEvent) {
+    if let Some(f) = OBSERVER.get() {
+        f(ev);
+    }
+}
+
+/// Send `req`, retrying transport errors, 429, and 5xx per `policy`.
+/// Non-retryable statuses are returned as `Ok(resp)` untouched. After
+/// exhausting attempts: [`FolioError::RateLimited`] if the last failure was
+/// a 429, [`FolioError::Network`] otherwise.
+pub fn send_with_retry(
+    req: reqwest::blocking::RequestBuilder,
+    provider: &str,
+    policy: &RetryPolicy,
+) -> FolioResult<reqwest::blocking::Response> {
+    let mut last_was_rate_limit = false;
+    let mut last_reason = String::new();
+
+    for attempt in 1..=policy.max_attempts {
+        let cloned = req
+            .try_clone()
+            .ok_or_else(|| FolioError::network(format!("{provider}: request cannot be retried")))?;
+
+        let retry_after = match cloned.send() {
+            Ok(resp) if !is_retryable(resp.status()) => return Ok(resp),
+            Ok(resp) => {
+                last_was_rate_limit = resp.status() == reqwest::StatusCode::TOO_MANY_REQUESTS;
+                last_reason = format!("HTTP {}", resp.status());
+                parse_retry_after(resp.headers())
+            }
+            Err(e) => {
+                last_was_rate_limit = false;
+                last_reason = e.to_string();
+                None
+            }
+        };
+
+        if attempt == policy.max_attempts {
+            break;
+        }
+
+        let delay = retry_delay(attempt, retry_after, policy);
+        tracing::warn!(
+            provider,
+            attempt,
+            max_attempts = policy.max_attempts,
+            delay_ms = delay.as_millis() as u64,
+            reason = %last_reason,
+            "retrying provider request"
+        );
+        notify_observer(&RetryEvent {
+            provider: provider.to_string(),
+            attempt: attempt + 1,
+            max_attempts: policy.max_attempts,
+            delay_ms: delay.as_millis() as u64,
+        });
+        std::thread::sleep(delay);
+    }
+
+    if last_was_rate_limit {
+        Err(FolioError::RateLimited(format!(
+            "{provider}: rate limited after {} attempts",
+            policy.max_attempts
+        )))
+    } else {
+        Err(FolioError::network(format!(
+            "{provider}: request failed after {} attempts: {last_reason}",
+            policy.max_attempts
+        )))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use reqwest::header::{HeaderMap, HeaderValue, RETRY_AFTER};
     use reqwest::StatusCode;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+
+    /// Minimal scripted HTTP server: serves each response string to one
+    /// connection, in order, then exits. `Connection: close` in the
+    /// responses forces reqwest to reconnect per attempt.
+    fn spawn_stub(responses: Vec<&'static str>) -> (String, std::thread::JoinHandle<usize>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let handle = std::thread::spawn(move || {
+            let mut served = 0;
+            for resp in responses {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut buf = [0u8; 1024];
+                let _ = stream.read(&mut buf);
+                stream.write_all(resp.as_bytes()).unwrap();
+                served += 1;
+            }
+            served
+        });
+        (format!("http://{}", addr), handle)
+    }
+
+    /// Fast policy so retry tests don't sleep for real.
+    fn fast_policy() -> RetryPolicy {
+        RetryPolicy {
+            max_attempts: 3,
+            base_delay: Duration::from_millis(1),
+            max_delay: Duration::from_millis(5),
+        }
+    }
+
+    const OK: &str = "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok";
+    const TOO_MANY: &str =
+        "HTTP/1.1 429 Too Many Requests\r\nRetry-After: 0\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+    const NOT_FOUND_RESP: &str =
+        "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+
+    #[test]
+    fn succeeds_after_429_then_200() {
+        let (url, server) = spawn_stub(vec![TOO_MANY, OK]);
+        let client = reqwest::blocking::Client::new();
+        let resp = send_with_retry(client.get(&url), "test", &fast_policy()).unwrap();
+        assert_eq!(resp.status(), reqwest::StatusCode::OK);
+        assert_eq!(server.join().unwrap(), 2);
+    }
+
+    #[test]
+    fn persistent_429_yields_rate_limited_after_max_attempts() {
+        let (url, server) = spawn_stub(vec![TOO_MANY, TOO_MANY, TOO_MANY]);
+        let client = reqwest::blocking::Client::new();
+        let err = send_with_retry(client.get(&url), "test", &fast_policy()).unwrap_err();
+        assert_eq!(err.kind(), "RateLimited");
+        assert_eq!(server.join().unwrap(), 3);
+    }
+
+    #[test]
+    fn non_retryable_status_returns_immediately() {
+        let (url, server) = spawn_stub(vec![NOT_FOUND_RESP]);
+        let client = reqwest::blocking::Client::new();
+        let resp = send_with_retry(client.get(&url), "test", &fast_policy()).unwrap();
+        assert_eq!(resp.status(), reqwest::StatusCode::NOT_FOUND);
+        assert_eq!(server.join().unwrap(), 1);
+    }
+
+    #[test]
+    fn transport_error_retried_then_network_error() {
+        // Bind then immediately drop the listener: connection refused.
+        let port = {
+            let l = TcpListener::bind("127.0.0.1:0").unwrap();
+            l.local_addr().unwrap().port()
+        };
+        let url = format!("http://127.0.0.1:{}", port);
+        let client = reqwest::blocking::Client::new();
+        let err = send_with_retry(client.get(&url), "test", &fast_policy()).unwrap_err();
+        assert_eq!(err.kind(), "Network");
+    }
+
+    #[test]
+    fn observer_receives_retry_events() {
+        // Sole owner of the process-wide observer — no other test may set it.
+        // Filter to the "openlibrary" provider so parallel tests using
+        // provider "test" don't pollute the event list.
+        static EVENTS: std::sync::Mutex<Vec<RetryEvent>> = std::sync::Mutex::new(Vec::new());
+        set_retry_observer(Box::new(|ev| {
+            if ev.provider == "openlibrary" {
+                EVENTS.lock().unwrap().push(ev.clone());
+            }
+        }));
+
+        let (url, _server) = spawn_stub(vec![TOO_MANY, OK]);
+        let client = reqwest::blocking::Client::new();
+        send_with_retry(client.get(&url), "openlibrary", &fast_policy()).unwrap();
+
+        let events = EVENTS.lock().unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].provider, "openlibrary");
+        assert_eq!(events[0].attempt, 2);
+        assert_eq!(events[0].max_attempts, 3);
+    }
 
     fn policy() -> RetryPolicy {
         RetryPolicy::default()
