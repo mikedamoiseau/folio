@@ -75,6 +75,7 @@
     "enrichingProgress": "Enriching {{current}}/{{total}}: {{bookTitle}}",
     "cancelScan": "Cancel scan",
     "scanCancelled": "Scan cancelled. {{count}} books processed.",
+    "retryingProvider": "Retrying {{provider}} ({{attempt}}/{{max}})…",
     "metadataUpdated": "Metadata updated",
     "noMetadataFound": "No metadata found",
     "scanFailed": "Scan failed",

@@ -75,6 +75,7 @@
     "enrichingProgress": "Enrichissement {{current}}/{{total}}\u00a0: {{bookTitle}}",
     "cancelScan": "Annuler le scan",
     "scanCancelled": "Scan annul\u00e9. {{count}} livres trait\u00e9s.",
+    "retryingProvider": "Nouvelle tentative {{provider}} ({{attempt}}/{{max}})\u2026",
     "metadataUpdated": "M\u00e9tadonn\u00e9es mises \u00e0 jour",
     "noMetadataFound": "Aucune m\u00e9tadonn\u00e9e trouv\u00e9e",
     "scanFailed": "\u00c9chec du scan",
