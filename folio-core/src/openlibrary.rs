@@ -30,8 +30,11 @@ pub fn search(title: &str, author: Option<&str>) -> FolioResult<Vec<OpenLibraryR
         query
     );
 
-    let resp = reqwest::blocking::get(&url)
-        .map_err(|e| FolioError::network(format!("OpenLibrary search failed: {e}")))?;
+    let resp = crate::http_retry::send_with_retry(
+        reqwest::blocking::Client::new().get(&url),
+        "openlibrary",
+        &crate::http_retry::RetryPolicy::default(),
+    )?;
     if !resp.status().is_success() {
         return Err(FolioError::network(format!(
             "OpenLibrary HTTP {}",
@@ -101,8 +104,11 @@ pub fn search(title: &str, author: Option<&str>) -> FolioResult<Vec<OpenLibraryR
 /// Fetch detailed metadata for a specific OpenLibrary work.
 pub fn get_work(key: &str) -> FolioResult<OpenLibraryResult> {
     let url = format!("https://openlibrary.org{}.json", key);
-    let resp = reqwest::blocking::get(&url)
-        .map_err(|e| FolioError::network(format!("OpenLibrary fetch failed: {e}")))?;
+    let resp = crate::http_retry::send_with_retry(
+        reqwest::blocking::Client::new().get(&url),
+        "openlibrary",
+        &crate::http_retry::RetryPolicy::default(),
+    )?;
     if !resp.status().is_success() {
         return Err(FolioError::network(format!(
             "OpenLibrary HTTP {}",
@@ -154,8 +160,11 @@ pub fn get_work(key: &str) -> FolioResult<OpenLibraryResult> {
 /// Look up a book by ISBN. Returns the work data if found.
 pub fn lookup_isbn(isbn: &str) -> FolioResult<OpenLibraryResult> {
     let url = format!("https://openlibrary.org/isbn/{}.json", isbn);
-    let resp = reqwest::blocking::get(&url)
-        .map_err(|e| FolioError::network(format!("ISBN lookup failed: {e}")))?;
+    let resp = crate::http_retry::send_with_retry(
+        reqwest::blocking::Client::new().get(&url),
+        "openlibrary",
+        &crate::http_retry::RetryPolicy::default(),
+    )?;
     if !resp.status().is_success() {
         return Err(FolioError::not_found(format!(
             "ISBN not found: HTTP {}",

@@ -93,11 +93,11 @@ fn fetch_and_parse(
     parser: fn(&serde_json::Value) -> Option<EnrichmentData>,
 ) -> FolioResult<Vec<EnrichmentData>> {
     let client = reqwest::blocking::Client::new();
-    let resp = client
-        .get(url)
-        .header("User-Agent", USER_AGENT)
-        .send()
-        .map_err(|e| FolioError::network(format!("Comic Vine request failed: {e}")))?;
+    let resp = crate::http_retry::send_with_retry(
+        client.get(url).header("User-Agent", USER_AGENT),
+        "comic_vine",
+        &crate::http_retry::RetryPolicy::default(),
+    )?;
 
     if !resp.status().is_success() {
         return Err(FolioError::network(format!(
