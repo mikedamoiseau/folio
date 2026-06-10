@@ -21,6 +21,9 @@ use crate::page_cache;
 use crate::pdf;
 
 pub use folio_core::cache::LruCache;
+use folio_core::cache::{
+    DiskPageCacheAdapter, ManagedCache, MemoryCacheAdapter, UnifiedCacheStats,
+};
 
 /// Profile state: active profile name + pool map in a single Mutex.
 /// This prevents the race condition where the active profile changes between
@@ -48,14 +51,16 @@ pub struct AppState {
     pub profile_state: std::sync::Mutex<ProfileState>,
     pub data_dir: std::path::PathBuf,
     /// EPUB archive LRU cache (lock #2). Single Mutex replaces the former
-    /// dual-Mutex (epub_cache + epub_cache_order).
-    pub epub_cache: std::sync::Mutex<LruCache<epub::CachedEpubArchive>>,
+    /// dual-Mutex (epub_cache + epub_cache_order). Arc so the unified cache
+    /// registry (get_unified_cache_stats / clear_all_caches) can hold the
+    /// same handle.
+    pub epub_cache: std::sync::Arc<std::sync::Mutex<LruCache<epub::CachedEpubArchive>>>,
     /// MOBI parsed-book LRU cache (lock #3). Holds the post-parse view
     /// (HTML parts + image resources) so chapter reads, full-book loads,
     /// and search don't reopen and reparse the file via libmobi on every
     /// request. Mirrors the EPUB cache's role for the MOBI hot paths.
     #[cfg(feature = "mobi")]
-    pub mobi_cache: std::sync::Mutex<LruCache<folio_core::mobi::CachedMobiBook>>,
+    pub mobi_cache: std::sync::Arc<std::sync::Mutex<LruCache<folio_core::mobi::CachedMobiBook>>>,
     /// Metadata provider registry (lock #4).
     pub enrichment_registry: std::sync::Mutex<crate::providers::ProviderRegistry>,
     /// DB pool shared with the web server, swapped on profile switch.
@@ -2259,10 +2264,45 @@ pub async fn prepare_pdf(
     Ok(manifest)
 }
 
+/// Build the lifecycle registry over every cache. Constructed per call:
+/// cheap (three Arc clones), and the disk storage handle comes from
+/// `page_cache_storage` exactly like the existing page-cache commands.
+fn cache_registry(
+    state: &AppState,
+    storage: std::sync::Arc<dyn folio_core::storage::Storage>,
+) -> Vec<Box<dyn ManagedCache>> {
+    let mut registry: Vec<Box<dyn ManagedCache>> = vec![Box::new(MemoryCacheAdapter::new(
+        "epub",
+        false,
+        state.epub_cache.clone(),
+    ))];
+    #[cfg(feature = "mobi")]
+    registry.push(Box::new(MemoryCacheAdapter::new(
+        "mobi",
+        true,
+        state.mobi_cache.clone(),
+    )));
+    registry.push(Box::new(DiskPageCacheAdapter::new(storage)));
+    registry
+}
+
 #[tauri::command]
-pub async fn get_cache_stats(app: AppHandle) -> FolioResult<page_cache::CacheStats> {
-    let storage = page_cache_storage(&app)?;
-    Ok(page_cache::get_cache_stats(&storage))
+pub async fn get_unified_cache_stats(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> FolioResult<UnifiedCacheStats> {
+    let storage: std::sync::Arc<dyn folio_core::storage::Storage> =
+        std::sync::Arc::new(page_cache_storage(&app)?);
+    Ok(folio_core::cache::unified_stats(&cache_registry(
+        &state, storage,
+    )))
+}
+
+#[tauri::command]
+pub async fn clear_all_caches(app: AppHandle, state: State<'_, AppState>) -> FolioResult<()> {
+    let storage: std::sync::Arc<dyn folio_core::storage::Storage> =
+        std::sync::Arc::new(page_cache_storage(&app)?);
+    folio_core::cache::clear_all(&cache_registry(&state, storage))
 }
 
 #[tauri::command]
