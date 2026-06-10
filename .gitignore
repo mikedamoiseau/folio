@@ -63,3 +63,12 @@ tests/e2e/package-lock.json
 
 # PR review artifacts (~/bin/pr-review.sh outputs)
 .pr-reviews/
+
+# TypeScript incremental build cache
+*.tsbuildinfo
+
+# Vitest/Playwright output
+test-results/
+
+# Antigravity CLI session state
+.antigravitycli/
