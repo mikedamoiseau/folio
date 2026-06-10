@@ -20,132 +20,10 @@ use crate::openlibrary;
 use crate::page_cache;
 use crate::pdf;
 
-/// A simple LRU cache that bundles the data map and access order in a single
-/// structure, so only one Mutex is needed. This eliminates the risk of lock
-/// poisoning or inversion that arises from guarding the map and order with
-/// separate Mutexes.
-pub struct LruCache<V> {
-    entries: std::collections::HashMap<String, V>,
-    sizes: std::collections::HashMap<String, usize>,
-    order: Vec<String>,
-    capacity: usize,
-    max_bytes: usize,
-    current_bytes: usize,
-}
-
-impl<V> LruCache<V> {
-    pub fn new(capacity: usize) -> Self {
-        Self {
-            entries: std::collections::HashMap::new(),
-            sizes: std::collections::HashMap::new(),
-            order: Vec::new(),
-            capacity,
-            max_bytes: 0, // 0 = no memory limit
-            current_bytes: 0,
-        }
-    }
-
-    /// Set maximum total byte size for the cache (#52).
-    pub fn set_max_bytes(&mut self, bytes: usize) {
-        self.max_bytes = bytes;
-    }
-
-    /// Current total tracked byte size.
-    pub fn total_bytes(&self) -> usize {
-        self.current_bytes
-    }
-
-    /// Number of entries.
-    pub fn len(&self) -> usize {
-        self.entries.len()
-    }
-
-    /// Whether the cache is empty.
-    pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
-    }
-
-    /// Move an existing key to the most-recently-used position.
-    fn touch(&mut self, key: &str) {
-        if let Some(pos) = self.order.iter().position(|k| k == key) {
-            self.order.remove(pos);
-        }
-        self.order.push(key.to_string());
-    }
-
-    /// Evict least-recently-used entries until both count and memory limits are satisfied.
-    fn evict_if_needed(&mut self) {
-        while self.entries.len() >= self.capacity
-            || (self.max_bytes > 0 && self.current_bytes > self.max_bytes)
-        {
-            if let Some(oldest) = self.order.first().cloned() {
-                self.entries.remove(&oldest);
-                if let Some(size) = self.sizes.remove(&oldest) {
-                    self.current_bytes = self.current_bytes.saturating_sub(size);
-                }
-                self.order.remove(0);
-            } else {
-                self.entries.clear();
-                self.sizes.clear();
-                self.current_bytes = 0;
-                break;
-            }
-        }
-    }
-
-    /// Insert a key-value pair, evicting the least-recently-used entry when at capacity.
-    fn insert(&mut self, key: String, value: V) {
-        if self.entries.contains_key(&key) {
-            self.touch(&key);
-            self.entries.insert(key, value);
-            return;
-        }
-        self.evict_if_needed();
-        self.entries.insert(key.clone(), value);
-        self.order.push(key);
-    }
-
-    /// Insert with explicit byte size tracking (#52). Reachable in the
-    /// production lib only when the `mobi` feature is on (and from the
-    /// unit-test build via `#[cfg(test)]`); without `--all-targets`,
-    /// clippy on the default-feature lib build can't see those callers
-    /// and would flag this as dead.
-    #[cfg_attr(not(feature = "mobi"), allow(dead_code))]
-    fn insert_with_size(&mut self, key: String, value: V, size_bytes: usize) {
-        if self.entries.contains_key(&key) {
-            // Update size tracking for existing entry
-            if let Some(old_size) = self.sizes.get(&key) {
-                self.current_bytes = self.current_bytes.saturating_sub(*old_size);
-            }
-            self.touch(&key);
-            self.entries.insert(key.clone(), value);
-            self.sizes.insert(key, size_bytes);
-            self.current_bytes += size_bytes;
-            return;
-        }
-        self.current_bytes += size_bytes;
-        self.evict_if_needed();
-        self.entries.insert(key.clone(), value);
-        self.sizes.insert(key.clone(), size_bytes);
-        self.order.push(key);
-    }
-
-    fn get(&self, key: &str) -> Option<&V> {
-        self.entries.get(key)
-    }
-
-    fn get_mut(&mut self, key: &str) -> Option<&mut V> {
-        self.entries.get_mut(key)
-    }
-
-    fn remove(&mut self, key: &str) {
-        self.entries.remove(key);
-        if let Some(size) = self.sizes.remove(key) {
-            self.current_bytes = self.current_bytes.saturating_sub(size);
-        }
-        self.order.retain(|k| k != key);
-    }
-}
+pub use folio_core::cache::LruCache;
+use folio_core::cache::{
+    DiskPageCacheAdapter, ManagedCache, MemoryCacheAdapter, UnifiedCacheStats,
+};
 
 /// Profile state: active profile name + pool map in a single Mutex.
 /// This prevents the race condition where the active profile changes between
@@ -173,14 +51,16 @@ pub struct AppState {
     pub profile_state: std::sync::Mutex<ProfileState>,
     pub data_dir: std::path::PathBuf,
     /// EPUB archive LRU cache (lock #2). Single Mutex replaces the former
-    /// dual-Mutex (epub_cache + epub_cache_order).
-    pub epub_cache: std::sync::Mutex<LruCache<epub::CachedEpubArchive>>,
+    /// dual-Mutex (epub_cache + epub_cache_order). Arc so the unified cache
+    /// registry (get_unified_cache_stats / clear_all_caches) can hold the
+    /// same handle.
+    pub epub_cache: std::sync::Arc<std::sync::Mutex<LruCache<epub::CachedEpubArchive>>>,
     /// MOBI parsed-book LRU cache (lock #3). Holds the post-parse view
     /// (HTML parts + image resources) so chapter reads, full-book loads,
     /// and search don't reopen and reparse the file via libmobi on every
     /// request. Mirrors the EPUB cache's role for the MOBI hot paths.
     #[cfg(feature = "mobi")]
-    pub mobi_cache: std::sync::Mutex<LruCache<folio_core::mobi::CachedMobiBook>>,
+    pub mobi_cache: std::sync::Arc<std::sync::Mutex<LruCache<folio_core::mobi::CachedMobiBook>>>,
     /// Metadata provider registry (lock #4).
     pub enrichment_registry: std::sync::Mutex<crate::providers::ProviderRegistry>,
     /// DB pool shared with the web server, swapped on profile switch.
@@ -2384,10 +2264,45 @@ pub async fn prepare_pdf(
     Ok(manifest)
 }
 
+/// Build the lifecycle registry over every cache. Constructed per call:
+/// cheap (three Arc clones), and the disk storage handle comes from
+/// `page_cache_storage` exactly like the existing page-cache commands.
+fn cache_registry(
+    state: &AppState,
+    storage: std::sync::Arc<dyn folio_core::storage::Storage>,
+) -> Vec<Box<dyn ManagedCache>> {
+    let mut registry: Vec<Box<dyn ManagedCache>> = vec![Box::new(MemoryCacheAdapter::new(
+        "epub",
+        false,
+        state.epub_cache.clone(),
+    ))];
+    #[cfg(feature = "mobi")]
+    registry.push(Box::new(MemoryCacheAdapter::new(
+        "mobi",
+        true,
+        state.mobi_cache.clone(),
+    )));
+    registry.push(Box::new(DiskPageCacheAdapter::new(storage)));
+    registry
+}
+
 #[tauri::command]
-pub async fn get_cache_stats(app: AppHandle) -> FolioResult<page_cache::CacheStats> {
-    let storage = page_cache_storage(&app)?;
-    Ok(page_cache::get_cache_stats(&storage))
+pub async fn get_unified_cache_stats(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> FolioResult<UnifiedCacheStats> {
+    let storage: std::sync::Arc<dyn folio_core::storage::Storage> =
+        std::sync::Arc::new(page_cache_storage(&app)?);
+    Ok(folio_core::cache::unified_stats(&cache_registry(
+        &state, storage,
+    )))
+}
+
+#[tauri::command]
+pub async fn clear_all_caches(app: AppHandle, state: State<'_, AppState>) -> FolioResult<()> {
+    let storage: std::sync::Arc<dyn folio_core::storage::Storage> =
+        std::sync::Arc::new(page_cache_storage(&app)?);
+    folio_core::cache::clear_all(&cache_registry(&state, storage))
 }
 
 #[tauri::command]
@@ -6278,34 +6193,6 @@ mod tests {
         assert_eq!(derive_font_name("My Font.otf"), "My Font");
         assert_eq!(derive_font_name("Roboto-BoldItalic.ttf"), "Roboto");
         assert_eq!(derive_font_name("SimpleFont.ttf"), "SimpleFont");
-    }
-
-    // #52: PDF cache memory limits
-    #[test]
-    fn test_lru_cache_memory_tracking() {
-        let mut cache = LruCache::<String>::new(100); // high count limit
-        cache.set_max_bytes(100); // but low memory limit
-
-        // Each entry is ~10 bytes
-        cache.insert_with_size("a".to_string(), "0123456789".to_string(), 10);
-        cache.insert_with_size("b".to_string(), "0123456789".to_string(), 10);
-        assert_eq!(cache.total_bytes(), 20);
-        assert_eq!(cache.len(), 2);
-    }
-
-    #[test]
-    fn test_lru_cache_memory_eviction() {
-        let mut cache = LruCache::<String>::new(100);
-        cache.set_max_bytes(25); // evict when over 25 bytes
-
-        cache.insert_with_size("a".to_string(), "0123456789".to_string(), 10);
-        cache.insert_with_size("b".to_string(), "0123456789".to_string(), 10);
-        cache.insert_with_size("c".to_string(), "0123456789".to_string(), 10);
-
-        // "a" should have been evicted to stay under 25 bytes
-        assert!(cache.get("a").is_none());
-        assert!(cache.get("b").is_some() || cache.get("c").is_some());
-        assert!(cache.total_bytes() <= 25);
     }
 
     // --- #64 M2: book storage key helpers ---

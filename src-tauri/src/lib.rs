@@ -142,9 +142,9 @@ pub fn run() {
                     pools: profiles,
                 }),
                 data_dir,
-                epub_cache: std::sync::Mutex::new(LruCache::new(5)),
+                epub_cache: std::sync::Arc::new(std::sync::Mutex::new(LruCache::new(5))),
                 #[cfg(feature = "mobi")]
-                mobi_cache: std::sync::Mutex::new({
+                mobi_cache: std::sync::Arc::new(std::sync::Mutex::new({
                     let mut c = LruCache::new(5);
                     // Cap by total bytes — owned MOBI bytes (chapter HTML +
                     // image resources) can run hundreds of MB on illustrated
@@ -152,7 +152,7 @@ pub fn run() {
                     // 200 MB matches the PDF cache budget below.
                     c.set_max_bytes(200 * 1024 * 1024);
                     c
-                }),
+                })),
                 enrichment_registry,
                 web_server_handle: std::sync::Mutex::new(None),
                 ipc_metrics: crate::ipc_metrics::IpcMetrics::new(500, 500.0),
@@ -384,7 +384,8 @@ pub fn run() {
             commands::cleanup_library,
             commands::list_auto_backups,
             commands::prepare_comic,
-            commands::get_cache_stats,
+            commands::get_unified_cache_stats,
+            commands::clear_all_caches,
             commands::clear_page_cache,
             commands::sync_pull_book,
             commands::sync_push_book,
