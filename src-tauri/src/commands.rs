@@ -2,6 +2,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use uuid::Uuid;
 
 use folio_core::activity::ActivityEvent;
+use folio_core::events::{self, FolioEvent, ImportSource, SyncDirection};
 
 use crate::cbr;
 use crate::cbz;
@@ -498,6 +499,7 @@ pub async fn import_book(
         covers_storage,
         &import_mode,
         false,
+        ImportSource::Manual,
     )
     .map(ImportOutcome::into_book)
 }
@@ -574,6 +576,7 @@ pub(crate) fn import_book_inner(
     covers_storage: std::sync::Arc<dyn folio_core::storage::Storage>,
     import_mode: &str,
     force_copy: bool,
+    source: ImportSource,
 ) -> FolioResult<ImportOutcome> {
     // Step 1: single stat — used for size guard, mode-dependent dedup, and to
     // avoid extra round trips on slow filesystems (network shares).
@@ -1155,6 +1158,13 @@ pub(crate) fn import_book_inner(
         }
         e.to_string()
     })?;
+
+    // Emit only after the commit — the event must reflect durable state.
+    events::bus().emit(FolioEvent::BookImported {
+        book_id: book.id.clone(),
+        format: book.format.clone(),
+        source,
+    });
 
     Ok(ImportOutcome::Imported(book))
 }
@@ -1965,6 +1975,9 @@ pub async fn save_reading_progress(
     db::upsert_reading_progress(&conn, &progress)?;
 
     if is_on_last_chapter && !was_completed_before {
+        events::bus().emit(FolioEvent::BookFinished {
+            book_id: book_id.clone(),
+        });
         log_event(
             &conn,
             ActivityEvent::BookCompleted {
@@ -2024,6 +2037,11 @@ pub async fn add_bookmark(
 
     let conn = state.active_db()?.get()?;
     db::insert_bookmark(&conn, &bookmark)?;
+
+    events::bus().emit(FolioEvent::BookmarkCreated {
+        book_id: bookmark.book_id.clone(),
+        bookmark_id: bookmark.id.clone(),
+    });
 
     Ok(bookmark)
 }
@@ -2384,6 +2402,12 @@ pub async fn add_highlight(
     };
     let conn = state.active_db()?.get()?;
     db::insert_highlight(&conn, &highlight)?;
+
+    events::bus().emit(FolioEvent::HighlightCreated {
+        book_id: highlight.book_id.clone(),
+        highlight_id: highlight.id.clone(),
+    });
+
     Ok(highlight)
 }
 
@@ -2413,17 +2437,17 @@ pub async fn update_highlight_note(
     state: State<'_, AppState>,
 ) -> FolioResult<()> {
     let conn = state.active_db()?.get()?;
-    Ok(db::update_highlight_note(
-        &conn,
-        &highlight_id,
-        note.as_deref(),
-    )?)
+    db::update_highlight_note(&conn, &highlight_id, note.as_deref())?;
+    events::bus().emit(FolioEvent::HighlightUpdated { highlight_id });
+    Ok(())
 }
 
 #[tauri::command]
 pub async fn remove_highlight(highlight_id: String, state: State<'_, AppState>) -> FolioResult<()> {
     let conn = state.active_db()?.get()?;
-    Ok(db::soft_delete_highlight(&conn, &highlight_id)?)
+    db::soft_delete_highlight(&conn, &highlight_id)?;
+    events::bus().emit(FolioEvent::HighlightDeleted { highlight_id });
+    Ok(())
 }
 
 #[tauri::command]
@@ -2921,6 +2945,10 @@ pub async fn enrich_book_from_openlibrary(
     book.isbn = isbn;
     book.openlibrary_key = Some(openlibrary_key);
 
+    events::bus().emit(FolioEvent::MetadataEnriched {
+        book_id: book_id.clone(),
+        provider: "OpenLibrary".to_string(),
+    });
     log_event(&conn, ActivityEvent::BookEnriched { id: book_id });
 
     Ok(book)
@@ -3376,6 +3404,7 @@ pub async fn download_opds_book(
         covers_storage,
         &import_mode,
         true,
+        ImportSource::Download,
     );
 
     // Clean up temp file regardless of import success/failure
@@ -4233,6 +4262,10 @@ pub async fn run_backup(
     });
     let result = rx.recv()?;
     let log_conn = state.active_db()?.get()?;
+    events::bus().emit(FolioEvent::BackupCompleted {
+        provider: format!("{provider_name:?}"),
+        success: result.is_ok(),
+    });
     match &result {
         Ok(sync_result) => {
             log_event(
@@ -4771,6 +4804,7 @@ fn run_import_task(app: AppHandle, paths: Vec<String>, resources: ImportResource
                         covers_storage.clone(),
                         &import_mode,
                         false,
+                        ImportSource::FolderScan,
                     ) {
                         Ok(ImportOutcome::Imported(_)) => {
                             imported.fetch_add(1, Ordering::SeqCst);
@@ -4918,6 +4952,10 @@ pub async fn scan_single_book(book_id: String, state: State<'_, AppState>) -> Fo
             let updated_book = db::get_book(&conn, &book_id)?
                 .ok_or_else(|| FolioError::not_found("Book not found"))?;
             let tried = result.providers_tried.join(", ");
+            events::bus().emit(FolioEvent::MetadataEnriched {
+                book_id: book_id.clone(),
+                provider: result.data.source.clone(),
+            });
             log_event(
                 &conn,
                 ActivityEvent::BookScanned {
@@ -5484,6 +5522,12 @@ pub async fn sync_pull_book(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> FolioResult<()> {
+    // The reader invokes this on every book open regardless of sync state,
+    // which makes it the backend's open signal — emit before the sync guards.
+    events::bus().emit(FolioEvent::BookOpened {
+        book_id: book_id.clone(),
+    });
+
     let conn = state.active_db()?.get()?;
 
     // Guard: sync must be enabled and backup provider configured
@@ -5520,6 +5564,10 @@ pub async fn sync_pull_book(
     let timeout = std::time::Duration::from_secs(5);
     match rx.recv_timeout(timeout) {
         Ok(Ok(Some(remote))) => {
+            events::bus().emit(FolioEvent::SyncCompleted {
+                direction: SyncDirection::Pull,
+                success: true,
+            });
             // Merge on main thread using the existing connection
             let local = crate::sync::build_sync_payload(&conn, &book_id, &file_hash, &device_id);
             let merge_result =
@@ -5543,9 +5591,17 @@ pub async fn sync_pull_book(
         }
         Ok(Ok(None)) => {
             // No remote file — success (nothing to merge)
+            events::bus().emit(FolioEvent::SyncCompleted {
+                direction: SyncDirection::Pull,
+                success: true,
+            });
             let _ = db::set_setting(&conn, "last_sync_success_at", &now_unix_secs().to_string());
         }
         Ok(Err(e)) => {
+            events::bus().emit(FolioEvent::SyncCompleted {
+                direction: SyncDirection::Pull,
+                success: false,
+            });
             let msg = friendly_sync_error(&e);
             let kind = sync_error_kind_str(&e);
             let _ = db::set_setting(&conn, "last_sync_error_at", &now_unix_secs().to_string());
@@ -5565,6 +5621,10 @@ pub async fn sync_pull_book(
         }
         Err(_) => {
             // Timeout
+            events::bus().emit(FolioEvent::SyncCompleted {
+                direction: SyncDirection::Pull,
+                success: false,
+            });
             let msg = "Remote server did not respond within 5 seconds";
             let _ = db::set_setting(&conn, "last_sync_error_at", &now_unix_secs().to_string());
             let _ = db::set_setting(&conn, "last_sync_error_message", msg);
@@ -5585,6 +5645,12 @@ pub async fn sync_pull_book(
 
 #[tauri::command]
 pub async fn sync_push_book(book_id: String, state: State<'_, AppState>) -> FolioResult<()> {
+    // The reader invokes this on every book close regardless of sync state,
+    // which makes it the backend's close signal — emit before the sync guards.
+    events::bus().emit(FolioEvent::BookClosed {
+        book_id: book_id.clone(),
+    });
+
     let conn = state.active_db()?.get()?;
 
     // Guard: sync must be enabled and backup provider configured
@@ -5624,6 +5690,10 @@ pub async fn sync_push_book(book_id: String, state: State<'_, AppState>) -> Foli
         };
         match crate::sync::sync_book_on_close(&bg_conn, &op, &book_id, &file_hash, &device_id) {
             Ok(()) => {
+                events::bus().emit(FolioEvent::SyncCompleted {
+                    direction: SyncDirection::Push,
+                    success: true,
+                });
                 let _ = db::set_setting(
                     &bg_conn,
                     "last_sync_success_at",
@@ -5639,6 +5709,10 @@ pub async fn sync_push_book(book_id: String, state: State<'_, AppState>) -> Foli
                 );
             }
             Err(e) => {
+                events::bus().emit(FolioEvent::SyncCompleted {
+                    direction: SyncDirection::Push,
+                    success: false,
+                });
                 let msg = friendly_sync_error(&e);
                 let _ =
                     db::set_setting(&bg_conn, "last_sync_error_at", &now_unix_secs().to_string());
@@ -6879,6 +6953,7 @@ mod tests {
             covers.clone(),
             "link",
             false,
+            ImportSource::Manual,
         )
         .unwrap();
         let first_id = first.into_book().id;
@@ -6902,6 +6977,7 @@ mod tests {
             covers.clone(),
             "link",
             false,
+            ImportSource::Manual,
         )
         .unwrap();
         match second {
@@ -6936,6 +7012,7 @@ mod tests {
             covers.clone(),
             "link",
             false,
+            ImportSource::Manual,
         )
         .unwrap();
         let first_id = first.into_book().id;
@@ -6958,6 +7035,7 @@ mod tests {
             covers.clone(),
             "link",
             false,
+            ImportSource::Manual,
         )
         .unwrap();
         match second {
@@ -6992,6 +7070,7 @@ mod tests {
             covers.clone(),
             "link",
             false,
+            ImportSource::Manual,
         )
         .unwrap();
         let first_id = first.into_book().id;
@@ -7017,6 +7096,7 @@ mod tests {
             covers.clone(),
             "link",
             false,
+            ImportSource::Manual,
         )
         .unwrap();
         match second {
@@ -7059,6 +7139,7 @@ mod tests {
             covers.clone(),
             "link",
             false,
+            ImportSource::Manual,
         )
         .unwrap();
         let first_id = first.into_book().id;
@@ -7090,6 +7171,7 @@ mod tests {
             covers.clone(),
             "link",
             false,
+            ImportSource::Manual,
         )
         .unwrap();
         match second {

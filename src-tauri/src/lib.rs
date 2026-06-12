@@ -282,6 +282,10 @@ pub fn run() {
                 }
             });
 
+            // Plugin/hook system M1: app-lifecycle hook point. Listener
+            // registration (M2) happens before this in future milestones.
+            folio_core::events::bus().emit(folio_core::events::FolioEvent::AppStarted);
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
