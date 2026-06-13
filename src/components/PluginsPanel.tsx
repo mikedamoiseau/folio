@@ -57,15 +57,22 @@ export default function PluginsPanel({ onToast }: { onToast?: (msg: string) => v
   }, [refresh]);
 
   const toggle = async (p: PluginView, next: boolean) => {
-    if (next && (p.needs_consent || p.permissions.length > 0)) {
-      // Always confirm permissions on enable, even if previously granted.
+    if (next && p.needs_consent) {
+      // Permissions not yet granted (new plugin, or manifest added a
+      // permission) — show the consent dialog. Already-granted plugins
+      // re-enable without re-prompting (spec §4.3).
       setConsentFor(p);
       return;
     }
     setBusy(true);
     try {
       if (next) {
-        await invoke("plugin_enable", { pluginId: p.id, grantedPermissions: [] });
+        // Re-affirm the already-granted permissions; the backend requires
+        // the grant set to match the manifest exactly.
+        await invoke("plugin_enable", {
+          pluginId: p.id,
+          grantedPermissions: p.permissions.map((perm) => perm.id),
+        });
       } else {
         await invoke("plugin_disable", { pluginId: p.id });
       }

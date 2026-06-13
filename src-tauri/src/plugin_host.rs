@@ -13,7 +13,6 @@ use tauri::{AppHandle, Manager, State};
 use tauri_plugin_notification::NotificationExt;
 
 use folio_core::activity::ActivityEvent;
-use folio_core::events::EventBus;
 use folio_core::plugins::manifest::is_valid_plugin_id;
 use folio_core::plugins::permissions::{self, Permission};
 use folio_core::plugins::runtime::{HostServices, RuntimeDeps};
@@ -54,14 +53,18 @@ pub fn plugins_dir(data_dir: &std::path::Path) -> PathBuf {
     data_dir.join("plugins")
 }
 
-/// Build a `PluginManager` for the active profile and attach it to `bus`.
+/// Build a `PluginManager` bound to `pool` (the active profile's DB).
 /// Returns `None` (logged) if initialization fails, so a plugin problem
-/// never blocks app startup.
+/// never blocks app startup or a profile switch.
+///
+/// This does NOT subscribe to the event bus — the bus has no unsubscribe,
+/// so a single forwarding subscriber is installed once at startup (see
+/// `lib.rs`) and reads whichever manager currently occupies the shared slot.
+/// Rebuilding here on profile switch therefore can't leak subscribers.
 pub fn init_manager(
     app: &AppHandle,
     data_dir: &std::path::Path,
     pool: DbPool,
-    bus: &EventBus,
 ) -> Option<Arc<PluginManager>> {
     let dir = plugins_dir(data_dir);
     if let Err(e) = std::fs::create_dir_all(&dir) {
@@ -73,14 +76,28 @@ pub fn init_manager(
         services: Arc::new(DesktopHostServices::new(app.clone())),
     };
     match PluginManager::new(dir, deps) {
-        Ok(manager) => {
-            manager.attach_to_bus(bus);
-            Some(manager)
-        }
+        Ok(manager) => Some(manager),
         Err(e) => {
             tracing::error!(error = %e, "plugin manager init failed");
             None
         }
+    }
+}
+
+/// The shared slot holding the active-profile plugin manager.
+pub type ManagerSlot = Arc<std::sync::Mutex<Option<Arc<PluginManager>>>>;
+
+/// Rebuild the plugin manager for a newly-activated profile and swap it into
+/// `slot`. Called from `switch_profile`. Failure is logged, never fatal.
+pub fn rebuild_for_profile(
+    app: &AppHandle,
+    data_dir: &std::path::Path,
+    pool: DbPool,
+    slot: &ManagerSlot,
+) {
+    let manager = init_manager(app, data_dir, pool);
+    if let Ok(mut guard) = slot.lock() {
+        *guard = manager;
     }
 }
 
@@ -178,26 +195,49 @@ pub async fn plugin_enable(
     }
     let mgr = manager(&state)?;
 
-    // Record consent for the approved permissions, then enable. Unknown
-    // permission strings are rejected rather than silently dropped.
-    let grants: Vec<(Permission, Option<String>)> = granted_permissions
+    // Parse the approved permissions; unknown strings are rejected rather
+    // than silently dropped.
+    let approved: Vec<Permission> = granted_permissions
         .iter()
         .map(|p| {
             Permission::parse(p)
-                .map(|perm| (perm, None))
                 .ok_or_else(|| FolioError::invalid(format!("unknown permission: {p}")))
         })
         .collect::<FolioResult<_>>()?;
 
-    let name = {
+    // The grant set must match the manifest exactly: every required
+    // permission must be approved, and nothing beyond the manifest may be
+    // recorded. This stops a crafted IPC call from inflating a plugin's
+    // recorded grants past what its manifest declares.
+    let info = mgr
+        .list()?
+        .into_iter()
+        .find(|p| p.id == plugin_id)
+        .ok_or_else(|| FolioError::not_found(format!("plugin not found: {plugin_id}")))?;
+    let required: Vec<Permission> = info.permissions.clone();
+    for req in &required {
+        if !approved.contains(req) {
+            return Err(FolioError::invalid(format!(
+                "consent missing for required permission: {}",
+                req.as_str()
+            )));
+        }
+    }
+    for got in &approved {
+        if !required.contains(got) {
+            return Err(FolioError::invalid(format!(
+                "permission '{}' is not declared in the plugin manifest",
+                got.as_str()
+            )));
+        }
+    }
+
+    let grants: Vec<(Permission, Option<String>)> = required.iter().map(|p| (*p, None)).collect();
+    let name = info.name.clone();
+    {
         let conn = state.active_db()?.get()?;
         permissions::record_grants(&conn, &plugin_id, &grants, now_unix_secs())?;
-        mgr.list()?
-            .into_iter()
-            .find(|p| p.id == plugin_id)
-            .map(|p| p.name)
-            .unwrap_or_else(|| plugin_id.clone())
-    };
+    }
 
     mgr.enable(&plugin_id)?;
 
@@ -215,6 +255,9 @@ pub async fn plugin_enable(
 
 #[tauri::command]
 pub async fn plugin_disable(plugin_id: String, state: State<'_, AppState>) -> FolioResult<()> {
+    if !is_valid_plugin_id(&plugin_id) {
+        return Err(FolioError::invalid("invalid plugin id"));
+    }
     let mgr = manager(&state)?;
     let name = mgr
         .list()?
@@ -242,6 +285,9 @@ pub async fn plugin_reload(state: State<'_, AppState>) -> FolioResult<()> {
 /// Wipe all grants and runtime state for a plugin ("Remove plugin data").
 #[tauri::command]
 pub async fn plugin_remove_data(plugin_id: String, state: State<'_, AppState>) -> FolioResult<()> {
+    if !is_valid_plugin_id(&plugin_id) {
+        return Err(FolioError::invalid("invalid plugin id"));
+    }
     let mgr = manager(&state)?;
     mgr.disable(&plugin_id)?;
     let conn = state.active_db()?.get()?;

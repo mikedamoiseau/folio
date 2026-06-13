@@ -168,7 +168,7 @@ pub fn run() {
                 enrichment_registry,
                 web_server_handle: std::sync::Mutex::new(None),
                 ipc_metrics: crate::ipc_metrics::IpcMetrics::new(500, 500.0),
-                plugin_manager: std::sync::Mutex::new(None),
+                plugin_manager: std::sync::Arc::new(std::sync::Mutex::new(None)),
                 _log_guard: log_guard,
             });
 
@@ -286,25 +286,35 @@ pub fn run() {
             });
 
             // Plugin/hook system M2: build the plugin manager for the active
-            // profile and attach it to the bus BEFORE emitting AppStarted, so
-            // AppStarted-subscribing plugins receive it. Failure is logged,
-            // never fatal.
+            // profile and install ONE forwarding bus subscriber that reads
+            // whichever manager currently occupies the shared slot. The slot
+            // is swapped on profile switch (the bus has no unsubscribe, so we
+            // must never subscribe per-manager). Done BEFORE emitting
+            // AppStarted so AppStarted-subscribing plugins receive it.
+            // Failure is logged, never fatal.
             {
-                let (data_dir, pool) = {
+                let (data_dir, pool, slot) = {
                     let state = app.state::<AppState>();
-                    (state.data_dir.clone(), state.db.clone())
+                    (
+                        state.data_dir.clone(),
+                        state.db.clone(),
+                        state.plugin_manager.clone(),
+                    )
                 };
-                let manager = plugin_host::init_manager(
-                    &app.handle().clone(),
-                    &data_dir,
-                    pool,
-                    folio_core::events::bus(),
-                );
-                let state = app.state::<AppState>();
-                let lock = state.plugin_manager.lock();
-                if let Ok(mut slot) = lock {
-                    *slot = manager;
+                let manager = plugin_host::init_manager(&app.handle().clone(), &data_dir, pool);
+                if let Ok(mut guard) = slot.lock() {
+                    *guard = manager;
                 }
+                // Single, permanent forwarding subscriber.
+                let bus_slot = slot.clone();
+                folio_core::events::bus().subscribe(Box::new(
+                    move |event: &folio_core::events::FolioEvent| {
+                        let mgr = bus_slot.lock().ok().and_then(|g| g.clone());
+                        if let Some(mgr) = mgr {
+                            mgr.handle_event(event);
+                        }
+                    },
+                ));
             }
 
             // Plugin/hook system M1: app-lifecycle hook point.

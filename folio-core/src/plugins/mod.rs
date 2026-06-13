@@ -57,9 +57,12 @@ struct Discovered {
 }
 
 struct ActivePlugin {
-    runtime: PluginRuntime,
+    /// `Arc` so `handle_event` can snapshot the runtime and dispatch the
+    /// script WITHOUT holding the manager lock (a slow script must not
+    /// freeze list/enable/disable/reload). Rhai's `sync` feature makes the
+    /// runtime `Send + Sync`.
+    runtime: Arc<PluginRuntime>,
     subscribe: HashSet<String>,
-    consecutive_errors: u32,
 }
 
 struct Inner {
@@ -226,39 +229,54 @@ impl PluginManager {
     }
 
     /// Dispatch one event to every active plugin subscribed to it. Errors
-    /// count per plugin; at [`ERROR_THRESHOLD`] consecutive failures the
-    /// plugin is auto-disabled and unloaded.
+    /// count per plugin (the `plugin_state` table is the single source of
+    /// truth, so a `reload` can't reset the auto-disable timer); at
+    /// [`ERROR_THRESHOLD`] consecutive failures the plugin is auto-disabled
+    /// and unloaded.
     pub fn handle_event(&self, event: &FolioEvent) {
         let name = event.name();
-        let mut inner = self.lock_inner();
-        let mut to_disable: Vec<String> = Vec::new();
 
-        for (id, plugin) in inner.active.iter_mut() {
-            if !plugin.subscribe.contains(name) {
-                continue;
-            }
-            match plugin.runtime.dispatch(event) {
+        // Snapshot the subscribed runtimes, then drop the lock before
+        // running any script — a 5s wall-clock-budget script must not block
+        // list/enable/disable/reload. Re-acquire only to mutate `active`.
+        let targets: Vec<(String, Arc<PluginRuntime>)> = {
+            let inner = self.lock_inner();
+            inner
+                .active
+                .iter()
+                .filter(|(_, p)| p.subscribe.contains(name))
+                .map(|(id, p)| (id.clone(), Arc::clone(&p.runtime)))
+                .collect()
+        };
+
+        let mut to_disable: Vec<String> = Vec::new();
+        for (id, runtime) in &targets {
+            match runtime.dispatch(event) {
                 Ok(()) => {
-                    if plugin.consecutive_errors > 0 {
-                        plugin.consecutive_errors = 0;
-                        if let Ok(conn) = self.deps.pool.get() {
-                            let _ = permissions::reset_plugin_errors(&conn, id);
-                        }
+                    if let Ok(conn) = self.deps.pool.get() {
+                        let _ = permissions::reset_plugin_errors(&conn, id);
                     }
                 }
                 Err(e) => {
-                    plugin.consecutive_errors += 1;
                     tracing::error!(plugin = %id, error = %e, "plugin dispatch failed");
-                    if let Ok(conn) = self.deps.pool.get() {
-                        let _ = permissions::record_plugin_error(&conn, id);
-                    }
-                    if plugin.consecutive_errors >= ERROR_THRESHOLD {
+                    let count = self
+                        .deps
+                        .pool
+                        .get()
+                        .ok()
+                        .and_then(|conn| permissions::record_plugin_error(&conn, id).ok())
+                        .unwrap_or(0);
+                    if count >= ERROR_THRESHOLD {
                         to_disable.push(id.clone());
                     }
                 }
             }
         }
 
+        if to_disable.is_empty() {
+            return;
+        }
+        let mut inner = self.lock_inner();
         for id in to_disable {
             inner.active.remove(&id);
             if let Ok(conn) = self.deps.pool.get() {
@@ -388,9 +406,8 @@ fn load_active(
     let script = std::fs::read_to_string(plugins_dir.join(&manifest.id).join("main.rhai"))?;
     let runtime = PluginRuntime::load(&script, granted, deps.clone())?;
     Ok(ActivePlugin {
-        runtime,
+        runtime: Arc::new(runtime),
         subscribe: manifest.subscribe.iter().cloned().collect(),
-        consecutive_errors: 0,
     })
 }
 
@@ -651,6 +668,61 @@ required = ["notify"]
         assert!(state.auto_disabled);
         let log = db::get_all_activity(&conn).unwrap();
         assert!(log.iter().any(|e| e.action == "plugin_auto_disabled"));
+    }
+
+    #[test]
+    fn reload_does_not_reset_the_auto_disable_counter() {
+        // Regression: the error count lives in plugin_state (the DB), not in
+        // per-load in-memory state, so a reload mid-sequence can't reset the
+        // auto-disable timer.
+        let f = fixture();
+        write_plugin(
+            &f,
+            "test-notify",
+            &notify_manifest("test-notify"),
+            r#"fn on_event(e) { throw "boom"; }"#,
+        );
+        grant_notify(&f, "test-notify");
+        let mgr = PluginManager::new(f.plugins_dir.clone(), f.deps.clone()).unwrap();
+        mgr.enable("test-notify").unwrap();
+
+        // One error short of the threshold, then reload.
+        for _ in 0..(ERROR_THRESHOLD - 1) {
+            mgr.handle_event(&imported("b1"));
+        }
+        assert_eq!(mgr.list().unwrap()[0].status, PluginStatus::Active);
+        mgr.reload().unwrap();
+        assert_eq!(mgr.list().unwrap()[0].status, PluginStatus::Active);
+
+        // One more error must cross the threshold despite the reload.
+        mgr.handle_event(&imported("b1"));
+        assert_eq!(mgr.list().unwrap()[0].status, PluginStatus::AutoDisabled);
+    }
+
+    #[test]
+    fn successful_dispatch_resets_the_error_counter() {
+        let f = fixture();
+        // Throws only for book "bad"; succeeds otherwise.
+        write_plugin(
+            &f,
+            "test-notify",
+            &notify_manifest("test-notify"),
+            r#"fn on_event(e) { if e.book_id == "bad" { throw "boom"; } notify("ok", e.book_id); }"#,
+        );
+        grant_notify(&f, "test-notify");
+        let mgr = PluginManager::new(f.plugins_dir.clone(), f.deps.clone()).unwrap();
+        mgr.enable("test-notify").unwrap();
+
+        for _ in 0..(ERROR_THRESHOLD - 1) {
+            mgr.handle_event(&imported("bad"));
+        }
+        // A success resets the counter, so the next batch of errors must
+        // start over rather than tipping straight into auto-disable.
+        mgr.handle_event(&imported("good"));
+        for _ in 0..(ERROR_THRESHOLD - 1) {
+            mgr.handle_event(&imported("bad"));
+        }
+        assert_eq!(mgr.list().unwrap()[0].status, PluginStatus::Active);
     }
 
     #[test]
