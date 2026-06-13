@@ -4,6 +4,7 @@ pub mod commands;
 pub mod ipc_metrics;
 pub mod observability;
 pub mod page_wire;
+pub mod plugin_host;
 #[cfg(test)]
 mod release_workflow_test;
 #[cfg(test)]
@@ -29,6 +30,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init())
+        .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             None,
@@ -166,6 +168,7 @@ pub fn run() {
                 enrichment_registry,
                 web_server_handle: std::sync::Mutex::new(None),
                 ipc_metrics: crate::ipc_metrics::IpcMetrics::new(500, 500.0),
+                plugin_manager: std::sync::Mutex::new(None),
                 _log_guard: log_guard,
             });
 
@@ -282,8 +285,29 @@ pub fn run() {
                 }
             });
 
-            // Plugin/hook system M1: app-lifecycle hook point. Listener
-            // registration (M2) happens before this in future milestones.
+            // Plugin/hook system M2: build the plugin manager for the active
+            // profile and attach it to the bus BEFORE emitting AppStarted, so
+            // AppStarted-subscribing plugins receive it. Failure is logged,
+            // never fatal.
+            {
+                let (data_dir, pool) = {
+                    let state = app.state::<AppState>();
+                    (state.data_dir.clone(), state.db.clone())
+                };
+                let manager = plugin_host::init_manager(
+                    &app.handle().clone(),
+                    &data_dir,
+                    pool,
+                    folio_core::events::bus(),
+                );
+                let state = app.state::<AppState>();
+                let lock = state.plugin_manager.lock();
+                if let Ok(mut slot) = lock {
+                    *slot = manager;
+                }
+            }
+
+            // Plugin/hook system M1: app-lifecycle hook point.
             folio_core::events::bus().emit(folio_core::events::FolioEvent::AppStarted);
 
             Ok(())
@@ -351,6 +375,14 @@ pub fn run() {
             commands::create_profile,
             commands::switch_profile,
             commands::delete_profile,
+            plugin_host::plugin_list,
+            plugin_host::plugin_enable,
+            plugin_host::plugin_disable,
+            plugin_host::plugin_reload,
+            plugin_host::plugin_remove_data,
+            plugin_host::plugin_open_dir,
+            plugin_host::plugin_list_examples,
+            plugin_host::plugin_install_example,
             commands::search_openlibrary,
             commands::enrich_book_from_openlibrary,
             commands::get_opds_catalogs,

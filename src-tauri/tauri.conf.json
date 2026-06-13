@@ -36,7 +36,8 @@
       "icons/icon.ico"
     ],
     "resources": [
-      "resources/*"
+      "resources/*",
+      "resources/example-plugins/**/*"
     ]
   }
 }

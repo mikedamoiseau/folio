@@ -72,6 +72,10 @@ pub struct AppState {
     pub web_server_handle: std::sync::Mutex<Option<crate::web_server::WebServerHandle>>,
     /// IPC command timing metrics (leaf lock — no ordering constraint).
     pub ipc_metrics: IpcMetrics,
+    /// Plugin manager for the active profile (leaf lock). `None` until the
+    /// setup hook initializes it; a plugin failure never blocks startup.
+    pub plugin_manager:
+        std::sync::Mutex<Option<std::sync::Arc<folio_core::plugins::PluginManager>>>,
     /// Keeps the non-blocking tracing file writer alive for the app's
     /// lifetime so buffered log records flush on shutdown. Held only for
     /// its `Drop`; never read. `None` when logging to stderr (dev).
@@ -221,7 +225,7 @@ fn ensure_mobi_cached(
 
 // --- Activity logging ---
 
-fn log_event(conn: &rusqlite::Connection, event: ActivityEvent) {
+pub(crate) fn log_event(conn: &rusqlite::Connection, event: ActivityEvent) {
     let f = event.into_fields();
     let entry = crate::models::ActivityEntry {
         id: Uuid::new_v4().to_string(),

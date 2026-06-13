@@ -1,0 +1,15 @@
+[plugin]
+id = "stats-notifier"
+name = "Stats Notifier"
+version = "1.0.0"
+description = "Shows a desktop notification when you finish a book."
+author = "Folio"
+min_app_version = "2.3.0"
+
+[events]
+subscribe = ["BookFinished"]
+
+[permissions]
+# read:library → fetch the finished book's title
+# notify       → show the desktop notification
+required = ["read:library", "notify"]
