@@ -93,7 +93,13 @@ impl PluginRuntime {
         });
 
         for (permission, params) in granted {
-            register_host_fns(&mut engine, *permission, params.as_deref(), network_hosts, &deps);
+            register_host_fns(
+                &mut engine,
+                *permission,
+                params.as_deref(),
+                network_hosts,
+                &deps,
+            );
         }
 
         let ast = engine
@@ -267,13 +273,12 @@ fn register_host_fns(
 /// manifest allowlist, AND it must pass the SSRF guard (public HTTP/HTTPS
 /// only — no LAN relaxation for plugins). Routed through `send_with_retry`.
 fn http_get(url: &str, allow: &[String]) -> Result<String, Box<EvalAltResult>> {
-    let host_port = crate::opds::host_port_from_url(url)
-        .ok_or_else(|| host_err("invalid URL"))?;
+    let host_port = crate::opds::host_port_from_url(url).ok_or_else(|| host_err("invalid URL"))?;
     // Match either "host" or "host:port" against the allowlist.
     let host_only = host_port.split(':').next().unwrap_or(&host_port);
-    let allowed = allow.iter().any(|h| {
-        h.eq_ignore_ascii_case(&host_port) || h.eq_ignore_ascii_case(host_only)
-    });
+    let allowed = allow
+        .iter()
+        .any(|h| h.eq_ignore_ascii_case(&host_port) || h.eq_ignore_ascii_case(host_only));
     if !allowed {
         return Err(host_err(format!(
             "host '{host_only}' is not in the plugin's declared network hosts"
@@ -281,7 +286,9 @@ fn http_get(url: &str, allow: &[String]) -> Result<String, Box<EvalAltResult>> {
     }
     // SSRF guard with no trusted entries: blocks private/loopback targets.
     if !crate::opds::is_safe_url_with_trusted(url, &[]) {
-        return Err(host_err("URL blocked: only public HTTP/HTTPS URLs are allowed"));
+        return Err(host_err(
+            "URL blocked: only public HTTP/HTTPS URLs are allowed",
+        ));
     }
 
     // Redirects must stay within the allowlist AND keep passing the SSRF
@@ -747,7 +754,8 @@ mod tests {
     #[test]
     fn script_without_on_event_errors_on_dispatch() {
         let f = fixture();
-        let rt = PluginRuntime::load(r#"fn other() { 1 }"#, &perms(&[]), &[], f.deps.clone()).unwrap();
+        let rt =
+            PluginRuntime::load(r#"fn other() { 1 }"#, &perms(&[]), &[], f.deps.clone()).unwrap();
         let err = rt.dispatch(&imported("b1")).unwrap_err().to_string();
         assert!(err.contains("on_event"), "got: {err}");
     }
@@ -944,7 +952,10 @@ mod tests {
         )
         .unwrap();
         let err = rt.dispatch(&imported("b1")).unwrap_err().to_string();
-        assert!(err.contains("not in the plugin's declared network hosts"), "got: {err}");
+        assert!(
+            err.contains("not in the plugin's declared network hosts"),
+            "got: {err}"
+        );
     }
 
     #[test]

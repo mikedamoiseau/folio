@@ -159,9 +159,9 @@ impl EventBus {
                     for listener in listeners.iter_mut() {
                         // A panicking listener must not kill the dispatch
                         // thread or starve the remaining listeners.
-                        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
-                            || listener.on_event(&event),
-                        ));
+                        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            listener.on_event(&event)
+                        }));
                         if result.is_err() {
                             tracing::error!(?event, "event listener panicked during dispatch");
                         }
@@ -376,9 +376,15 @@ mod tests {
                 format: BookFormat::Epub,
                 source: ImportSource::Manual,
             },
-            FolioEvent::BookOpened { book_id: "b".into() },
-            FolioEvent::BookClosed { book_id: "b".into() },
-            FolioEvent::BookFinished { book_id: "b".into() },
+            FolioEvent::BookOpened {
+                book_id: "b".into(),
+            },
+            FolioEvent::BookClosed {
+                book_id: "b".into(),
+            },
+            FolioEvent::BookFinished {
+                book_id: "b".into(),
+            },
             FolioEvent::HighlightCreated {
                 book_id: "b".into(),
                 highlight_id: "h".into(),

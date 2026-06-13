@@ -138,11 +138,7 @@ impl PluginManager {
                         permissions: m.permissions.clone(),
                         network_hosts: m.network_hosts.clone(),
                         status,
-                        needs_consent: permissions::needs_consent(
-                            &conn,
-                            &d.id,
-                            &m.permissions,
-                        )?,
+                        needs_consent: permissions::needs_consent(&conn, &d.id, &m.permissions)?,
                     }
                 }
             };
@@ -369,10 +365,7 @@ fn discover(plugins_dir: &std::path::Path) -> Vec<Discovered> {
     out
 }
 
-fn validate_plugin_dir(
-    dir: &std::path::Path,
-    folder: &str,
-) -> Result<PluginManifest, String> {
+fn validate_plugin_dir(dir: &std::path::Path, folder: &str) -> Result<PluginManifest, String> {
     let raw = std::fs::read_to_string(dir.join("plugin.toml"))
         .map_err(|e| format!("cannot read plugin.toml: {e}"))?;
     let manifest = parse_manifest(&raw).map_err(|e| e.to_string())?;
@@ -689,7 +682,9 @@ required = ["notify"]
 
         // Auto-disable is persisted and audit-logged.
         let conn = f.deps.pool.get().unwrap();
-        let state = permissions::plugin_state(&conn, "test-notify").unwrap().unwrap();
+        let state = permissions::plugin_state(&conn, "test-notify")
+            .unwrap()
+            .unwrap();
         assert!(state.auto_disabled);
         let log = db::get_all_activity(&conn).unwrap();
         assert!(log.iter().any(|e| e.action == "plugin_auto_disabled"));

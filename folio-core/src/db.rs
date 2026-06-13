@@ -918,7 +918,8 @@ pub fn is_sync_enabled(conn: &Connection) -> bool {
 // --- Feature Flags CRUD ---
 
 pub fn list_feature_flags(conn: &Connection) -> Result<Vec<FeatureFlag>> {
-    let mut stmt = conn.prepare("SELECT key, enabled, description FROM feature_flags ORDER BY key")?;
+    let mut stmt =
+        conn.prepare("SELECT key, enabled, description FROM feature_flags ORDER BY key")?;
     let rows = stmt.query_map([], |row| {
         Ok(FeatureFlag {
             key: row.get(0)?,
@@ -939,7 +940,12 @@ pub fn get_feature_flag(conn: &Connection, key: &str) -> Result<bool> {
     }
 }
 
-pub fn set_feature_flag(conn: &Connection, key: &str, enabled: bool, description: Option<&str>) -> Result<()> {
+pub fn set_feature_flag(
+    conn: &Connection,
+    key: &str,
+    enabled: bool,
+    description: Option<&str>,
+) -> Result<()> {
     conn.execute(
         "INSERT INTO feature_flags (key, enabled, description) VALUES (?1, ?2, ?3)
          ON CONFLICT(key) DO UPDATE SET enabled=excluded.enabled, description=COALESCE(excluded.description, feature_flags.description)",
@@ -1348,8 +1354,7 @@ pub fn get_reading_stats(conn: &Connection) -> Result<ReadingStats> {
         [],
         |row| row.get(0),
     )?;
-    let total_books: i64 =
-        conn.query_row("SELECT COUNT(*) FROM books", [], |row| row.get(0))?;
+    let total_books: i64 = conn.query_row("SELECT COUNT(*) FROM books", [], |row| row.get(0))?;
     let books_finished: i64 = conn.query_row(
         "SELECT COUNT(*) FROM reading_progress rp JOIN books b ON rp.book_id = b.id WHERE rp.chapter_index >= b.total_chapters - 1",
         [],
@@ -1552,7 +1557,10 @@ pub fn search_highlights(
     query: &str,
     limit: u32,
 ) -> Result<Vec<HighlightSearchResult>> {
-    let escaped = query.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_");
+    let escaped = query
+        .replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_");
     let pattern = format!("%{escaped}%");
     let mut stmt = conn.prepare(
         "SELECT h.id, h.book_id, b.title, b.author, h.chapter_index, h.text, h.color, h.note, h.created_at
@@ -2172,8 +2180,7 @@ pub fn get_collection_suggestions(
 ) -> Result<Vec<CollectionSuggestion>> {
     let mut suggestions = Vec::new();
     let colors = [
-        "#c2714e", "#6b8f71", "#7a6b9a", "#4e7a8f", "#8f7a4e", "#8f4e4e", "#4e8f8a",
-        "#666666",
+        "#c2714e", "#6b8f71", "#7a6b9a", "#4e7a8f", "#8f7a4e", "#8f4e4e", "#4e8f8a", "#666666",
     ];
     let mut color_idx = 0;
 
@@ -4006,12 +4013,22 @@ mod tests {
         assert_eq!(flags.len(), initial_count + 1);
         let discover = flags.iter().find(|f| f.key == "discover").unwrap();
         assert!(discover.enabled);
-        assert_eq!(discover.description.as_deref(), Some("Show Discover section"));
+        assert_eq!(
+            discover.description.as_deref(),
+            Some("Show Discover section")
+        );
 
         set_feature_flag(&conn, "discover", false, None).unwrap();
         assert!(!get_feature_flag(&conn, "discover").unwrap());
-        let discover = list_feature_flags(&conn).unwrap().into_iter().find(|f| f.key == "discover").unwrap();
-        assert_eq!(discover.description.as_deref(), Some("Show Discover section"));
+        let discover = list_feature_flags(&conn)
+            .unwrap()
+            .into_iter()
+            .find(|f| f.key == "discover")
+            .unwrap();
+        assert_eq!(
+            discover.description.as_deref(),
+            Some("Show Discover section")
+        );
 
         delete_feature_flag(&conn, "discover").unwrap();
         assert_eq!(list_feature_flags(&conn).unwrap().len(), initial_count);
@@ -4143,11 +4160,17 @@ mod tests {
 
         assert_eq!(status_suggestions.len(), 2);
 
-        let unread = status_suggestions.iter().find(|s| s.name == "Unread books").unwrap();
+        let unread = status_suggestions
+            .iter()
+            .find(|s| s.name == "Unread books")
+            .unwrap();
         assert_eq!(unread.matched_book_count, 4);
         assert_eq!(unread.rules[0].value, "unread");
 
-        let finished = status_suggestions.iter().find(|s| s.name == "Finished books").unwrap();
+        let finished = status_suggestions
+            .iter()
+            .find(|s| s.name == "Finished books")
+            .unwrap();
         assert_eq!(finished.matched_book_count, 3);
         assert_eq!(finished.rules[0].value, "finished");
     }
@@ -4204,9 +4227,7 @@ mod tests {
             value: "finished".to_string(),
         }];
         let (joins, wheres, params) = build_rule_query(&rules);
-        let sql = format!(
-            "SELECT COUNT(*) FROM books b {joins} {wheres}",
-        );
+        let sql = format!("SELECT COUNT(*) FROM books b {joins} {wheres}",);
         let count: usize = conn
             .query_row(&sql, rusqlite::params_from_iter(params), |row| row.get(0))
             .unwrap();

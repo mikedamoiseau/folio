@@ -243,7 +243,12 @@ Rust-only commands from `src-tauri/`:
 ```bash
 cargo test
 cargo clippy -- -D warnings
-cargo fmt --check
+```
+
+Formatting is checked workspace-wide from the repo root (`cargo fmt --check` from `src-tauri/` misses `folio-core`):
+
+```bash
+cargo fmt --all --check
 ```
 
 ### MOBI test fixtures
