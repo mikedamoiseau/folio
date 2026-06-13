@@ -389,6 +389,7 @@ pub fn run() {
             plugin_host::plugin_enable,
             plugin_host::plugin_disable,
             plugin_host::plugin_reload,
+            plugin_host::plugin_run_now,
             plugin_host::plugin_remove_data,
             plugin_host::plugin_open_dir,
             plugin_host::plugin_list_examples,

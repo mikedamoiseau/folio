@@ -651,12 +651,15 @@ Lower priority features — high effort, niche audience, or dependent on other w
 - Extends existing Markdown/plain text export with direct service integration
 - Readwise is a popular highlight aggregation service used by serious readers
 
-### 47. Plugin / Hook System — **Spec'd (2026-06-12)**
-- Fire events at key points: `on_import`, `on_book_open`, `on_book_close`, `on_annotation_created`, etc.
-- Let user scripts react to events (similar to WordPress/Drupal hooks)
-- Lightweight alternative to a full plugin SDK — extensible without modifying core code
-- Enables custom automation: auto-tagging, post-import scripts, external sync
-- Design spec: `docs/superpowers/specs/2026-06-12-plugin-hook-system-design.md` — Rhai user scripts, permission/consent model, 4 bundled example plugins (auto-tagger, stats notifier, highlight exporter, OPDS auto-download), 4 milestones
+### 47. Plugin / Hook System — **Done (2026-06-13)**
+- ~~Fire events at key points: book imported/opened/closed/finished, highlight created/updated/deleted, bookmark created, metadata enriched, backup/sync completed, app started~~
+- ~~Let user scripts (Rhai) react to events (similar to WordPress/Drupal hooks)~~
+- ~~Lightweight alternative to a full plugin SDK — extensible without modifying core code~~
+- ~~Enables custom automation: auto-tagging, post-import scripts, highlight export, OPDS auto-download~~
+- ~~Deny-by-default permission/consent model: read:library, read:highlights, write:tags, write:files (user-picked dir, traversal-safe), notify, network (host-allowlisted, SSRF-guarded), import:books~~
+- ~~Capability-scoped Rhai engines with op + wall-clock budgets; auto-disable after repeated errors; per-profile~~
+- ~~4 bundled example plugins (auto-tagger, stats notifier, highlight exporter, OPDS auto-download); Settings → Plugins UI; author guide `docs/PLUGINS.md`~~
+- Design spec: `docs/superpowers/specs/2026-06-12-plugin-hook-system-design.md`. Shipped across M1–M4 (PRs #55, #56, #57, + M4).
 - **Follow-up (do not lose):** recurring/scheduled plugin triggers (e.g. periodic OPDS auto-download) deferred from v1 — depends on a background job queue (research report F-2-2). v1 ships `AppStarted` + manual "Run now" only.
 
 ### 48. User-Created Themes — **Done**

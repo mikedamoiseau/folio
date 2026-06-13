@@ -3282,6 +3282,49 @@ fn opds_extension_from_url(url: &str) -> Option<&'static str> {
     }
 }
 
+/// Download a book from `url` and import it into the active profile, reusing
+/// the standard import pipeline (dedup, copy-on-import). Returns the book id
+/// (new or existing duplicate). Backs the plugin `import:books` host function
+/// (`plugin_host::DesktopHostServices::import_from_url`); runs on the caller's
+/// thread, so it uses blocking download + import directly.
+pub(crate) fn import_book_from_url(state: &AppState, url: &str) -> FolioResult<String> {
+    let ext = opds_extension_from_url(url).unwrap_or("epub");
+    if !supported_import_extensions().contains(&ext) {
+        return Err(FolioError::invalid(format!(
+            "Format '.{ext}' is not supported in this build."
+        )));
+    }
+
+    let db_pool = state.active_db()?;
+    let storage = state.active_storage()?;
+    let covers_storage = state.covers_storage()?;
+    let import_mode = {
+        let conn = db_pool.get()?;
+        db::get_setting(&conn, "import_mode")
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| "import".to_string())
+    };
+
+    let temp_path = std::env::temp_dir().join(format!("folio-plugin-{}.{}", Uuid::new_v4(), ext));
+    let temp_str = temp_path.to_string_lossy().to_string();
+    // SSRF-guarded on every redirect hop, with NO trusted-host relaxation:
+    // a plugin must not reach the user's LAN catalogs, only public URLs.
+    opds::download_file_ssrf_guarded(url, &temp_str)?;
+
+    let outcome = import_book_inner(
+        temp_str,
+        db_pool,
+        storage,
+        covers_storage,
+        &import_mode,
+        true,
+        ImportSource::Download,
+    );
+    let _ = std::fs::remove_file(&temp_path);
+    Ok(outcome?.into_book().id)
+}
+
 /// Map an OPDS acquisition link's MIME type to the file extension the import
 /// pipeline expects. Preferred over URL-based detection because many feeds
 /// serve opaque download URLs (e.g. `/download/123`) while still returning

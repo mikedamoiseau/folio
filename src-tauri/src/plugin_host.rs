@@ -46,6 +46,11 @@ impl HostServices for DesktopHostServices {
             tracing::warn!(error = %e, "plugin notification failed");
         }
     }
+
+    fn import_from_url(&self, url: &str) -> Result<String, String> {
+        let state = self.app.state::<AppState>();
+        crate::commands::import_book_from_url(&state, url).map_err(|e| e.to_string())
+    }
 }
 
 /// Resolve the per-profile plugins directory: `{app_data}/plugins`.
@@ -119,10 +124,14 @@ pub struct PluginView {
     pub author: String,
     pub events: Vec<String>,
     pub permissions: Vec<PermissionView>,
+    /// Declared host allowlist for `network` (shown in the consent dialog).
+    pub network_hosts: Vec<String>,
     /// `active` | `disabled` | `auto_disabled` | `invalid`.
     pub status: String,
     pub invalid_reason: Option<String>,
     pub needs_consent: bool,
+    /// True when the plugin subscribes to `AppStarted` (offer "Run now").
+    pub can_run_now: bool,
 }
 
 fn permission_category_key(p: Permission) -> &'static str {
@@ -145,6 +154,8 @@ fn to_view(info: PluginInfo) -> PluginView {
         PluginStatus::AutoDisabled => ("auto_disabled".to_string(), None),
         PluginStatus::Invalid(reason) => ("invalid".to_string(), Some(reason.clone())),
     };
+    let can_run_now =
+        info.status == PluginStatus::Active && info.subscribe.iter().any(|e| e == "AppStarted");
     PluginView {
         id: info.id,
         name: info.name,
@@ -160,9 +171,11 @@ fn to_view(info: PluginInfo) -> PluginView {
                 category_key: permission_category_key(p).to_string(),
             })
             .collect(),
+        network_hosts: info.network_hosts,
         status,
         invalid_reason,
         needs_consent: info.needs_consent,
+        can_run_now,
     }
 }
 
@@ -314,6 +327,15 @@ pub async fn plugin_disable(plugin_id: String, state: State<'_, AppState>) -> Fo
 #[tauri::command]
 pub async fn plugin_reload(state: State<'_, AppState>) -> FolioResult<()> {
     manager(&state)?.reload()
+}
+
+/// Manually trigger an `AppStarted`-driven plugin (the "Run now" button).
+#[tauri::command]
+pub async fn plugin_run_now(plugin_id: String, state: State<'_, AppState>) -> FolioResult<()> {
+    if !is_valid_plugin_id(&plugin_id) {
+        return Err(FolioError::invalid("invalid plugin id"));
+    }
+    manager(&state)?.run_now(&plugin_id)
 }
 
 /// Wipe all grants and runtime state for a plugin ("Remove plugin data").
@@ -491,7 +513,7 @@ mod tests {
                 pool: pool.clone(),
                 services: Arc::new(NoopServices),
             };
-            PluginRuntime::load(&script, &granted, deps)
+            PluginRuntime::load(&script, &granted, &manifest.network_hosts, deps)
                 .unwrap_or_else(|e| panic!("{} script failed to compile: {e}", manifest.id));
             checked += 1;
         }

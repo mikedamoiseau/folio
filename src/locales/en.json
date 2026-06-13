@@ -264,6 +264,8 @@
     "intro": "Plugins are small scripts that react to events in Folio — like tagging books on import or notifying you when you finish one. Only install plugins from sources you trust.",
     "reload": "Reload plugins",
     "openFolder": "Open plugins folder",
+    "runNow": "Run now",
+    "networkHosts": "Will contact: {{hosts}}",
     "empty": "No plugins installed yet. Install one of the examples below to get started.",
     "enable": "Enable plugin",
     "statusActive": "Active",

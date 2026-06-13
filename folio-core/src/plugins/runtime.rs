@@ -17,10 +17,19 @@ use crate::error::{FolioError, FolioResult};
 use crate::events::FolioEvent;
 use crate::models::{Book, Highlight};
 
-/// Capabilities that only the embedding app can provide (OS notifications…).
-/// `folio-core` stays UI-free; the desktop shell injects an implementation.
+/// Capabilities that only the embedding app can provide (OS notifications,
+/// the book-import pipeline). `folio-core` stays UI-free; the desktop shell
+/// injects an implementation.
 pub trait HostServices: Send + Sync {
     fn notify(&self, title: &str, body: &str);
+
+    /// Download and import a book from `url` into the active library,
+    /// reusing the app's normal import path (dedup, copy-on-import). Returns
+    /// the imported book id, or an error string. Backs the `import:books`
+    /// host function; default errors so non-desktop hosts opt out.
+    fn import_from_url(&self, _url: &str) -> Result<String, String> {
+        Err("import is not available in this context".to_string())
+    }
 }
 
 /// Everything host functions may need, injected at load time.
@@ -56,10 +65,12 @@ impl PluginRuntime {
 
     /// Compile `script` with host functions for exactly `granted`. Each entry
     /// is a permission plus its optional grant parameter (e.g. the
-    /// user-picked export directory for `write:files`).
+    /// user-picked export directory for `write:files`). `network_hosts` is the
+    /// manifest's declared host allowlist for the `network` permission.
     pub fn load(
         script: &str,
         granted: &[(Permission, Option<String>)],
+        network_hosts: &[String],
         deps: RuntimeDeps,
     ) -> FolioResult<Self> {
         let mut engine = Engine::new();
@@ -82,7 +93,7 @@ impl PluginRuntime {
         });
 
         for (permission, params) in granted {
-            register_host_fns(&mut engine, *permission, params.as_deref(), &deps);
+            register_host_fns(&mut engine, *permission, params.as_deref(), network_hosts, &deps);
         }
 
         let ast = engine
@@ -105,8 +116,11 @@ impl PluginRuntime {
             .unwrap_or_else(|poisoned| poisoned.into_inner()) = Instant::now();
 
         let mut scope = Scope::new();
+        // Accept any return type — a script may end on an expression; we
+        // simply ignore whatever `on_event` evaluates to.
         self.engine
-            .call_fn::<()>(&mut scope, &self.ast, "on_event", (event_to_map(event),))
+            .call_fn::<Dynamic>(&mut scope, &self.ast, "on_event", (event_to_map(event),))
+            .map(|_| ())
             .map_err(|e| FolioError::internal(format!("plugin dispatch error: {e}")))
     }
 }
@@ -118,6 +132,7 @@ fn register_host_fns(
     engine: &mut Engine,
     permission: Permission,
     params: Option<&str>,
+    network_hosts: &[String],
     deps: &RuntimeDeps,
 ) {
     match permission {
@@ -221,10 +236,93 @@ fn register_host_fns(
                 );
             }
         }
-        // Host functions for these arrive in M4 (spec §6); granting them
-        // today registers nothing — deny-by-default stays intact.
-        Permission::WriteMetadata | Permission::Network | Permission::ImportBooks => {}
+        Permission::Network => {
+            // Allowlist comes from the manifest (source of truth), never from
+            // script input. With no declared hosts, no function is registered.
+            let allow: Vec<String> = network_hosts.to_vec();
+            if !allow.is_empty() {
+                engine.register_fn(
+                    "http_get",
+                    move |url: &str| -> Result<String, Box<EvalAltResult>> {
+                        http_get(url, &allow)
+                    },
+                );
+            }
+        }
+        Permission::ImportBooks => {
+            let services = Arc::clone(&deps.services);
+            engine.register_fn(
+                "import_from_url",
+                move |url: &str| -> Result<String, Box<EvalAltResult>> {
+                    services.import_from_url(url).map_err(host_err)
+                },
+            );
+        }
+        // No host functions yet; granting registers nothing.
+        Permission::WriteMetadata => {}
     }
+}
+
+/// GET `url` as text. Two gates: the URL's host must be in the plugin's
+/// manifest allowlist, AND it must pass the SSRF guard (public HTTP/HTTPS
+/// only — no LAN relaxation for plugins). Routed through `send_with_retry`.
+fn http_get(url: &str, allow: &[String]) -> Result<String, Box<EvalAltResult>> {
+    let host_port = crate::opds::host_port_from_url(url)
+        .ok_or_else(|| host_err("invalid URL"))?;
+    // Match either "host" or "host:port" against the allowlist.
+    let host_only = host_port.split(':').next().unwrap_or(&host_port);
+    let allowed = allow.iter().any(|h| {
+        h.eq_ignore_ascii_case(&host_port) || h.eq_ignore_ascii_case(host_only)
+    });
+    if !allowed {
+        return Err(host_err(format!(
+            "host '{host_only}' is not in the plugin's declared network hosts"
+        )));
+    }
+    // SSRF guard with no trusted entries: blocks private/loopback targets.
+    if !crate::opds::is_safe_url_with_trusted(url, &[]) {
+        return Err(host_err("URL blocked: only public HTTP/HTTPS URLs are allowed"));
+    }
+
+    // Redirects must stay within the allowlist AND keep passing the SSRF
+    // guard — otherwise an allowlisted host could 302 to a private/loopback
+    // or off-allowlist target.
+    let allow_redirect = allow.to_vec();
+    let policy = reqwest::redirect::Policy::custom(move |attempt| {
+        if attempt.previous().len() >= 5 {
+            return attempt.error("too many redirects");
+        }
+        let u = attempt.url();
+        let host = u.host_str().unwrap_or("");
+        let hp = match u.port() {
+            Some(p) => format!("{host}:{p}"),
+            None => host.to_string(),
+        };
+        let on_allowlist = allow_redirect
+            .iter()
+            .any(|h| h.eq_ignore_ascii_case(host) || h.eq_ignore_ascii_case(&hp));
+        if on_allowlist && crate::opds::is_safe_url_with_trusted(u.as_str(), &[]) {
+            attempt.follow()
+        } else {
+            attempt.error("redirect outside the plugin's declared hosts")
+        }
+    });
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .user_agent("Folio-Plugin/1.0")
+        .redirect(policy)
+        .build()
+        .map_err(host_err)?;
+    let resp = crate::http_retry::send_with_retry(
+        client.get(url),
+        "plugin",
+        &crate::http_retry::RetryPolicy::default(),
+    )
+    .map_err(host_err)?;
+    if !resp.status().is_success() {
+        return Err(host_err(format!("HTTP {}", resp.status())));
+    }
+    resp.text().map_err(host_err)
 }
 
 /// Write or append `text` to `rel` resolved under `root`, rejecting any path
@@ -414,6 +512,7 @@ mod tests {
 
     struct MockServices {
         notes: Mutex<Vec<(String, String)>>,
+        imports: Mutex<Vec<String>>,
     }
 
     impl HostServices for MockServices {
@@ -422,6 +521,11 @@ mod tests {
                 .lock()
                 .unwrap()
                 .push((title.to_string(), body.to_string()));
+        }
+
+        fn import_from_url(&self, url: &str) -> Result<String, String> {
+            self.imports.lock().unwrap().push(url.to_string());
+            Ok(format!("book-for-{url}"))
         }
     }
 
@@ -436,6 +540,7 @@ mod tests {
         let pool = db::create_pool(&dir.path().join("t.db")).unwrap();
         let services = Arc::new(MockServices {
             notes: Mutex::new(Vec::new()),
+            imports: Mutex::new(Vec::new()),
         });
         Fixture {
             deps: RuntimeDeps {
@@ -509,6 +614,7 @@ mod tests {
         let rt = PluginRuntime::load(
             r#"fn on_event(event) { notify("hi", event.type); }"#,
             &perms(&[Permission::Notify]),
+            &[],
             f.deps.clone(),
         )
         .unwrap();
@@ -526,6 +632,7 @@ mod tests {
         let rt = PluginRuntime::load(
             r#"fn on_event(event) { notify("hi", "there"); }"#,
             &perms(&[]), // notify NOT granted
+            &[],
             f.deps.clone(),
         )
         .unwrap();
@@ -550,6 +657,7 @@ mod tests {
                 if missing == () { notify("missing", "unit"); }
             }"#,
             &perms(&[Permission::ReadLibrary, Permission::Notify]),
+            &[],
             f.deps.clone(),
         )
         .unwrap();
@@ -577,6 +685,7 @@ mod tests {
                 notify("herbert", herbert.len().to_string());
             }"#,
             &perms(&[Permission::ReadLibrary, Permission::Notify]),
+            &[],
             f.deps.clone(),
         )
         .unwrap();
@@ -601,6 +710,7 @@ mod tests {
                 remove_tag(event.book_id, "epic");
             }"#,
             &perms(&[Permission::WriteTags]),
+            &[],
             f.deps.clone(),
         )
         .unwrap();
@@ -621,6 +731,7 @@ mod tests {
         let rt = PluginRuntime::load(
             r#"fn on_event(event) { let x = 0; loop { x += 1; } }"#,
             &perms(&[]),
+            &[],
             f.deps.clone(),
         )
         .unwrap();
@@ -636,7 +747,7 @@ mod tests {
     #[test]
     fn script_without_on_event_errors_on_dispatch() {
         let f = fixture();
-        let rt = PluginRuntime::load(r#"fn other() { 1 }"#, &perms(&[]), f.deps.clone()).unwrap();
+        let rt = PluginRuntime::load(r#"fn other() { 1 }"#, &perms(&[]), &[], f.deps.clone()).unwrap();
         let err = rt.dispatch(&imported("b1")).unwrap_err().to_string();
         assert!(err.contains("on_event"), "got: {err}");
     }
@@ -644,7 +755,7 @@ mod tests {
     #[test]
     fn syntax_error_fails_at_load() {
         let f = fixture();
-        assert!(PluginRuntime::load("fn on_event(e) {", &perms(&[]), f.deps).is_err());
+        assert!(PluginRuntime::load("fn on_event(e) {", &perms(&[]), &[], f.deps).is_err());
     }
 
     fn sample_highlight(id: &str, book_id: &str, text: &str) -> Highlight {
@@ -679,6 +790,7 @@ mod tests {
                 notify("first", hs[0].text);
             }"#,
             &perms(&[Permission::ReadHighlights, Permission::Notify]),
+            &[],
             f.deps.clone(),
         )
         .unwrap();
@@ -696,6 +808,7 @@ mod tests {
         let rt = PluginRuntime::load(
             r#"fn on_event(event) { write_file("x.txt", "hi"); }"#,
             &[(Permission::WriteFiles, None)],
+            &[],
             f.deps.clone(),
         )
         .unwrap();
@@ -717,6 +830,7 @@ mod tests {
                 append_file("sub/deep.md", "nested\n");
             }"##,
             &[(Permission::WriteFiles, Some(dir))],
+            &[],
             f.deps.clone(),
         )
         .unwrap();
@@ -743,6 +857,7 @@ mod tests {
             let rt = PluginRuntime::load(
                 &format!(r#"fn on_event(event) {{ write_file("{bad}", "x"); }}"#),
                 &[(Permission::WriteFiles, Some(dir.clone()))],
+                &[],
                 f.deps.clone(),
             )
             .unwrap();
@@ -770,6 +885,7 @@ mod tests {
         let rt = PluginRuntime::load(
             r#"fn on_event(event) { write_file("link.txt", "pwned"); }"#,
             &[(Permission::WriteFiles, Some(dir))],
+            &[],
             f.deps.clone(),
         )
         .unwrap();
@@ -794,10 +910,102 @@ mod tests {
                 write_file("big.txt", big);
             }"#,
             &[(Permission::WriteFiles, Some(dir))],
+            &[],
             f.deps.clone(),
         )
         .unwrap();
         assert!(rt.dispatch(&imported("b1")).is_err());
         assert!(!export.join("big.txt").exists());
+    }
+
+    #[test]
+    fn http_get_absent_without_declared_hosts() {
+        let f = fixture();
+        // network granted but the manifest declared no hosts → no host fn.
+        let rt = PluginRuntime::load(
+            r#"fn on_event(event) { http_get("https://example.org"); }"#,
+            &[(Permission::Network, None)],
+            &[],
+            f.deps.clone(),
+        )
+        .unwrap();
+        let err = rt.dispatch(&imported("b1")).unwrap_err().to_string();
+        assert!(err.contains("http_get"), "got: {err}");
+    }
+
+    #[test]
+    fn http_get_rejects_host_outside_allowlist() {
+        let f = fixture();
+        let rt = PluginRuntime::load(
+            r#"fn on_event(event) { http_get("https://evil.example/x"); }"#,
+            &[(Permission::Network, None)],
+            &["standardebooks.org".to_string()],
+            f.deps.clone(),
+        )
+        .unwrap();
+        let err = rt.dispatch(&imported("b1")).unwrap_err().to_string();
+        assert!(err.contains("not in the plugin's declared network hosts"), "got: {err}");
+    }
+
+    #[test]
+    fn http_get_rejects_private_address_even_if_allowlisted() {
+        let f = fixture();
+        // Allowlisting a private host must still be blocked by the SSRF guard.
+        let rt = PluginRuntime::load(
+            r#"fn on_event(event) { http_get("http://127.0.0.1:7788/opds"); }"#,
+            &[(Permission::Network, None)],
+            &["127.0.0.1".to_string()],
+            f.deps.clone(),
+        )
+        .unwrap();
+        let err = rt.dispatch(&imported("b1")).unwrap_err().to_string();
+        assert!(err.contains("blocked"), "got: {err}");
+    }
+
+    #[test]
+    fn http_get_loopback_blocked_even_when_allowlisted_with_port() {
+        // host:port allowlist entry must still not defeat the SSRF guard.
+        let f = fixture();
+        let rt = PluginRuntime::load(
+            r#"fn on_event(event) { http_get("http://localhost:8080/x"); }"#,
+            &[(Permission::Network, None)],
+            &["localhost:8080".to_string()],
+            f.deps.clone(),
+        )
+        .unwrap();
+        let err = rt.dispatch(&imported("b1")).unwrap_err().to_string();
+        assert!(err.contains("blocked"), "got: {err}");
+    }
+
+    #[test]
+    fn import_from_url_routes_to_host_services() {
+        let f = fixture();
+        let rt = PluginRuntime::load(
+            r#"fn on_event(event) { import_from_url("https://standardebooks.org/x.epub"); }"#,
+            &[(Permission::ImportBooks, None)],
+            &[],
+            f.deps.clone(),
+        )
+        .unwrap();
+        rt.dispatch(&imported("b1")).unwrap();
+        assert_eq!(
+            f.services.imports.lock().unwrap().as_slice(),
+            &["https://standardebooks.org/x.epub".to_string()]
+        );
+    }
+
+    #[test]
+    fn import_from_url_absent_without_permission() {
+        let f = fixture();
+        let rt = PluginRuntime::load(
+            r#"fn on_event(event) { import_from_url("https://x.test/y"); }"#,
+            &perms(&[]),
+            &[],
+            f.deps.clone(),
+        )
+        .unwrap();
+        let err = rt.dispatch(&imported("b1")).unwrap_err().to_string();
+        assert!(err.contains("import_from_url"), "got: {err}");
+        assert!(f.services.imports.lock().unwrap().is_empty());
     }
 }

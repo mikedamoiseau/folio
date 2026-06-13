@@ -97,7 +97,14 @@ is a "function not found" error.
 | `write:tags` | `add_tag(book_id, tag)`; `remove_tag(book_id, tag)` | Add and remove book tags |
 | `write:files` | `write_file(rel, text)`; `append_file(rel, text)` — relative to a folder you pick at enable time | Write files to a folder you choose |
 | `notify` | `notify(title, body)` → desktop notification | Show desktop notifications |
-| `write:metadata`, `network`, `import:books` | reserved (no host functions yet) | — |
+| `network` | `http_get(url)` → response body text — only for hosts in `[permissions.network] hosts` | Contact these websites |
+| `import:books` | `import_from_url(url)` → downloads and imports a book (dedup applies) | Download books into your library |
+| `write:metadata` | reserved (no host functions yet) | — |
+
+**`network` safety:** `http_get` only reaches hosts you declared in
+`[permissions.network] hosts`; the SSRF guard additionally blocks private and
+loopback addresses, so a plugin can't reach your LAN or a metadata endpoint
+even if it lists one.
 
 **Book map:** `id`, `title`, `author`, `format`, `total_chapters`, `series`,
 `volume`, `language`, `rating` (missing optional fields are `()`).
@@ -119,6 +126,13 @@ Each `on_event` call is bounded:
 - Plugins are dispatched one event at a time; keep `on_event` quick.
 - A plugin that errors on 5 consecutive events is automatically disabled. Fix
   it and re-enable from Settings → Plugins.
+
+## Scheduling
+
+There is no recurring scheduler yet. A plugin that subscribes to `AppStarted`
+runs once at launch and can also be triggered on demand with the **Run now**
+button next to it in Settings → Plugins. (The bundled OPDS Auto-Download
+plugin works this way.)
 
 ## Example: tag comics on import
 

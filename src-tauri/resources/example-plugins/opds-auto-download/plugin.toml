@@ -1,0 +1,21 @@
+[plugin]
+id = "opds-auto-download"
+name = "OPDS Auto-Download"
+version = "1.0.0"
+description = "Fetches a Standard Ebooks OPDS feed and imports new books. Run it from the Run-now button."
+author = "Folio"
+min_app_version = "2.3.0"
+
+[events]
+# AppStarted fires at launch; this plugin is also driven by the "Run now"
+# button in Settings → Plugins (v1 has no recurring scheduler).
+subscribe = ["AppStarted"]
+
+[permissions]
+# network      → fetch the OPDS feed (only the host listed below)
+# read:library → skip books already in the library
+# import:books → download and import new entries
+required = ["network", "read:library", "import:books"]
+
+[permissions.network]
+hosts = ["standardebooks.org"]
