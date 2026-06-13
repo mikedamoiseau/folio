@@ -56,21 +56,20 @@ pub fn is_safe_url_with_trusted(url: &str, trusted: &[String]) -> bool {
         }
     }
 
-    // Extract host portion
-    let after_scheme = if let Some(s) = url.strip_prefix("https://") {
-        s
-    } else if let Some(s) = url.strip_prefix("http://") {
-        s
-    } else {
-        return false;
+    // Extract the host with the `url` crate — the SAME parser the allowlist
+    // and trusted-host checks use (`host_port_from_url`). A manual string
+    // split disagrees with it on userinfo tricks (`http://a@b/`), letting a
+    // URL pass one check while the other sees a different host.
+    let host = match url::Url::parse(url).ok().and_then(|u| {
+        u.host_str().map(|h| {
+            // url crate keeps IPv6 in brackets; strip them for IpAddr parsing.
+            h.trim_start_matches('[').trim_end_matches(']').to_string()
+        })
+    }) {
+        Some(h) => h,
+        None => return false, // unparseable / hostless → unsafe
     };
-    let host = after_scheme
-        .split('/')
-        .next()
-        .unwrap_or("")
-        .split(':')
-        .next()
-        .unwrap_or("");
+    let host = host.as_str();
 
     // Block loopback and private network ranges
     if host == "localhost" || host.ends_with(".localhost") {
@@ -935,6 +934,46 @@ pub fn download_file_with_trusted(url: &str, dest: &str, trusted: &[String]) -> 
     }
     let client = reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(120)) // longer timeout for file downloads
+        .build()
+        .map_err(|e| FolioError::network(format!("HTTP client error: {e}")))?;
+    let response = client
+        .get(url)
+        .send()
+        .map_err(|e| FolioError::network(format!("Download failed: {e}")))?;
+    if !response.status().is_success() {
+        return Err(FolioError::network(format!("HTTP {}", response.status())));
+    }
+    let bytes = response
+        .bytes()
+        .map_err(|e| FolioError::network(format!("Read error: {e}")))?;
+    std::fs::write(dest, &bytes).map_err(|e| FolioError::io(format!("Write error: {e}")))?;
+    Ok(())
+}
+
+/// Download a file with the SSRF guard re-applied on EVERY redirect hop, not
+/// just the initial URL. Used by the plugin `import:books` path so a public
+/// URL can't 302 to a private/loopback target (no trusted-host relaxation).
+pub fn download_file_ssrf_guarded(url: &str, dest: &str) -> FolioResult<()> {
+    if !is_safe_url_with_trusted(url, &[]) {
+        return Err(FolioError::invalid(
+            "URL blocked: only public HTTP/HTTPS URLs are allowed.",
+        ));
+    }
+    // Custom redirect policy: each hop must itself pass the SSRF guard, else
+    // the redirect is refused. Also caps hop count.
+    let policy = reqwest::redirect::Policy::custom(|attempt| {
+        if attempt.previous().len() >= 5 {
+            return attempt.error("too many redirects");
+        }
+        if is_safe_url_with_trusted(attempt.url().as_str(), &[]) {
+            attempt.follow()
+        } else {
+            attempt.error("redirect to a blocked (private/non-HTTP) URL")
+        }
+    });
+    let client = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(120))
+        .redirect(policy)
         .build()
         .map_err(|e| FolioError::network(format!("HTTP client error: {e}")))?;
     let response = client

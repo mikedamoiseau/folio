@@ -263,6 +263,8 @@
     "intro": "Les extensions sont de petits scripts qui r\u00e9agissent aux \u00e9v\u00e9nements de Folio \u2014 comme \u00e9tiqueter les livres \u00e0 l'import ou vous pr\u00e9venir quand vous en terminez un. N'installez que des extensions de sources de confiance.",
     "reload": "Recharger les extensions",
     "openFolder": "Ouvrir le dossier des extensions",
+    "runNow": "Exécuter maintenant",
+    "networkHosts": "Contactera : {{hosts}}",
     "empty": "Aucune extension install\u00e9e. Installez l'un des exemples ci-dessous pour commencer.",
     "enable": "Activer l'extension",
     "statusActive": "Active",

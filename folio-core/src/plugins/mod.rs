@@ -46,6 +46,8 @@ pub struct PluginInfo {
     pub author: String,
     pub subscribe: Vec<String>,
     pub permissions: Vec<Permission>,
+    /// Declared host allowlist for the `network` permission (empty otherwise).
+    pub network_hosts: Vec<String>,
     pub status: PluginStatus,
     /// True when enabling requires the consent dialog (ungranted perms).
     pub needs_consent: bool,
@@ -113,6 +115,7 @@ impl PluginManager {
                     author: String::new(),
                     subscribe: Vec::new(),
                     permissions: Vec::new(),
+                    network_hosts: Vec::new(),
                     status: PluginStatus::Invalid(reason.clone()),
                     needs_consent: false,
                 },
@@ -133,6 +136,7 @@ impl PluginManager {
                         author: m.author.clone(),
                         subscribe: m.subscribe.clone(),
                         permissions: m.permissions.clone(),
+                        network_hosts: m.network_hosts.clone(),
                         status,
                         needs_consent: permissions::needs_consent(
                             &conn,
@@ -191,6 +195,27 @@ impl PluginManager {
         inner.active.remove(plugin_id);
         permissions::set_plugin_enabled(&conn, plugin_id, false)?;
         Ok(())
+    }
+
+    /// Manually fire `AppStarted` to one active plugin (the "Run now" button
+    /// for `AppStarted`-triggered plugins, e.g. the OPDS auto-downloader,
+    /// which v1 has no scheduler for). Errors if the plugin is not active.
+    pub fn run_now(&self, plugin_id: &str) -> FolioResult<()> {
+        let runtime = {
+            let inner = self.lock_inner();
+            let plugin = inner.active.get(plugin_id).ok_or_else(|| {
+                FolioError::invalid(format!("plugin '{plugin_id}' is not active"))
+            })?;
+            if !plugin.subscribe.contains("AppStarted") {
+                return Err(FolioError::invalid(format!(
+                    "plugin '{plugin_id}' does not subscribe to AppStarted"
+                )));
+            }
+            Arc::clone(&plugin.runtime)
+        };
+        runtime
+            .dispatch(&FolioEvent::AppStarted)
+            .map_err(|e| FolioError::internal(format!("plugin run failed: {e}")))
     }
 
     /// Rescan the plugins directory and reload enabled plugins.
@@ -404,7 +429,7 @@ fn load_active(
     deps: &RuntimeDeps,
 ) -> FolioResult<ActivePlugin> {
     let script = std::fs::read_to_string(plugins_dir.join(&manifest.id).join("main.rhai"))?;
-    let runtime = PluginRuntime::load(&script, granted, deps.clone())?;
+    let runtime = PluginRuntime::load(&script, granted, &manifest.network_hosts, deps.clone())?;
     Ok(ActivePlugin {
         runtime: Arc::new(runtime),
         subscribe: manifest.subscribe.iter().cloned().collect(),
@@ -745,6 +770,26 @@ required = ["notify"]
         assert_eq!(mgr.list().unwrap()[0].status, PluginStatus::Active);
         mgr.handle_event(&imported("b9"));
         assert_eq!(f.services.notes.lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn run_now_rejects_plugin_not_subscribed_to_app_started() {
+        let f = fixture();
+        // Subscribes to BookImported, not AppStarted.
+        write_plugin(
+            &f,
+            "test-notify",
+            &notify_manifest("test-notify"),
+            r#"fn on_event(e) { notify("got", e.book_id); }"#,
+        );
+        grant_notify(&f, "test-notify");
+        let mgr = PluginManager::new(f.plugins_dir.clone(), f.deps.clone()).unwrap();
+        mgr.enable("test-notify").unwrap();
+
+        let err = mgr.run_now("test-notify").unwrap_err().to_string();
+        assert!(err.contains("AppStarted"), "got: {err}");
+        // The plugin's on_event was never invoked.
+        assert!(f.services.notes.lock().unwrap().is_empty());
     }
 
     #[test]

@@ -65,6 +65,12 @@ Folio is for the opposite case: you already have the files, and you want a bette
 - Read-only and sanitized; PIN hashed in your OS keychain, with rate-limited logins and a login audit trail
 - System tray toggles to flip the Web UI and OPDS server on or off
 
+### Extensibility
+- Plugin system — small sandboxed scripts that react to events (book imported, highlight created, book finished, …)
+- Deny-by-default permissions with an explicit consent dialog per plugin
+- Bundled example plugins: auto-tag on import, finish notifications, Markdown highlight export, OPDS auto-download
+- See [`docs/PLUGINS.md`](docs/PLUGINS.md) to write your own
+
 ### Interface
 - Multi-language UI — English and French, with OS-language auto-detection
 - Cross-platform desktop app for macOS, Windows, and Linux

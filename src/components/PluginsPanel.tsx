@@ -21,9 +21,11 @@ interface PluginView {
   author: string;
   events: string[];
   permissions: PermissionView[];
+  network_hosts: string[];
   status: "active" | "disabled" | "auto_disabled" | "invalid";
   invalid_reason: string | null;
   needs_consent: boolean;
+  can_run_now: boolean;
 }
 
 interface ExamplePlugin {
@@ -137,6 +139,17 @@ export default function PluginsPanel({ onToast }: { onToast?: (msg: string) => v
     }
   };
 
+  const runNow = async (p: PluginView) => {
+    setBusy(true);
+    try {
+      await invoke("plugin_run_now", { pluginId: p.id });
+    } catch (e) {
+      onToast?.(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const installExample = async (id: string) => {
     setBusy(true);
     try {
@@ -232,6 +245,16 @@ export default function PluginsPanel({ onToast }: { onToast?: (msg: string) => v
                   ))}
                 </div>
               )}
+              {p.can_run_now && (
+                <button
+                  type="button"
+                  onClick={() => runNow(p)}
+                  disabled={busy}
+                  className="mt-2 text-xs text-accent hover:text-accent-hover hover:underline disabled:opacity-50"
+                >
+                  {t("plugins.runNow")}
+                </button>
+              )}
             </li>
           ))}
         </ul>
@@ -292,6 +315,13 @@ export default function PluginsPanel({ onToast }: { onToast?: (msg: string) => v
                   </li>
                 ))}
               </ul>
+              {consentFor.network_hosts.length > 0 && (
+                <p className="text-xs text-ink-muted">
+                  {t("plugins.networkHosts", {
+                    hosts: consentFor.network_hosts.join(", "),
+                  })}
+                </p>
+              )}
               <p className="text-xs text-ink-muted">{t("plugins.consentTrust")}</p>
               <div className="flex justify-end gap-3 pt-1">
                 <button
