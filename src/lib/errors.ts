@@ -11,6 +11,7 @@ export type FolioErrorPayload = {
     | "PermissionDenied"
     | "InvalidInput"
     | "Network"
+    | "RateLimited"
     | "Database"
     | "Io"
     | "Serialization"
@@ -46,6 +47,7 @@ const KIND_TO_KEY: Record<string, string> = {
   NotFound: "errors.fileNotFound",
   PermissionDenied: "errors.permissionDenied",
   Network: "errors.networkError",
+  RateLimited: "errors.rateLimited",
   InvalidInput: "errors.invalidInput",
   Database: "errors.database",
   Io: "errors.io",

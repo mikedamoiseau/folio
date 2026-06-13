@@ -72,8 +72,11 @@ fn build_sru_url(query: &str, max_records: u32) -> String {
 }
 
 fn fetch_and_parse(url: &str) -> FolioResult<Vec<EnrichmentData>> {
-    let resp = reqwest::blocking::get(url)
-        .map_err(|e| FolioError::network(format!("BnF request failed: {e}")))?;
+    let resp = crate::http_retry::send_with_retry(
+        reqwest::blocking::Client::new().get(url),
+        "bnf",
+        &crate::http_retry::RetryPolicy::default(),
+    )?;
 
     if !resp.status().is_success() {
         return Err(FolioError::network(format!("BnF HTTP {}", resp.status())));

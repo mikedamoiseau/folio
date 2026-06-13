@@ -21,12 +21,12 @@
 //! ## IPC contract stability
 //!
 //! The strings returned by [`FolioError::kind`] (`"NotFound"`,
-//! `"PermissionDenied"`, `"InvalidInput"`, `"Network"`, `"Database"`, `"Io"`,
-//! `"Serialization"`, `"Internal"`) are a public contract consumed by
-//! `src/lib/errors.ts`. **Renaming or removing a variant is a breaking
-//! change** — update `KIND_TO_KEY` in the frontend in the same commit.
-//! Adding a new variant is backwards-compatible: the frontend falls back to
-//! message substring matching if it doesn't recognize a kind.
+//! `"PermissionDenied"`, `"InvalidInput"`, `"Network"`, `"RateLimited"`,
+//! `"Database"`, `"Io"`, `"Serialization"`, `"Internal"`) are a public
+//! contract consumed by `src/lib/errors.ts`. **Renaming or removing a variant
+//! is a breaking change** — update `KIND_TO_KEY` in the frontend in the same
+//! commit. Adding a new variant is backwards-compatible: the frontend falls
+//! back to message substring matching if it doesn't recognize a kind.
 //!
 //! ## Dependency direction (folio-core extraction, #63)
 //!
@@ -55,6 +55,9 @@ pub enum FolioError {
     /// Network-level failure (HTTP, DNS, timeout, connection refused,
     /// remote-storage transport errors).
     Network(String),
+    /// Provider refused requests due to rate limiting (HTTP 429) and
+    /// retries were exhausted.
+    RateLimited(String),
     /// SQLite / r2d2 database error.
     Database(String),
     /// Filesystem I/O error (non-NotFound, non-PermissionDenied).
@@ -73,6 +76,7 @@ impl FolioError {
             Self::PermissionDenied(_) => "PermissionDenied",
             Self::InvalidInput(_) => "InvalidInput",
             Self::Network(_) => "Network",
+            Self::RateLimited(_) => "RateLimited",
             Self::Database(_) => "Database",
             Self::Io(_) => "Io",
             Self::Serialization(_) => "Serialization",
@@ -136,6 +140,7 @@ impl fmt::Display for FolioError {
             | Self::PermissionDenied(m)
             | Self::InvalidInput(m)
             | Self::Network(m)
+            | Self::RateLimited(m)
             | Self::Database(m)
             | Self::Io(m)
             | Self::Serialization(m)
@@ -303,6 +308,7 @@ mod tests {
         assert_eq!(FolioError::NotFound("x".into()).kind(), "NotFound");
         assert_eq!(FolioError::InvalidInput("x".into()).kind(), "InvalidInput");
         assert_eq!(FolioError::Network("x".into()).kind(), "Network");
+        assert_eq!(FolioError::RateLimited("x".into()).kind(), "RateLimited");
         assert_eq!(FolioError::Database("x".into()).kind(), "Database");
         assert_eq!(FolioError::Io("x".into()).kind(), "Io");
         assert_eq!(

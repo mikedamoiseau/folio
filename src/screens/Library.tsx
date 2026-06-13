@@ -20,7 +20,7 @@ import KeyboardShortcutsHelp from "../components/KeyboardShortcutsHelp";
 import TagFilter from "../components/TagFilter";
 import { startDrag, endDrag, isDragging, getDraggedCoverSrc, subscribe } from "../lib/dragState";
 import { friendlyError } from "../lib/errors";
-import { pickSupportedOpdsLink, getReadingStatus } from "../lib/utils";
+import { pickSupportedOpdsLink, getReadingStatus, providerDisplayName } from "../lib/utils";
 import { FALLBACK_FORMATS, getSupportedFormats, useSupportedFormats } from "../lib/supportedFormats";
 import HighlightSearchModal from "../components/HighlightSearchModal";
 import SeriesStackCard from "../components/SeriesStackCard";
@@ -149,6 +149,7 @@ export default function Library({ catalogImportedBookIds }: LibraryProps = {}) {
   const [showShortcuts, setShowShortcuts] = useState(false);
   const searchRef = useRef<HTMLInputElement>(null);
   const [scanProgress, setScanProgress] = useState<{ current: number; total: number; bookTitle: string; status: string } | null>(null);
+  const [retryInfo, setRetryInfo] = useState<{ provider: string; attempt: number; maxAttempts: number; delayMs: number } | null>(null);
 
   // Recently read
   const [showContinueReading, setShowContinueReading] = useState(() => {
@@ -658,8 +659,10 @@ export default function Library({ catalogImportedBookIds }: LibraryProps = {}) {
   useEffect(() => {
     let unlistenProgress: (() => void) | undefined;
     let unlistenAutoStart: (() => void) | undefined;
+    let unlistenRetry: (() => void) | undefined;
     listen<{ current: number; total: number; bookTitle: string; status: string }>("scan-progress", (event) => {
       const p = event.payload;
+      setRetryInfo(null);
       if (p.status === "done" || p.status === "cancelled") {
         if (p.status === "cancelled" && p.current > 0) {
           addToast(t("library.scanCancelled", { count: p.current }), "info");
@@ -671,10 +674,13 @@ export default function Library({ catalogImportedBookIds }: LibraryProps = {}) {
         setScanProgress(p);
       }
     }).then((fn) => { unlistenProgress = fn; });
+    listen<{ provider: string; attempt: number; maxAttempts: number; delayMs: number }>("enrichment-retry", (event) => {
+      setRetryInfo(event.payload);
+    }).then((fn) => { unlistenRetry = fn; });
     listen<number>("scan-auto-start", () => {
       invoke("start_scan").catch(() => {});
     }).then((fn) => { unlistenAutoStart = fn; });
-    return () => { unlistenProgress?.(); unlistenAutoStart?.(); };
+    return () => { unlistenProgress?.(); unlistenAutoStart?.(); unlistenRetry?.(); };
   }, [loadBooks]);
 
   // Reload the grid whenever a background import finishes so freshly imported
@@ -859,6 +865,11 @@ export default function Library({ catalogImportedBookIds }: LibraryProps = {}) {
               <span className="truncate max-w-[200px]">
                 {t("library.enrichingProgress", { current: scanProgress.current, total: scanProgress.total, bookTitle: scanProgress.bookTitle })}
               </span>
+              {retryInfo && (
+                <span className="truncate max-w-[180px] text-accent">
+                  {t("library.retryingProvider", { provider: providerDisplayName(retryInfo.provider), attempt: retryInfo.attempt, max: retryInfo.maxAttempts })}
+                </span>
+              )}
               <button onClick={handleCancelScan} className="shrink-0 text-ink-muted hover:text-ink transition-colors" title={t("library.cancelScan")}>
                 <svg width="14" height="14" viewBox="0 0 20 20" fill="none">
                   <path d="M15 5L5 15M5 5l10 10" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />

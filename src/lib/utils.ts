@@ -339,6 +339,18 @@ export const PAUSED_AFTER_DAYS = 14;
  * - in progress, read <=14d ago → active
  * - in progress, older or no timestamp → paused
  */
+/** Display names for enrichment provider ids used in retry feedback (F-2-7). */
+const PROVIDER_DISPLAY_NAMES: Record<string, string> = {
+  google_books: "Google Books",
+  openlibrary: "OpenLibrary",
+  comic_vine: "Comic Vine",
+  bnf: "BnF",
+};
+
+export function providerDisplayName(id: string): string {
+  return PROVIDER_DISPLAY_NAMES[id] ?? id;
+}
+
 export function getReadingStatus(
   progress: number,
   lastReadAt: number | undefined,

@@ -66,8 +66,11 @@ impl EnrichmentProvider for OpenLibraryProvider {
 }
 
 fn fetch_and_parse(url: &str) -> FolioResult<Vec<EnrichmentData>> {
-    let resp = reqwest::blocking::get(url)
-        .map_err(|e| FolioError::network(format!("OpenLibrary search failed: {e}")))?;
+    let resp = crate::http_retry::send_with_retry(
+        reqwest::blocking::Client::new().get(url),
+        "openlibrary",
+        &crate::http_retry::RetryPolicy::default(),
+    )?;
     if !resp.status().is_success() {
         return Err(FolioError::network(format!(
             "OpenLibrary HTTP {}",

@@ -14,6 +14,7 @@ import {
   resolveBookmarkScrollTop,
   getReadingStatus,
   PAUSED_AFTER_DAYS,
+  providerDisplayName,
   type BookLike,
 } from "./utils";
 
@@ -659,5 +660,21 @@ describe("getReadingStatus", () => {
   it("returns paused for in-progress book with no/zero last-read timestamp", () => {
     expect(getReadingStatus(34, undefined, now)).toBe("paused");
     expect(getReadingStatus(34, 0, now)).toBe("paused");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// providerDisplayName
+// ---------------------------------------------------------------------------
+describe("providerDisplayName", () => {
+  it("maps known provider ids", () => {
+    expect(providerDisplayName("google_books")).toBe("Google Books");
+    expect(providerDisplayName("openlibrary")).toBe("OpenLibrary");
+    expect(providerDisplayName("comic_vine")).toBe("Comic Vine");
+    expect(providerDisplayName("bnf")).toBe("BnF");
+  });
+
+  it("falls back to the raw id for unknown providers", () => {
+    expect(providerDisplayName("somenew_api")).toBe("somenew_api");
   });
 });

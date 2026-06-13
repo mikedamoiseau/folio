@@ -1,6 +1,6 @@
 use axum::{
     extract::{Path, Query, State},
-    http::{header, StatusCode},
+    http::{header, HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::get,
     Router,
@@ -9,6 +9,8 @@ use axum::{
 use super::{folio_status, WebState};
 use crate::db;
 use crate::models::Book;
+use sha2::{Digest, Sha256};
+use std::collections::HashMap;
 
 const ATOM_CONTENT_TYPE: &str = "application/atom+xml;profile=opds-catalog;kind=navigation";
 const ATOM_ACQ_TYPE: &str = "application/atom+xml;profile=opds-catalog;kind=acquisition";
@@ -29,6 +31,52 @@ fn xml_escape(s: &str) -> String {
         .replace('<', "&lt;")
         .replace('>', "&gt;")
         .replace('"', "&quot;")
+}
+
+/// Weak ETag over the rendered book subset: SHA-256 of the feed id plus the
+/// sorted `(id, updated_at)` pairs of exactly the books this feed renders.
+/// Weak (`W/"..."`) because equal-state bodies are not byte-identical.
+/// Hashing pairs (not raw timestamps in the tag) avoids leaking library
+/// activity times to clients.
+fn feed_etag(feed_id: &str, rendered_ids: &[&str], pairs: &HashMap<String, i64>) -> String {
+    let mut ids: Vec<&str> = rendered_ids.to_vec();
+    ids.sort_unstable();
+    let mut h = Sha256::new();
+    h.update(feed_id.as_bytes());
+    for id in ids {
+        h.update([0u8]); // separator so ("ab","c") != ("a","bc")
+        h.update(id.as_bytes());
+        h.update(pairs.get(id).copied().unwrap_or(0).to_le_bytes());
+    }
+    let hex = format!("{:x}", h.finalize());
+    format!("W/\"{}\"", &hex[..16])
+}
+
+/// RFC 9110 §13.1.2 If-None-Match: comma-separated entity tags or `*`,
+/// compared weakly (the `W/` prefix is ignored on both sides).
+fn if_none_match_matches(headers: &HeaderMap, etag: &str) -> bool {
+    let Some(value) = headers
+        .get(header::IF_NONE_MATCH)
+        .and_then(|v| v.to_str().ok())
+    else {
+        return false;
+    };
+    fn opaque(tag: &str) -> &str {
+        tag.trim().trim_start_matches("W/").trim_matches('"')
+    }
+    let ours = opaque(etag);
+    value
+        .split(',')
+        .any(|candidate| candidate.trim() == "*" || opaque(candidate) == ours)
+}
+
+/// Max `updated_at` among the rendered books — the feed-level `<updated>`
+/// value. `None` for an empty feed (caller falls back to now).
+fn max_updated(rendered_ids: &[&str], pairs: &HashMap<String, i64>) -> Option<i64> {
+    rendered_ids
+        .iter()
+        .filter_map(|id| pairs.get(*id).copied())
+        .max()
 }
 
 /// Derive an OPDS acquisition extension + MIME from a MOBI-family book's
@@ -130,8 +178,14 @@ fn wrap_feed(
     self_href: &str,
     kind: &str,
     next_href: Option<&str>,
+    updated_ts: Option<i64>,
 ) -> String {
-    let now = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ");
+    // Feed-level <updated>: the library-state change time for ETag-scoped
+    // feeds (max updated_at of rendered books), request time otherwise.
+    let updated = updated_ts
+        .and_then(|t| chrono::DateTime::from_timestamp(t, 0))
+        .map(|dt| dt.format("%Y-%m-%dT%H:%M:%SZ").to_string())
+        .unwrap_or_else(|| chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string());
     let next_link = next_href
         .map(|h| format!(r#"  <link rel="next" href="{h}" type="{kind}"/>"#))
         .unwrap_or_default();
@@ -141,7 +195,7 @@ fn wrap_feed(
       xmlns:opds="http://opds-spec.org/2010/catalog">
   <id>{feed_id}</id>
   <title>{title}</title>
-  <updated>{now}</updated>
+  <updated>{updated}</updated>
   <link rel="self" href="{self_href}" type="{kind}"/>
   <link rel="start" href="/opds" type="{ATOM_CONTENT_TYPE}"/>
   <link rel="search" href="/opds/search?q={{searchTerms}}" type="{ATOM_ACQ_TYPE}"/>
@@ -177,6 +231,7 @@ async fn root_catalog() -> Response {
         "/opds",
         ATOM_CONTENT_TYPE,
         None,
+        None,
     );
 
     ([(header::CONTENT_TYPE, ATOM_CONTENT_TYPE)], xml).into_response()
@@ -190,9 +245,20 @@ struct PaginationQuery {
 async fn all_books(
     State(state): State<WebState>,
     Query(params): Query<PaginationQuery>,
+    headers: HeaderMap,
 ) -> Result<Response, (StatusCode, String)> {
     let conn = state.conn().map_err(folio_status)?;
     let books = db::list_books(&conn).map_err(folio_status)?;
+    let pairs = db::book_etag_pairs(&conn).map_err(folio_status)?;
+
+    // Whole-set tag shared by every page: clients cache per-URL, so a
+    // shared tag across page URLs is correct and any library change
+    // invalidates all pages at once.
+    let rendered_ids: Vec<&str> = books.iter().map(|b| b.id.as_str()).collect();
+    let etag = feed_etag("urn:folio:all", &rendered_ids, &pairs);
+    if if_none_match_matches(&headers, &etag) {
+        return Ok((StatusCode::NOT_MODIFIED, [(header::ETAG, etag)]).into_response());
+    }
 
     let page = params.page.unwrap_or(0);
     let start = page * OPDS_PAGE_SIZE;
@@ -223,18 +289,36 @@ async fn all_books(
         &self_href,
         ATOM_ACQ_TYPE,
         next_href.as_deref(),
+        max_updated(&rendered_ids, &pairs),
     );
 
-    Ok(([(header::CONTENT_TYPE, ATOM_ACQ_TYPE)], xml).into_response())
+    Ok((
+        [
+            (header::CONTENT_TYPE, ATOM_ACQ_TYPE.to_string()),
+            (header::ETAG, etag),
+        ],
+        xml,
+    )
+        .into_response())
 }
 
-async fn new_books(State(state): State<WebState>) -> Result<Response, (StatusCode, String)> {
+async fn new_books(
+    State(state): State<WebState>,
+    headers: HeaderMap,
+) -> Result<Response, (StatusCode, String)> {
     let conn = state.conn().map_err(folio_status)?;
     let mut books = db::list_books(&conn).map_err(folio_status)?;
+    let pairs = db::book_etag_pairs(&conn).map_err(folio_status)?;
 
     // Sort by added_at descending, take 25 most recent
     books.sort_by_key(|b| std::cmp::Reverse(b.added_at));
     books.truncate(25);
+
+    let rendered_ids: Vec<&str> = books.iter().map(|b| b.id.as_str()).collect();
+    let etag = feed_etag("urn:folio:new", &rendered_ids, &pairs);
+    if if_none_match_matches(&headers, &etag) {
+        return Ok((StatusCode::NOT_MODIFIED, [(header::ETAG, etag)]).into_response());
+    }
 
     let entries: String = books
         .iter()
@@ -249,17 +333,35 @@ async fn new_books(State(state): State<WebState>) -> Result<Response, (StatusCod
         "/opds/new",
         ATOM_ACQ_TYPE,
         None,
+        max_updated(&rendered_ids, &pairs),
     );
 
-    Ok(([(header::CONTENT_TYPE, ATOM_ACQ_TYPE)], xml).into_response())
+    Ok((
+        [
+            (header::CONTENT_TYPE, ATOM_ACQ_TYPE.to_string()),
+            (header::ETAG, etag),
+        ],
+        xml,
+    )
+        .into_response())
 }
 
 async fn collection_feed(
     State(state): State<WebState>,
     Path(id): Path<String>,
+    headers: HeaderMap,
 ) -> Result<Response, (StatusCode, String)> {
     let conn = state.conn().map_err(folio_status)?;
     let books = db::get_books_in_collection(&conn, &id).map_err(folio_status)?;
+    let pairs = db::book_etag_pairs(&conn).map_err(folio_status)?;
+
+    let rendered_ids: Vec<&str> = books.iter().map(|b| b.id.as_str()).collect();
+    // Hash the RESOLVED membership — works for manual and rule-based collections alike.
+    let feed_id = format!("urn:folio:collection:{id}");
+    let etag = feed_etag(&feed_id, &rendered_ids, &pairs);
+    if if_none_match_matches(&headers, &etag) {
+        return Ok((StatusCode::NOT_MODIFIED, [(header::ETAG, etag)]).into_response());
+    }
 
     let entries: String = books
         .iter()
@@ -269,14 +371,22 @@ async fn collection_feed(
 
     let xml = wrap_feed(
         &format!("Collection {id}"),
-        &format!("urn:folio:collection:{id}"),
+        &feed_id,
         &entries,
         &format!("/opds/collections/{id}"),
         ATOM_ACQ_TYPE,
         None,
+        max_updated(&rendered_ids, &pairs),
     );
 
-    Ok(([(header::CONTENT_TYPE, ATOM_ACQ_TYPE)], xml).into_response())
+    Ok((
+        [
+            (header::CONTENT_TYPE, ATOM_ACQ_TYPE.to_string()),
+            (header::ETAG, etag),
+        ],
+        xml,
+    )
+        .into_response())
 }
 
 #[derive(serde::Deserialize)]
@@ -318,6 +428,7 @@ async fn search_books(
         &entries,
         &format!("/opds/search?q={}", urlencoding::encode(search_term)),
         ATOM_ACQ_TYPE,
+        None,
         None,
     );
 
@@ -502,6 +613,333 @@ mod tests {
         assert!(
             entry.contains(r#"href="/api/books/book-1/cover" type="image/png""#),
             "cover link should advertise png mime:\n{entry}"
+        );
+    }
+
+    use axum::http::HeaderMap;
+    use std::collections::HashMap;
+
+    fn pairs(entries: &[(&str, i64)]) -> HashMap<String, i64> {
+        entries.iter().map(|(k, v)| (k.to_string(), *v)).collect()
+    }
+
+    #[test]
+    fn feed_etag_is_order_independent_and_weak() {
+        let p = pairs(&[("a", 1), ("b", 2)]);
+        let t1 = feed_etag("urn:folio:all", &["a", "b"], &p);
+        let t2 = feed_etag("urn:folio:all", &["b", "a"], &p);
+        assert_eq!(t1, t2);
+        assert!(t1.starts_with("W/\""), "weak ETag required, got {t1}");
+        assert!(t1.ends_with('"'));
+    }
+
+    #[test]
+    fn feed_etag_changes_on_updated_at_bump_and_set_change() {
+        let p1 = pairs(&[("a", 1), ("b", 2)]);
+        let base = feed_etag("urn:folio:all", &["a", "b"], &p1);
+
+        // updated_at bump
+        let p2 = pairs(&[("a", 1), ("b", 3)]);
+        assert_ne!(base, feed_etag("urn:folio:all", &["a", "b"], &p2));
+
+        // id removed from rendered set
+        assert_ne!(base, feed_etag("urn:folio:all", &["a"], &p1));
+
+        // id added to rendered set
+        let p3 = pairs(&[("a", 1), ("b", 2), ("c", 9)]);
+        assert_ne!(base, feed_etag("urn:folio:all", &["a", "b", "c"], &p3));
+    }
+
+    #[test]
+    fn feed_etag_differs_across_feed_ids() {
+        let p = pairs(&[("a", 1)]);
+        assert_ne!(
+            feed_etag("urn:folio:all", &["a"], &p),
+            feed_etag("urn:folio:new", &["a"], &p)
+        );
+    }
+
+    #[test]
+    fn if_none_match_absent_header_no_match() {
+        let headers = HeaderMap::new();
+        assert!(!if_none_match_matches(&headers, "W/\"abc\""));
+    }
+
+    #[test]
+    fn if_none_match_exact_weak_and_star() {
+        let mut headers = HeaderMap::new();
+        headers.insert(header::IF_NONE_MATCH, "W/\"abc\"".parse().unwrap());
+        assert!(if_none_match_matches(&headers, "W/\"abc\""));
+
+        // Strong-form client tag still matches our weak tag (weak comparison)
+        let mut headers = HeaderMap::new();
+        headers.insert(header::IF_NONE_MATCH, "\"abc\"".parse().unwrap());
+        assert!(if_none_match_matches(&headers, "W/\"abc\""));
+
+        let mut headers = HeaderMap::new();
+        headers.insert(header::IF_NONE_MATCH, "*".parse().unwrap());
+        assert!(if_none_match_matches(&headers, "W/\"anything\""));
+    }
+
+    #[test]
+    fn if_none_match_comma_list_and_mismatch() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::IF_NONE_MATCH,
+            "\"zzz\", W/\"abc\", \"q\"".parse().unwrap(),
+        );
+        assert!(if_none_match_matches(&headers, "W/\"abc\""));
+
+        let mut headers = HeaderMap::new();
+        headers.insert(header::IF_NONE_MATCH, "W/\"other\"".parse().unwrap());
+        assert!(!if_none_match_matches(&headers, "W/\"abc\""));
+    }
+
+    #[test]
+    fn max_updated_picks_max_of_rendered_only() {
+        let p = pairs(&[("a", 10), ("b", 50), ("c", 99)]);
+        assert_eq!(max_updated(&["a", "b"], &p), Some(50));
+        assert_eq!(max_updated(&[], &p), None);
+    }
+
+    use super::super::{auth, WebState};
+    use axum::extract::{Path as AxumPath, Query as AxumQuery, State as AxumState};
+    use std::path::PathBuf;
+    use std::sync::{Arc, Mutex};
+
+    fn etag_test_book(id: &str, added_at: i64) -> Book {
+        Book {
+            id: id.to_string(),
+            title: format!("Book {id}"),
+            author: "Author".to_string(),
+            file_path: format!("/tmp/{id}.epub"),
+            cover_path: None,
+            total_chapters: 1,
+            added_at,
+            format: crate::models::BookFormat::Epub,
+            file_hash: None,
+            description: None,
+            genres: None,
+            rating: None,
+            isbn: None,
+            openlibrary_key: None,
+            enrichment_status: None,
+            series: None,
+            volume: None,
+            language: None,
+            publisher: None,
+            publish_year: None,
+            is_imported: true,
+        }
+    }
+
+    fn seeded_state(books: &[(&str, i64)]) -> WebState {
+        let pool = crate::db::create_pool(&PathBuf::from(":memory:")).expect("in-memory DB");
+        {
+            let conn = pool.get().unwrap();
+            for (id, ts) in books {
+                crate::db::insert_book(&conn, &etag_test_book(id, *ts)).unwrap();
+            }
+        }
+        WebState {
+            pool: Arc::new(Mutex::new(pool)),
+            data_dir: PathBuf::from("/tmp"),
+            pin_hash: Arc::new(Mutex::new(None)),
+            sessions: Arc::new(Mutex::new(std::collections::HashMap::new())),
+            login_limiter: Arc::new(auth::RateLimiter::new(5, 300)),
+        }
+    }
+
+    fn response_etag(resp: &axum::response::Response) -> Option<String> {
+        resp.headers()
+            .get(header::ETAG)
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_string)
+    }
+
+    #[tokio::test]
+    async fn all_books_sets_etag_and_returns_304_on_match() {
+        let state = seeded_state(&[("b1", 100), ("b2", 200)]);
+
+        let resp = all_books(
+            AxumState(state.clone()),
+            AxumQuery(PaginationQuery { page: None }),
+            HeaderMap::new(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let etag = response_etag(&resp).expect("200 must carry ETag");
+
+        let mut headers = HeaderMap::new();
+        headers.insert(header::IF_NONE_MATCH, etag.parse().unwrap());
+        let resp = all_books(
+            AxumState(state.clone()),
+            AxumQuery(PaginationQuery { page: None }),
+            headers,
+        )
+        .await
+        .unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_MODIFIED);
+        assert_eq!(response_etag(&resp).as_deref(), Some(etag.as_str()));
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert!(body.is_empty(), "304 must have empty body");
+    }
+
+    #[tokio::test]
+    async fn all_books_etag_changes_after_book_mutation() {
+        let state = seeded_state(&[("b1", 100)]);
+
+        let resp = all_books(
+            AxumState(state.clone()),
+            AxumQuery(PaginationQuery { page: None }),
+            HeaderMap::new(),
+        )
+        .await
+        .unwrap();
+        let etag = response_etag(&resp).unwrap();
+
+        state
+            .conn()
+            .unwrap()
+            .execute("UPDATE books SET updated_at = 999 WHERE id = 'b1'", [])
+            .unwrap();
+
+        let mut headers = HeaderMap::new();
+        headers.insert(header::IF_NONE_MATCH, etag.parse().unwrap());
+        let resp = all_books(
+            AxumState(state.clone()),
+            AxumQuery(PaginationQuery { page: None }),
+            headers,
+        )
+        .await
+        .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK, "stale tag must re-send");
+        assert_ne!(response_etag(&resp).unwrap(), etag);
+    }
+
+    #[tokio::test]
+    async fn new_books_ignores_changes_outside_top_25() {
+        // 26 books: ids b00..b25, added_at ascending — b00 is outside top-25.
+        let books: Vec<(String, i64)> = (0..26)
+            .map(|i| (format!("b{i:02}"), 1000 + i as i64))
+            .collect();
+        let refs: Vec<(&str, i64)> = books.iter().map(|(s, t)| (s.as_str(), *t)).collect();
+        let state = seeded_state(&refs);
+
+        let resp = new_books(AxumState(state.clone()), HeaderMap::new())
+            .await
+            .unwrap();
+        let etag = response_etag(&resp).unwrap();
+
+        // Bump the one book NOT rendered (lowest added_at) — tag must not change.
+        state
+            .conn()
+            .unwrap()
+            .execute("UPDATE books SET updated_at = 9999 WHERE id = 'b00'", [])
+            .unwrap();
+
+        let mut headers = HeaderMap::new();
+        headers.insert(header::IF_NONE_MATCH, etag.parse().unwrap());
+        let resp = new_books(AxumState(state.clone()), headers).await.unwrap();
+        assert_eq!(
+            resp.status(),
+            StatusCode::NOT_MODIFIED,
+            "change outside rendered top-25 must not invalidate /opds/new"
+        );
+    }
+
+    #[tokio::test]
+    async fn collection_feed_etag_changes_on_membership_change() {
+        let state = seeded_state(&[("b1", 100), ("b2", 200)]);
+        {
+            let conn = state.conn().unwrap();
+            let coll = crate::models::Collection {
+                id: "c1".to_string(),
+                name: "Test".to_string(),
+                r#type: crate::models::CollectionType::Manual,
+                icon: None,
+                color: None,
+                created_at: 1,
+                updated_at: 1,
+                rules: Vec::new(),
+            };
+            crate::db::insert_collection(&conn, &coll).unwrap();
+            crate::db::add_book_to_collection(&conn, "b1", "c1").unwrap();
+        }
+
+        let resp = collection_feed(
+            AxumState(state.clone()),
+            AxumPath("c1".to_string()),
+            HeaderMap::new(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let etag = response_etag(&resp).expect("collection 200 must carry ETag");
+
+        // Membership change → new tag
+        crate::db::add_book_to_collection(&state.conn().unwrap(), "b2", "c1").unwrap();
+
+        let mut headers = HeaderMap::new();
+        headers.insert(header::IF_NONE_MATCH, etag.parse().unwrap());
+        let resp = collection_feed(
+            AxumState(state.clone()),
+            AxumPath("c1".to_string()),
+            headers,
+        )
+        .await
+        .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_ne!(response_etag(&resp).unwrap(), etag);
+    }
+
+    #[tokio::test]
+    async fn search_and_root_have_no_etag() {
+        let state = seeded_state(&[("b1", 100)]);
+
+        let resp = search_books(
+            AxumState(state.clone()),
+            AxumQuery(SearchQuery {
+                q: Some("Book".to_string()),
+            }),
+        )
+        .await
+        .unwrap();
+        assert!(
+            response_etag(&resp).is_none(),
+            "/search is out of ETag scope"
+        );
+
+        let resp = root_catalog().await;
+        assert!(
+            response_etag(&resp).is_none(),
+            "root catalog is out of ETag scope"
+        );
+    }
+
+    #[tokio::test]
+    async fn feed_updated_reflects_max_book_updated_at() {
+        let state = seeded_state(&[("b1", 100), ("b2", 1700000000)]);
+        let resp = all_books(
+            AxumState(state.clone()),
+            AxumQuery(PaginationQuery { page: None }),
+            HeaderMap::new(),
+        )
+        .await
+        .unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let xml = String::from_utf8(body.to_vec()).unwrap();
+        // 1700000000 = 2023-11-14T22:13:20Z — feed-level <updated> is the max
+        // updated_at of rendered books, not request time.
+        assert!(
+            xml.contains("<updated>2023-11-14T22:13:20Z</updated>"),
+            "feed <updated> must be max book updated_at; got: {}",
+            &xml[..xml.len().min(600)]
         );
     }
 }

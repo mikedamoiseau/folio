@@ -16,6 +16,8 @@ pub mod db;
 pub mod enrichment;
 pub mod epub;
 pub mod error;
+pub mod events;
+pub mod http_retry;
 pub mod image_util;
 pub mod isbn;
 #[cfg(feature = "mobi")]
