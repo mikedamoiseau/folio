@@ -16,6 +16,7 @@ import {
 } from "../lib/themes";
 import ActivityLog from "./ActivityLog";
 import SavedThemesList from "./SavedThemesList";
+import PluginsPanel from "./PluginsPanel";
 import { emit } from "@tauri-apps/api/event";
 import { releaseNotes, appVersion as buildVersion } from "virtual:release-notes";
 import {
@@ -2229,6 +2230,10 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
               </div>
             </Accordion>
           )}
+
+          <Accordion title={t("plugins.section")} open={openSection === "plugins"} onToggle={() => toggleSection("plugins")}>
+            <PluginsPanel onToast={(msg) => addToast(msg, "error")} />
+          </Accordion>
 
           <Accordion title={t("settings.aboutSection")} open={openSection === "about"} onToggle={() => toggleSection("about")}>
             <div className="space-y-3 text-sm">

@@ -258,6 +258,36 @@
     "bookCount": "{{count}} livres"
   },
 
+  "plugins": {
+    "section": "Extensions",
+    "intro": "Les extensions sont de petits scripts qui r\u00e9agissent aux \u00e9v\u00e9nements de Folio \u2014 comme \u00e9tiqueter les livres \u00e0 l'import ou vous pr\u00e9venir quand vous en terminez un. N'installez que des extensions de sources de confiance.",
+    "reload": "Recharger les extensions",
+    "openFolder": "Ouvrir le dossier des extensions",
+    "empty": "Aucune extension install\u00e9e. Installez l'un des exemples ci-dessous pour commencer.",
+    "enable": "Activer l'extension",
+    "statusActive": "Active",
+    "statusDisabled": "D\u00e9sactiv\u00e9e",
+    "statusAutoDisabled": "D\u00e9sactiv\u00e9e apr\u00e8s des erreurs r\u00e9p\u00e9t\u00e9es",
+    "statusInvalid": "Invalide",
+    "examplesHeading": "Exemples d'extensions",
+    "install": "Installer",
+    "installed": "Install\u00e9e",
+    "consentTitle": "Activer {{name}} ?",
+    "consentBody": "Cette extension demande l'acc\u00e8s \u00e0 :",
+    "consentTrust": "N'activez que des extensions de sources de confiance. Une extension peut utiliser les acc\u00e8s que vous accordez ici.",
+    "consentApprove": "Approuver et activer",
+    "perm": {
+      "read_library": "Lire les m\u00e9tadonn\u00e9es de vos livres (titres, auteurs, \u00e9tiquettes, notes)",
+      "read_highlights": "Lire vos surlignages et notes",
+      "write_tags": "Ajouter et retirer des \u00e9tiquettes",
+      "write_metadata": "Modifier les m\u00e9tadonn\u00e9es (note, s\u00e9rie)",
+      "write_files": "\u00c9crire des fichiers dans un dossier de votre choix",
+      "notify": "Afficher des notifications",
+      "network": "Contacter les sites web qu'elle d\u00e9clare",
+      "import_books": "T\u00e9l\u00e9charger des livres dans votre biblioth\u00e8que"
+    }
+  },
+
   "settings": {
     "title": "Param\u00e8tres",
     "closeLabel": "Fermer les param\u00e8tres",
