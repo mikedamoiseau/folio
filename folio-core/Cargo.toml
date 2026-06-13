@@ -50,6 +50,10 @@ sha2 = { workspace = true }
 # backup.rs (tokio runtime guarding for blocking opendal calls)
 tokio = { workspace = true }
 
+# plugins/ — user-script runtime (rhai) + plugin.toml manifest parsing
+rhai = { workspace = true }
+toml = { workspace = true }
+
 [features]
 default = []
 # Exposes test-only helpers like `db::init_db` so cross-crate integration

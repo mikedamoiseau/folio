@@ -72,6 +72,14 @@ pub struct AppState {
     pub web_server_handle: std::sync::Mutex<Option<crate::web_server::WebServerHandle>>,
     /// IPC command timing metrics (leaf lock — no ordering constraint).
     pub ipc_metrics: IpcMetrics,
+    /// Plugin manager for the active profile (leaf lock). `None` until the
+    /// setup hook initializes it; a plugin failure never blocks startup.
+    /// `Arc<Mutex<..>>` so a single forwarding bus subscriber can read the
+    /// current manager and `switch_profile` can swap it (the manager is
+    /// rebuilt against the new profile's DB on switch).
+    pub plugin_manager: std::sync::Arc<
+        std::sync::Mutex<Option<std::sync::Arc<folio_core::plugins::PluginManager>>>,
+    >,
     /// Keeps the non-blocking tracing file writer alive for the app's
     /// lifetime so buffered log records flush on shutdown. Held only for
     /// its `Drop`; never read. `None` when logging to stderr (dev).
@@ -221,7 +229,7 @@ fn ensure_mobi_cached(
 
 // --- Activity logging ---
 
-fn log_event(conn: &rusqlite::Connection, event: ActivityEvent) {
+pub(crate) fn log_event(conn: &rusqlite::Connection, event: ActivityEvent) {
     let f = event.into_fields();
     let entry = crate::models::ActivityEntry {
         id: Uuid::new_v4().to_string(),
@@ -3469,7 +3477,11 @@ pub async fn create_profile(name: String, state: State<'_, AppState>) -> FolioRe
 }
 
 #[tauri::command]
-pub async fn switch_profile(name: String, state: State<'_, AppState>) -> FolioResult<()> {
+pub async fn switch_profile(
+    name: String,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> FolioResult<()> {
     {
         let mut ps = state.profile_state.lock()?;
         if name != "default" && !ps.pools.contains_key(&name) {
@@ -3484,6 +3496,17 @@ pub async fn switch_profile(name: String, state: State<'_, AppState>) -> FolioRe
         let mut shared = state.shared_active_pool.lock()?;
         *shared = new_pool;
     }
+
+    // Rebuild the plugin manager against the new profile's DB so plugin
+    // grants, enable-state, and host-API queries all follow the active
+    // profile. Plugins are per-profile; the single bus subscriber reads the
+    // swapped slot, so no listener is leaked.
+    crate::plugin_host::rebuild_for_profile(
+        &app,
+        &state.data_dir,
+        state.active_db()?,
+        &state.plugin_manager,
+    );
 
     let conn = state.active_db()?.get()?;
     log_event(&conn, ActivityEvent::ProfileSwitched { name });

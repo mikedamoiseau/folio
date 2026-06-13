@@ -29,6 +29,7 @@ pub mod openlibrary;
 pub mod page_cache;
 pub mod paths;
 pub mod pdf;
+pub mod plugins;
 pub mod providers;
 pub mod search;
 pub mod storage;

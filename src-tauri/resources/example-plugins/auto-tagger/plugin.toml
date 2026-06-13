@@ -1,0 +1,15 @@
+[plugin]
+id = "auto-tagger"
+name = "Auto Tagger"
+version = "1.0.0"
+description = "Tags newly imported books automatically by format."
+author = "Folio"
+min_app_version = "2.3.0"
+
+[events]
+subscribe = ["BookImported"]
+
+[permissions]
+# read:library  → look up the imported book's metadata (get_book)
+# write:tags    → apply tags
+required = ["read:library", "write:tags"]
