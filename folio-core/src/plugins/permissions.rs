@@ -112,9 +112,8 @@ pub fn record_grants(
 }
 
 pub fn grants_for(conn: &Connection, plugin_id: &str) -> Result<Vec<Grant>> {
-    let mut stmt = conn.prepare(
-        "SELECT permission, params, granted_at FROM plugin_grants WHERE plugin_id = ?1",
-    )?;
+    let mut stmt = conn
+        .prepare("SELECT permission, params, granted_at FROM plugin_grants WHERE plugin_id = ?1")?;
     let rows = stmt.query_map(params![plugin_id], |row| {
         Ok((
             row.get::<_, String>(0)?,
@@ -241,7 +240,10 @@ mod tests {
         for p in Permission::ALL {
             assert_eq!(Permission::parse(p.as_str()), Some(p));
         }
-        assert_eq!(Permission::parse("read:library"), Some(Permission::ReadLibrary));
+        assert_eq!(
+            Permission::parse("read:library"),
+            Some(Permission::ReadLibrary)
+        );
         assert_eq!(Permission::parse("write:tags"), Some(Permission::WriteTags));
         assert_eq!(Permission::parse("notify"), Some(Permission::Notify));
         assert_eq!(Permission::parse("bogus"), None);
@@ -270,7 +272,9 @@ mod tests {
 
         let grants = grants_for(&c, "auto-tagger").unwrap();
         assert_eq!(grants.len(), 2);
-        assert!(grants.iter().any(|g| g.permission == Permission::ReadLibrary));
+        assert!(grants
+            .iter()
+            .any(|g| g.permission == Permission::ReadLibrary));
         assert!(grants.iter().any(|g| g.permission == Permission::WriteTags));
         assert!(grants.iter().all(|g| g.granted_at == 1000));
     }

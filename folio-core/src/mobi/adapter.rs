@@ -16,8 +16,8 @@ use ammonia::clean;
 
 use super::{MobiBook, PartKind};
 use crate::epub::{count_words, strip_html_tags, BookMetadata, ChapterInfo, ExtractedCover};
-use crate::models::ChapterMeta;
 use crate::error::{FolioError, FolioResult};
+use crate::models::ChapterMeta;
 use crate::storage::Storage;
 
 /// Metadata collected from the MOBI/AZW/AZW3 EXTH records, shaped to match

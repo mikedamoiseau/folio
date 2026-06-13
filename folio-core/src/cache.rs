@@ -307,10 +307,10 @@ pub fn clear_all(registry: &[Box<dyn ManagedCache>]) -> FolioResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::{Arc, Mutex};
     use crate::models::BookFormat;
     use crate::page_cache::{self, CacheManifest};
     use crate::storage::{LocalStorage, Storage};
+    use std::sync::{Arc, Mutex};
     use tempfile::TempDir;
 
     // #52: PDF cache memory limits (moved from src-tauri commands.rs)
@@ -467,7 +467,9 @@ mod tests {
         seed_disk_cache(storage.as_ref());
 
         let epub = Arc::new(Mutex::new(LruCache::<String>::new(10)));
-        epub.lock().unwrap().insert("e".to_string(), "v".to_string());
+        epub.lock()
+            .unwrap()
+            .insert("e".to_string(), "v".to_string());
         let mobi = Arc::new(Mutex::new(LruCache::<String>::new(10)));
         mobi.lock()
             .unwrap()
@@ -492,7 +494,9 @@ mod tests {
         seed_disk_cache(storage.as_ref());
 
         let epub = Arc::new(Mutex::new(LruCache::<String>::new(10)));
-        epub.lock().unwrap().insert("e".to_string(), "v".to_string());
+        epub.lock()
+            .unwrap()
+            .insert("e".to_string(), "v".to_string());
 
         let registry: Vec<Box<dyn ManagedCache>> = vec![
             Box::new(MemoryCacheAdapter::new("epub", false, Arc::clone(&epub))),

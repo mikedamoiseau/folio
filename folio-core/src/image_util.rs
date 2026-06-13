@@ -350,13 +350,19 @@ mod tests {
     #[test]
     fn thumbnail_none_when_source_at_or_below_target() {
         // Already-small cover → no thumbnail, caller uses the original.
-        assert!(make_thumbnail(&encode_jpeg(320, 480), 320).unwrap().is_none());
-        assert!(make_thumbnail(&encode_jpeg(200, 300), 320).unwrap().is_none());
+        assert!(make_thumbnail(&encode_jpeg(320, 480), 320)
+            .unwrap()
+            .is_none());
+        assert!(make_thumbnail(&encode_jpeg(200, 300), 320)
+            .unwrap()
+            .is_none());
     }
 
     #[test]
     fn thumbnail_none_when_target_is_zero() {
-        assert!(make_thumbnail(&encode_jpeg(1000, 1500), 0).unwrap().is_none());
+        assert!(make_thumbnail(&encode_jpeg(1000, 1500), 0)
+            .unwrap()
+            .is_none());
     }
 
     #[test]
@@ -373,10 +379,15 @@ mod tests {
     #[test]
     fn thumbnail_from_png_transcodes_and_shrinks() {
         let src = encode_png(2000, 3000);
-        let out = make_thumbnail(&src, 320).unwrap().expect("should thumbnail");
+        let out = make_thumbnail(&src, 320)
+            .unwrap()
+            .expect("should thumbnail");
         let (w, _h) = dims_of(&out);
         assert_eq!(w, 320);
-        assert!(out.len() < src.len(), "thumbnail must be smaller than source");
+        assert!(
+            out.len() < src.len(),
+            "thumbnail must be smaller than source"
+        );
         // Output is JPEG regardless of PNG input.
         assert_eq!(
             image::ImageReader::new(Cursor::new(&out))
@@ -403,7 +414,9 @@ mod tests {
 
     #[test]
     fn thumbnail_gif_returns_none() {
-        assert!(make_thumbnail(&encode_gif(1200, 800), 320).unwrap().is_none());
+        assert!(make_thumbnail(&encode_gif(1200, 800), 320)
+            .unwrap()
+            .is_none());
     }
 
     #[test]

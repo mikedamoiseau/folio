@@ -97,11 +97,7 @@ pub fn parse_manifest(raw: &str) -> FolioResult<PluginManifest> {
         }
     }
 
-    let network_hosts = raw
-        .permissions
-        .network
-        .map(|n| n.hosts)
-        .unwrap_or_default();
+    let network_hosts = raw.permissions.network.map(|n| n.hosts).unwrap_or_default();
     let wants_network = permissions.contains(&Permission::Network);
     if wants_network && network_hosts.is_empty() {
         return Err(FolioError::invalid(
