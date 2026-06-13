@@ -15,7 +15,7 @@ use super::permissions::Permission;
 use crate::db::{self, DbPool};
 use crate::error::{FolioError, FolioResult};
 use crate::events::FolioEvent;
-use crate::models::Book;
+use crate::models::{Book, Highlight};
 
 /// Capabilities that only the embedding app can provide (OS notifications…).
 /// `folio-core` stays UI-free; the desktop shell injects an implementation.
@@ -48,8 +48,20 @@ impl PluginRuntime {
     /// Call-depth cap (spec §4.4).
     pub const MAX_CALL_LEVELS: usize = 64;
 
-    /// Compile `script` with host functions for exactly `granted`.
-    pub fn load(script: &str, granted: &[Permission], deps: RuntimeDeps) -> FolioResult<Self> {
+    /// Per-write cap for `write:files` host functions (spec §7, text-only).
+    /// Matches `MAX_STRING_SIZE`: the string-size cap already bounds any text
+    /// a script can build, so this is the same ceiling enforced at the write
+    /// boundary as defense-in-depth for non-script callers.
+    pub const MAX_FILE_WRITE_BYTES: usize = Self::MAX_STRING_SIZE;
+
+    /// Compile `script` with host functions for exactly `granted`. Each entry
+    /// is a permission plus its optional grant parameter (e.g. the
+    /// user-picked export directory for `write:files`).
+    pub fn load(
+        script: &str,
+        granted: &[(Permission, Option<String>)],
+        deps: RuntimeDeps,
+    ) -> FolioResult<Self> {
         let mut engine = Engine::new();
         engine.set_max_operations(Self::MAX_OPERATIONS);
         engine.set_max_call_levels(Self::MAX_CALL_LEVELS);
@@ -69,8 +81,8 @@ impl PluginRuntime {
             }
         });
 
-        for permission in granted {
-            register_host_fns(&mut engine, *permission, &deps);
+        for (permission, params) in granted {
+            register_host_fns(&mut engine, *permission, params.as_deref(), &deps);
         }
 
         let ast = engine
@@ -102,7 +114,12 @@ impl PluginRuntime {
 /// Register the host functions one permission unlocks. Capability scoping
 /// happens HERE: an ungranted permission's functions are never registered,
 /// so calling one is a function-not-found error inside the script.
-fn register_host_fns(engine: &mut Engine, permission: Permission, deps: &RuntimeDeps) {
+fn register_host_fns(
+    engine: &mut Engine,
+    permission: Permission,
+    params: Option<&str>,
+    deps: &RuntimeDeps,
+) {
     match permission {
         Permission::ReadLibrary => {
             let pool = deps.pool.clone();
@@ -170,14 +187,117 @@ fn register_host_fns(engine: &mut Engine, permission: Permission, deps: &Runtime
                 services.notify(title, body);
             });
         }
-        // Host functions for these arrive in M3/M4 (spec §6); granting them
+        Permission::ReadHighlights => {
+            let pool = deps.pool.clone();
+            engine.register_fn(
+                "get_highlights",
+                move |book_id: &str| -> Result<Array, Box<EvalAltResult>> {
+                    let conn = pool.get().map_err(host_err)?;
+                    Ok(db::list_highlights(&conn, book_id)
+                        .map_err(host_err)?
+                        .iter()
+                        .map(|h| Dynamic::from_map(highlight_to_map(h)))
+                        .collect())
+                },
+            );
+        }
+        Permission::WriteFiles => {
+            // The grant parameter is the user-picked export directory. With
+            // no directory granted, no write functions are registered — the
+            // capability is inert rather than rooted at an unsafe default.
+            if let Some(root) = params.map(|p| p.to_string()) {
+                let write_root = root.clone();
+                engine.register_fn(
+                    "write_file",
+                    move |rel: &str, text: &str| -> Result<(), Box<EvalAltResult>> {
+                        write_into_root(&write_root, rel, text, false)
+                    },
+                );
+                engine.register_fn(
+                    "append_file",
+                    move |rel: &str, text: &str| -> Result<(), Box<EvalAltResult>> {
+                        write_into_root(&root, rel, text, true)
+                    },
+                );
+            }
+        }
+        // Host functions for these arrive in M4 (spec §6); granting them
         // today registers nothing — deny-by-default stays intact.
-        Permission::ReadHighlights
-        | Permission::WriteMetadata
-        | Permission::WriteFiles
-        | Permission::Network
-        | Permission::ImportBooks => {}
+        Permission::WriteMetadata | Permission::Network | Permission::ImportBooks => {}
     }
+}
+
+/// Write or append `text` to `rel` resolved under `root`, rejecting any path
+/// that escapes `root` (absolute paths, `..`, and symlinked parent dirs or
+/// leaf files). Text-only, size-capped per write.
+fn write_into_root(
+    root: &str,
+    rel: &str,
+    text: &str,
+    append: bool,
+) -> Result<(), Box<EvalAltResult>> {
+    use std::path::{Component, Path};
+
+    if text.len() > PluginRuntime::MAX_FILE_WRITE_BYTES {
+        return Err(format!(
+            "write exceeds {}-byte limit",
+            PluginRuntime::MAX_FILE_WRITE_BYTES
+        )
+        .into());
+    }
+
+    let rel_path = Path::new(rel);
+    // Reject empty, absolute, and any component that could escape the root.
+    if rel_path.as_os_str().is_empty() {
+        return Err("path must name a file".into());
+    }
+    if rel_path.is_absolute() {
+        return Err("path must be relative to the export folder".into());
+    }
+    for comp in rel_path.components() {
+        match comp {
+            Component::Normal(_) => {}
+            _ => return Err("path may not contain '..' or absolute segments".into()),
+        }
+    }
+
+    let root_path = Path::new(root);
+    let canonical_root = root_path
+        .canonicalize()
+        .map_err(|e| host_err(format!("export folder unavailable: {e}")))?;
+    let target = canonical_root.join(rel_path);
+
+    // Create parent dirs inside the root, then verify the resolved parent is
+    // still within the canonical root (defends against a symlinked subdir).
+    if let Some(parent) = target.parent() {
+        std::fs::create_dir_all(parent).map_err(host_err)?;
+        let canonical_parent = parent.canonicalize().map_err(host_err)?;
+        if !canonical_parent.starts_with(&canonical_root) {
+            return Err("resolved path escapes the export folder".into());
+        }
+    }
+
+    // If the leaf already exists, it may be a symlink pointing outside the
+    // root — canonicalize and re-check before opening so a write can't be
+    // redirected past the parent-dir guard. (A residual check-then-open
+    // TOCTOU window remains; closing it fully needs O_NOFOLLOW.)
+    if target.exists() {
+        let canonical_target = target.canonicalize().map_err(host_err)?;
+        if !canonical_target.starts_with(&canonical_root) {
+            return Err("resolved path escapes the export folder".into());
+        }
+    }
+
+    use std::io::Write;
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .append(append)
+        .truncate(!append)
+        .open(&target)
+        .map_err(host_err)?;
+    file.write_all(text.as_bytes()).map_err(host_err)?;
+    Ok(())
 }
 
 fn host_err(e: impl std::fmt::Display) -> Box<EvalAltResult> {
@@ -271,6 +391,21 @@ fn book_to_map(book: &Book) -> RhaiMap {
     map
 }
 
+fn highlight_to_map(h: &Highlight) -> RhaiMap {
+    let mut map = RhaiMap::new();
+    map.insert("id".into(), h.id.clone().into());
+    map.insert("book_id".into(), h.book_id.clone().into());
+    map.insert("chapter_index".into(), (h.chapter_index as i64).into());
+    map.insert("text".into(), h.text.clone().into());
+    map.insert("color".into(), h.color.clone().into());
+    map.insert(
+        "note".into(),
+        h.note.clone().map(Into::into).unwrap_or(Dynamic::UNIT),
+    );
+    map.insert("created_at".into(), h.created_at.into());
+    map
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -346,6 +481,11 @@ mod tests {
         }
     }
 
+    /// Grant a set of permissions with no parameters (test convenience).
+    fn perms(ps: &[Permission]) -> Vec<(Permission, Option<String>)> {
+        ps.iter().map(|p| (*p, None)).collect()
+    }
+
     #[test]
     fn event_map_carries_type_and_payload_fields() {
         let map = event_to_map(&imported("b1"));
@@ -368,7 +508,7 @@ mod tests {
         let f = fixture();
         let rt = PluginRuntime::load(
             r#"fn on_event(event) { notify("hi", event.type); }"#,
-            &[Permission::Notify],
+            &perms(&[Permission::Notify]),
             f.deps.clone(),
         )
         .unwrap();
@@ -385,7 +525,7 @@ mod tests {
         let f = fixture();
         let rt = PluginRuntime::load(
             r#"fn on_event(event) { notify("hi", "there"); }"#,
-            &[], // notify NOT granted
+            &perms(&[]), // notify NOT granted
             f.deps.clone(),
         )
         .unwrap();
@@ -409,7 +549,7 @@ mod tests {
                 let missing = get_book("nope");
                 if missing == () { notify("missing", "unit"); }
             }"#,
-            &[Permission::ReadLibrary, Permission::Notify],
+            &perms(&[Permission::ReadLibrary, Permission::Notify]),
             f.deps.clone(),
         )
         .unwrap();
@@ -436,7 +576,7 @@ mod tests {
                 let herbert = find_books("herbert");
                 notify("herbert", herbert.len().to_string());
             }"#,
-            &[Permission::ReadLibrary, Permission::Notify],
+            &perms(&[Permission::ReadLibrary, Permission::Notify]),
             f.deps.clone(),
         )
         .unwrap();
@@ -460,7 +600,7 @@ mod tests {
                 add_tag(event.book_id, "epic");
                 remove_tag(event.book_id, "epic");
             }"#,
-            &[Permission::WriteTags],
+            &perms(&[Permission::WriteTags]),
             f.deps.clone(),
         )
         .unwrap();
@@ -480,7 +620,7 @@ mod tests {
         let f = fixture();
         let rt = PluginRuntime::load(
             r#"fn on_event(event) { let x = 0; loop { x += 1; } }"#,
-            &[],
+            &perms(&[]),
             f.deps.clone(),
         )
         .unwrap();
@@ -496,7 +636,7 @@ mod tests {
     #[test]
     fn script_without_on_event_errors_on_dispatch() {
         let f = fixture();
-        let rt = PluginRuntime::load(r#"fn other() { 1 }"#, &[], f.deps.clone()).unwrap();
+        let rt = PluginRuntime::load(r#"fn other() { 1 }"#, &perms(&[]), f.deps.clone()).unwrap();
         let err = rt.dispatch(&imported("b1")).unwrap_err().to_string();
         assert!(err.contains("on_event"), "got: {err}");
     }
@@ -504,6 +644,160 @@ mod tests {
     #[test]
     fn syntax_error_fails_at_load() {
         let f = fixture();
-        assert!(PluginRuntime::load("fn on_event(e) {", &[], f.deps).is_err());
+        assert!(PluginRuntime::load("fn on_event(e) {", &perms(&[]), f.deps).is_err());
+    }
+
+    fn sample_highlight(id: &str, book_id: &str, text: &str) -> Highlight {
+        Highlight {
+            id: id.into(),
+            book_id: book_id.into(),
+            chapter_index: 0,
+            text: text.into(),
+            color: "yellow".into(),
+            note: None,
+            start_offset: 0,
+            end_offset: text.len() as u32,
+            created_at: 0,
+            updated_at: 0,
+            deleted_at: None,
+        }
+    }
+
+    #[test]
+    fn get_highlights_returns_book_highlights() {
+        let f = fixture();
+        {
+            let conn = f.deps.pool.get().unwrap();
+            db::insert_book(&conn, &sample_book("b1", "Dune", "Herbert")).unwrap();
+            db::insert_highlight(&conn, &sample_highlight("h1", "b1", "spice")).unwrap();
+            db::insert_highlight(&conn, &sample_highlight("h2", "b1", "sandworm")).unwrap();
+        }
+        let rt = PluginRuntime::load(
+            r#"fn on_event(event) {
+                let hs = get_highlights(event.book_id);
+                notify("count", hs.len().to_string());
+                notify("first", hs[0].text);
+            }"#,
+            &perms(&[Permission::ReadHighlights, Permission::Notify]),
+            f.deps.clone(),
+        )
+        .unwrap();
+
+        rt.dispatch(&imported("b1")).unwrap();
+        let notes = f.services.notes.lock().unwrap();
+        assert_eq!(notes[0].1, "2");
+        assert_eq!(notes[1].1, "spice");
+    }
+
+    #[test]
+    fn write_files_absent_without_granted_directory() {
+        let f = fixture();
+        // write:files granted but with no directory parameter → no host fn.
+        let rt = PluginRuntime::load(
+            r#"fn on_event(event) { write_file("x.txt", "hi"); }"#,
+            &[(Permission::WriteFiles, None)],
+            f.deps.clone(),
+        )
+        .unwrap();
+        let err = rt.dispatch(&imported("b1")).unwrap_err().to_string();
+        assert!(err.contains("write_file"), "got: {err}");
+    }
+
+    #[test]
+    fn write_and_append_file_within_granted_dir() {
+        let f = fixture();
+        let export = f._dir.path().join("export");
+        std::fs::create_dir_all(&export).unwrap();
+        let dir = export.to_string_lossy().to_string();
+
+        let rt = PluginRuntime::load(
+            r##"fn on_event(event) {
+                write_file("notes.md", "# Notes\n");
+                append_file("notes.md", "- one\n");
+                append_file("sub/deep.md", "nested\n");
+            }"##,
+            &[(Permission::WriteFiles, Some(dir))],
+            f.deps.clone(),
+        )
+        .unwrap();
+
+        rt.dispatch(&imported("b1")).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(export.join("notes.md")).unwrap(),
+            "# Notes\n- one\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(export.join("sub/deep.md")).unwrap(),
+            "nested\n"
+        );
+    }
+
+    #[test]
+    fn write_file_rejects_path_traversal() {
+        let f = fixture();
+        let export = f._dir.path().join("export");
+        std::fs::create_dir_all(&export).unwrap();
+        let dir = export.to_string_lossy().to_string();
+
+        for bad in ["../escape.txt", "/etc/evil", "a/../../escape.txt"] {
+            let rt = PluginRuntime::load(
+                &format!(r#"fn on_event(event) {{ write_file("{bad}", "x"); }}"#),
+                &[(Permission::WriteFiles, Some(dir.clone()))],
+                f.deps.clone(),
+            )
+            .unwrap();
+            assert!(
+                rt.dispatch(&imported("b1")).is_err(),
+                "traversal not rejected for {bad}"
+            );
+        }
+        // Nothing escaped the export dir.
+        assert!(!f._dir.path().join("escape.txt").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_file_rejects_symlinked_leaf_escaping_root() {
+        let f = fixture();
+        let export = f._dir.path().join("export");
+        std::fs::create_dir_all(&export).unwrap();
+        let outside = f._dir.path().join("outside.txt");
+        std::fs::write(&outside, "original").unwrap();
+        // A symlink inside the export dir pointing at a file outside it.
+        std::os::unix::fs::symlink(&outside, export.join("link.txt")).unwrap();
+        let dir = export.to_string_lossy().to_string();
+
+        let rt = PluginRuntime::load(
+            r#"fn on_event(event) { write_file("link.txt", "pwned"); }"#,
+            &[(Permission::WriteFiles, Some(dir))],
+            f.deps.clone(),
+        )
+        .unwrap();
+
+        assert!(rt.dispatch(&imported("b1")).is_err());
+        // The outside file is untouched.
+        assert_eq!(std::fs::read_to_string(&outside).unwrap(), "original");
+    }
+
+    #[test]
+    fn write_file_rejects_oversized_write() {
+        let f = fixture();
+        let export = f._dir.path().join("export");
+        std::fs::create_dir_all(&export).unwrap();
+        let dir = export.to_string_lossy().to_string();
+
+        let rt = PluginRuntime::load(
+            // 2 MB string exceeds the 1 MB string-size cap, so the write is
+            // rejected before any bytes hit disk.
+            r#"fn on_event(event) {
+                let big = "x".repeat(2 * 1024 * 1024);
+                write_file("big.txt", big);
+            }"#,
+            &[(Permission::WriteFiles, Some(dir))],
+            f.deps.clone(),
+        )
+        .unwrap();
+        assert!(rt.dispatch(&imported("b1")).is_err());
+        assert!(!export.join("big.txt").exists());
     }
 }
