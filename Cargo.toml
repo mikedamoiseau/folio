@@ -40,6 +40,12 @@ reqwest = { version = "0.12", features = ["blocking", "json"] }
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "fs"] }
 opendal = { version = "0.55", features = ["services-s3", "services-fs", "services-ftp", "services-webdav", "blocking"] }
 
+# Plugin/hook system (spec 2026-06-12): user-script runtime + manifest parsing.
+# `sync` makes rhai types Send+Sync so engines can live behind the event bus's
+# dispatch thread boundary.
+rhai = { version = "1", features = ["sync"] }
+toml = "0.8"
+
 # Archive / parser support
 zip = "2"
 quick-xml = "0.36"

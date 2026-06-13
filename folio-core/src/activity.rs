@@ -104,6 +104,19 @@ pub enum ActivityEvent {
     WebServerModesChanged {
         detail: String,
     },
+    PluginEnabled {
+        id: String,
+        name: String,
+        detail: String,
+    },
+    PluginDisabled {
+        id: String,
+        name: String,
+    },
+    PluginAutoDisabled {
+        id: String,
+        detail: String,
+    },
 }
 
 impl ActivityEvent {
@@ -294,6 +307,27 @@ impl ActivityEvent {
                 entity_name: None,
                 detail: Some(detail),
             },
+            PluginEnabled { id, name, detail } => ActivityFields {
+                action: "plugin_enabled",
+                entity_type: "plugin",
+                entity_id: Some(id),
+                entity_name: Some(name),
+                detail: Some(detail),
+            },
+            PluginDisabled { id, name } => ActivityFields {
+                action: "plugin_disabled",
+                entity_type: "plugin",
+                entity_id: Some(id),
+                entity_name: Some(name),
+                detail: None,
+            },
+            PluginAutoDisabled { id, detail } => ActivityFields {
+                action: "plugin_auto_disabled",
+                entity_type: "plugin",
+                entity_id: Some(id),
+                entity_name: None,
+                detail: Some(detail),
+            },
         }
     }
 }
@@ -481,6 +515,31 @@ mod tests {
                 ActivityEvent::WebServerModesChanged { detail: "d".into() },
                 "web_server_modes_changed",
                 "system",
+            ),
+            (
+                ActivityEvent::PluginEnabled {
+                    id: "i".into(),
+                    name: "n".into(),
+                    detail: "d".into(),
+                },
+                "plugin_enabled",
+                "plugin",
+            ),
+            (
+                ActivityEvent::PluginDisabled {
+                    id: "i".into(),
+                    name: "n".into(),
+                },
+                "plugin_disabled",
+                "plugin",
+            ),
+            (
+                ActivityEvent::PluginAutoDisabled {
+                    id: "i".into(),
+                    detail: "d".into(),
+                },
+                "plugin_auto_disabled",
+                "plugin",
             ),
         ];
         for (event, action, entity) in cases {

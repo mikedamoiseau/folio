@@ -80,6 +80,43 @@ pub enum FolioEvent {
     },
 }
 
+impl FolioEvent {
+    /// Stable event names — the contract for plugin manifests
+    /// (`[events] subscribe = [...]`). Keep in sync with `ALL_NAMES`.
+    pub fn name(&self) -> &'static str {
+        match self {
+            FolioEvent::AppStarted => "AppStarted",
+            FolioEvent::BookImported { .. } => "BookImported",
+            FolioEvent::BookOpened { .. } => "BookOpened",
+            FolioEvent::BookClosed { .. } => "BookClosed",
+            FolioEvent::BookFinished { .. } => "BookFinished",
+            FolioEvent::HighlightCreated { .. } => "HighlightCreated",
+            FolioEvent::HighlightUpdated { .. } => "HighlightUpdated",
+            FolioEvent::HighlightDeleted { .. } => "HighlightDeleted",
+            FolioEvent::BookmarkCreated { .. } => "BookmarkCreated",
+            FolioEvent::MetadataEnriched { .. } => "MetadataEnriched",
+            FolioEvent::BackupCompleted { .. } => "BackupCompleted",
+            FolioEvent::SyncCompleted { .. } => "SyncCompleted",
+        }
+    }
+
+    /// Every valid event name, for manifest validation.
+    pub const ALL_NAMES: [&'static str; 12] = [
+        "AppStarted",
+        "BookImported",
+        "BookOpened",
+        "BookClosed",
+        "BookFinished",
+        "HighlightCreated",
+        "HighlightUpdated",
+        "HighlightDeleted",
+        "BookmarkCreated",
+        "MetadataEnriched",
+        "BackupCompleted",
+        "SyncCompleted",
+    ];
+}
+
 /// A registered event listener. Dispatched sequentially on the bus's own
 /// thread; implementations must be cheap or do their own offloading.
 pub trait EventListener: Send {
@@ -328,6 +365,49 @@ mod tests {
                 book_id: "b1".into(),
             }
         );
+    }
+
+    #[test]
+    fn event_names_cover_every_variant_and_match_all_names() {
+        let samples: Vec<FolioEvent> = vec![
+            FolioEvent::AppStarted,
+            FolioEvent::BookImported {
+                book_id: "b".into(),
+                format: BookFormat::Epub,
+                source: ImportSource::Manual,
+            },
+            FolioEvent::BookOpened { book_id: "b".into() },
+            FolioEvent::BookClosed { book_id: "b".into() },
+            FolioEvent::BookFinished { book_id: "b".into() },
+            FolioEvent::HighlightCreated {
+                book_id: "b".into(),
+                highlight_id: "h".into(),
+            },
+            FolioEvent::HighlightUpdated {
+                highlight_id: "h".into(),
+            },
+            FolioEvent::HighlightDeleted {
+                highlight_id: "h".into(),
+            },
+            FolioEvent::BookmarkCreated {
+                book_id: "b".into(),
+                bookmark_id: "m".into(),
+            },
+            FolioEvent::MetadataEnriched {
+                book_id: "b".into(),
+                provider: "p".into(),
+            },
+            FolioEvent::BackupCompleted {
+                provider: "p".into(),
+                success: true,
+            },
+            FolioEvent::SyncCompleted {
+                direction: SyncDirection::Pull,
+                success: true,
+            },
+        ];
+        let names: Vec<&str> = samples.iter().map(|e| e.name()).collect();
+        assert_eq!(names, FolioEvent::ALL_NAMES.to_vec());
     }
 
     #[test]
