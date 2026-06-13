@@ -1,0 +1,16 @@
+[plugin]
+id = "highlight-exporter"
+name = "Highlight Exporter"
+version = "1.0.0"
+description = "Appends new highlights to a Markdown file per book (Obsidian-friendly)."
+author = "Folio"
+min_app_version = "2.3.0"
+
+[events]
+subscribe = ["HighlightCreated"]
+
+[permissions]
+# read:library    → book title/author for the file name + heading
+# read:highlights → fetch the highlight text/note
+# write:files     → append to a Markdown file in a folder you choose
+required = ["read:library", "read:highlights", "write:files"]

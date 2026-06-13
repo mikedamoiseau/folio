@@ -1,6 +1,12 @@
 import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { open as openDirPicker } from "@tauri-apps/plugin-dialog";
 import { useTranslation } from "react-i18next";
+
+interface GrantInput {
+  permission: string;
+  params: string | null;
+}
 
 interface PermissionView {
   id: string;
@@ -67,12 +73,9 @@ export default function PluginsPanel({ onToast }: { onToast?: (msg: string) => v
     setBusy(true);
     try {
       if (next) {
-        // Re-affirm the already-granted permissions; the backend requires
-        // the grant set to match the manifest exactly.
-        await invoke("plugin_enable", {
-          pluginId: p.id,
-          grantedPermissions: p.permissions.map((perm) => perm.id),
-        });
+        // Re-enable with empty grants → backend reuses the recorded consent
+        // (no re-prompt, no folder re-pick).
+        await invoke("plugin_enable", { pluginId: p.id, grants: [] });
       } else {
         await invoke("plugin_disable", { pluginId: p.id });
       }
@@ -89,10 +92,22 @@ export default function PluginsPanel({ onToast }: { onToast?: (msg: string) => v
     const p = consentFor;
     setBusy(true);
     try {
-      await invoke("plugin_enable", {
-        pluginId: p.id,
-        grantedPermissions: p.permissions.map((perm) => perm.id),
-      });
+      const grants: GrantInput[] = [];
+      for (const perm of p.permissions) {
+        if (perm.id === "write:files") {
+          // write:files needs a user-chosen export folder.
+          const dir = await openDirPicker({ directory: true, multiple: false });
+          if (typeof dir !== "string") {
+            // User cancelled the folder picker — abort enabling.
+            setBusy(false);
+            return;
+          }
+          grants.push({ permission: perm.id, params: dir });
+        } else {
+          grants.push({ permission: perm.id, params: null });
+        }
+      }
+      await invoke("plugin_enable", { pluginId: p.id, grants });
       setConsentFor(null);
       await refresh();
     } catch (e) {

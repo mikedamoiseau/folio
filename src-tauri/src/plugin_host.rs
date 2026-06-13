@@ -180,14 +180,22 @@ pub async fn plugin_list(state: State<'_, AppState>) -> FolioResult<Vec<PluginVi
     Ok(mgr.list()?.into_iter().map(to_view).collect())
 }
 
-/// Enable a plugin, recording consent for its permissions first. The
-/// frontend shows the consent dialog and calls this with the user's
-/// approval; passing the plugin's full required-permission list is the
-/// approval record.
+/// One approved permission plus its optional parameter (e.g. the chosen
+/// export directory for `write:files`).
+#[derive(serde::Deserialize)]
+pub struct GrantInput {
+    pub permission: String,
+    #[serde(default)]
+    pub params: Option<String>,
+}
+
+/// Enable a plugin, recording consent first. The frontend shows the consent
+/// dialog (and a folder picker for `write:files`) and calls this with the
+/// approved grants. The grant set must match the manifest exactly.
 #[tauri::command]
 pub async fn plugin_enable(
     plugin_id: String,
-    granted_permissions: Vec<String>,
+    grants: Vec<GrantInput>,
     state: State<'_, AppState>,
 ) -> FolioResult<()> {
     if !is_valid_plugin_id(&plugin_id) {
@@ -195,20 +203,31 @@ pub async fn plugin_enable(
     }
     let mgr = manager(&state)?;
 
-    // Parse the approved permissions; unknown strings are rejected rather
-    // than silently dropped.
-    let approved: Vec<Permission> = granted_permissions
-        .iter()
-        .map(|p| {
-            Permission::parse(p)
-                .ok_or_else(|| FolioError::invalid(format!("unknown permission: {p}")))
-        })
-        .collect::<FolioResult<_>>()?;
+    // Empty `grants` means "re-enable using the already-recorded consent"
+    // (the UI does not re-prompt a plugin whose permissions are unchanged).
+    // A non-empty list is fresh consent and replaces the recorded grants.
+    let approved: Vec<(Permission, Option<String>)> = if grants.is_empty() {
+        let conn = state.active_db()?.get()?;
+        permissions::grants_for(&conn, &plugin_id)?
+            .into_iter()
+            .map(|g| (g.permission, g.params))
+            .collect()
+    } else {
+        grants
+            .iter()
+            .map(|g| {
+                Permission::parse(&g.permission)
+                    .map(|p| (p, g.params.clone()))
+                    .ok_or_else(|| {
+                        FolioError::invalid(format!("unknown permission: {}", g.permission))
+                    })
+            })
+            .collect::<FolioResult<_>>()?
+    };
 
     // The grant set must match the manifest exactly: every required
-    // permission must be approved, and nothing beyond the manifest may be
-    // recorded. This stops a crafted IPC call from inflating a plugin's
-    // recorded grants past what its manifest declares.
+    // permission approved, nothing beyond the manifest recorded. This stops a
+    // crafted IPC call from inflating a plugin's recorded grants.
     let info = mgr
         .list()?
         .into_iter()
@@ -216,14 +235,14 @@ pub async fn plugin_enable(
         .ok_or_else(|| FolioError::not_found(format!("plugin not found: {plugin_id}")))?;
     let required: Vec<Permission> = info.permissions.clone();
     for req in &required {
-        if !approved.contains(req) {
+        if !approved.iter().any(|(p, _)| p == req) {
             return Err(FolioError::invalid(format!(
                 "consent missing for required permission: {}",
                 req.as_str()
             )));
         }
     }
-    for got in &approved {
+    for (got, _) in &approved {
         if !required.contains(got) {
             return Err(FolioError::invalid(format!(
                 "permission '{}' is not declared in the plugin manifest",
@@ -232,11 +251,26 @@ pub async fn plugin_enable(
         }
     }
 
-    let grants: Vec<(Permission, Option<String>)> = required.iter().map(|p| (*p, None)).collect();
+    // write:files must come with a non-empty export directory.
+    for (perm, params) in &approved {
+        if *perm == Permission::WriteFiles
+            && params.as_deref().map(str::trim).unwrap_or("").is_empty()
+        {
+            return Err(FolioError::invalid(
+                "the 'write files' permission requires choosing an export folder",
+            ));
+        }
+    }
+
+    let detail = approved
+        .iter()
+        .map(|(p, _)| p.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
     let name = info.name.clone();
     {
         let conn = state.active_db()?.get()?;
-        permissions::record_grants(&conn, &plugin_id, &grants, now_unix_secs())?;
+        permissions::record_grants(&conn, &plugin_id, &approved, now_unix_secs())?;
     }
 
     mgr.enable(&plugin_id)?;
@@ -247,7 +281,7 @@ pub async fn plugin_enable(
         ActivityEvent::PluginEnabled {
             id: plugin_id,
             name,
-            detail: format!("granted: {}", granted_permissions.join(", ")),
+            detail: format!("granted: {detail}"),
         },
     );
     Ok(())
@@ -400,4 +434,70 @@ fn now_unix_secs() -> i64 {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs() as i64
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use folio_core::plugins::manifest::parse_manifest;
+    use folio_core::plugins::runtime::PluginRuntime;
+
+    struct NoopServices;
+    impl HostServices for NoopServices {
+        fn notify(&self, _title: &str, _body: &str) {}
+    }
+
+    /// Every bundled example plugin must parse and compile. Guards against
+    /// shipping an example with a bad manifest or a Rhai syntax error.
+    #[test]
+    fn bundled_example_plugins_parse_and_compile() {
+        let dir =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("resources/example-plugins");
+        let tmp = tempfile::tempdir().unwrap();
+        let pool = folio_core::db::create_pool(&tmp.path().join("t.db")).unwrap();
+
+        let mut checked = 0;
+        for entry in std::fs::read_dir(&dir).unwrap().flatten() {
+            let p = entry.path();
+            if !p.is_dir() {
+                continue;
+            }
+            let raw = std::fs::read_to_string(p.join("plugin.toml"))
+                .unwrap_or_else(|e| panic!("{}: {e}", p.display()));
+            let manifest = parse_manifest(&raw)
+                .unwrap_or_else(|e| panic!("{} manifest invalid: {e}", p.display()));
+            assert_eq!(
+                manifest.id,
+                p.file_name().unwrap().to_string_lossy(),
+                "manifest id must match folder name"
+            );
+            let script = std::fs::read_to_string(p.join("main.rhai"))
+                .unwrap_or_else(|e| panic!("{}: {e}", p.display()));
+            // Grant every declared permission (write:files gets a dummy dir)
+            // so all referenced host functions exist at compile time.
+            let granted: Vec<(Permission, Option<String>)> = manifest
+                .permissions
+                .iter()
+                .map(|perm| {
+                    let params = if *perm == Permission::WriteFiles {
+                        Some(tmp.path().to_string_lossy().to_string())
+                    } else {
+                        None
+                    };
+                    (*perm, params)
+                })
+                .collect();
+            let deps = RuntimeDeps {
+                pool: pool.clone(),
+                services: Arc::new(NoopServices),
+            };
+            PluginRuntime::load(&script, &granted, deps)
+                .unwrap_or_else(|e| panic!("{} script failed to compile: {e}", manifest.id));
+            checked += 1;
+        }
+        assert!(
+            checked >= 3,
+            "expected at least 3 example plugins, found {checked}"
+        );
+    }
 }

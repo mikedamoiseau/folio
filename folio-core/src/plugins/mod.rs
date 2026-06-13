@@ -173,10 +173,10 @@ impl PluginManager {
             )));
         }
 
-        let granted: Vec<Permission> = permissions::grants_for(&conn, plugin_id)?
+        let granted: Vec<(Permission, Option<String>)> = permissions::grants_for(&conn, plugin_id)?
             .into_iter()
-            .map(|g| g.permission)
-            .filter(|p| manifest.permissions.contains(p))
+            .filter(|g| manifest.permissions.contains(&g.permission))
+            .map(|g| (g.permission, g.params))
             .collect();
         let active = load_active(&self.plugins_dir, &manifest, &granted, &self.deps)?;
         permissions::set_plugin_enabled(&conn, plugin_id, true)?;
@@ -207,10 +207,10 @@ impl PluginManager {
             if !enabled {
                 continue;
             }
-            let granted: Vec<Permission> = permissions::grants_for(&conn, &d.id)?
+            let granted: Vec<(Permission, Option<String>)> = permissions::grants_for(&conn, &d.id)?
                 .into_iter()
-                .map(|g| g.permission)
-                .filter(|p| manifest.permissions.contains(p))
+                .filter(|g| manifest.permissions.contains(&g.permission))
+                .map(|g| (g.permission, g.params))
                 .collect();
             match load_active(&self.plugins_dir, manifest, &granted, &self.deps) {
                 Ok(plugin) => {
@@ -400,7 +400,7 @@ fn version_lt(current: &str, min: &str) -> bool {
 fn load_active(
     plugins_dir: &std::path::Path,
     manifest: &PluginManifest,
-    granted: &[Permission],
+    granted: &[(Permission, Option<String>)],
     deps: &RuntimeDeps,
 ) -> FolioResult<ActivePlugin> {
     let script = std::fs::read_to_string(plugins_dir.join(&manifest.id).join("main.rhai"))?;
