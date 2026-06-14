@@ -2908,11 +2908,7 @@ mod tests {
             &sample_activity("act-new1", "import", now - 10 * 86400),
         )
         .unwrap();
-        insert_activity(
-            &conn,
-            &sample_activity("act-new2", "import", now - 1 * 86400),
-        )
-        .unwrap();
+        insert_activity(&conn, &sample_activity("act-new2", "import", now - 86400)).unwrap();
 
         // keep=2 means old entries outside top 2 AND older than 90 days are pruned
         prune_activity_log(&conn, 2, 90).unwrap();

@@ -445,6 +445,153 @@ fn parse_feed_with_trusted(xml: &str, base_url: &str, trusted: &[String]) -> Fol
     })
 }
 
+/// Resolve a search URL — if it's an OpenSearch description XML, fetch it and
+/// extract the Atom/OPDS template URL. Otherwise return it as-is.
+pub fn resolve_search_url(url: &str) -> Option<String> {
+    resolve_search_url_with_trusted(url, &[])
+}
+
+/// Like [`resolve_search_url`], but allows URLs whose `host:port` matches a
+/// trusted entry.
+pub fn resolve_search_url_with_trusted(url: &str, trusted: &[String]) -> Option<String> {
+    // If it already contains {searchTerms}, it's a direct template
+    if url.contains("{searchTerms}") {
+        return Some(url.to_string());
+    }
+    // Try fetching as OpenSearch description
+    if !is_safe_url_with_trusted(url, trusted) {
+        return None;
+    }
+    let client = http_client().ok()?;
+    let response = client
+        .get(url)
+        .header("User-Agent", OPDS_USER_AGENT)
+        .send()
+        .ok()?;
+    if !response.status().is_success() {
+        return None;
+    }
+    let xml = response.text().ok()?;
+
+    // Parse and find the Atom/OPDS Url template
+    let mut reader = Reader::from_str(&xml);
+    reader.config_mut().trim_text(true);
+    let mut buf = Vec::new();
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(ref e)) | Ok(Event::Empty(ref e)) => {
+                let ln = e.local_name();
+                let local = std::str::from_utf8(ln.as_ref()).unwrap_or("");
+                if local.eq_ignore_ascii_case("url") {
+                    let mut template = String::new();
+                    let mut url_type = String::new();
+                    for attr in e.attributes().flatten() {
+                        let key = std::str::from_utf8(attr.key.as_ref()).unwrap_or("");
+                        let val = attr.unescape_value().unwrap_or_default().to_string();
+                        match key {
+                            "template" => template = val,
+                            "type" => url_type = val,
+                            _ => {}
+                        }
+                    }
+                    // Prefer atom+xml / opds-catalog type
+                    if !template.is_empty()
+                        && (url_type.contains("atom") || url_type.contains("opds"))
+                    {
+                        return Some(template);
+                    }
+                }
+            }
+            Ok(Event::Eof) => break,
+            Err(_) => break,
+            _ => {}
+        }
+        buf.clear();
+    }
+    None
+}
+
+/// Percent-encode a string for use in URLs.
+pub fn url_encode(s: &str) -> String {
+    s.replace('%', "%25")
+        .replace(' ', "%20")
+        .replace('&', "%26")
+        .replace('=', "%3D")
+        .replace('#', "%23")
+        .replace('+', "%2B")
+}
+
+/// Download a file from a URL to a local path.
+pub fn download_file(url: &str, dest: &str) -> FolioResult<()> {
+    download_file_with_trusted(url, dest, &[])
+}
+
+/// Like [`download_file`], but allows URLs whose `host:port` matches a
+/// trusted entry — required for downloading from user-added LAN catalogs.
+pub fn download_file_with_trusted(url: &str, dest: &str, trusted: &[String]) -> FolioResult<()> {
+    if !is_safe_url_with_trusted(url, trusted) {
+        return Err(FolioError::invalid(
+            "URL blocked: only public HTTP/HTTPS URLs are allowed.",
+        ));
+    }
+    let client = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(120)) // longer timeout for file downloads
+        .build()
+        .map_err(|e| FolioError::network(format!("HTTP client error: {e}")))?;
+    let response = client
+        .get(url)
+        .send()
+        .map_err(|e| FolioError::network(format!("Download failed: {e}")))?;
+    if !response.status().is_success() {
+        return Err(FolioError::network(format!("HTTP {}", response.status())));
+    }
+    let bytes = response
+        .bytes()
+        .map_err(|e| FolioError::network(format!("Read error: {e}")))?;
+    std::fs::write(dest, &bytes).map_err(|e| FolioError::io(format!("Write error: {e}")))?;
+    Ok(())
+}
+
+/// Download a file with the SSRF guard re-applied on EVERY redirect hop, not
+/// just the initial URL. Used by the plugin `import:books` path so a public
+/// URL can't 302 to a private/loopback target (no trusted-host relaxation).
+pub fn download_file_ssrf_guarded(url: &str, dest: &str) -> FolioResult<()> {
+    if !is_safe_url_with_trusted(url, &[]) {
+        return Err(FolioError::invalid(
+            "URL blocked: only public HTTP/HTTPS URLs are allowed.",
+        ));
+    }
+    // Custom redirect policy: each hop must itself pass the SSRF guard, else
+    // the redirect is refused. Also caps hop count.
+    let policy = reqwest::redirect::Policy::custom(|attempt| {
+        if attempt.previous().len() >= 5 {
+            return attempt.error("too many redirects");
+        }
+        if is_safe_url_with_trusted(attempt.url().as_str(), &[]) {
+            attempt.follow()
+        } else {
+            attempt.error("redirect to a blocked (private/non-HTTP) URL")
+        }
+    });
+    let client = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(120))
+        .redirect(policy)
+        .build()
+        .map_err(|e| FolioError::network(format!("HTTP client error: {e}")))?;
+    let response = client
+        .get(url)
+        .send()
+        .map_err(|e| FolioError::network(format!("Download failed: {e}")))?;
+    if !response.status().is_success() {
+        return Err(FolioError::network(format!("HTTP {}", response.status())));
+    }
+    let bytes = response
+        .bytes()
+        .map_err(|e| FolioError::network(format!("Read error: {e}")))?;
+    std::fs::write(dest, &bytes).map_err(|e| FolioError::io(format!("Write error: {e}")))?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -841,151 +988,4 @@ mod tests {
         );
         assert_eq!(feed.entries[0].links[0].mime_type, "application/epub+zip");
     }
-}
-
-/// Resolve a search URL — if it's an OpenSearch description XML, fetch it and
-/// extract the Atom/OPDS template URL. Otherwise return it as-is.
-pub fn resolve_search_url(url: &str) -> Option<String> {
-    resolve_search_url_with_trusted(url, &[])
-}
-
-/// Like [`resolve_search_url`], but allows URLs whose `host:port` matches a
-/// trusted entry.
-pub fn resolve_search_url_with_trusted(url: &str, trusted: &[String]) -> Option<String> {
-    // If it already contains {searchTerms}, it's a direct template
-    if url.contains("{searchTerms}") {
-        return Some(url.to_string());
-    }
-    // Try fetching as OpenSearch description
-    if !is_safe_url_with_trusted(url, trusted) {
-        return None;
-    }
-    let client = http_client().ok()?;
-    let response = client
-        .get(url)
-        .header("User-Agent", OPDS_USER_AGENT)
-        .send()
-        .ok()?;
-    if !response.status().is_success() {
-        return None;
-    }
-    let xml = response.text().ok()?;
-
-    // Parse and find the Atom/OPDS Url template
-    let mut reader = Reader::from_str(&xml);
-    reader.config_mut().trim_text(true);
-    let mut buf = Vec::new();
-    loop {
-        match reader.read_event_into(&mut buf) {
-            Ok(Event::Start(ref e)) | Ok(Event::Empty(ref e)) => {
-                let ln = e.local_name();
-                let local = std::str::from_utf8(ln.as_ref()).unwrap_or("");
-                if local.eq_ignore_ascii_case("url") {
-                    let mut template = String::new();
-                    let mut url_type = String::new();
-                    for attr in e.attributes().flatten() {
-                        let key = std::str::from_utf8(attr.key.as_ref()).unwrap_or("");
-                        let val = attr.unescape_value().unwrap_or_default().to_string();
-                        match key {
-                            "template" => template = val,
-                            "type" => url_type = val,
-                            _ => {}
-                        }
-                    }
-                    // Prefer atom+xml / opds-catalog type
-                    if !template.is_empty()
-                        && (url_type.contains("atom") || url_type.contains("opds"))
-                    {
-                        return Some(template);
-                    }
-                }
-            }
-            Ok(Event::Eof) => break,
-            Err(_) => break,
-            _ => {}
-        }
-        buf.clear();
-    }
-    None
-}
-
-/// Percent-encode a string for use in URLs.
-pub fn url_encode(s: &str) -> String {
-    s.replace('%', "%25")
-        .replace(' ', "%20")
-        .replace('&', "%26")
-        .replace('=', "%3D")
-        .replace('#', "%23")
-        .replace('+', "%2B")
-}
-
-/// Download a file from a URL to a local path.
-pub fn download_file(url: &str, dest: &str) -> FolioResult<()> {
-    download_file_with_trusted(url, dest, &[])
-}
-
-/// Like [`download_file`], but allows URLs whose `host:port` matches a
-/// trusted entry — required for downloading from user-added LAN catalogs.
-pub fn download_file_with_trusted(url: &str, dest: &str, trusted: &[String]) -> FolioResult<()> {
-    if !is_safe_url_with_trusted(url, trusted) {
-        return Err(FolioError::invalid(
-            "URL blocked: only public HTTP/HTTPS URLs are allowed.",
-        ));
-    }
-    let client = reqwest::blocking::Client::builder()
-        .timeout(Duration::from_secs(120)) // longer timeout for file downloads
-        .build()
-        .map_err(|e| FolioError::network(format!("HTTP client error: {e}")))?;
-    let response = client
-        .get(url)
-        .send()
-        .map_err(|e| FolioError::network(format!("Download failed: {e}")))?;
-    if !response.status().is_success() {
-        return Err(FolioError::network(format!("HTTP {}", response.status())));
-    }
-    let bytes = response
-        .bytes()
-        .map_err(|e| FolioError::network(format!("Read error: {e}")))?;
-    std::fs::write(dest, &bytes).map_err(|e| FolioError::io(format!("Write error: {e}")))?;
-    Ok(())
-}
-
-/// Download a file with the SSRF guard re-applied on EVERY redirect hop, not
-/// just the initial URL. Used by the plugin `import:books` path so a public
-/// URL can't 302 to a private/loopback target (no trusted-host relaxation).
-pub fn download_file_ssrf_guarded(url: &str, dest: &str) -> FolioResult<()> {
-    if !is_safe_url_with_trusted(url, &[]) {
-        return Err(FolioError::invalid(
-            "URL blocked: only public HTTP/HTTPS URLs are allowed.",
-        ));
-    }
-    // Custom redirect policy: each hop must itself pass the SSRF guard, else
-    // the redirect is refused. Also caps hop count.
-    let policy = reqwest::redirect::Policy::custom(|attempt| {
-        if attempt.previous().len() >= 5 {
-            return attempt.error("too many redirects");
-        }
-        if is_safe_url_with_trusted(attempt.url().as_str(), &[]) {
-            attempt.follow()
-        } else {
-            attempt.error("redirect to a blocked (private/non-HTTP) URL")
-        }
-    });
-    let client = reqwest::blocking::Client::builder()
-        .timeout(Duration::from_secs(120))
-        .redirect(policy)
-        .build()
-        .map_err(|e| FolioError::network(format!("HTTP client error: {e}")))?;
-    let response = client
-        .get(url)
-        .send()
-        .map_err(|e| FolioError::network(format!("Download failed: {e}")))?;
-    if !response.status().is_success() {
-        return Err(FolioError::network(format!("HTTP {}", response.status())));
-    }
-    let bytes = response
-        .bytes()
-        .map_err(|e| FolioError::network(format!("Read error: {e}")))?;
-    std::fs::write(dest, &bytes).map_err(|e| FolioError::io(format!("Write error: {e}")))?;
-    Ok(())
 }
