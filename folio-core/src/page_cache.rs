@@ -1246,10 +1246,10 @@ mod tests {
             Ok((format!("page-{idx}").into_bytes(), "image/jpeg".into()))
         };
 
-        ensure_pdf_prewarmed_with_renderer(&storage, "book", hash, 25, 5, &render).unwrap();
+        ensure_pdf_prewarmed_with_renderer(&storage, "book", hash, 25, 5, render).unwrap();
         let first_calls = calls.get();
 
-        ensure_pdf_prewarmed_with_renderer(&storage, "book", hash, 25, 5, &render).unwrap();
+        ensure_pdf_prewarmed_with_renderer(&storage, "book", hash, 25, 5, render).unwrap();
         assert_eq!(
             calls.get(),
             first_calls,
@@ -1541,7 +1541,7 @@ mod tests {
         reset_lazy_eviction_counter_for_tests();
 
         for i in 0..LAZY_EVICTION_BATCH * 2 {
-            get_or_render_pdf_page_with_renderer(&storage, hash, i, &render, &on_batch).unwrap();
+            get_or_render_pdf_page_with_renderer(&storage, hash, i, render, on_batch).unwrap();
         }
 
         assert_eq!(calls.get(), 2, "callback fires exactly once per batch");

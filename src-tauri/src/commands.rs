@@ -6475,8 +6475,7 @@ mod tests {
         let url = "https://example.com/download/123";
         let ext = opds_extension_from_url(url)
             .or_else(|| opds_extension_from_mime(mime))
-            .or(Some("azw3"))
-            .unwrap();
+            .unwrap_or("azw3");
         assert_eq!(ext, "azw3");
     }
 

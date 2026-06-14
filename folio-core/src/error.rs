@@ -364,7 +364,7 @@ mod tests {
 
     #[test]
     fn zip_error_maps_to_invalid_input() {
-        let err: FolioError = zip::result::ZipError::InvalidArchive("bad".into()).into();
+        let err: FolioError = zip::result::ZipError::InvalidArchive("bad").into();
         assert_eq!(err.kind(), "InvalidInput");
     }
 
