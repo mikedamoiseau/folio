@@ -242,12 +242,12 @@ Rust-only commands from `src-tauri/`:
 
 ```bash
 cargo test
-cargo clippy -- -D warnings
 ```
 
-Formatting is checked workspace-wide from the repo root (`cargo fmt --check` from `src-tauri/` misses `folio-core`):
+Lint and formatting are checked workspace-wide from the repo root (a `src-tauri/`-scoped run misses `folio-core`, and dropping `--all-targets` skips test targets):
 
 ```bash
+cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --all --check
 ```
 

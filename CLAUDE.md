@@ -15,12 +15,13 @@ npm run build                # Frontend build (type-check + Vite)
 Rust-only commands (run from `src-tauri/`):
 ```bash
 cargo test                   # Run Rust unit tests
-cargo clippy -- -D warnings  # Lint Rust code (CI-enforced)
 ```
 
-Formatting is checked workspace-wide from the repo root (CI-enforced):
+Lint and formatting are checked workspace-wide from the repo root (CI-enforced). Running them scoped to `src-tauri/` only covers the `folio` crate, not `folio-core`; omitting `--all-targets` skips test/example targets:
 ```bash
-cargo fmt --all --check      # plain `cargo fmt --check` from src-tauri/ only covers the `folio` crate, NOT folio-core
+cargo clippy --workspace --all-targets -- -D warnings
+cargo clippy --workspace --all-targets --features mobi -- -D warnings  # libmobi-gated paths
+cargo fmt --all --check
 ```
 
 The toolchain is pinned in `rust-toolchain.toml` (currently `1.96.0`); CI uses the same version via `dtolnay/rust-toolchain@1.96.0`, so local and CI rustfmt/clippy never drift. Bump both together.
@@ -133,10 +134,10 @@ This is added to Mike's `~/.zshrc`. If builds fail with `fatal error: 'new' file
 ## CI
 
 GitHub Actions runs on push to main and PRs:
-- `cargo clippy -- -D warnings`, `cargo fmt --all --check`, `cargo test` (Ubuntu)
+- `cargo clippy --workspace --all-targets -- -D warnings` (+ `--features mobi`), `cargo fmt --all --check`, `cargo test` (Ubuntu)
 - `npm run type-check`
 - Pdfium binaries downloaded from `bblanchon/pdfium-binaries` in CI
 - Release workflow (`release.yml`) builds platform binaries on tag push
 
 **Before pushing:** Always run the full CI check suite locally. A pre-push git hook enforces this:
-`cargo fmt --all --check` (from repo root — covers folio-core), then `cargo clippy -- -D warnings && cargo test` (in `src-tauri/`), then `npm run type-check && npm run test` (in root). When touching MOBI code also run `cargo test -p folio-core --features mobi` from the workspace root — `src-tauri/`'s `cargo test` does not compile folio-core's test binary.
+`cargo fmt --all --check` and `cargo clippy --workspace --all-targets -- -D warnings` (from repo root — both cover folio-core), then `cargo test` (in `src-tauri/`), then `npm run type-check && npm run test` (in root). When touching MOBI code also run `cargo test -p folio-core --features mobi` from the workspace root — `src-tauri/`'s `cargo test` does not compile folio-core's test binary.
