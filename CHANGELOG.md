@@ -5,6 +5,34 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.3.0] - 2026-06-17
+
+An extensibility release. Folio gains a sandboxed plugin system (Rhai scripts
+with an explicit, consent-gated permission model), a typed lifecycle event bus
+underpinning it, and resilient network behaviour for metadata enrichment and
+OPDS. Imports get a fast skip-before-hash path for unchanged files, and caches
+are unified behind a single managed abstraction with stats and a clear-all
+control.
+
+### Added
+- **Plugin system.** Folio can now run user-installed plugins written in [Rhai](https://rhai.rs), scoped by an explicit permission model and gated behind a consent dialog. Plugins declare capabilities in a manifest and are granted them per-install; a new **Settings → Plugins** panel (EN/FR) lists installed plugins, surfaces requested permissions, and manages consent. The desktop host exposes plugin commands over IPC and ships example plugins.
+  - **Capabilities** landed incrementally: `read:highlights` and `write:files` (with a highlight-exporter example), then `import:books` plus network access, enabling an OPDS auto-download plugin that pulls books from a remote feed.
+  - Built on a typed **lifecycle event bus** in `folio-core` — command paths emit structured events (import, enrich, etc.) that plugins and internal observers subscribe to, replacing ad-hoc hooks.
+- **Library book counts.** The library view shows the total book count and an imported-vs-linked breakdown.
+- **OPDS conditional requests.** Book feeds now send weak ETags and honour `304 Not Modified`, so unchanged feeds skip re-downloads. Backed by a `book_etag_pairs` DB helper.
+
+### Changed
+- **Fast re-import (skip-before-hash).** Re-importing an unchanged source file now skips before hashing when the source path, size, and mtime are unchanged — much faster folder re-scans on large libraries. New `source_path` / `size` / `mtime` columns back the fast path, which self-heals on mtime drift and falls through to hash dedup when the cheap check misses.
+- **Resilient enrichment HTTP.** All metadata-provider requests route through a `send_with_retry` loop with backoff and `Retry-After` handling; a new `RateLimited` error variant surfaces exhausted 429 retries. The scan UI shows provider-retry feedback during enrichment so backoff is visible rather than looking like a hang.
+- **Unified cache abstraction.** Memory and disk page caches now sit behind a single `ManagedCache` trait and registry (`MemoryCacheAdapter`, `DiskPageCacheAdapter`). Settings gains a unified cache-stats view and a clear-all control wired over IPC.
+
+### Fixed
+- **macOS SMB accented-filename imports.** Imports/reads of files with accented (non-ASCII) names from an SMB share could fail with `os error 2`; this is a known macOS smbfs Unicode bug, and the import/read error now explains the cause and suggests mounting over NFS instead of presenting it as a Folio failure.
+
+### Internal
+- **CI hardening.** Lint and formatting are now enforced workspace-wide: `cargo clippy --workspace --all-targets` and `cargo fmt --all --check` cover both `folio` and `folio-core`. The Rust toolchain is pinned to `1.96.0` in `rust-toolchain.toml` and matched in CI so local and CI never drift. A `docs-on-merge` workflow keeps in-repo docs in sync after PR merges.
+- **Documentation.** Added a plugin-system architecture guide and documented the workspace-wide fmt/clippy checks and toolchain pin.
+
 ## [2.2.1] - 2026-06-02
 
 ### Fixed
