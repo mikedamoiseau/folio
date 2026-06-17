@@ -78,6 +78,26 @@ fn filename_stem(path: &str) -> String {
         .to_string()
 }
 
+/// True when `s` is exactly a canonical UUID (`8-4-4-4-12` hex groups).
+/// Tools like ImageMagick stamp a bare UUID into the PDF Title; that is
+/// never a real book title, so callers fall back to the filename.
+fn is_uuid_like(s: &str) -> bool {
+    let parts: Vec<&str> = s.trim().split('-').collect();
+    let groups = [8usize, 4, 4, 4, 12];
+    parts.len() == 5
+        && parts
+            .iter()
+            .zip(groups)
+            .all(|(p, n)| p.len() == n && p.bytes().all(|b| b.is_ascii_hexdigit()))
+}
+
+/// True when `s` looks like a URL. PDF tooling (e.g. ImageMagick) leaks its
+/// homepage into the Author field; an author name is never a URL.
+fn looks_like_url(s: &str) -> bool {
+    let s = s.trim().to_ascii_lowercase();
+    s.starts_with("http://") || s.starts_with("https://")
+}
+
 fn read_metadata_tag(document: &PdfDocument, tag: PdfDocumentMetadataTagType) -> Option<String> {
     let entry: PdfDocumentMetadataTag = document.metadata().get(tag)?;
     let s = entry.value().to_string();
@@ -99,11 +119,16 @@ pub fn import_pdf(path: &str) -> FolioResult<PdfMeta> {
 
     let page_count = document.pages().len() as u32;
 
+    // A bare-UUID Title (common in tool-generated PDFs) is junk — fall back
+    // to the filename so the library shows something meaningful.
     let title = read_metadata_tag(&document, PdfDocumentMetadataTagType::Title)
+        .filter(|t| !is_uuid_like(t))
         .unwrap_or_else(|| filename_stem(path));
 
-    let author =
-        read_metadata_tag(&document, PdfDocumentMetadataTagType::Author).unwrap_or_default();
+    // A URL is never an author name (e.g. ImageMagick leaks its homepage).
+    let author = read_metadata_tag(&document, PdfDocumentMetadataTagType::Author)
+        .filter(|a| !looks_like_url(a))
+        .unwrap_or_default();
 
     Ok(PdfMeta {
         title,
@@ -332,5 +357,34 @@ mod tests {
     fn filename_stem_empty_string() {
         // Empty path has no stem — should fall back to "Unknown"
         assert_eq!(filename_stem(""), "Unknown");
+    }
+
+    #[test]
+    fn is_uuid_like_matches_canonical_uuid() {
+        assert!(is_uuid_like("e86d890e-1288-4044-98fd-d0e50be373f9"));
+        assert!(is_uuid_like("  742ae232-d411-4c1f-aace-84dedc9a4cb8  "));
+    }
+
+    #[test]
+    fn is_uuid_like_rejects_real_titles() {
+        assert!(!is_uuid_like("Wunderwaffen - T21 - Starjet"));
+        assert!(!is_uuid_like("Dune"));
+        assert!(!is_uuid_like("")); // empty
+        assert!(!is_uuid_like("e86d890e-1288-4044-98fd-d0e50be373f9-extra")); // 6 groups
+        assert!(!is_uuid_like("g86d890e-1288-4044-98fd-d0e50be373f9")); // non-hex
+    }
+
+    #[test]
+    fn looks_like_url_matches_urls() {
+        assert!(looks_like_url("https://imagemagick.org"));
+        assert!(looks_like_url("HTTP://Example.com"));
+        assert!(looks_like_url("  https://x.io "));
+    }
+
+    #[test]
+    fn looks_like_url_rejects_names() {
+        assert!(!looks_like_url("Frank Herbert"));
+        assert!(!looks_like_url("O'Reilly"));
+        assert!(!looks_like_url(""));
     }
 }
