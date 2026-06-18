@@ -3830,8 +3830,12 @@ pub async fn export_library(
     let mut linked_count = 0u32;
     if include_files {
         // Add each book file (use Stored for already-compressed formats)
-        let stored_options =
-            SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+        // `large_file(true)` forces ZIP64 per entry so a book ≥4GB doesn't
+        // abort the write mid-stream (the zip crate errors "Large file
+        // option has not been set" otherwise, leaving a truncated archive).
+        let stored_options = SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored)
+            .large_file(true);
         for book in &books {
             if !book.is_imported {
                 linked_count += 1;
@@ -3937,36 +3941,47 @@ pub async fn import_library_backup(
             }
         }
 
-        // Derive the extension for the archive entry. For post-M4 backups
-        // `book.file_path` is a storage key (e.g. `abc.epub`); for older
-        // backups it's an absolute path. `Path::extension` handles both.
-        let ext = std::path::Path::new(&book.file_path)
-            .extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or("epub");
-        let book_archive_name = format!("books/{}.{}", book.id, ext);
+        // Linked books carry no file bytes in the backup (export skips
+        // them; only the metadata row + cover are archived). Restore them
+        // as links to their original absolute path — consistent with how
+        // `resolve_book_path` treats linked books. The source volume must
+        // be mounted at the same path on the restoring machine.
+        let restored_file_path = if book.is_imported {
+            // Derive the extension for the archive entry. For post-M4 backups
+            // `book.file_path` is a storage key (e.g. `abc.epub`); for older
+            // backups it's an absolute path. `Path::extension` handles both.
+            let ext = std::path::Path::new(&book.file_path)
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("epub");
+            let book_archive_name = format!("books/{}.{}", book.id, ext);
 
-        // Validate ZIP entry name before extraction
-        if !is_safe_zip_entry(&book_archive_name) {
-            continue;
-        }
-
-        // Extract book file through the library storage — storage owns the
-        // on-disk layout, and the key (`{book_id}.{ext}`) is what the DB
-        // now stores (#64 M4).
-        let storage = state.active_storage()?;
-        let book_key = book_storage_key(&book.id, ext);
-        if let Ok(mut entry) = archive.by_name(&book_archive_name) {
-            // Validate the actual entry name from the archive as well
-            if !is_safe_zip_entry(entry.name()) {
+            // Validate ZIP entry name before extraction
+            if !is_safe_zip_entry(&book_archive_name) {
                 continue;
             }
-            let mut buf = Vec::new();
-            entry.read_to_end(&mut buf)?;
-            storage.put(&book_key, &buf)?;
+
+            // Extract book file through the library storage — storage owns the
+            // on-disk layout, and the key (`{book_id}.{ext}`) is what the DB
+            // now stores (#64 M4).
+            let storage = state.active_storage()?;
+            let book_key = book_storage_key(&book.id, ext);
+            if let Ok(mut entry) = archive.by_name(&book_archive_name) {
+                // Validate the actual entry name from the archive as well
+                if !is_safe_zip_entry(entry.name()) {
+                    continue;
+                }
+                let mut buf = Vec::new();
+                entry.read_to_end(&mut buf)?;
+                storage.put(&book_key, &buf)?;
+            } else {
+                continue; // imported book whose file is missing from the backup
+            }
+            book_key
         } else {
-            continue; // skip books without files
-        }
+            // Linked: keep the original absolute path verbatim.
+            book.file_path.clone()
+        };
 
         // Extract cover if present — route through the covers storage
         // (#64 M3) so on-disk layout stays identical whether restore writes
@@ -3997,7 +4012,7 @@ pub async fn import_library_backup(
         }
 
         let restored_book = Book {
-            file_path: book_key.clone(),
+            file_path: restored_file_path,
             cover_path,
             ..book.clone()
         };
