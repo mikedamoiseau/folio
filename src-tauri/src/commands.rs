@@ -3911,12 +3911,29 @@ pub async fn import_library_backup(
     let file = std::fs::File::open(&archive_path)?;
     let mut archive = zip::ZipArchive::new(file)?;
 
-    // Read library.json
+    // Read library.json. `build_core_export` writes an object
+    // (`{ "version", "books", "reading_progress", ... }`), so pull the
+    // `books` array out of it. A bare top-level array is also accepted for
+    // forward/backward compatibility with any plain-list backups.
     let books: Vec<Book> = {
         let mut entry = archive.by_name("library.json")?;
         let mut json = String::new();
         entry.read_to_string(&mut json)?;
-        serde_json::from_str(&json)?
+        let value: serde_json::Value = serde_json::from_str(&json)?;
+        match value {
+            serde_json::Value::Array(_) => serde_json::from_value(value)?,
+            serde_json::Value::Object(mut map) => {
+                let books = map
+                    .remove("books")
+                    .unwrap_or_else(|| serde_json::Value::Array(Vec::new()));
+                serde_json::from_value(books)?
+            }
+            _ => {
+                return Err(FolioError::invalid(
+                    "library.json is neither an object nor an array",
+                ))
+            }
+        }
     };
 
     let conn = state.active_db()?.get()?;

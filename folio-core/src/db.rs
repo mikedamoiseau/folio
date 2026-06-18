@@ -4421,6 +4421,29 @@ mod tests {
     }
 
     #[test]
+    fn build_core_export_books_deserialize_into_book_vec() {
+        // Restore (`import_library_backup`) parses the `books` array of the
+        // export object back into `Vec<Book>`. Guard that the export shape
+        // stays compatible — a regression here silently breaks restore.
+        let (_tmp, conn) = setup();
+        let mut b1 = sample_book("rt1");
+        b1.file_path = "/tmp/rt1.epub".to_string();
+        let mut b2 = sample_book("rt2");
+        b2.file_path = "/tmp/rt2.epub".to_string();
+        insert_book(&conn, &b1).unwrap();
+        insert_book(&conn, &b2).unwrap();
+
+        let value = build_core_export(&conn).expect("build_core_export");
+        let books: Vec<Book> =
+            serde_json::from_value(value["books"].clone()).expect("books -> Vec<Book>");
+
+        assert_eq!(books.len(), 2);
+        let mut ids: Vec<_> = books.iter().map(|b| b.id.as_str()).collect();
+        ids.sort_unstable();
+        assert_eq!(ids, ["rt1", "rt2"]);
+    }
+
+    #[test]
     fn list_settings_round_trips() {
         let (_tmp, conn) = setup();
         set_setting(&conn, "import_mode", "copy").unwrap();
