@@ -598,6 +598,87 @@ pub fn build_core_export(conn: &Connection) -> Result<serde_json::Value> {
     }))
 }
 
+/// Rows restored by [`restore_secondary_data`]. A field counts only the
+/// rows that were actually written (best-effort: rows referencing a book
+/// that wasn't imported, or that already exist, are skipped).
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct RestoreCounts {
+    pub reading_progress: usize,
+    pub bookmarks: usize,
+    pub highlights: usize,
+    pub collections: usize,
+    pub tags: usize,
+    pub book_tags: usize,
+}
+
+/// Non-book data carried in a library backup, the counterpart to the
+/// arrays emitted by [`build_core_export`]. Borrowed so the caller keeps
+/// ownership of the deserialized export.
+pub struct SecondaryImport<'a> {
+    pub reading_progress: &'a [ReadingProgress],
+    pub bookmarks: &'a [Bookmark],
+    pub highlights: &'a [crate::models::Highlight],
+    pub collections: &'a [Collection],
+    /// `(tag_id, name)` pairs.
+    pub tags: &'a [(String, String)],
+    /// `(book_id, tag_id, tag_name)` triples.
+    pub book_tags: &'a [(String, String, String)],
+}
+
+/// Restore the non-book data from a backup (reading progress, bookmarks,
+/// highlights, collections, tags, tag assignments).
+///
+/// Best-effort by design: a single row that fails — most often a foreign
+/// key to a book that wasn't imported, or a collection id that already
+/// exists — is skipped, never aborting the restore. The returned counts
+/// reflect rows actually written. Books must be inserted first so the
+/// foreign keys resolve.
+///
+/// Note: manual-collection membership (`collection_books`) is not part of
+/// the export, so it cannot be restored here; automated collections
+/// repopulate from their rules.
+pub fn restore_secondary_data(conn: &Connection, data: &SecondaryImport) -> RestoreCounts {
+    let mut counts = RestoreCounts::default();
+
+    for p in data.reading_progress {
+        if upsert_reading_progress(conn, p).is_ok() {
+            counts.reading_progress += 1;
+        }
+    }
+    for b in data.bookmarks {
+        if upsert_bookmark_from_sync(conn, b).is_ok() {
+            counts.bookmarks += 1;
+        }
+    }
+    for h in data.highlights {
+        if upsert_highlight_from_sync(conn, h).is_ok() {
+            counts.highlights += 1;
+        }
+    }
+    for c in data.collections {
+        // `insert_collection` is a plain INSERT — a pre-existing id errors
+        // and is simply skipped on re-import.
+        if insert_collection(conn, c).is_ok() {
+            counts.collections += 1;
+        }
+    }
+    for (tag_id, name) in data.tags {
+        if get_or_create_tag(conn, tag_id, name).is_ok() {
+            counts.tags += 1;
+        }
+    }
+    for (book_id, tag_id, tag_name) in data.book_tags {
+        // Ensure the tag exists (covers tags assigned but absent from the
+        // top-level `tags` array), then link it to the book.
+        let _ = get_or_create_tag(conn, tag_id, tag_name);
+        if add_tag_to_book(conn, book_id, tag_id).is_ok() {
+            counts.book_tags += 1;
+        }
+    }
+
+    counts
+}
+
 const GRID_COLUMNS: &str = "id, title, author, cover_path, total_chapters, added_at, format, series, volume, rating, language, publish_year, is_imported";
 
 /// Grid columns prefixed with table alias `b.` for JOIN queries.
@@ -4418,6 +4499,96 @@ mod tests {
         }
         assert_eq!(obj["version"], 1);
         assert!(obj["books"].is_array());
+    }
+
+    #[test]
+    fn restore_secondary_data_writes_and_is_idempotent() {
+        use crate::models::Highlight;
+        let (_tmp, conn) = setup();
+        let mut book = sample_book("b1");
+        book.file_path = "/tmp/b1.epub".to_string();
+        insert_book(&conn, &book).unwrap();
+
+        let progress = vec![ReadingProgress {
+            book_id: "b1".to_string(),
+            chapter_index: 3,
+            scroll_position: 0.5,
+            last_read_at: 1700,
+        }];
+        let bookmarks = vec![Bookmark {
+            id: "bm1".to_string(),
+            book_id: "b1".to_string(),
+            chapter_index: 2,
+            scroll_position: 0.1,
+            name: Some("mark".to_string()),
+            note: None,
+            created_at: 1,
+            updated_at: 1,
+            deleted_at: None,
+        }];
+        let highlights = vec![Highlight {
+            id: "hl1".to_string(),
+            book_id: "b1".to_string(),
+            chapter_index: 1,
+            text: "quote".to_string(),
+            color: "yellow".to_string(),
+            note: None,
+            start_offset: 0,
+            end_offset: 5,
+            created_at: 1,
+            updated_at: 1,
+            deleted_at: None,
+        }];
+        let collections = vec![Collection {
+            id: "c1".to_string(),
+            name: "Faves".to_string(),
+            r#type: CollectionType::Manual,
+            icon: None,
+            color: None,
+            created_at: 1,
+            updated_at: 1,
+            rules: Vec::new(),
+        }];
+        let tags = vec![("t1".to_string(), "scifi".to_string())];
+        let book_tags = vec![("b1".to_string(), "t1".to_string(), "scifi".to_string())];
+
+        let data = SecondaryImport {
+            reading_progress: &progress,
+            bookmarks: &bookmarks,
+            highlights: &highlights,
+            collections: &collections,
+            tags: &tags,
+            book_tags: &book_tags,
+        };
+
+        let counts = restore_secondary_data(&conn, &data);
+        assert_eq!(
+            counts,
+            RestoreCounts {
+                reading_progress: 1,
+                bookmarks: 1,
+                highlights: 1,
+                collections: 1,
+                tags: 1,
+                book_tags: 1,
+            }
+        );
+
+        // Data actually landed.
+        assert!(get_reading_progress(&conn, "b1").unwrap().is_some());
+        assert_eq!(list_bookmarks(&conn, "b1").unwrap().len(), 1);
+        assert_eq!(list_highlights(&conn, "b1").unwrap().len(), 1);
+        assert_eq!(list_collections(&conn).unwrap().len(), 1);
+        assert_eq!(get_book_tags(&conn, "b1").unwrap().len(), 1);
+
+        // Re-running must not duplicate rows or error. The collection's
+        // existing id is skipped, so its count drops to zero.
+        let again = restore_secondary_data(&conn, &data);
+        assert_eq!(again.collections, 0);
+        assert_eq!(list_bookmarks(&conn, "b1").unwrap().len(), 1);
+        assert_eq!(list_highlights(&conn, "b1").unwrap().len(), 1);
+        assert_eq!(list_collections(&conn).unwrap().len(), 1);
+        assert_eq!(get_book_tags(&conn, "b1").unwrap().len(), 1);
     }
 
     #[test]

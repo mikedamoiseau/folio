@@ -3913,6 +3913,27 @@ pub async fn export_library(
     Ok(dest_path)
 }
 
+/// Deserialized `library.json` from a backup — the counterpart to
+/// `db::build_core_export`. All fields default to empty so older/partial
+/// backups (or a bare book array) still deserialize.
+#[derive(Default, serde::Deserialize)]
+struct LibraryExport {
+    #[serde(default)]
+    books: Vec<Book>,
+    #[serde(default)]
+    reading_progress: Vec<folio_core::models::ReadingProgress>,
+    #[serde(default)]
+    bookmarks: Vec<folio_core::models::Bookmark>,
+    #[serde(default)]
+    highlights: Vec<folio_core::models::Highlight>,
+    #[serde(default)]
+    collections: Vec<folio_core::models::Collection>,
+    #[serde(default)]
+    tags: Vec<(String, String)>,
+    #[serde(default)]
+    book_tags: Vec<(String, String, String)>,
+}
+
 #[tauri::command]
 pub async fn import_library_backup(
     archive_path: String,
@@ -3925,22 +3946,20 @@ pub async fn import_library_backup(
     let mut archive = zip::ZipArchive::new(file)?;
 
     // Read library.json. `build_core_export` writes an object
-    // (`{ "version", "books", "reading_progress", ... }`), so pull the
-    // `books` array out of it. A bare top-level array is also accepted for
-    // forward/backward compatibility with any plain-list backups.
-    let books: Vec<Book> = {
+    // (`{ "version", "books", "reading_progress", ... }`); a bare top-level
+    // array of books is also accepted for backward compatibility with any
+    // plain-list backups.
+    let export: LibraryExport = {
         let mut entry = archive.by_name("library.json")?;
         let mut json = String::new();
         entry.read_to_string(&mut json)?;
         let value: serde_json::Value = serde_json::from_str(&json)?;
         match value {
-            serde_json::Value::Array(_) => serde_json::from_value(value)?,
-            serde_json::Value::Object(mut map) => {
-                let books = map
-                    .remove("books")
-                    .unwrap_or_else(|| serde_json::Value::Array(Vec::new()));
-                serde_json::from_value(books)?
-            }
+            serde_json::Value::Array(_) => LibraryExport {
+                books: serde_json::from_value(value)?,
+                ..Default::default()
+            },
+            serde_json::Value::Object(_) => serde_json::from_value(value)?,
             _ => {
                 return Err(FolioError::invalid(
                     "library.json is neither an object nor an array",
@@ -3948,6 +3967,7 @@ pub async fn import_library_backup(
             }
         }
     };
+    let books = &export.books;
 
     let conn = state.active_db()?.get()?;
     let library_folder = match db::get_setting(&conn, "library_folder")? {
@@ -3963,7 +3983,7 @@ pub async fn import_library_backup(
         !name.contains("..") && !name.starts_with('/') && !name.starts_with('\\')
     };
 
-    for book in &books {
+    for book in books {
         // Skip if book already exists by hash
         if let Some(ref hash) = book.file_hash {
             if db::get_book_by_file_hash(&conn, hash)?.is_some() {
@@ -4052,10 +4072,28 @@ pub async fn import_library_backup(
         }
     }
 
+    // Restore non-book data (reading progress, bookmarks, highlights,
+    // collections, tags). Best-effort: rows referencing a book that wasn't
+    // imported are skipped. Runs after books so foreign keys resolve.
+    let counts = db::restore_secondary_data(
+        &conn,
+        &db::SecondaryImport {
+            reading_progress: &export.reading_progress,
+            bookmarks: &export.bookmarks,
+            highlights: &export.highlights,
+            collections: &export.collections,
+            tags: &export.tags,
+            book_tags: &export.book_tags,
+        },
+    );
+
     log_event(
         &conn,
         ActivityEvent::LibraryImported {
-            detail: "Restored from backup".to_string(),
+            detail: format!(
+                "Restored from backup ({imported} books, {} bookmarks, {} highlights, {} collections)",
+                counts.bookmarks, counts.highlights, counts.collections
+            ),
         },
     );
 

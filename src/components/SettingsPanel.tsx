@@ -893,6 +893,9 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
     try {
       const count = await invoke<number>("import_library_backup", { archivePath: restoreConfirmPath });
       setBackupMessage(t("settings.importedBooks", { count }));
+      // Tell the Library screen to re-fetch — restore writes books,
+      // collections, and tags directly to the DB.
+      window.dispatchEvent(new Event("folio-library-changed"));
       setRestoreConfirmPath(null);
       setRestoreModalOpen(false);
     } catch (err) {
