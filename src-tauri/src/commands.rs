@@ -3862,12 +3862,25 @@ pub async fn export_library(
         if let Ok(_data_dir) = app.path().app_data_dir() {
             for book in &books {
                 if let Some(cover_path) = &book.cover_path {
-                    if let Ok(data) = std::fs::read(cover_path) {
+                    // Prefer the small grid thumbnail (sibling `thumb.jpg`)
+                    // over the full-resolution cover so backups stay small —
+                    // the thumbnail is what the library grid displays. Falls
+                    // back to the full cover when no thumbnail exists (the
+                    // cover was already small enough at import time).
+                    let thumb = std::path::Path::new(cover_path).with_file_name("thumb.jpg");
+                    let (src, archive_name) = if thumb.exists() {
+                        (thumb, format!("covers/{}/cover.jpg", book.id))
+                    } else {
                         let ext = std::path::Path::new(cover_path)
                             .extension()
                             .and_then(|e| e.to_str())
                             .unwrap_or("jpg");
-                        let archive_name = format!("covers/{}/cover.{}", book.id, ext);
+                        (
+                            std::path::PathBuf::from(cover_path),
+                            format!("covers/{}/cover.{}", book.id, ext),
+                        )
+                    };
+                    if let Ok(data) = std::fs::read(&src) {
                         zip.start_file(&archive_name, options)?;
                         zip.write_all(&data)?;
                     }
