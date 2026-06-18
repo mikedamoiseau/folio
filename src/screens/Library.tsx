@@ -311,6 +311,20 @@ export default function Library({ catalogImportedBookIds }: LibraryProps = {}) {
     loadSeries();
   }, [loadCollections, loadBooks, loadRecentlyRead, loadSeries]);
 
+  // Reload the library when a backup is restored from SettingsPanel — it
+  // writes books, collections, and tags straight to the DB, so the grid
+  // must re-fetch to reflect them.
+  useEffect(() => {
+    const handler = () => {
+      loadCollections();
+      loadBooks(activeCollectionIdRef.current);
+      loadRecentlyRead();
+      loadSeries();
+    };
+    window.addEventListener("folio-library-changed", handler);
+    return () => window.removeEventListener("folio-library-changed", handler);
+  }, [loadCollections, loadBooks, loadRecentlyRead, loadSeries]);
+
   // Re-fetch recently read when toggled on
   useEffect(() => {
     if (showContinueReading) loadRecentlyRead();
