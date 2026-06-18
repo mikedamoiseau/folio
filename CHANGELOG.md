@@ -5,6 +5,25 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.4.0] - 2026-06-18
+
+A backup-and-restore release. Library restore now reconstructs the whole
+library — not just books — and exported backups are far smaller. Several
+restore paths that silently dropped data (or failed outright) are fixed.
+
+### Added
+- **Full restore.** Restoring a backup now brings back reading progress, bookmarks, highlights, collections, and tags in addition to books and covers. Restore is a best-effort, non-destructive merge: rows referencing a book that wasn't imported are skipped, and re-importing the same backup is safe (idempotent). Backed by a new `restore_secondary_data` helper in `folio-core`.
+- **Linked books in restore.** Linked books (not copied into the library) are now restored as links to their original absolute path. The source volume must be mounted at the same path on the restoring machine. Previously they were silently dropped.
+
+### Changed
+- **Smaller backups.** Library exports now ship the lightweight grid thumbnails rather than full-resolution covers — on a ~2,000-book library the cover payload drops from ~1.1 GB to ~150 MB. Restored covers are the 320px thumbnail; full-resolution covers are re-derivable by re-importing from source files.
+- **Large-file exports.** Book files ≥4 GB no longer abort the export mid-write (ZIP64 is now forced for stored entries), so full backups of large libraries produce a valid, extractable archive.
+- **Cleaner PDF metadata.** PDF import now ignores junk embedded metadata from tool-generated files: a bare-UUID Title falls back to the filename, and a URL Author (e.g. an ImageMagick homepage) is dropped.
+
+### Fixed
+- **Restore worked at all.** `library.json` is written as an object (`{ version, books, ... }`) but restore parsed it as a bare array, so every restore errored and the UI silently bounced back to the file picker. Restore now parses the object (and still accepts a bare array for older backups).
+- **Library refreshes after restore.** The grid now re-fetches automatically once a restore completes, instead of showing stale contents until the next manual reload.
+
 ## [2.3.0] - 2026-06-17
 
 An extensibility release. Folio gains a sandboxed plugin system (Rhai scripts
