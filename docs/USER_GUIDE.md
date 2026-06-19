@@ -600,15 +600,15 @@ From **Settings > Backup & Restore** you can export and restore library backups.
 
 **Export options:**
 
-- **Metadata only** — small file containing your reading progress, collections, tags, and highlights.
-- **Full backup** — includes all book files alongside the metadata.
+- **Metadata only** — small file containing your book metadata, reading progress, bookmarks, highlights, collections, and tags.
+- **Full backup** — includes book files alongside the metadata. Linked books (not copied into the library) keep a reference to their original location rather than embedding the file. Cover images are stored as compact thumbnails to keep the archive small.
 
 **Restore from backup:** Click "Restore from backup" to open the restore picker:
 
 - **Automatic backups** — Folio creates automatic backups before destructive operations like library cleanup. These are listed with their date, type, and file size. Click "Restore" on any entry.
 - **From file** — Click "Choose file" to select a backup ZIP you exported previously.
 
-Restoring a backup imports books and metadata. Existing data is not deleted — it's a non-destructive merge.
+Restoring a backup brings back your books and covers along with reading progress, bookmarks, highlights, collections, and tags. Existing data is not deleted — it's a non-destructive merge, and restoring the same backup twice is safe. Linked books are restored as references to their original path, so that location must be reachable (e.g. the drive mounted) on the machine you restore to. The library view refreshes automatically once the restore finishes.
 
 ### Library cleanup
 
