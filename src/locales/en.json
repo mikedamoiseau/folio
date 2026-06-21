@@ -824,6 +824,7 @@
       "importMode": "When importing books",
       "importModeCopy": "Copy to library",
       "importModeLink": "Link to original",
+      "importModeHelp": "Copy duplicates files into your library — safe, but uses more disk space. Link reads files in place — saves space, but breaks if you move the originals.",
       "cta": "Continue"
     },
     "import": {

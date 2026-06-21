@@ -399,6 +399,9 @@ function PreferencesStep({ onContinue }: { onContinue: () => void }) {
               </button>
             ))}
           </div>
+          <p className="text-xs text-ink-muted mt-2">
+            {t("onboarding.preferences.importModeHelp")}
+          </p>
         </div>
       </div>
 

@@ -41,6 +41,10 @@ export default function ImportStatusBar() {
     phase !== "done" &&
     phase !== "empty" &&
     phase !== "error";
+  // A finished batch that had failures persists (see ImportContext) so the user
+  // can read the breakdown — give it a dismiss control and surface the failed
+  // count in its own red line rather than burying it in the summary string.
+  const doneWithErrors = phase === "done" && errors > 0;
 
   return (
     <div
@@ -66,7 +70,7 @@ export default function ImportStatusBar() {
               {t("library.importingFile", { filename })}
             </div>
           )}
-          {(phase === "importing" || phase === "scanning") &&
+          {(phase === "importing" || phase === "scanning" || doneWithErrors) &&
             (imported > 0 || duplicates > 0 || errors > 0) && (
               <div className="text-xs text-ink-muted mt-0.5">
                 {imported > 0 && (
@@ -78,7 +82,9 @@ export default function ImportStatusBar() {
                 )}
                 {duplicates > 0 && errors > 0 && <span> · </span>}
                 {errors > 0 && (
-                  <span>{t("library.failed", { count: errors })}</span>
+                  <span className="text-red-600 dark:text-red-400">
+                    {t("library.failed", { count: errors })}
+                  </span>
                 )}
               </div>
             )}
@@ -91,6 +97,15 @@ export default function ImportStatusBar() {
             className="shrink-0 text-xs px-2 py-1 rounded border border-warm-border text-ink-muted hover:text-ink hover:bg-warm-subtle"
           >
             {t("common.cancel")}
+          </button>
+        )}
+        {doneWithErrors && (
+          <button
+            onClick={dismiss}
+            className="shrink-0 text-xs px-2 py-1 rounded border border-warm-border text-ink-muted hover:text-ink hover:bg-warm-subtle"
+            aria-label={t("common.close")}
+          >
+            {t("common.close")}
           </button>
         )}
         {phase === "error" && (
