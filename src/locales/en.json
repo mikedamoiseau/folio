@@ -68,6 +68,7 @@
     "importBackgroundDone": "Import finished — {{imported}} added, {{duplicates}} skipped, {{errors}} failed",
     "importBackgroundCancelled": "Import cancelled — {{imported}} added, {{duplicates}} skipped, {{errors}} failed",
     "importBackgroundError": "Import failed — {{error}}",
+    "retryImport": "Retry",
     "importCancelling": "Cancelling…",
     "collectionEmpty": "This collection is empty",
     "collectionEmptyManual": "Drag books onto this collection to add them.",

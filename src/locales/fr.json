@@ -68,6 +68,7 @@
     "importBackgroundDone": "Import termin\u00e9 \u2014 {{imported}} ajout\u00e9(s), {{duplicates}} ignor\u00e9(s), {{errors}} \u00e9chec(s)",
     "importBackgroundCancelled": "Import annul\u00e9 \u2014 {{imported}} ajout\u00e9(s), {{duplicates}} ignor\u00e9(s), {{errors}} \u00e9chec(s)",
     "importBackgroundError": "\u00c9chec de l'import \u2014 {{error}}",
+    "retryImport": "R\u00e9essayer",
     "importCancelling": "Annulation\u2026",
     "collectionEmpty": "Cette collection est vide",
     "collectionEmptyManual": "Glissez des livres sur cette collection pour les ajouter.",
