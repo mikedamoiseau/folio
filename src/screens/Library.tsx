@@ -377,7 +377,10 @@ export default function Library({ catalogImportedBookIds }: LibraryProps = {}) {
         undoLabel: t("common.undo"),
         commit: async () => {
           await invoke("remove_book_from_collection", { bookId, collectionId });
-          await loadBooks(collectionId);
+          // Refresh whatever collection is active *now* — the user may have
+          // navigated away during the 5s undo window, so the captured
+          // `collectionId` can be stale for view purposes.
+          await loadBooks(activeCollectionIdRef.current);
         },
         onError: (err) => setError(friendlyError(err, t)),
       });

@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useCallback, useRef, type ReactNode } from "react";
+import { createContext, useContext, useState, useCallback, useEffect, useRef, type ReactNode } from "react";
 
 export type ToastType = "success" | "error" | "info";
 
@@ -54,6 +54,18 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   const nextId = useRef(0);
   const timers = useRef<Map<number, ReturnType<typeof setTimeout>>>(new Map());
   const onTimeouts = useRef<Map<number, () => void>>(new Map());
+
+  // On unmount, drop any open timers so a deferred undo commit (which calls
+  // backend invoke() + a screen refresh) can never fire against a torn-down
+  // tree. Dropping rather than committing is the safe default for the
+  // destructive actions this backs — the deletion simply doesn't happen.
+  useEffect(() => {
+    const timers_ = timers.current;
+    return () => {
+      timers_.forEach((timer) => clearTimeout(timer));
+      timers_.clear();
+    };
+  }, []);
 
   // Remove a toast and clear its timer. When `runTimeout` is true, fire the
   // toast's onTimeout (commit). The undo action passes `false` to suppress it.
