@@ -82,9 +82,23 @@ describe("CatalogBrowser add-catalog validation", () => {
   });
 });
 
-// NOTE: the remove-confirmation flow (catalog row → ConfirmDialog → remove)
-// uses the same gated-ConfirmDialog pattern unit-tested in ProfileSwitcher.test.
-// A click-based test of the catalog *row* button is omitted: the row is
-// rendered via map and jsdom does not reliably dispatch its synthetic click
-// in this harness. The behaviour is covered by the ProfileSwitcher confirm
-// tests + codex review.
+describe("CatalogBrowser remove confirmation", () => {
+  it("confirms before removing a catalog (no immediate backend call)", async () => {
+    invoke.mockImplementation((cmd: string) => {
+      if (cmd === "get_opds_catalogs")
+        return Promise.resolve([{ name: "My Feed", url: "https://example.com/opds" }]);
+      return Promise.resolve(undefined);
+    });
+    render(<CatalogBrowser onClose={() => {}} onBookImported={() => {}} />);
+    await waitFor(() => expect(screen.getByText("My Feed")).toBeInTheDocument());
+
+    await act(async () => fireEvent.click(screen.getByLabelText(/catalog\.removeCatalog/)));
+    expect(invoke).not.toHaveBeenCalledWith("remove_opds_catalog", expect.anything());
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "common.remove" })));
+    await waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith("remove_opds_catalog", { url: "https://example.com/opds" })
+    );
+  });
+});

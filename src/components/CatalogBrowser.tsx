@@ -440,6 +440,20 @@ export default function CatalogBrowser({ onClose, onBookImported }: CatalogBrows
             )}
           </div>
         </div>
+
+        {removeCatalogTarget && (
+          <ConfirmDialog
+            title={t("catalog.removeCatalogConfirmTitle", { name: removeCatalogTarget.name })}
+            message={t("catalog.removeCatalogConfirmMessage")}
+            confirmLabel={t("common.remove")}
+            onCancel={() => setRemoveCatalogTarget(null)}
+            onConfirm={() => {
+              const url = removeCatalogTarget.url;
+              setRemoveCatalogTarget(null);
+              void handleRemoveCatalog(url);
+            }}
+          />
+        )}
       </>
     );
   }
@@ -584,20 +598,6 @@ export default function CatalogBrowser({ onClose, onBookImported }: CatalogBrows
           )}
         </div>
       </div>
-
-      {removeCatalogTarget && (
-        <ConfirmDialog
-          title={t("catalog.removeCatalogConfirmTitle", { name: removeCatalogTarget.name })}
-          message={t("catalog.removeCatalogConfirmMessage")}
-          confirmLabel={t("common.remove")}
-          onCancel={() => setRemoveCatalogTarget(null)}
-          onConfirm={() => {
-            const url = removeCatalogTarget.url;
-            setRemoveCatalogTarget(null);
-            void handleRemoveCatalog(url);
-          }}
-        />
-      )}
     </>
   );
 }
