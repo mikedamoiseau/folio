@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   formatDuration,
+  formatBytes,
   filterBooks,
   sortBooks,
   groupBy,
@@ -774,5 +775,32 @@ describe("validateWebServerPort", () => {
 
   it("tolerates surrounding whitespace", () => {
     expect(validateWebServerPort("  7788  ")).toEqual({ valid: true, port: 7788 });
+  });
+});
+
+describe("formatBytes", () => {
+  it("formats zero", () => {
+    expect(formatBytes(0)).toBe("0 B");
+  });
+
+  it("formats bytes with no decimals", () => {
+    expect(formatBytes(512)).toBe("512 B");
+  });
+
+  it("formats kilobytes", () => {
+    expect(formatBytes(2048)).toBe("2.0 KB");
+  });
+
+  it("formats megabytes", () => {
+    expect(formatBytes(2.4 * 1024 * 1024)).toBe("2.4 MB");
+  });
+
+  it("formats gigabytes", () => {
+    expect(formatBytes(3 * 1024 * 1024 * 1024)).toBe("3.0 GB");
+  });
+
+  it("returns empty string for null/undefined", () => {
+    expect(formatBytes(null)).toBe("");
+    expect(formatBytes(undefined)).toBe("");
   });
 });

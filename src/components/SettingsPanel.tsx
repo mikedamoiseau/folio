@@ -8,7 +8,7 @@ import { useTheme, MIN_FONT_SIZE, MAX_FONT_SIZE, type ColorTokens } from "../con
 import { friendlyError } from "../lib/errors";
 import { missingRequiredFields, connectionResultFeedback } from "../lib/backupConnection";
 import { isPinUnsaved, shouldSaveOnBlur } from "../lib/pinSaveState";
-import { validateWebServerPort, WEB_SERVER_PORT_MIN, WEB_SERVER_PORT_MAX } from "../lib/utils";
+import { validateWebServerPort, WEB_SERVER_PORT_MIN, WEB_SERVER_PORT_MAX, formatBytes } from "../lib/utils";
 import { useOnboardingContext } from "../context/OnboardingContext";
 import { useToast } from "./Toast";
 import {
@@ -360,13 +360,6 @@ interface MigrationDialogState {
   newFolder: string;
   fileCount: number;
   totalSizeBytes: number;
-}
-
-function formatBytes(bytes: number): string {
-  if (bytes === 0) return "0 B";
-  const units = ["B", "KB", "MB", "GB", "TB"];
-  const i = Math.floor(Math.log(bytes) / Math.log(1024));
-  return `${(bytes / Math.pow(1024, i)).toFixed(i === 0 ? 0 : 1)} ${units[i]}`;
 }
 
 export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
