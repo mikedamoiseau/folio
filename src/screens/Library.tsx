@@ -28,6 +28,7 @@ import { LiveRegion } from "../components/LiveRegion";
 import OnboardingWizard from "../components/OnboardingWizard";
 import { useToast } from "../components/Toast";
 import { useUndoableRemoval } from "../lib/useUndoableRemoval";
+import ConfirmDialog from "../components/ConfirmDialog";
 import { useDebounce } from "../hooks/useDebounce";
 import { useImport } from "../context/ImportContext";
 import WhatsNewBanner from "../components/WhatsNewBanner";
@@ -61,6 +62,7 @@ export default function Library({ catalogImportedBookIds }: LibraryProps = {}) {
   const navigate = useNavigate();
   const { addToast } = useToast();
   const { pendingIds: pendingRemovalIds, remove: removeWithUndo } = useUndoableRemoval(addToast);
+  const [bulkDeleteConfirm, setBulkDeleteConfirm] = useState(false);
   // Backend-supported formats for this build — drives OPDS download-link
   // gating and drag-drop filtering so MOBI/AZW/AZW3 don't appear on builds
   // that weren't compiled with the `mobi` feature.
@@ -1802,21 +1804,7 @@ export default function Library({ catalogImportedBookIds }: LibraryProps = {}) {
           <div className="w-px h-4 bg-paper/20" />
           <button
             type="button"
-            onClick={() => {
-              if (!confirm(t("library.bulkDeleteConfirm", { count: selectedIds.size }))) return;
-              const ids = [...selectedIds];
-              removeWithUndo(ids, {
-                message: t("library.bulkRemovedUndo", { count: ids.length }),
-                undoLabel: t("common.undo"),
-                commit: async () => {
-                  await invoke("bulk_delete_books", { bookIds: ids });
-                  await loadBooks(activeCollectionIdRef.current);
-                },
-                onError: (e) => addToast(friendlyError(e, t), "error"),
-              });
-              setSelectedIds(new Set());
-              setSelectMode(false);
-            }}
+            onClick={() => setBulkDeleteConfirm(true)}
             className="text-red-400 hover:text-red-300 text-xs font-medium"
           >
             {t("common.delete")}
@@ -1832,6 +1820,30 @@ export default function Library({ catalogImportedBookIds }: LibraryProps = {}) {
       )}
 
       {/* Toast notifications now rendered by ToastProvider at app root */}
+
+      {bulkDeleteConfirm && (
+        <ConfirmDialog
+          title={t("library.bulkDeleteTitle", { count: selectedIds.size })}
+          message={t("library.bulkDeleteConfirm", { count: selectedIds.size })}
+          confirmLabel={t("common.delete")}
+          onCancel={() => setBulkDeleteConfirm(false)}
+          onConfirm={() => {
+            const ids = [...selectedIds];
+            setBulkDeleteConfirm(false);
+            removeWithUndo(ids, {
+              message: t("library.bulkRemovedUndo", { count: ids.length }),
+              undoLabel: t("common.undo"),
+              commit: async () => {
+                await invoke("bulk_delete_books", { bookIds: ids });
+                await loadBooks(activeCollectionIdRef.current);
+              },
+              onError: (e) => addToast(friendlyError(e, t), "error"),
+            });
+            setSelectedIds(new Set());
+            setSelectMode(false);
+          }}
+        />
+      )}
 
       {bulkEditing && (
         <BulkEditDialog
