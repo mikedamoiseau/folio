@@ -53,16 +53,18 @@ describe("CatalogBrowser add-catalog validation", () => {
     expect(screen.getByText("catalog.invalidUrl")).toBeInTheDocument();
   });
 
-  it("connection-tests via browse_opds before saving a valid URL", async () => {
+  it("saves then connection-tests via browse_opds for a valid URL (no rollback on success)", async () => {
     await openAddForm();
     await fillForm("My Feed", "https://example.com/opds");
     await act(async () => fireEvent.click(screen.getByRole("button", { name: "common.add" })));
 
     await waitFor(() => expect(invoke).toHaveBeenCalledWith("browse_opds", { url: "https://example.com/opds" }));
     expect(invoke).toHaveBeenCalledWith("add_opds_catalog", { name: "My Feed", url: "https://example.com/opds" });
+    // success → no rollback
+    expect(invoke).not.toHaveBeenCalledWith("remove_opds_catalog", expect.anything());
   });
 
-  it("does NOT save when the connection test fails", async () => {
+  it("rolls back the add when the connection test fails", async () => {
     invoke.mockImplementation((cmd: string) => {
       if (cmd === "get_opds_catalogs") return Promise.resolve([]);
       if (cmd === "browse_opds") return Promise.reject(new Error("connection refused"));
@@ -73,6 +75,8 @@ describe("CatalogBrowser add-catalog validation", () => {
     await act(async () => fireEvent.click(screen.getByRole("button", { name: "common.add" })));
 
     await waitFor(() => expect(screen.getByText(/catalog\.connectionTestFailed/)).toBeInTheDocument());
-    expect(invoke).not.toHaveBeenCalledWith("add_opds_catalog", expect.anything());
+    // it was provisionally added, then rolled back
+    expect(invoke).toHaveBeenCalledWith("add_opds_catalog", { name: "Broken", url: "https://bad.example/opds" });
+    expect(invoke).toHaveBeenCalledWith("remove_opds_catalog", { url: "https://bad.example/opds" });
   });
 });

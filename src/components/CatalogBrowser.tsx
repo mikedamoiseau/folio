@@ -153,6 +153,7 @@ export default function CatalogBrowser({ onClose, onBookImported }: CatalogBrows
   }, [onBookImported, t, supportedFormats]);
 
   const handleAddCatalog = async () => {
+    if (addingCatalog) return; // guard re-entry (Enter key / double-click while testing)
     const name = newCatalogName.trim();
     const url = newCatalogUrl.trim();
     if (!name || !url) return;
@@ -166,10 +167,18 @@ export default function CatalogBrowser({ onClose, onBookImported }: CatalogBrows
     setAddCatalogError(null);
     setAddingCatalog(true);
     try {
-      // Pre-flight: fetch + parse the feed so a broken URL is caught here
-      // rather than only when the user later tries to browse it.
-      await invoke("browse_opds", { url });
+      // Save first, then connection-test. `browse_opds` only relaxes its
+      // private/loopback SSRF guard for hosts already in the saved catalog
+      // list, so a LAN/localhost feed must be saved before it can be tested.
+      // `add_opds_catalog` intentionally trusts the user-entered URL.
       await invoke("add_opds_catalog", { name, url });
+      try {
+        await invoke("browse_opds", { url });
+      } catch (testErr) {
+        // Roll back the provisional add so a broken feed isn't kept.
+        await invoke("remove_opds_catalog", { url }).catch(() => {});
+        throw testErr;
+      }
       setNewCatalogName("");
       setNewCatalogUrl("");
       setShowAddCatalog(false);
