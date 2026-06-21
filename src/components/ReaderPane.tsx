@@ -5,6 +5,7 @@ import { listen } from "@tauri-apps/api/event";
 import { useTranslation } from "react-i18next";
 import { useTheme, MIN_FONT_SIZE, MAX_FONT_SIZE } from "../context/ThemeContext";
 import PageViewer from "./PageViewer";
+import ChapterErrorCard from "./ChapterErrorCard";
 import PageThumbnailStrip from "./PageThumbnailStrip";
 import KeyboardShortcutsHelp from "./KeyboardShortcutsHelp";
 import HighlightsPanel, { HIGHLIGHT_COLORS } from "./HighlightsPanel";
@@ -219,6 +220,7 @@ export default function ReaderPane({
   }, [focusHint, dndMode]);
 
   const [chapterError, setChapterError] = useState<string | null>(null);
+  const [chapterRetryCount, setChapterRetryCount] = useState(0);
   const [missingFileDialog, setMissingFileDialog] = useState(false);
 
   const completion = useBookCompletion(bookId, chapterIndex, totalChapters);
@@ -444,7 +446,7 @@ export default function ReaderPane({
 
     loadAll();
     return () => { cancelled = true; };
-  }, [bookId, loading, isContinuous]);
+  }, [bookId, loading, isContinuous, chapterRetryCount]);
 
   // ---- Scroll to saved chapter after all chapters load (continuous mode) ----
 
@@ -544,7 +546,7 @@ export default function ReaderPane({
     return () => {
       cancelled = true;
     };
-  }, [bookId, chapterIndex, loading]);
+  }, [bookId, chapterIndex, loading, chapterRetryCount]);
 
   // ---- Restore scroll position after chapter HTML renders ----
 
@@ -2248,9 +2250,13 @@ export default function ReaderPane({
               })()}
 
               {chapterError ? (
-                <div className="max-w-[680px] mx-auto px-8 py-10">
-                  <p className="text-red-500 text-sm">{t("reader.failedToLoadChapter", { error: chapterError })}</p>
-                </div>
+                <ChapterErrorCard
+                  error={chapterError}
+                  onRetry={() => {
+                    setChapterError(null);
+                    setChapterRetryCount((c) => c + 1);
+                  }}
+                />
               ) : isContinuous ? (
                 /* ── Continuous scroll: all chapters stacked ── */
                 allChaptersLoaded ? (
