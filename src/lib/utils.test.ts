@@ -678,3 +678,20 @@ describe("providerDisplayName", () => {
     expect(providerDisplayName("somenew_api")).toBe("somenew_api");
   });
 });
+
+import { isValidHttpUrl } from "./utils";
+
+describe("isValidHttpUrl", () => {
+  it("accepts http and https absolute URLs", () => {
+    expect(isValidHttpUrl("https://example.com/opds")).toBe(true);
+    expect(isValidHttpUrl("http://192.168.0.5:8080/feed")).toBe(true);
+    expect(isValidHttpUrl("  https://trimmed.example/ ")).toBe(true);
+  });
+  it("rejects empty, malformed, and non-http schemes", () => {
+    expect(isValidHttpUrl("")).toBe(false);
+    expect(isValidHttpUrl("not a url")).toBe(false);
+    expect(isValidHttpUrl("ftp://example.com")).toBe(false);
+    expect(isValidHttpUrl("javascript:alert(1)")).toBe(false);
+    expect(isValidHttpUrl("example.com")).toBe(false);
+  });
+});

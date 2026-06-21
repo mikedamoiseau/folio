@@ -1,0 +1,78 @@
+// @vitest-environment jsdom
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import "@testing-library/jest-dom/vitest";
+
+const invoke = vi.fn();
+vi.mock("@tauri-apps/api/core", () => ({ invoke: (...a: unknown[]) => invoke(...a) }));
+vi.mock("react-i18next", () => ({
+  useTranslation: () => ({ t: (k: string, p?: Record<string, unknown>) => (p ? `${k}:${JSON.stringify(p)}` : k) }),
+}));
+vi.mock("../lib/supportedFormats", () => ({
+  FALLBACK_FORMATS: ["epub"],
+  useSupportedFormats: () => ["epub", "pdf"],
+}));
+vi.mock("./OpdsPresetPicker", () => ({ default: () => null }));
+
+import { render, screen, cleanup, fireEvent, act, waitFor } from "@testing-library/react";
+import CatalogBrowser from "./CatalogBrowser";
+
+beforeEach(() => {
+  invoke.mockReset();
+  invoke.mockImplementation((cmd: string) => {
+    if (cmd === "get_opds_catalogs") return Promise.resolve([]);
+    return Promise.resolve(undefined);
+  });
+});
+afterEach(() => cleanup());
+
+async function openAddForm() {
+  render(<CatalogBrowser onClose={() => {}} onBookImported={() => {}} />);
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith("get_opds_catalogs"));
+  // Reveal the add-catalog form
+  const addToggle = await screen.findByText("catalog.addCustomCatalog");
+  await act(async () => fireEvent.click(addToggle));
+}
+
+async function fillForm(name: string, url: string) {
+  const nameInput = screen.getByPlaceholderText("catalog.catalogName");
+  const urlInput = screen.getByPlaceholderText("catalog.opdsFeedUrl");
+  await act(async () => {
+    fireEvent.change(nameInput, { target: { value: name } });
+    fireEvent.change(urlInput, { target: { value: url } });
+  });
+}
+
+describe("CatalogBrowser add-catalog validation", () => {
+  it("rejects an invalid URL without calling the backend", async () => {
+    await openAddForm();
+    await fillForm("My Feed", "not-a-url");
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "common.add" })));
+
+    expect(invoke).not.toHaveBeenCalledWith("browse_opds", expect.anything());
+    expect(invoke).not.toHaveBeenCalledWith("add_opds_catalog", expect.anything());
+    expect(screen.getByText("catalog.invalidUrl")).toBeInTheDocument();
+  });
+
+  it("connection-tests via browse_opds before saving a valid URL", async () => {
+    await openAddForm();
+    await fillForm("My Feed", "https://example.com/opds");
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "common.add" })));
+
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("browse_opds", { url: "https://example.com/opds" }));
+    expect(invoke).toHaveBeenCalledWith("add_opds_catalog", { name: "My Feed", url: "https://example.com/opds" });
+  });
+
+  it("does NOT save when the connection test fails", async () => {
+    invoke.mockImplementation((cmd: string) => {
+      if (cmd === "get_opds_catalogs") return Promise.resolve([]);
+      if (cmd === "browse_opds") return Promise.reject(new Error("connection refused"));
+      return Promise.resolve(undefined);
+    });
+    await openAddForm();
+    await fillForm("Broken", "https://bad.example/opds");
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "common.add" })));
+
+    await waitFor(() => expect(screen.getByText(/catalog\.connectionTestFailed/)).toBeInTheDocument());
+    expect(invoke).not.toHaveBeenCalledWith("add_opds_catalog", expect.anything());
+  });
+});

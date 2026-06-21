@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useTranslation } from "react-i18next";
 import { friendlyError } from "../lib/errors";
-import { pickSupportedOpdsLink } from "../lib/utils";
+import { pickSupportedOpdsLink, isValidHttpUrl } from "../lib/utils";
 import { FALLBACK_FORMATS, useSupportedFormats } from "../lib/supportedFormats";
 import OpdsPresetPicker from "./OpdsPresetPicker";
 
@@ -61,6 +61,8 @@ export default function CatalogBrowser({ onClose, onBookImported }: CatalogBrows
   const [showPresetPicker, setShowPresetPicker] = useState(false);
   const [newCatalogName, setNewCatalogName] = useState("");
   const [newCatalogUrl, setNewCatalogUrl] = useState("");
+  const [addingCatalog, setAddingCatalog] = useState(false);
+  const [addCatalogError, setAddCatalogError] = useState<string | null>(null);
 
   // Search (per-catalog and unified)
   const [searchQuery, setSearchQuery] = useState("");
@@ -151,15 +153,31 @@ export default function CatalogBrowser({ onClose, onBookImported }: CatalogBrows
   }, [onBookImported, t, supportedFormats]);
 
   const handleAddCatalog = async () => {
-    if (!newCatalogName.trim() || !newCatalogUrl.trim()) return;
+    const name = newCatalogName.trim();
+    const url = newCatalogUrl.trim();
+    if (!name || !url) return;
+
+    // Validate the URL shape before hitting the network.
+    if (!isValidHttpUrl(url)) {
+      setAddCatalogError(t("catalog.invalidUrl"));
+      return;
+    }
+
+    setAddCatalogError(null);
+    setAddingCatalog(true);
     try {
-      await invoke("add_opds_catalog", { name: newCatalogName.trim(), url: newCatalogUrl.trim() });
+      // Pre-flight: fetch + parse the feed so a broken URL is caught here
+      // rather than only when the user later tries to browse it.
+      await invoke("browse_opds", { url });
+      await invoke("add_opds_catalog", { name, url });
       setNewCatalogName("");
       setNewCatalogUrl("");
       setShowAddCatalog(false);
       await loadCatalogs();
     } catch (err) {
-      setError(friendlyError(err, t));
+      setAddCatalogError(t("catalog.connectionTestFailed", { error: friendlyError(err, t) }));
+    } finally {
+      setAddingCatalog(false);
     }
   };
 
@@ -372,18 +390,21 @@ export default function CatalogBrowser({ onClose, onBookImported }: CatalogBrows
                     className="w-full text-sm bg-warm-subtle border border-warm-border rounded-lg px-3 py-2 text-ink placeholder-ink-muted/50 focus:outline-none focus:border-accent"
                   />
                   <input
-                    type="url" value={newCatalogUrl} onChange={(e) => setNewCatalogUrl(e.target.value)}
+                    type="url" value={newCatalogUrl} onChange={(e) => { setNewCatalogUrl(e.target.value); setAddCatalogError(null); }}
                     placeholder={t("catalog.opdsFeedUrl")}
                     onKeyDown={(e) => { if (e.key === "Enter") handleAddCatalog(); }}
                     className="w-full text-sm bg-warm-subtle border border-warm-border rounded-lg px-3 py-2 text-ink placeholder-ink-muted/50 focus:outline-none focus:border-accent"
                   />
+                  {addCatalogError && (
+                    <p className="text-xs text-red-600">{addCatalogError}</p>
+                  )}
                   <div className="flex gap-2">
-                    <button onClick={handleAddCatalog} disabled={!newCatalogName.trim() || !newCatalogUrl.trim()}
+                    <button onClick={handleAddCatalog} disabled={!newCatalogName.trim() || !newCatalogUrl.trim() || addingCatalog}
                       className="flex-1 py-1.5 text-xs font-medium text-white bg-accent hover:bg-accent-hover rounded-lg transition-colors disabled:opacity-40">
-                      {t("common.add")}
+                      {addingCatalog ? t("catalog.testingConnection") : t("common.add")}
                     </button>
-                    <button onClick={() => setShowAddCatalog(false)}
-                      className="flex-1 py-1.5 text-xs text-ink-muted hover:text-ink transition-colors">
+                    <button onClick={() => { setShowAddCatalog(false); setAddCatalogError(null); }} disabled={addingCatalog}
+                      className="flex-1 py-1.5 text-xs text-ink-muted hover:text-ink transition-colors disabled:opacity-40">
                       {t("common.cancel")}
                     </button>
                   </div>
