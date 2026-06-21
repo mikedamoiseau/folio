@@ -16,6 +16,9 @@ import {
   PAUSED_AFTER_DAYS,
   providerDisplayName,
   computeTagBookCounts,
+  validateWebServerPort,
+  WEB_SERVER_PORT_MIN,
+  WEB_SERVER_PORT_MAX,
   type BookLike,
 } from "./utils";
 
@@ -730,5 +733,46 @@ describe("computeTagBookCounts", () => {
     expect(computeTagBookCounts([], bookTagMap).size).toBe(0);
     const counts = computeTagBookCounts([{ id: "unknown" }], bookTagMap);
     expect(counts.size).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// validateWebServerPort
+// ---------------------------------------------------------------------------
+
+describe("validateWebServerPort", () => {
+  it("accepts an in-range port and returns the parsed number", () => {
+    expect(validateWebServerPort("7788")).toEqual({ valid: true, port: 7788 });
+  });
+
+  it("accepts the boundary values", () => {
+    expect(validateWebServerPort(String(WEB_SERVER_PORT_MIN))).toEqual({
+      valid: true,
+      port: WEB_SERVER_PORT_MIN,
+    });
+    expect(validateWebServerPort(String(WEB_SERVER_PORT_MAX))).toEqual({
+      valid: true,
+      port: WEB_SERVER_PORT_MAX,
+    });
+  });
+
+  it("rejects values above the range (no silent clamp to 65535)", () => {
+    expect(validateWebServerPort("99999")).toEqual({ valid: false });
+  });
+
+  it("rejects values below the range", () => {
+    expect(validateWebServerPort("80")).toEqual({ valid: false });
+    expect(validateWebServerPort("0")).toEqual({ valid: false });
+  });
+
+  it("rejects non-numeric, empty, and negative input", () => {
+    expect(validateWebServerPort("")).toEqual({ valid: false });
+    expect(validateWebServerPort("abc")).toEqual({ valid: false });
+    expect(validateWebServerPort("-1")).toEqual({ valid: false });
+    expect(validateWebServerPort("80.5")).toEqual({ valid: false });
+  });
+
+  it("tolerates surrounding whitespace", () => {
+    expect(validateWebServerPort("  7788  ")).toEqual({ valid: true, port: 7788 });
   });
 });

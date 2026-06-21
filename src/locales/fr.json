@@ -277,6 +277,8 @@
     "section": "Extensions",
     "intro": "Les extensions sont de petits scripts qui r\u00e9agissent aux \u00e9v\u00e9nements de Folio \u2014 comme \u00e9tiqueter les livres \u00e0 l'import ou vous pr\u00e9venir quand vous en terminez un. N'installez que des extensions de sources de confiance.",
     "reload": "Recharger les extensions",
+    "reloadSuccess": "Extensions rechargées",
+    "installSuccess": "Extension installée",
     "openFolder": "Ouvrir le dossier des extensions",
     "runNow": "Exécuter maintenant",
     "networkHosts": "Contactera : {{hosts}}",
@@ -425,6 +427,7 @@
     "pinPlaceholder": "D\u00e9finir un code PIN",
     "savePin": "Enregistrer le PIN",
     "port": "Port",
+    "portRange": "Le port doit \u00eatre compris entre {{min}} et {{max}}",
     "startServer": "D\u00e9marrer le serveur",
     "stopServer": "Arr\u00eater le serveur",
     "serverRunningAt": "Serveur actif \u00e0",
@@ -695,6 +698,7 @@
 
   "profiles": {
     "manageProfiles": "G\u00e9rer les profils",
+    "switching": "Changement de profil\u2026",
     "newProfile": "Nouveau profil",
     "profileName": "Nom du profil",
     "deleteLabel": "Supprimer le profil {{name}}",

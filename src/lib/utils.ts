@@ -422,3 +422,25 @@ export function isValidHttpUrl(value: string): boolean {
   }
   return url.protocol === "http:" || url.protocol === "https:";
 }
+
+/** The valid TCP port range Folio's web server accepts (non-privileged). */
+export const WEB_SERVER_PORT_MIN = 1024;
+export const WEB_SERVER_PORT_MAX = 65535;
+
+/**
+ * Validates a web-server port string. Returns the parsed port when it is an
+ * integer within [WEB_SERVER_PORT_MIN, WEB_SERVER_PORT_MAX], otherwise
+ * `{ valid: false }`. Used to surface an inline range error instead of
+ * silently clamping out-of-range input.
+ */
+export function validateWebServerPort(
+  value: string
+): { valid: true; port: number } | { valid: false } {
+  const trimmed = value.trim();
+  if (!/^\d+$/.test(trimmed)) return { valid: false };
+  const port = parseInt(trimmed, 10);
+  if (port < WEB_SERVER_PORT_MIN || port > WEB_SERVER_PORT_MAX) {
+    return { valid: false };
+  }
+  return { valid: true, port };
+}
