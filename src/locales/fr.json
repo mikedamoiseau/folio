@@ -130,6 +130,7 @@
     "pageLoadTimeout": "Le chargement de la page a pris trop de temps. R\u00e9essayer ?",
     "retryLoadPage": "R\u00e9essayer",
     "loadingChapters": "Chargement de {{count}} chapitres\u2026",
+    "loadedChapters": "{{loaded}} / {{total}} chapitres charg\u00e9s\u2026",
     "failedToLoadChapter": "\u00c9chec du chargement du chapitre\u00a0: {{error}}",
     "searchInBook": "Rechercher dans le livre...",
     "searchingText": "Recherche...",

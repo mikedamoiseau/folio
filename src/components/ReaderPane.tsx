@@ -6,6 +6,7 @@ import { useTranslation } from "react-i18next";
 import { useTheme, MIN_FONT_SIZE, MAX_FONT_SIZE } from "../context/ThemeContext";
 import PageViewer from "./PageViewer";
 import ChapterErrorCard from "./ChapterErrorCard";
+import ChapterLoadProgress from "./ChapterLoadProgress";
 import PageThumbnailStrip from "./PageThumbnailStrip";
 import KeyboardShortcutsHelp from "./KeyboardShortcutsHelp";
 import HighlightsPanel, { HIGHLIGHT_COLORS } from "./HighlightsPanel";
@@ -2267,10 +2268,7 @@ export default function ReaderPane({
                     })}
                   </div>
                 ) : (
-                  <div className="flex-1 flex flex-col items-center justify-center gap-2">
-                    <div className="w-5 h-5 border-2 border-accent/30 border-t-accent rounded-full animate-spin" />
-                    <p className="text-sm text-ink-muted">{t("reader.loadingChapters", { count: totalChapters })}</p>
-                  </div>
+                  <ChapterLoadProgress total={totalChapters} />
                 )
               ) : !chapterHtml ? (
                 /* ── Paginated: loading chapter ── */

@@ -130,6 +130,7 @@
     "pageLoadTimeout": "Page took too long to load. Try again?",
     "retryLoadPage": "Retry",
     "loadingChapters": "Loading {{count}} chapters\u2026",
+    "loadedChapters": "Loaded {{loaded}} / {{total}} chapters\u2026",
     "failedToLoadChapter": "Failed to load chapter: {{error}}",
     "searchInBook": "Search in book...",
     "searchingText": "Searching...",

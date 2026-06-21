@@ -87,6 +87,7 @@
   --animate-progress-fill:  progress-fill 0.6s ease-out both;
   --animate-slide-in-up:    slide-in-up 0.26s cubic-bezier(0.22, 1, 0.36, 1) both;
   --animate-thumb-in:       thumb-in 0.32s cubic-bezier(0.22, 1, 0.36, 1) both;
+  --animate-chapter-load-indeterminate: chapter-load-indeterminate 1.2s ease-in-out infinite;
 }
 
 @keyframes shimmer {
@@ -138,6 +139,14 @@
 @keyframes thumb-in {
   from { opacity: 0; transform: translateY(4px) scale(0.985); }
   to   { opacity: 1; transform: translateY(0)   scale(1); }
+}
+
+/* Indeterminate loader bar — a short fill sweeps across the track while
+   chapters are fetched in a single bulk call (no per-chapter progress to
+   report). Conveys "working" without faking a percentage. */
+@keyframes chapter-load-indeterminate {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(300%); }
 }
 
 /* Strip edge mask — fades thumbs into the surface at the left/right
