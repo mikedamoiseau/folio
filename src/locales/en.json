@@ -439,6 +439,7 @@
     "stopServer": "Stop Server",
     "serverRunningAt": "Server running at",
     "pinSaved": "PIN saved",
+    "pinUnsaved": "Unsaved",
     "starting": "Starting\u2026",
     "stopping": "Stopping\u2026",
     "copyUrl": "Copy URL",
