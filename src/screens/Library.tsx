@@ -496,20 +496,20 @@ export default function Library({ catalogImportedBookIds }: LibraryProps = {}) {
   }, [importFiles, t]);
 
   const handleImportUrl = useCallback(async (url: string) => {
+    // Errors propagate to the caller (ImportButton) so the URL dialog can show
+    // them inline; the dialog stays open until the import succeeds.
     try {
+      setError(null); // clear any stale library banner before this action
       setImportingUrl(true);
-      setError(null);
       const result = await invoke<{ id: string; newly_imported: boolean }>("download_opds_book", { downloadUrl: url });
       if (result.newly_imported) {
         recentlyImportedRef.current = new Set([result.id]);
       }
       await loadBooks(activeCollectionIdRef.current);
-    } catch (err) {
-      setError(friendlyError(err, t));
     } finally {
       setImportingUrl(false);
     }
-  }, [loadBooks, t]);
+  }, [loadBooks]);
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;

@@ -199,7 +199,8 @@
     "importFolder": "Importer un dossier",
     "importFromUrl": "Importer depuis une URL",
     "urlPlaceholder": "https://example.com/book.epub",
-    "urlHint": "Lien direct vers un fichier EPUB, PDF, CBZ ou CBR."
+    "urlHint": "Lien direct vers un fichier EPUB, PDF, CBZ ou CBR.",
+    "invalidUrl": "Saisissez une URL http(s) valide."
   },
 
   "empty": {
