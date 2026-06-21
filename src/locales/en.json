@@ -278,6 +278,8 @@
     "section": "Plugins",
     "intro": "Plugins are small scripts that react to events in Folio — like tagging books on import or notifying you when you finish one. Only install plugins from sources you trust.",
     "reload": "Reload plugins",
+    "reloadSuccess": "Plugins reloaded",
+    "installSuccess": "Plugin installed",
     "openFolder": "Open plugins folder",
     "runNow": "Run now",
     "networkHosts": "Will contact: {{hosts}}",
@@ -439,6 +441,7 @@
     "pinSequential": "Sequential pattern",
     "pinRepeating": "Repeating pattern",
     "port": "Port",
+    "portRange": "Port must be {{min}}–{{max}}",
     "startServer": "Start Server",
     "stopServer": "Stop Server",
     "serverRunningAt": "Server running at",
@@ -710,6 +713,7 @@
 
   "profiles": {
     "manageProfiles": "Manage profiles",
+    "switching": "Switching profile…",
     "newProfile": "New profile",
     "profileName": "Profile name",
     "deleteLabel": "Delete profile {{name}}",

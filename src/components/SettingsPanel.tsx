@@ -8,6 +8,7 @@ import { useTheme, MIN_FONT_SIZE, MAX_FONT_SIZE, type ColorTokens } from "../con
 import { friendlyError } from "../lib/errors";
 import { missingRequiredFields, connectionResultFeedback } from "../lib/backupConnection";
 import { isPinUnsaved, shouldSaveOnBlur } from "../lib/pinSaveState";
+import { validateWebServerPort, WEB_SERVER_PORT_MIN, WEB_SERVER_PORT_MAX } from "../lib/utils";
 import { useOnboardingContext } from "../context/OnboardingContext";
 import { useToast } from "./Toast";
 import {
@@ -515,6 +516,7 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
   const [webServerQr, setWebServerQr] = useState<string | null>(null);
   const [webServerError, setWebServerError] = useState<string | null>(null);
   const [webServerLoading, setWebServerLoading] = useState(false);
+  const [webServerPortError, setWebServerPortError] = useState<string | null>(null);
   const [webUiEnabled, setWebUiEnabled] = useState(false);
   const [opdsEnabled, setOpdsEnabled] = useState(false);
   const [pinSaved, setPinSaved] = useState(false);
@@ -802,6 +804,25 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
 
   const handleSetModes = useCallback(
     async (next: { webUi?: boolean; opds?: boolean; port?: number }) => {
+      // Resolve the port to send. When the caller passes an explicit port
+      // (the onBlur path) it is already validated. Otherwise validate the
+      // current field value here — this is the single choke point, so a
+      // toggle change with an out-of-range port in the input never reaches
+      // the backend.
+      let port = next.port;
+      if (port === undefined) {
+        const result = validateWebServerPort(webServerPort);
+        if (!result.valid) {
+          setWebServerPortError(
+            t("settings.portRange", {
+              min: WEB_SERVER_PORT_MIN,
+              max: WEB_SERVER_PORT_MAX,
+            })
+          );
+          return;
+        }
+        port = result.port;
+      }
       setWebServerError(null);
       setWebServerLoading(true);
       try {
@@ -815,7 +836,7 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
         }>("web_server_set_modes", {
           webUi: next.webUi ?? webUiEnabled,
           opds: next.opds ?? opdsEnabled,
-          port: next.port ?? (parseInt(webServerPort, 10) || 7788),
+          port,
         });
         setWebUiEnabled(status.webUiEnabled);
         setOpdsEnabled(status.opdsEnabled);
@@ -2075,18 +2096,48 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                 <input
                   type="number"
                   value={webServerPort}
-                  onChange={(e) => setWebServerPort(e.target.value)}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    setWebServerPort(v);
+                    // Surface the valid range inline instead of silently
+                    // clamping; clear once the value is back in range.
+                    setWebServerPortError(
+                      v.trim() === "" || validateWebServerPort(v).valid
+                        ? null
+                        : t("settings.portRange", {
+                            min: WEB_SERVER_PORT_MIN,
+                            max: WEB_SERVER_PORT_MAX,
+                          })
+                    );
+                  }}
                   onBlur={() => {
-                    const port = parseInt(webServerPort, 10);
-                    if (port && (webUiEnabled || opdsEnabled)) {
-                      handleSetModes({ port });
+                    const result = validateWebServerPort(webServerPort);
+                    if (!result.valid) {
+                      setWebServerPortError(
+                        t("settings.portRange", {
+                          min: WEB_SERVER_PORT_MIN,
+                          max: WEB_SERVER_PORT_MAX,
+                        })
+                      );
+                      return;
+                    }
+                    setWebServerPortError(null);
+                    if (webUiEnabled || opdsEnabled) {
+                      handleSetModes({ port: result.port });
                     }
                   }}
                   className="w-full bg-transparent text-sm text-ink focus:outline-none"
                   id="web-server-port"
-                  min={1024}
-                  max={65535}
+                  aria-invalid={webServerPortError ? true : undefined}
+                  aria-describedby={webServerPortError ? "web-server-port-error" : undefined}
+                  min={WEB_SERVER_PORT_MIN}
+                  max={WEB_SERVER_PORT_MAX}
                 />
+                {webServerPortError && (
+                  <p id="web-server-port-error" className="text-xs text-red-600 dark:text-red-400 mt-1">
+                    {webServerPortError}
+                  </p>
+                )}
               </div>
 
               {/* Web UI / OPDS toggles. Server runs iff at least one is on. */}
@@ -2332,7 +2383,7 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
           )}
 
           <Accordion title={t("plugins.section")} open={openSection === "plugins"} onToggle={() => toggleSection("plugins")} query={settingsQuery} keywords={t("settings.searchTermsPlugins")}>
-            <PluginsPanel onToast={(msg) => addToast(msg, "error")} />
+            <PluginsPanel onToast={(msg, type) => addToast(msg, type ?? "error")} />
           </Accordion>
 
           <Accordion title={t("settings.aboutSection")} open={openSection === "about"} onToggle={() => toggleSection("about")} query={settingsQuery} keywords={t("settings.searchTermsAbout")}>

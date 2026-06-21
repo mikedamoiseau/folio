@@ -65,3 +65,37 @@ describe("ProfileSwitcher delete confirmation", () => {
     expect(screen.queryByLabelText("profiles.deleteLabel:default")).not.toBeInTheDocument();
   });
 });
+
+describe("ProfileSwitcher switching loading state", () => {
+  it("shows a loading spinner on the row while switch_profile is in flight", async () => {
+    // Hold switch_profile pending so the loading state stays visible.
+    let resolveSwitch: () => void = () => {};
+    invoke.mockImplementation((cmd: string) => {
+      if (cmd === "get_profiles")
+        return Promise.resolve([
+          { name: "default", is_active: true },
+          { name: "work", is_active: false },
+        ]);
+      if (cmd === "switch_profile")
+        return new Promise<void>((res) => {
+          resolveSwitch = res;
+        });
+      return Promise.resolve(undefined);
+    });
+
+    await openDropdown();
+    const workRow = screen.getByText("work").closest("div")!;
+    await act(async () => fireEvent.click(workRow));
+
+    // Spinner (role=status) appears while the switch is pending.
+    const spinner = await screen.findByRole("status");
+    expect(spinner).toBeInTheDocument();
+    expect(spinner).toHaveAttribute("aria-label", "profiles.switching");
+
+    // Resolve the switch; spinner goes away.
+    await act(async () => {
+      resolveSwitch();
+    });
+    await waitFor(() => expect(screen.queryByRole("status")).not.toBeInTheDocument());
+  });
+});
