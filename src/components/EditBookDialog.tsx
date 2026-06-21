@@ -4,6 +4,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { useTranslation } from "react-i18next";
 import { friendlyError } from "../lib/errors";
 import StarRating from "./StarRating";
+import { useToast } from "./Toast";
 
 interface Tag {
   id: string;
@@ -57,6 +58,7 @@ export default function EditBookDialog({
   onSaved,
 }: EditBookDialogProps) {
   const { t } = useTranslation();
+  const { addToast } = useToast();
   const [title, setTitle] = useState(initialTitle);
   const [author, setAuthor] = useState(initialAuthor);
   const [series, setSeries] = useState(initialSeries ?? "");
@@ -160,6 +162,7 @@ export default function EditBookDialog({
         publishYear: publishYear !== String(initialPublishYear ?? "") ? (publishYear ? parseInt(publishYear) : null) : null,
         rating: bookRating !== initialRating ? (bookRating ?? 0) : null,
       });
+      addToast(t("common.saved"), "success");
       onSaved();
     } catch (err) {
       setError(friendlyError(err, t));
