@@ -1805,7 +1805,12 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                   onChange={async (e) => {
                     const val = e.target.checked;
                     setAutoScanImport(val);
-                    await invoke("set_setting_value", { key: "auto_scan_import", value: val ? "true" : "false" }).catch(() => {});
+                    try {
+                      await invoke("set_setting_value", { key: "auto_scan_import", value: val ? "true" : "false" });
+                    } catch (err) {
+                      setAutoScanImport(!val); // revert — the setting did not persist
+                      addToast(friendlyError(err, t), "error");
+                    }
                   }}
                   className="mt-0.5 accent-accent" />
                 <span className="text-sm text-ink leading-snug">
@@ -1818,7 +1823,12 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                   onChange={async (e) => {
                     const val = e.target.checked;
                     setAutoScanStartup(val);
-                    await invoke("set_setting_value", { key: "auto_scan_startup", value: val ? "true" : "false" }).catch(() => {});
+                    try {
+                      await invoke("set_setting_value", { key: "auto_scan_startup", value: val ? "true" : "false" });
+                    } catch (err) {
+                      setAutoScanStartup(!val); // revert — the setting did not persist
+                      addToast(friendlyError(err, t), "error");
+                    }
                   }}
                   className="mt-0.5 accent-accent" />
                 <span className="text-sm text-ink leading-snug">
