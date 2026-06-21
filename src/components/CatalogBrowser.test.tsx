@@ -82,6 +82,62 @@ describe("CatalogBrowser add-catalog validation", () => {
   });
 });
 
+describe("CatalogBrowser empty state", () => {
+  it("shows the no-catalogs empty state only after a successful empty load, not while loading", async () => {
+    // Hold the load open so we can assert the empty state is NOT shown until
+    // `get_opds_catalogs` resolves (i.e. it must not flash on initial load).
+    let resolveCatalogs!: (v: unknown[]) => void;
+    invoke.mockImplementation((cmd: string) => {
+      if (cmd === "get_opds_catalogs")
+        return new Promise((res) => {
+          resolveCatalogs = res as (v: unknown[]) => void;
+        });
+      return Promise.resolve(undefined);
+    });
+    render(<CatalogBrowser onClose={() => {}} onBookImported={() => {}} />);
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("get_opds_catalogs"));
+
+    // While the load is still pending, the empty state must not appear.
+    expect(screen.queryByText("catalog.empty.title")).not.toBeInTheDocument();
+
+    // Resolve the load to an empty list — now the empty state appears.
+    await act(async () => {
+      resolveCatalogs([]);
+    });
+
+    expect(await screen.findByText("catalog.empty.title")).toBeInTheDocument();
+    expect(screen.getByText("catalog.empty.subtitle")).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "catalog.empty.browsePresets" })
+    ).toBeInTheDocument();
+  });
+
+  it("does not show the empty state after a failed load", async () => {
+    invoke.mockImplementation((cmd: string) => {
+      if (cmd === "get_opds_catalogs") return Promise.reject(new Error("boom"));
+      return Promise.resolve(undefined);
+    });
+    render(<CatalogBrowser onClose={() => {}} onBookImported={() => {}} />);
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("get_opds_catalogs"));
+
+    // Load failed → `catalogsLoaded` stays false → empty state hidden even
+    // though `catalogs` is still [].
+    expect(screen.queryByText("catalog.empty.title")).not.toBeInTheDocument();
+  });
+
+  it("hides the empty state once a catalog exists", async () => {
+    invoke.mockImplementation((cmd: string) => {
+      if (cmd === "get_opds_catalogs")
+        return Promise.resolve([{ name: "My Feed", url: "https://example.com/opds" }]);
+      return Promise.resolve(undefined);
+    });
+    render(<CatalogBrowser onClose={() => {}} onBookImported={() => {}} />);
+    await waitFor(() => expect(screen.getByText("My Feed")).toBeInTheDocument());
+
+    expect(screen.queryByText("catalog.empty.title")).not.toBeInTheDocument();
+  });
+});
+
 describe("CatalogBrowser remove confirmation", () => {
   it("confirms before removing a catalog (no immediate backend call)", async () => {
     invoke.mockImplementation((cmd: string) => {

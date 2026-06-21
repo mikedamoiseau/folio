@@ -603,6 +603,12 @@
     "noEntries": "No entries found.",
     "loadMore": "Load more\u2026",
     "downloadFailed": "Failed to download \"{{title}}\": {{error}}",
+    "downloadingFormat": "Downloading {{format}}…",
+    "empty": {
+      "title": "No catalogs yet",
+      "subtitle": "Add an OPDS catalog to browse and download books from public libraries and online stores.",
+      "browsePresets": "Browse presets"
+    },
     "presets": {
       "browseButton": "Browse presets",
       "title": "Browse presets",

@@ -44,6 +44,14 @@ interface CatalogBrowserProps {
 export default function CatalogBrowser({ onClose, onBookImported }: CatalogBrowserProps) {
   const { t } = useTranslation();
   const [catalogs, setCatalogs] = useState<OpdsCatalog[]>([]);
+  // Flipped true after the first successful `get_opds_catalogs`. Gates the
+  // no-catalogs empty state so it never flashes during the initial load nor
+  // appears after a failed load (where `catalogs` is still []). Stays false
+  // on failure. In practice the backend always prepends DEFAULT_CATALOGS so
+  // an empty list is rare — this is a safety net for builds where the
+  // defaults are disabled/removed, keeping the empty state correct rather
+  // than misleading even though it's seldom hit.
+  const [catalogsLoaded, setCatalogsLoaded] = useState(false);
   const [feed, setFeed] = useState<OpdsFeed | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -76,8 +84,10 @@ export default function CatalogBrowser({ onClose, onBookImported }: CatalogBrows
     try {
       const cs = await invoke<OpdsCatalog[]>("get_opds_catalogs");
       setCatalogs(cs);
+      setCatalogsLoaded(true);
     } catch {
-      // non-fatal
+      // non-fatal — leave `catalogsLoaded` false so the empty state stays
+      // hidden after a failed load (the error UI handles surfacing failures).
     }
   }, []);
 
@@ -336,12 +346,14 @@ export default function CatalogBrowser({ onClose, onBookImported }: CatalogBrows
                               {isDownloaded ? (
                                 <span className="text-[11px] text-accent font-medium">{t("catalog.addedToLibrary")}</span>
                               ) : isDownloading ? (
-                                <span className="text-[11px] text-ink-muted flex items-center gap-1">
+                                <span className="text-[11px] text-accent font-medium flex items-center gap-1.5">
                                   <svg className="animate-spin w-3 h-3" viewBox="0 0 24 24" fill="none">
                                     <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" className="opacity-25" />
                                     <path d="M4 12a8 8 0 018-8" stroke="currentColor" strokeWidth="3" strokeLinecap="round" className="opacity-75" />
                                   </svg>
-                                  {t("common.downloading")}
+                                  {picked?.label
+                                    ? t("catalog.downloadingFormat", { format: picked.label })
+                                    : t("common.downloading")}
                                 </span>
                               ) : (
                                 <button
@@ -361,6 +373,27 @@ export default function CatalogBrowser({ onClose, onBookImported }: CatalogBrows
               ) : (
               /* Catalog list (hidden during unified search) */
               <>
+              {catalogsLoaded && catalogs.length === 0 && !showAddCatalog && (
+                <div className="flex flex-col items-center justify-center text-center px-8 py-12 gap-3">
+                  <div className="w-12 h-12 rounded-2xl bg-accent-light flex items-center justify-center">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" className="text-accent">
+                      <path d="M12 6.042A8.967 8.967 0 006 3.75c-1.052 0-2.062.18-3 .512v14.25A8.987 8.987 0 016 18c2.305 0 4.408.867 6 2.292m0-14.25a8.966 8.966 0 016-2.292c1.052 0 2.062.18 3 .512v14.25A8.987 8.987 0 0018 18a8.967 8.967 0 00-6 2.292m0-14.25v14.25" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                    </svg>
+                  </div>
+                  <h3 className="font-serif text-base font-semibold text-ink">{t("catalog.empty.title")}</h3>
+                  <p className="text-sm text-ink-muted leading-relaxed max-w-xs">{t("catalog.empty.subtitle")}</p>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowPresetPicker(true);
+                      setShowAddCatalog(false);
+                    }}
+                    className="mt-1 px-4 py-2 text-sm font-medium text-white bg-accent hover:bg-accent-hover rounded-lg transition-colors"
+                  >
+                    {t("catalog.empty.browsePresets")}
+                  </button>
+                </div>
+              )}
               {catalogs.map((cat) => (
                 // Row + remove are sibling buttons (not nested) — a button
                 // inside a button is invalid HTML and breaks click handling.
@@ -548,12 +581,14 @@ export default function CatalogBrowser({ onClose, onBookImported }: CatalogBrows
                           {isDownloaded ? (
                             <span className="text-[11px] text-accent font-medium">{t("catalog.addedToLibrary")}</span>
                           ) : isDownloading ? (
-                            <span className="text-[11px] text-ink-muted flex items-center gap-1">
+                            <span className="text-[11px] text-accent font-medium flex items-center gap-1.5">
                               <svg className="animate-spin w-3 h-3" viewBox="0 0 24 24" fill="none">
                                 <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" className="opacity-25" />
                                 <path d="M4 12a8 8 0 018-8" stroke="currentColor" strokeWidth="3" strokeLinecap="round" className="opacity-75" />
                               </svg>
-                              {t("common.downloading")}
+                              {picked?.label
+                                ? t("catalog.downloadingFormat", { format: picked.label })
+                                : t("common.downloading")}
                             </span>
                           ) : (
                             picked && (
