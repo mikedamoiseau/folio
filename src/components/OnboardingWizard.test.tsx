@@ -48,6 +48,8 @@ vi.mock("@tauri-apps/api/core", () => ({
 
 let mockLastCompletedAt: number | null = null;
 let mockPhase: string | null = null;
+let mockCanRetry = false;
+const mockRetry = vi.fn(async () => {});
 
 vi.mock("../context/ImportContext", () => ({
   useImport: () => ({
@@ -57,6 +59,9 @@ vi.mock("../context/ImportContext", () => ({
     startFolder: async () => {},
     startFiles: async () => {},
     cancel: async () => {},
+    retry: mockRetry,
+    canRetry: mockCanRetry,
+    dismiss: () => {},
   }),
 }));
 
@@ -65,6 +70,8 @@ describe("OnboardingWizard", () => {
     localStorage.clear();
     mockLastCompletedAt = null;
     mockPhase = null;
+    mockCanRetry = false;
+    mockRetry.mockClear();
     mockChangeLanguage.mockClear();
     mockSetMode.mockClear();
     mockSetFontFamily.mockClear();
@@ -255,6 +262,153 @@ describe("OnboardingWizard", () => {
 
     expect(screen.getByText("onboarding.import.title")).toBeInTheDocument();
     expect(screen.queryByText("onboarding.tips.title")).not.toBeInTheDocument();
+  });
+
+  // --- Stuck-state banner on Step 3 (empty / error / cancelled) ---
+
+  const gotoImportStepWithPhase = (phase: string) => {
+    const utils = renderWizard();
+    fireEvent.click(screen.getByText("onboarding.welcome.cta"));
+    fireEvent.click(screen.getByText("onboarding.preferences.cta"));
+    expect(screen.getByText("onboarding.import.title")).toBeInTheDocument();
+
+    mockPhase = phase;
+    utils.rerender(
+      <OnboardingProvider>
+        <OnboardingWizard {...props} />
+      </OnboardingProvider>
+    );
+    return utils;
+  };
+
+  it.each(["empty", "error", "cancelled"])(
+    "shows a banner with retry + proceed when import phase is %s (no silent stuck step)",
+    (phase) => {
+      gotoImportStepWithPhase(phase);
+
+      // Still on the import step, but now with an explanatory alert banner.
+      expect(screen.getByText("onboarding.import.title")).toBeInTheDocument();
+      expect(screen.queryByText("onboarding.tips.title")).not.toBeInTheDocument();
+
+      const banner = screen.getByRole("alert");
+      expect(banner).toBeInTheDocument();
+      const messageKey =
+        phase === "empty"
+          ? "onboarding.import.emptyBanner"
+          : phase === "error"
+            ? "onboarding.import.errorBanner"
+            : "onboarding.import.cancelledBanner";
+      expect(screen.getByText(messageKey)).toBeInTheDocument();
+      expect(screen.getByText("onboarding.import.retry")).toBeInTheDocument();
+      expect(screen.getByText("onboarding.import.continueAnyway")).toBeInTheDocument();
+    }
+  );
+
+  it("keeps the banner after progress is cleared to null (persisted status survives the 4s clear)", () => {
+    const utils = gotoImportStepWithPhase("empty");
+
+    // Banner is showing because phase became "empty".
+    expect(screen.getByRole("alert")).toBeInTheDocument();
+    expect(screen.getByText("onboarding.import.emptyBanner")).toBeInTheDocument();
+
+    // ImportProvider clears `progress` 4s later: phase goes back to null.
+    mockPhase = null;
+    utils.rerender(
+      <OnboardingProvider>
+        <OnboardingWizard {...props} />
+      </OnboardingProvider>
+    );
+
+    // The banner must still be visible — driven by persisted local state, not
+    // the now-cleared live progress.
+    expect(screen.getByRole("alert")).toBeInTheDocument();
+    expect(screen.getByText("onboarding.import.emptyBanner")).toBeInTheDocument();
+    expect(screen.getByText("onboarding.import.title")).toBeInTheDocument();
+    expect(screen.queryByText("onboarding.tips.title")).not.toBeInTheDocument();
+  });
+
+  it("does NOT auto-advance when cancelled bumps lastCompletedAt then progress clears", () => {
+    const utils = renderWizard();
+    fireEvent.click(screen.getByText("onboarding.welcome.cta"));
+    fireEvent.click(screen.getByText("onboarding.preferences.cta"));
+
+    // Cancel: ImportProvider DOES bump lastCompletedAt for the cancelled phase.
+    mockLastCompletedAt = Date.now();
+    mockPhase = "cancelled";
+    utils.rerender(
+      <OnboardingProvider>
+        <OnboardingWizard {...props} />
+      </OnboardingProvider>
+    );
+    expect(screen.getByText("onboarding.import.cancelledBanner")).toBeInTheDocument();
+
+    // 4s later progress clears (phase null) but lastCompletedAt stays bumped.
+    mockPhase = null;
+    utils.rerender(
+      <OnboardingProvider>
+        <OnboardingWizard {...props} />
+      </OnboardingProvider>
+    );
+
+    // Must remain on the import step with the banner — no slip-through advance.
+    expect(screen.getByText("onboarding.import.title")).toBeInTheDocument();
+    expect(screen.getByText("onboarding.import.cancelledBanner")).toBeInTheDocument();
+    expect(screen.queryByText("onboarding.tips.title")).not.toBeInTheDocument();
+  });
+
+  it("clears the banner and starts a new import when a fresh import begins (phase scanning)", () => {
+    const utils = gotoImportStepWithPhase("empty");
+    expect(screen.getByRole("alert")).toBeInTheDocument();
+
+    // A new import kicks off — phase transitions to scanning.
+    mockPhase = "scanning";
+    utils.rerender(
+      <OnboardingProvider>
+        <OnboardingWizard {...props} />
+      </OnboardingProvider>
+    );
+
+    // Banner cleared because a new import reset the persisted status.
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.getByText("onboarding.import.title")).toBeInTheDocument();
+  });
+
+  it("does not show the stuck-state banner on a clean import step", () => {
+    renderWizard();
+    fireEvent.click(screen.getByText("onboarding.welcome.cta"));
+    fireEvent.click(screen.getByText("onboarding.preferences.cta"));
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("retry uses the import context retry() when canRetry is true", () => {
+    mockCanRetry = true;
+    gotoImportStepWithPhase("empty");
+    fireEvent.click(screen.getByText("onboarding.import.retry"));
+    expect(mockRetry).toHaveBeenCalledTimes(1);
+  });
+
+  it("retry falls back to onImportFolder when canRetry is false", () => {
+    const onImportFolder = vi.fn(async () => {});
+    mockCanRetry = false;
+    const utils = renderWizard({ onImport: noop, onImportFolder });
+    fireEvent.click(screen.getByText("onboarding.welcome.cta"));
+    fireEvent.click(screen.getByText("onboarding.preferences.cta"));
+    mockPhase = "error";
+    utils.rerender(
+      <OnboardingProvider>
+        <OnboardingWizard onImport={noop} onImportFolder={onImportFolder} />
+      </OnboardingProvider>
+    );
+    fireEvent.click(screen.getByText("onboarding.import.retry"));
+    expect(onImportFolder).toHaveBeenCalledTimes(1);
+    expect(mockRetry).not.toHaveBeenCalled();
+  });
+
+  it("proceed (continue without importing) advances to Step 4 from a stuck import", () => {
+    gotoImportStepWithPhase("empty");
+    fireEvent.click(screen.getByText("onboarding.import.continueAnyway"));
+    expect(screen.getByText("onboarding.tips.title")).toBeInTheDocument();
+    expect(screen.queryByText("onboarding.import.title")).not.toBeInTheDocument();
   });
 
   // --- Tips (Step 4) ---

@@ -814,7 +814,12 @@
       "addFilesHint": "EPUB, PDF, CBZ, CBR, MOBI",
       "importFolder": "Importer un dossier",
       "importFolderHint": "Ajouter tous les livres d'un dossier",
-      "dragDrop": "ou glissez-déposez vos fichiers ici"
+      "dragDrop": "ou glissez-déposez vos fichiers ici",
+      "emptyBanner": "Aucun fichier de livre pris en charge (.epub, .pdf, .cbz, .cbr) n'a été trouvé à cet endroit.",
+      "errorBanner": "Une erreur s'est produite lors de l'importation. Vous pouvez réessayer.",
+      "cancelledBanner": "Importation annulée. Vous pouvez réessayer ou passer cette étape.",
+      "retry": "Réessayer",
+      "continueAnyway": "Continuer sans importer"
     },
     "tips": {
       "title": "Tout est prêt",

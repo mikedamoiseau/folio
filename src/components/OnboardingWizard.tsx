@@ -64,12 +64,26 @@ function ImportStep({
   onImport,
   onImportFolder,
   onSkip,
+  status,
+  onRetry,
+  onProceed,
 }: {
   onImport: () => Promise<void>;
   onImportFolder: () => Promise<void>;
   onSkip: () => void;
+  status: "empty" | "error" | "cancelled" | null;
+  onRetry: () => void;
+  onProceed: () => void;
 }) {
   const { t } = useTranslation();
+  const bannerMessageKey =
+    status === "empty"
+      ? "onboarding.import.emptyBanner"
+      : status === "error"
+        ? "onboarding.import.errorBanner"
+        : status === "cancelled"
+          ? "onboarding.import.cancelledBanner"
+          : null;
   return (
     <div className="text-center">
       <div className="mb-6 flex justify-center">
@@ -87,6 +101,31 @@ function ImportStep({
       <p className="text-sm text-ink-muted leading-relaxed mb-6">
         {t("onboarding.import.subtitle")}
       </p>
+
+      {bannerMessageKey && (
+        <div
+          role="alert"
+          className="mb-4 rounded-xl border border-red-200 dark:border-red-900/40 bg-red-50 dark:bg-red-900/20 px-4 py-3 text-left"
+        >
+          <p className="text-sm text-red-700 dark:text-red-300">{t(bannerMessageKey)}</p>
+          <div className="mt-2.5 flex gap-2">
+            <button
+              type="button"
+              onClick={onRetry}
+              className="px-3 py-1.5 bg-accent text-white text-xs font-medium rounded-lg hover:bg-accent-hover transition-colors duration-150"
+            >
+              {t("onboarding.import.retry")}
+            </button>
+            <button
+              type="button"
+              onClick={onProceed}
+              className="px-3 py-1.5 text-xs font-medium text-ink-muted hover:text-ink transition-colors duration-150"
+            >
+              {t("onboarding.import.continueAnyway")}
+            </button>
+          </div>
+        </div>
+      )}
 
       <div className="flex flex-col gap-2.5 mb-4">
         <button
@@ -380,17 +419,60 @@ export default function OnboardingWizard({ onImport, onImportFolder }: Onboardin
   const prevCompletedRef = useRef(importCtx.lastCompletedAt);
   const trapRef = useFocusTrap(skip);
 
+  // A finished import that yielded nothing to advance on — surface a banner so
+  // step 3 isn't silently stuck. This is held in LOCAL state rather than read
+  // live from `importCtx.progress`, because the ImportProvider clears
+  // `progress` 4s after an `empty`/`cancelled` phase. Reading it live would let
+  // the banner vanish (returning to a silent stuck step) if the user doesn't
+  // act in time. Capturing the terminal phase here makes it survive that clear.
+  const [importStatus, setImportStatus] = useState<"empty" | "error" | "cancelled" | null>(null);
+
+  const phase = importCtx.progress?.phase;
+  useEffect(() => {
+    if (phase === "empty" || phase === "error" || phase === "cancelled") {
+      setImportStatus(phase);
+    } else if (phase === "scanning" || phase === "importing") {
+      // A new import is under way — drop any stale terminal banner.
+      setImportStatus(null);
+    }
+  }, [phase]);
+
   useEffect(() => {
     if (currentStep !== 3) return;
     if (
       importCtx.lastCompletedAt !== null &&
       importCtx.lastCompletedAt !== prevCompletedRef.current &&
-      importCtx.progress?.phase !== "cancelled"
+      // Guard against a stuck terminal status slipping through to advance. The
+      // ImportProvider bumps `lastCompletedAt` for the `cancelled` phase too
+      // (only `empty`/`error` are excluded), so without this guard a cancel
+      // would auto-advance. We check both the captured local status and the
+      // live phase: the local status survives the 4s `progress` clear, while
+      // the live phase covers the commit where the terminal phase and the
+      // `lastCompletedAt` bump land together (before the status effect has
+      // run). Only the happy `done` path advances.
+      importStatus === null &&
+      phase !== "cancelled" &&
+      phase !== "empty" &&
+      phase !== "error"
     ) {
       prevCompletedRef.current = importCtx.lastCompletedAt;
       advance();
     }
-  }, [importCtx.lastCompletedAt, importCtx.progress?.phase, currentStep, advance]);
+  }, [importCtx.lastCompletedAt, importStatus, phase, currentStep, advance]);
+
+  const handleRetry = () => {
+    setImportStatus(null);
+    if (importCtx.canRetry) {
+      void importCtx.retry();
+    } else {
+      void onImportFolder();
+    }
+  };
+
+  const handleProceed = () => {
+    setImportStatus(null);
+    advance();
+  };
 
   if (!isActive) return null;
 
@@ -418,6 +500,9 @@ export default function OnboardingWizard({ onImport, onImportFolder }: Onboardin
             onImport={onImport}
             onImportFolder={onImportFolder}
             onSkip={skip}
+            status={importStatus}
+            onRetry={handleRetry}
+            onProceed={handleProceed}
           />
         )}
         {currentStep === 4 && (
