@@ -8,14 +8,19 @@ interface Tag {
 
 interface TagFilterProps {
   allTags: Tag[];
-  bookTagMap: Map<string, Set<string>>;
+  /**
+   * Books-per-tag counts, already computed against the currently-filtered set
+   * (all active filters except the tag filter itself). See
+   * `computeTagBookCounts` in lib/utils.
+   */
+  tagBookCounts: Map<string, number>;
   selectedTagIds: string[];
   onChangeSelectedTagIds: (ids: string[]) => void;
 }
 
 export default function TagFilter({
   allTags,
-  bookTagMap,
+  tagBookCounts,
   selectedTagIds,
   onChangeSelectedTagIds,
 }: TagFilterProps) {
@@ -58,14 +63,6 @@ export default function TagFilter({
 
   // Don't render if there are no tags
   if (allTags.length === 0) return null;
-
-  // Count books per tag
-  const tagBookCounts = new Map<string, number>();
-  for (const [, tagIds] of bookTagMap) {
-    for (const tagId of tagIds) {
-      tagBookCounts.set(tagId, (tagBookCounts.get(tagId) ?? 0) + 1);
-    }
-  }
 
   // Filter tags by search
   const q = search.trim().toLowerCase();

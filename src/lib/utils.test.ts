@@ -15,6 +15,7 @@ import {
   getReadingStatus,
   PAUSED_AFTER_DAYS,
   providerDisplayName,
+  computeTagBookCounts,
   type BookLike,
 } from "./utils";
 
@@ -693,5 +694,41 @@ describe("isValidHttpUrl", () => {
     expect(isValidHttpUrl("ftp://example.com")).toBe(false);
     expect(isValidHttpUrl("javascript:alert(1)")).toBe(false);
     expect(isValidHttpUrl("example.com")).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// computeTagBookCounts (F2g — counts reflect the currently-filtered set)
+// ---------------------------------------------------------------------------
+
+describe("computeTagBookCounts", () => {
+  const bookTagMap = new Map<string, Set<string>>([
+    ["b1", new Set(["t1", "t2"])],
+    ["b2", new Set(["t1"])],
+    ["b3", new Set(["t3"])],
+    ["b4", new Set(["t2"])],
+  ]);
+
+  it("counts every book in the library when nothing is filtered out", () => {
+    const books = [{ id: "b1" }, { id: "b2" }, { id: "b3" }, { id: "b4" }];
+    const counts = computeTagBookCounts(books, bookTagMap);
+    expect(counts.get("t1")).toBe(2);
+    expect(counts.get("t2")).toBe(2);
+    expect(counts.get("t3")).toBe(1);
+  });
+
+  it("reflects the currently-filtered book set, not the whole library", () => {
+    // Simulate another active filter that left only b2 and b3 visible.
+    const filtered = [{ id: "b2" }, { id: "b3" }];
+    const counts = computeTagBookCounts(filtered, bookTagMap);
+    expect(counts.get("t1")).toBe(1); // only b2 carries t1 in the filtered set
+    expect(counts.get("t3")).toBe(1); // only b3 carries t3
+    expect(counts.get("t2")).toBeUndefined(); // b1/b4 filtered out -> no t2
+  });
+
+  it("ignores books with no tags and yields an empty map for an empty set", () => {
+    expect(computeTagBookCounts([], bookTagMap).size).toBe(0);
+    const counts = computeTagBookCounts([{ id: "unknown" }], bookTagMap);
+    expect(counts.size).toBe(0);
   });
 });

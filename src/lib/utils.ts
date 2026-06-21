@@ -77,6 +77,29 @@ export function filterBooks<T extends BookLike>(
 }
 
 /**
+ * Count how many of the given books carry each tag.
+ *
+ * Pass the set of books that already pass every *other* active filter
+ * (search, format, status, rating, source, series) but NOT the tag filter
+ * itself — that way each tag's count reflects how many results selecting it
+ * would yield given the current filters, while staying useful for multi-select.
+ */
+export function computeTagBookCounts<T extends { id: string }>(
+  books: T[],
+  bookTagMap: Map<string, Set<string>>,
+): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const book of books) {
+    const tagIds = bookTagMap.get(book.id);
+    if (!tagIds) continue;
+    for (const tagId of tagIds) {
+      counts.set(tagId, (counts.get(tagId) ?? 0) + 1);
+    }
+  }
+  return counts;
+}
+
+/**
  * True when any library filter or search is narrowing the visible set.
  * Used to distinguish "filters hide everything" from "the view is genuinely
  * empty" in the empty-state copy.
