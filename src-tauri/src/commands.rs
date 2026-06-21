@@ -1748,9 +1748,38 @@ pub async fn get_chapter_metadata_batch(
     }
 }
 
+/// Per-chapter progress emitted while `get_all_chapters` streams a book's
+/// chapters to the frontend for continuous-scroll mode.
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ChapterLoadProgress {
+    book_id: String,
+    loaded: usize,
+    total: usize,
+}
+
+/// Throttle rule for `chapter-load-progress` events: emitting one per chapter
+/// floods the IPC bridge on large books (hundreds of chapters). For small
+/// books (`total <= 50`) emit every chapter; otherwise emit roughly every 1%
+/// of progress. The final chapter (`loaded == total`) always emits so the bar
+/// reliably reaches 100%.
+///
+/// `loaded` is 1-based (the count of chapters loaded so far, i.e. `i + 1`).
+fn should_emit_chapter_progress(loaded: usize, total: usize) -> bool {
+    if total == 0 {
+        return false;
+    }
+    if loaded == total {
+        return true;
+    }
+    let step = if total <= 50 { 1 } else { (total / 100).max(1) };
+    loaded.is_multiple_of(step)
+}
+
 #[tauri::command]
 pub async fn get_all_chapters(
     book_id: String,
+    app: AppHandle,
     state: State<'_, AppState>,
 ) -> FolioResult<Vec<String>> {
     let _t = state.ipc_metrics.time("get_all_chapters");
@@ -1782,6 +1811,17 @@ pub async fn get_all_chapters(
                     &book_id,
                 )?;
                 chapters.push(html);
+                let loaded = i + 1;
+                if should_emit_chapter_progress(loaded, total_chapters as usize) {
+                    let _ = app.emit(
+                        "chapter-load-progress",
+                        ChapterLoadProgress {
+                            book_id: book_id.clone(),
+                            loaded,
+                            total: total_chapters as usize,
+                        },
+                    );
+                }
             }
             Ok(chapters)
         }
@@ -1801,6 +1841,17 @@ pub async fn get_all_chapters(
                     &book_id,
                 )?;
                 chapters.push(html);
+                let loaded = i + 1;
+                if should_emit_chapter_progress(loaded, total_chapters as usize) {
+                    let _ = app.emit(
+                        "chapter-load-progress",
+                        ChapterLoadProgress {
+                            book_id: book_id.clone(),
+                            loaded,
+                            total: total_chapters as usize,
+                        },
+                    );
+                }
             }
             Ok(chapters)
         }
@@ -6233,6 +6284,38 @@ pub async fn get_ipc_metrics(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn chapter_progress_emits_every_chapter_for_small_books() {
+        // total <= 50: every chapter is a meaningful step.
+        for loaded in 1..=10 {
+            assert!(should_emit_chapter_progress(loaded, 10));
+        }
+    }
+
+    #[test]
+    fn chapter_progress_throttles_large_books() {
+        // total = 280 -> step = 2; emit on even counts only, plus the last.
+        let total = 280;
+        assert!(should_emit_chapter_progress(2, total));
+        assert!(!should_emit_chapter_progress(3, total));
+        assert!(should_emit_chapter_progress(4, total));
+    }
+
+    #[test]
+    fn chapter_progress_always_emits_final() {
+        // The final chapter emits even when it isn't on a step boundary.
+        assert!(should_emit_chapter_progress(280, 280));
+        assert!(should_emit_chapter_progress(101, 101));
+        // total = 300 -> step = 3; 299 is not a multiple of 3 but 300 is the final.
+        assert!(!should_emit_chapter_progress(299, 300));
+        assert!(should_emit_chapter_progress(300, 300));
+    }
+
+    #[test]
+    fn chapter_progress_handles_zero_total() {
+        assert!(!should_emit_chapter_progress(0, 0));
+    }
 
     #[test]
     fn get_login_history_reads_web_session_rows() {
