@@ -143,6 +143,7 @@
     "timeLeft": "{{time}} restant",
     "timeLeftTitle": "{{chapter}} restant dans le chapitre, {{book}} restant dans le livre",
     "focusMode": "Mode concentration (d)",
+    "moreActions": "Plus d'actions",
     "dualPageSpread": "Double page",
     "mangaMode": "Mode manga (droite \u00e0 gauche)",
     "searchShortcut": "Rechercher (\u2318F)",

@@ -13,6 +13,7 @@ import BookmarkToast from "./BookmarkToast";
 import BookCompletionModal from "./BookCompletionModal";
 import { useBookCompletion } from "../hooks/useBookCompletion";
 import LanguageSwitcher from "./LanguageSwitcher";
+import OverflowMenu from "./OverflowMenu";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { friendlyError, isBookFileMissing } from "../lib/errors";
 import { useToast } from "./Toast";
@@ -1788,6 +1789,8 @@ export default function ReaderPane({
             </svg>
           </button>
 
+          <div className="w-px h-5 bg-warm-border/60 mx-0.5 shrink-0" aria-hidden="true" />
+
           {/* Font size controls */}
           <div className="flex items-center gap-0.5 mr-1">
             <button
@@ -1927,31 +1930,34 @@ export default function ReaderPane({
             </button>
           )}
 
-          {/* DND toggle */}
-          <button
-            onClick={() => setDndMode((prev) => !prev)}
-            className={`p-1.5 transition-colors rounded-lg focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 ${dndMode ? "text-accent bg-accent-light" : "text-ink-muted hover:text-ink hover:bg-warm-subtle"}`}
-            aria-label={t("reader.toggleFocusMode")}
-            title={t("reader.focusMode")}
-          >
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
-              <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="1.5" />
-              <path d="M12 8v4l2.5 2.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-            </svg>
-          </button>
+          <div className="w-px h-5 bg-warm-border/60 mx-0.5 shrink-0" aria-hidden="true" />
+
+          {/* App group: low-frequency actions tucked into an overflow menu so
+              the header stays grouped rather than a flat row of icons. */}
+          <OverflowMenu label={t("reader.moreActions")}>
+            <button
+              onClick={() => setDndMode((prev) => !prev)}
+              role="menuitem"
+              className={`flex items-center gap-2 px-3 py-2 text-sm transition-colors text-left w-full hover:bg-warm-subtle ${dndMode ? "text-accent" : "text-ink-muted hover:text-ink"}`}
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" className="shrink-0">
+                <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="1.5" />
+                <path d="M12 8v4l2.5 2.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+              {t("reader.focusMode")}
+            </button>
+            <button
+              onClick={() => setShowShortcuts(true)}
+              role="menuitem"
+              className="flex items-center gap-2 px-3 py-2 text-sm text-ink-muted hover:text-ink hover:bg-warm-subtle transition-colors text-left w-full"
+            >
+              <span className="w-[18px] text-center font-medium shrink-0">?</span>
+              {t("shortcuts.title")}
+            </button>
+          </OverflowMenu>
 
           {/* Language switcher */}
           <LanguageSwitcher />
-
-          {/* Keyboard shortcuts hint */}
-          <button
-            onClick={() => setShowShortcuts(true)}
-            className="p-1.5 text-ink-muted hover:text-ink transition-colors rounded-lg hover:bg-warm-subtle focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 text-xs font-medium w-6 h-6 flex items-center justify-center"
-            aria-label={t("shortcuts.title")}
-            title={t("shortcuts.title")}
-          >
-            ?
-          </button>
 
           {/* Settings button */}
           <button
