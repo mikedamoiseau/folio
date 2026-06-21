@@ -508,7 +508,9 @@
     "networkError": "Could not connect to remote storage",
     "connectionTimeout": "Connection timed out",
     "noConfigSaved": "No backup configuration saved",
-    "testFailed": "Connection test failed: {{error}}"
+    "testFailed": "Connection test failed: {{error}}",
+    "configSaved": "Destination de sauvegarde enregistrée",
+    "requiredFields": "Requis : {{fields}}"
   },
 
   "collections": {

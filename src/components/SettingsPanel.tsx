@@ -6,6 +6,7 @@ import { open as openFilePicker } from "@tauri-apps/plugin-dialog";
 import { useTranslation } from "react-i18next";
 import { useTheme, MIN_FONT_SIZE, MAX_FONT_SIZE, type ColorTokens } from "../context/ThemeContext";
 import { friendlyError } from "../lib/errors";
+import { missingRequiredFields, connectionResultFeedback } from "../lib/backupConnection";
 import { isPinUnsaved, shouldSaveOnBlur } from "../lib/pinSaveState";
 import { useOnboardingContext } from "../context/OnboardingContext";
 import { useToast } from "./Toast";
@@ -497,8 +498,11 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
   const [backupProgressText, setBackupProgressText] = useState("");
   const [backupStatus, setBackupStatus] = useState<SyncManifest | null>(null);
   const [remoteBackupMessage, setRemoteBackupMessage] = useState<string | null>(null);
+  // Save and Test connection report their outcomes independently so a save
+  // failure is never conflated with a connectivity failure (UX audit F4c).
+  const [saveFeedback, setSaveFeedback] = useState<{ text: string; isError: boolean } | null>(null);
+  const [testFeedback, setTestFeedback] = useState<{ text: string; isError: boolean } | null>(null);
   const [testingConnection, setTestingConnection] = useState(false);
-  const [connectionTestResult, setConnectionTestResult] = useState<ConnectionTestResult | null>(null);
   const [syncEnabled, setSyncEnabled] = useState(false);
   const [lastSyncSuccess, setLastSyncSuccess] = useState<number | null>(null);
   const [lastSyncError, setLastSyncError] = useState<{ at: number; message: string } | null>(null);
@@ -964,75 +968,70 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
     setSelectedProvider(providerType);
     setBackupFieldValues({});
     setRemoteBackupMessage(null);
+    setSaveFeedback(null);
+    setTestFeedback(null);
   };
 
-  const connectionResultMessage = (result: ConnectionTestResult): { text: string; isError: boolean } => {
-    switch (result.status) {
-      case "Ok":
-        return { text: t("settings.connected", { ms: result.latency_ms ?? 0 }), isError: false };
-      case "AuthFailed":
-        return { text: t("settings.authFailed"), isError: true };
-      case "PermissionDenied":
-        return { text: t("settings.writePermissionDenied"), isError: true };
-      case "NetworkError":
-        return { text: result.message || t("settings.networkError"), isError: true };
-      case "Timeout":
-        return { text: t("settings.connectionTimeout"), isError: true };
-    }
+  // Update a single backup config field and invalidate any prior save/test
+  // feedback — once the entered values change, "saved"/test results no longer
+  // describe what's in the form, so they must clear (UX audit F4c follow-up).
+  const updateBackupField = (key: string, value: string) => {
+    setBackupFieldValues((prev) => ({ ...prev, [key]: value }));
+    setSaveFeedback(null);
+    setTestFeedback(null);
   };
 
+  // Save persists the config without running a connectivity check, so a save
+  // failure is reported on its own and never conflated with a connection
+  // failure (UX audit F4c).
   const handleSaveBackupConfig = async () => {
     if (!selectedProvider || !currentProviderInfo) return;
-    // Validate required fields
-    const missing = currentProviderInfo.fields.filter(
-      (f) => f.required && !backupFieldValues[f.key]?.trim()
-    );
+    const missing = missingRequiredFields(currentProviderInfo.fields, backupFieldValues);
     if (missing.length > 0) {
-      setRemoteBackupMessage(`Required: ${missing.map((f) => f.label).join(", ")}`);
+      setSaveFeedback({ text: t("settings.requiredFields", { fields: missing.join(", ") }), isError: true });
+      setTestFeedback(null);
       return;
     }
     setSavingBackupConfig(true);
-    setRemoteBackupMessage(null);
-    setConnectionTestResult(null);
+    setSaveFeedback(null);
+    setTestFeedback(null);
     try {
       const config: BackupConfig = {
         providerType: selectedProvider,
         values: backupFieldValues,
       };
-      const result = await invoke<ConnectionTestResult>("save_backup_config", { config });
-      setConnectionTestResult(result);
-      if (result.status === "Ok") {
-        setSavedBackupConfig(config);
-        const { text } = connectionResultMessage(result);
-        setRemoteBackupMessage(text);
-      } else {
-        const { text } = connectionResultMessage(result);
-        setRemoteBackupMessage(text);
-      }
+      await invoke<ConnectionTestResult>("save_backup_config", { config, skipTest: true });
+      setSavedBackupConfig(config);
+      setSaveFeedback({ text: t("settings.configSaved"), isError: false });
     } catch (err) {
-      setRemoteBackupMessage(t("settings.saveFailed", { error: friendlyError(err, t) }));
+      setSaveFeedback({ text: t("settings.saveFailed", { error: friendlyError(err, t) }), isError: true });
     } finally {
       setSavingBackupConfig(false);
     }
   };
 
+  // Test connection checks connectivity against the currently entered values
+  // and reports its own outcome, distinct from the save feedback above.
   const handleTestConnection = async () => {
-    if (!savedBackupConfig) return;
+    if (!selectedProvider || !currentProviderInfo) return;
+    const missing = missingRequiredFields(currentProviderInfo.fields, backupFieldValues);
+    if (missing.length > 0) {
+      setTestFeedback({ text: t("settings.requiredFields", { fields: missing.join(", ") }), isError: true });
+      setSaveFeedback(null);
+      return;
+    }
     setTestingConnection(true);
-    setConnectionTestResult(null);
-    setRemoteBackupMessage(null);
+    setTestFeedback(null);
+    setSaveFeedback(null);
     try {
-      const config = await invoke<BackupConfig | null>("get_backup_config");
-      if (!config) {
-        setRemoteBackupMessage(t("settings.noConfigSaved"));
-        return;
-      }
+      const config: BackupConfig = {
+        providerType: selectedProvider,
+        values: backupFieldValues,
+      };
       const result = await invoke<ConnectionTestResult>("test_backup_connection", { config });
-      setConnectionTestResult(result);
-      const { text } = connectionResultMessage(result);
-      setRemoteBackupMessage(text);
+      setTestFeedback(connectionResultFeedback(result, t));
     } catch (err) {
-      setRemoteBackupMessage(t("settings.testFailed", { error: friendlyError(err, t) }));
+      setTestFeedback({ text: t("settings.testFailed", { error: friendlyError(err, t) }), isError: true });
     } finally {
       setTestingConnection(false);
     }
@@ -2179,10 +2178,7 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                           type="checkbox"
                           checked={backupFieldValues[field.key] === "true"}
                           onChange={(e) =>
-                            setBackupFieldValues((prev) => ({
-                              ...prev,
-                              [field.key]: e.target.checked ? "true" : "false",
-                            }))
+                            updateBackupField(field.key, e.target.checked ? "true" : "false")
                           }
                           className="accent-accent"
                         />
@@ -2201,12 +2197,7 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                       <input
                         type={field.fieldType === "password" ? "password" : "text"}
                         value={backupFieldValues[field.key] ?? ""}
-                        onChange={(e) =>
-                          setBackupFieldValues((prev) => ({
-                            ...prev,
-                            [field.key]: e.target.value,
-                          }))
-                        }
+                        onChange={(e) => updateBackupField(field.key, e.target.value)}
                         placeholder={field.placeholder}
                         className="w-full bg-transparent text-sm text-ink placeholder:text-ink-muted/50 focus:outline-none"
                       />
@@ -2214,14 +2205,45 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                   );
                 })}
 
-                {/* Save config */}
-                <button
-                  onClick={handleSaveBackupConfig}
-                  disabled={savingBackupConfig || !selectedProvider}
-                  className="w-full px-3 py-2 text-sm font-medium bg-accent text-surface rounded-xl hover:opacity-90 transition-opacity disabled:opacity-40"
-                >
-                  {savingBackupConfig ? t("settings.testingConnection") : t("settings.saveAndTest")}
-                </button>
+                {/* Save and Test connection — two distinct actions, each
+                    with its own feedback so a save failure can be told apart
+                    from a connection failure. */}
+                <div className="flex gap-2">
+                  <button
+                    onClick={handleSaveBackupConfig}
+                    disabled={savingBackupConfig || !selectedProvider}
+                    className="flex-1 px-3 py-2 text-sm font-medium bg-accent text-surface rounded-xl hover:opacity-90 transition-opacity disabled:opacity-40"
+                  >
+                    {savingBackupConfig ? t("common.saving") : t("common.save")}
+                  </button>
+                  <button
+                    onClick={handleTestConnection}
+                    disabled={testingConnection || !selectedProvider}
+                    className="flex-1 px-3 py-2 text-sm font-medium text-ink-muted hover:text-ink bg-warm-subtle hover:bg-warm-border rounded-xl transition-colors disabled:opacity-40 flex items-center justify-center gap-2"
+                  >
+                    {testingConnection && (
+                      <svg className="animate-spin w-3.5 h-3.5 shrink-0" viewBox="0 0 24 24" fill="none">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
+                      </svg>
+                    )}
+                    {testingConnection ? t("settings.testingConnection") : t("settings.testConnection")}
+                  </button>
+                </div>
+
+                {/* Save feedback — distinct from connection feedback */}
+                {saveFeedback && (
+                  <p className={`text-xs px-1 ${saveFeedback.isError ? "text-red-500" : "text-green-600"}`}>
+                    {saveFeedback.text}
+                  </p>
+                )}
+
+                {/* Test connection feedback — distinct from save feedback */}
+                {testFeedback && (
+                  <p className={`text-xs px-1 ${testFeedback.isError ? "text-red-500" : "text-green-600"}`}>
+                    {testFeedback.text}
+                  </p>
+                )}
 
                 {/* Backup now — only shown when a config has been saved */}
                 {savedBackupConfig && (
@@ -2253,23 +2275,6 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                   </button>
                 )}
 
-                {/* Test connection — only shown when a config has been saved */}
-                {savedBackupConfig && (
-                  <button
-                    onClick={handleTestConnection}
-                    disabled={testingConnection || runningBackup}
-                    className="w-full px-3 py-2 text-sm text-ink-muted hover:text-ink bg-warm-subtle hover:bg-warm-border rounded-xl transition-colors text-left disabled:opacity-40 flex items-center gap-2"
-                  >
-                    {testingConnection && (
-                      <svg className="animate-spin w-3.5 h-3.5 shrink-0" viewBox="0 0 24 24" fill="none">
-                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
-                      </svg>
-                    )}
-                    {testingConnection ? t("settings.testingConnection") : t("settings.testConnection")}
-                  </button>
-                )}
-
                 {/* Last backup timestamp */}
                 {backupStatus && (
                   <p className="text-xs text-ink-muted px-1">
@@ -2280,9 +2285,9 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                   </p>
                 )}
 
-                {/* Status messages */}
+                {/* Status messages (backup run progress / result) */}
                 {remoteBackupMessage && (
-                  <p className={`text-xs px-1 ${connectionTestResult && connectionTestResult.status !== "Ok" ? "text-red-500" : connectionTestResult?.status === "Ok" ? "text-green-600" : "text-ink-muted"}`}>
+                  <p className="text-xs px-1 text-ink-muted">
                     {remoteBackupMessage}
                   </p>
                 )}

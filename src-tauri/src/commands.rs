@@ -4240,8 +4240,26 @@ pub async fn get_backup_providers() -> FolioResult<Vec<crate::backup::ProviderIn
 #[tauri::command]
 pub async fn save_backup_config(
     config: crate::backup::BackupConfig,
+    skip_test: Option<bool>,
     state: State<'_, AppState>,
 ) -> Result<crate::backup::ConnectionTestResult, String> {
+    // When `skip_test` is set, persist the config without running a
+    // connection test. This lets the UI offer a "Save" action distinct
+    // from "Test connection", so a save failure is never conflated with a
+    // connectivity failure (and credentials can be saved while a remote is
+    // temporarily unreachable).
+    if skip_test.unwrap_or(false) {
+        let clean = crate::backup::store_secrets(&config).map_err(|e| e.to_string())?;
+        let conn = state
+            .active_db()
+            .map_err(|e| e.to_string())?
+            .get()
+            .map_err(|e| e.to_string())?;
+        let json = serde_json::to_string(&clean).map_err(|e| e.to_string())?;
+        db::set_setting(&conn, "backup_config", &json).map_err(|e| e.to_string())?;
+        return Ok(crate::backup::ConnectionTestResult::Ok { latency_ms: 0 });
+    }
+
     // Snapshot existing secrets for rollback on test failure
     let old_secrets = {
         let conn = state
