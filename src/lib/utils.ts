@@ -362,3 +362,17 @@ export function getReadingStatus(
   const ageDays = (nowSecs - lastReadAt) / 86400;
   return ageDays <= PAUSED_AFTER_DAYS ? "active" : "paused";
 }
+
+/**
+ * True when `value` parses as an absolute http(s) URL. Used to pre-validate
+ * OPDS catalog URLs before attempting a connection test.
+ */
+export function isValidHttpUrl(value: string): boolean {
+  let url: URL;
+  try {
+    url = new URL(value.trim());
+  } catch {
+    return false;
+  }
+  return url.protocol === "http:" || url.protocol === "https:";
+}
