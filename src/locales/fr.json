@@ -279,6 +279,7 @@
     "reload": "Recharger les extensions",
     "reloadSuccess": "Extensions rechargées",
     "installSuccess": "Extension installée",
+    "folderNotWritable": "Le dossier sélectionné n'est pas accessible en écriture. Choisissez un autre dossier et réessayez.",
     "openFolder": "Ouvrir le dossier des extensions",
     "runNow": "Exécuter maintenant",
     "networkHosts": "Contactera : {{hosts}}",

@@ -110,6 +110,16 @@ export default function PluginsPanel({
             setBusy(false);
             return;
           }
+          // The chosen export folder must be writable. A write probe is the
+          // only reliable check (readonly() lies on network mounts).
+          const writable = await invoke<boolean>("check_dir_writable", {
+            path: dir,
+          });
+          if (!writable) {
+            onToast?.(t("plugins.folderNotWritable"), "error");
+            setBusy(false);
+            return;
+          }
           grants.push({ permission: perm.id, params: dir });
         } else {
           grants.push({ permission: perm.id, params: null });

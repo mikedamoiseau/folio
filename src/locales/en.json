@@ -280,6 +280,7 @@
     "reload": "Reload plugins",
     "reloadSuccess": "Plugins reloaded",
     "installSuccess": "Plugin installed",
+    "folderNotWritable": "The selected folder is not writable. Choose a different folder and try again.",
     "openFolder": "Open plugins folder",
     "runNow": "Run now",
     "networkHosts": "Will contact: {{hosts}}",

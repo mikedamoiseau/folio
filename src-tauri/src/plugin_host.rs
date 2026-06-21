@@ -202,6 +202,31 @@ pub struct GrantInput {
     pub params: Option<String>,
 }
 
+/// Validate the export-folder parameter on every `write:files` grant before
+/// it is recorded. Each such grant must carry a non-empty path that probes as
+/// an actually-writable directory; otherwise the grant set is rejected so an
+/// unwritable export folder is never persisted. Grants without a path and all
+/// other permissions are unaffected.
+fn validate_write_grants(grants: &[(Permission, Option<String>)]) -> FolioResult<()> {
+    for (perm, params) in grants {
+        if *perm != Permission::WriteFiles {
+            continue;
+        }
+        let path = params.as_deref().map(str::trim).unwrap_or("");
+        if path.is_empty() {
+            return Err(FolioError::invalid(
+                "the 'write files' permission requires choosing an export folder",
+            ));
+        }
+        if !crate::commands::probe_dir_writable(std::path::Path::new(path)) {
+            return Err(FolioError::permission(format!(
+                "the chosen export folder is not writable: {path}"
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// Enable a plugin, recording consent first. The frontend shows the consent
 /// dialog (and a folder picker for `write:files`) and calls this with the
 /// approved grants. The grant set must match the manifest exactly.
@@ -264,16 +289,10 @@ pub async fn plugin_enable(
         }
     }
 
-    // write:files must come with a non-empty export directory.
-    for (perm, params) in &approved {
-        if *perm == Permission::WriteFiles
-            && params.as_deref().map(str::trim).unwrap_or("").is_empty()
-        {
-            return Err(FolioError::invalid(
-                "the 'write files' permission requires choosing an export folder",
-            ));
-        }
-    }
+    // write:files must come with a non-empty export directory that is
+    // actually writable. Enforced here (not just in the UI) so a direct
+    // invoke can't persist an unwritable export folder.
+    validate_write_grants(&approved)?;
 
     let detail = approved
         .iter()
@@ -521,5 +540,40 @@ mod tests {
             checked >= 3,
             "expected at least 3 example plugins, found {checked}"
         );
+    }
+
+    #[test]
+    fn validate_write_grants_accepts_writable_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let grants = vec![(
+            Permission::WriteFiles,
+            Some(tmp.path().to_string_lossy().to_string()),
+        )];
+        assert!(validate_write_grants(&grants).is_ok());
+    }
+
+    #[test]
+    fn validate_write_grants_rejects_missing_path() {
+        let missing = std::env::temp_dir().join("folio-no-such-dir-1234567890");
+        let grants = vec![(
+            Permission::WriteFiles,
+            Some(missing.to_string_lossy().to_string()),
+        )];
+        let err = validate_write_grants(&grants).unwrap_err();
+        assert_eq!(err.kind(), "PermissionDenied");
+    }
+
+    #[test]
+    fn validate_write_grants_rejects_empty_path() {
+        let grants = vec![(Permission::WriteFiles, Some("   ".to_string()))];
+        let err = validate_write_grants(&grants).unwrap_err();
+        assert_eq!(err.kind(), "InvalidInput");
+    }
+
+    #[test]
+    fn validate_write_grants_ignores_other_permissions() {
+        // A non-write:files grant with no path must pass untouched.
+        let grants = vec![(Permission::ReadLibrary, None)];
+        assert!(validate_write_grants(&grants).is_ok());
     }
 }

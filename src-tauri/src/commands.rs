@@ -478,6 +478,33 @@ pub async fn get_supported_formats() -> FolioResult<Vec<&'static str>> {
     Ok(supported_import_extensions().to_vec())
 }
 
+/// Best-effort check that `dir` is a writable directory.
+///
+/// Metadata-based checks (`readonly()`) are unreliable on network mounts
+/// (see the known SMBFS issue), so the only dependable test is an actual
+/// write probe: create a uniquely-named temp file in the directory, write a
+/// byte, then remove it. The temp file is always cleaned up, even on partial
+/// failure. Returns `false` when `dir` is not an existing directory.
+pub(crate) fn probe_dir_writable(dir: &std::path::Path) -> bool {
+    if !dir.is_dir() {
+        return false;
+    }
+
+    let probe = dir.join(format!(".folio-write-test-{}", Uuid::new_v4()));
+    let result = std::fs::write(&probe, b"0").is_ok();
+    // Best-effort cleanup regardless of whether the write succeeded.
+    let _ = std::fs::remove_file(&probe);
+    result
+}
+
+/// Verify a folder is actually writable before recording a `write:files`
+/// grant. Writability is a boolean answer, so failures (missing path, not a
+/// directory, permission denied) return `Ok(false)` rather than an error.
+#[tauri::command]
+pub async fn check_dir_writable(path: String) -> FolioResult<bool> {
+    Ok(probe_dir_writable(std::path::Path::new(&path)))
+}
+
 #[tauri::command]
 #[tracing::instrument(
     skip(file_path, state, _app),
@@ -6284,6 +6311,35 @@ pub async fn get_ipc_metrics(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn probe_dir_writable_true_for_writable_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(probe_dir_writable(dir.path()));
+        // The probe file must be cleaned up.
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn probe_dir_writable_false_for_missing_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("does-not-exist");
+        assert!(!probe_dir_writable(&missing));
+    }
+
+    #[test]
+    fn probe_dir_writable_false_for_file_path() {
+        // A regular file is not a directory.
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("a-file.txt");
+        std::fs::write(&file, b"x").unwrap();
+        assert!(!probe_dir_writable(&file));
+    }
+
+    // NOTE: a read-only-directory test is intentionally skipped — reliably
+    // creating an unwritable directory is fiddly and platform-dependent
+    // (root bypasses mode bits, Windows ignores them). The missing-path and
+    // file-path cases cover the non-writable branches portably.
 
     #[test]
     fn chapter_progress_emits_every_chapter_for_small_books() {
