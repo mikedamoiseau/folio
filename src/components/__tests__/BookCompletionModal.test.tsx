@@ -28,21 +28,26 @@ vi.mock("@tauri-apps/api/core", () => ({
 
 vi.mock("canvas-confetti", () => ({ default: vi.fn() }));
 
+const addToast = vi.fn();
 vi.mock("../Toast", () => ({
-  useToast: () => ({ addToast: vi.fn() }),
+  useToast: () => ({ addToast }),
 }));
 
 vi.mock("../../lib/useFocusTrap", () => ({
   useFocusTrap: () => ({ current: null }),
 }));
 
-import { render, screen, cleanup, act } from "@testing-library/react";
+import { render, screen, cleanup, act, fireEvent } from "@testing-library/react";
+import { invoke } from "@tauri-apps/api/core";
 import BookCompletionModal from "../BookCompletionModal";
 
 afterEach(() => cleanup());
 
 beforeEach(() => {
   vi.useFakeTimers();
+  addToast.mockClear();
+  vi.mocked(invoke).mockReset();
+  vi.mocked(invoke).mockResolvedValue({});
 });
 
 afterEach(() => {
@@ -122,5 +127,29 @@ describe("BookCompletionModal", () => {
     render(<BookCompletionModal {...defaultProps} />);
     act(() => { vi.advanceTimersByTime(1500); });
     expect(confetti).toHaveBeenCalled();
+  });
+
+  it("shows a success toast and inline confirmation when a star is clicked", async () => {
+    render(<BookCompletionModal {...defaultProps} />);
+    act(() => { vi.advanceTimersByTime(1500); });
+    await act(async () => {
+      fireEvent.click(screen.getByLabelText("4 stars"));
+    });
+    expect(invoke).toHaveBeenCalledWith(
+      "update_book_metadata",
+      expect.objectContaining({ bookId: "book-1", rating: 4 }),
+    );
+    expect(addToast).toHaveBeenCalledWith("Rating saved", "success");
+    expect(screen.getByText("✓ Rating saved")).toBeInTheDocument();
+  });
+
+  it("shows an error toast when saving the rating fails", async () => {
+    vi.mocked(invoke).mockRejectedValueOnce(new Error("boom"));
+    render(<BookCompletionModal {...defaultProps} />);
+    act(() => { vi.advanceTimersByTime(1500); });
+    await act(async () => {
+      fireEvent.click(screen.getByLabelText("3 stars"));
+    });
+    expect(addToast).toHaveBeenCalledWith("Failed to save rating", "error");
   });
 });
