@@ -14,7 +14,8 @@ interface BulkEditDialogProps {
 interface FieldState {
   value: string;
   mixed: boolean;
-  dirty: boolean;
+  /** Explicit opt-in — the field is written only when the user checks it. */
+  enabled: boolean;
 }
 
 function computeField(
@@ -24,7 +25,7 @@ function computeField(
   const values = books.map((b) => getter(b) ?? "");
   const first = values[0];
   const allSame = values.every((v) => v === first);
-  return { value: allSame ? first : "", mixed: !allSame, dirty: false };
+  return { value: allSame ? first : "", mixed: !allSame, enabled: false };
 }
 
 export default function BulkEditDialog({
@@ -54,7 +55,7 @@ export default function BulkEditDialog({
   const [publisher, setPublisher] = useState<FieldState>({
     value: "",
     mixed: false,
-    dirty: false,
+    enabled: false,
   });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -67,16 +68,18 @@ export default function BulkEditDialog({
     return () => document.removeEventListener("keydown", handleKey);
   }, [onClose]);
 
+  const anyMixed = author.mixed || series.mixed || year.mixed || language.mixed;
+
   const handleSave = async () => {
     const fields: Record<string, unknown> = {};
-    if (author.dirty) fields.author = author.value;
-    if (series.dirty) fields.series = series.value;
-    if (year.dirty) {
+    if (author.enabled) fields.author = author.value;
+    if (series.enabled) fields.series = series.value;
+    if (year.enabled) {
       const digits = year.value.replace(/\D/g, "");
       fields.publishYear = digits === "" ? 0 : Number(digits);
     }
-    if (language.dirty) fields.language = language.value;
-    if (publisher.dirty) fields.publisher = publisher.value;
+    if (language.enabled) fields.language = language.value;
+    if (publisher.enabled) fields.publisher = publisher.value;
 
     if (Object.keys(fields).length === 0) {
       onClose();
@@ -102,25 +105,41 @@ export default function BulkEditDialog({
     numeric?: boolean,
   ) => (
     <div className="flex flex-col gap-1">
-      <label className="text-xs text-ink-muted font-medium">{label}</label>
+      <div className="flex items-center gap-2 text-xs text-ink-muted font-medium">
+        <input
+          type="checkbox"
+          checked={state.enabled}
+          aria-label={t("bulkEdit.enableField", { field: label })}
+          onChange={(e) => setState({ ...state, enabled: e.target.checked })}
+          className="accent-accent cursor-pointer"
+        />
+        <span>{label}</span>
+        {state.mixed && (
+          <span className="text-[10px] uppercase tracking-wide text-amber-600 dark:text-amber-400">
+            {t("bulkEdit.differs")}
+          </span>
+        )}
+      </div>
       <input
         type="text"
         inputMode={numeric ? "numeric" : undefined}
-        value={state.dirty ? state.value : state.mixed ? "" : state.value}
-        placeholder={
-          state.mixed && !state.dirty
-            ? t("bulkEdit.multipleValues")
-            : undefined
-        }
+        aria-label={label}
+        disabled={!state.enabled}
+        value={state.mixed && !state.enabled ? "" : state.value}
+        placeholder={state.mixed ? t("bulkEdit.multipleValues") : undefined}
         onChange={(e) =>
           setState({
+            ...state,
             value: numeric ? e.target.value.replace(/\D/g, "") : e.target.value,
-            mixed: state.mixed,
-            dirty: true,
           })
         }
-        className={`h-9 px-3 bg-warm-subtle rounded-lg text-sm text-ink border border-transparent focus:border-accent focus:outline-none ${state.mixed && !state.dirty ? "italic text-ink-muted" : ""}`}
+        className={`h-9 px-3 bg-warm-subtle rounded-lg text-sm text-ink border border-transparent focus:border-accent focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed ${state.mixed && !state.enabled ? "italic text-ink-muted" : ""}`}
       />
+      {state.enabled && state.mixed && (
+        <p className="text-[11px] text-amber-600 dark:text-amber-400">
+          {t("bulkEdit.overwriteWarning", { count: bookIds.length })}
+        </p>
+      )}
     </div>
   );
 
@@ -140,6 +159,12 @@ export default function BulkEditDialog({
           <h3 className="font-serif text-base font-semibold text-ink">
             {t("bulkEdit.title", { count: bookIds.length })}
           </h3>
+          <p className="text-xs text-ink-muted">{t("bulkEdit.optInHint")}</p>
+          {anyMixed && (
+            <div className="text-xs rounded-lg px-3 py-2 bg-amber-50 dark:bg-amber-900/20 text-amber-800 dark:text-amber-300 border border-amber-200 dark:border-amber-900/40">
+              {t("bulkEdit.mixedBanner", { count: bookIds.length })}
+            </div>
+          )}
           <div className="space-y-3">
             {fieldRow(t("bulkEdit.author"), author, setAuthor)}
             {fieldRow(t("bulkEdit.series"), series, setSeries)}
