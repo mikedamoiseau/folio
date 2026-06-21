@@ -375,6 +375,11 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
   const [openSection, setOpenSection] = useState<string | null>("appearance");
   const toggleSection = (id: string) => setOpenSection((prev) => (prev === id ? null : id));
   const [settingsQuery, setSettingsQuery] = useState("");
+  // The panel stays mounted across open/close, so clear any prior search each
+  // time it opens — otherwise it reopens filtered with sections hidden.
+  useEffect(() => {
+    if (open) setSettingsQuery("");
+  }, [open]);
   const panelRef = useRef<HTMLDivElement>(null);
   const previousFocus = useRef<HTMLElement | null>(null);
 
