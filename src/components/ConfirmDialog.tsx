@@ -13,6 +13,8 @@ interface ConfirmDialogProps {
   cancelLabel?: string;
   /** Style the confirm button as destructive (red). Defaults to true. */
   destructive?: boolean;
+  /** Disable the confirm button (e.g. while the action is in flight). */
+  confirmDisabled?: boolean;
   /** Extra content (e.g. a cover thumbnail) rendered above the buttons. */
   children?: ReactNode;
   onConfirm: () => void;
@@ -33,6 +35,7 @@ export default function ConfirmDialog({
   confirmLabel,
   cancelLabel,
   destructive = true,
+  confirmDisabled = false,
   children,
   onConfirm,
   onCancel,
@@ -68,7 +71,8 @@ export default function ConfirmDialog({
               </button>
               <button
                 onClick={onConfirm}
-                className={`px-4 py-1.5 text-sm font-medium text-white rounded-lg transition-colors duration-150 ${
+                disabled={confirmDisabled}
+                className={`px-4 py-1.5 text-sm font-medium text-white rounded-lg transition-colors duration-150 disabled:opacity-40 disabled:cursor-not-allowed ${
                   destructive ? "bg-red-600 hover:bg-red-500" : "bg-accent hover:bg-accent-hover"
                 }`}
               >
