@@ -1,4 +1,32 @@
-export default function ReaderSkeleton() {
+interface ReaderSkeletonProps {
+  /** "full" (default) renders the whole reader chrome; "content" renders only the text placeholder for use inside an existing reader layout. */
+  variant?: "full" | "content";
+}
+
+function ContentLines() {
+  return (
+    <div className="flex-1 p-8 flex flex-col gap-3 max-w-3xl mx-auto w-full">
+      <div className="w-3/4 h-5 rounded bg-warm-subtle" />
+      <div className="w-full h-4 rounded bg-warm-subtle" />
+      <div className="w-[90%] h-4 rounded bg-warm-subtle" />
+      <div className="w-[85%] h-4 rounded bg-warm-subtle" />
+      <div className="w-full h-4 rounded bg-warm-subtle" />
+      <div className="w-[70%] h-4 rounded bg-warm-subtle" />
+      <div className="w-[95%] h-4 rounded bg-warm-subtle" />
+      <div className="w-3/5 h-4 rounded bg-warm-subtle" />
+    </div>
+  );
+}
+
+export default function ReaderSkeleton({ variant = "full" }: ReaderSkeletonProps = {}) {
+  if (variant === "content") {
+    return (
+      <div className="flex-1 flex flex-col animate-pulse" aria-hidden="true">
+        <ContentLines />
+      </div>
+    );
+  }
+
   return (
     <div className="flex flex-col h-screen bg-paper text-ink animate-pulse">
       {/* Header bar */}
@@ -18,16 +46,7 @@ export default function ReaderSkeleton() {
         </div>
 
         {/* Main content placeholder */}
-        <div className="flex-1 p-8 flex flex-col gap-3 max-w-3xl mx-auto">
-          <div className="w-3/4 h-5 rounded bg-warm-subtle" />
-          <div className="w-full h-4 rounded bg-warm-subtle" />
-          <div className="w-[90%] h-4 rounded bg-warm-subtle" />
-          <div className="w-[85%] h-4 rounded bg-warm-subtle" />
-          <div className="w-full h-4 rounded bg-warm-subtle" />
-          <div className="w-[70%] h-4 rounded bg-warm-subtle" />
-          <div className="w-[95%] h-4 rounded bg-warm-subtle" />
-          <div className="w-3/5 h-4 rounded bg-warm-subtle" />
-        </div>
+        <ContentLines />
       </div>
     </div>
   );

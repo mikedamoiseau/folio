@@ -17,6 +17,7 @@ import MissingFileDialog from "./MissingFileDialog";
 import { useBookCompletion } from "../hooks/useBookCompletion";
 import LanguageSwitcher from "./LanguageSwitcher";
 import OverflowMenu from "./OverflowMenu";
+import ReaderSkeleton from "./ReaderSkeleton";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { friendlyError, isBookFileMissing } from "../lib/errors";
 import { useToast } from "./Toast";
@@ -958,7 +959,7 @@ export default function ReaderPane({
   const handleCreateHighlight = useCallback(async (color: string) => {
     if (!bookId || !selectionPopup) return;
     try {
-      await invoke("add_highlight", {
+      const created = await invoke<ChapterHighlight>("add_highlight", {
         bookId,
         chapterIndex,
         text: selectionPopup.text,
@@ -970,6 +971,24 @@ export default function ReaderPane({
       setSelectionPopup(null);
       window.getSelection()?.removeAllRanges();
       await loadHighlights();
+      // Offer an immediate remove affordance for the just-created highlight.
+      addToast(t("reader.highlightCreated"), "success", {
+        action: {
+          label: t("common.remove"),
+          onClick: async () => {
+            try {
+              await invoke("remove_highlight", { highlightId: created.id });
+              // Refresh via the ref so we always load highlights for the
+              // CURRENT chapter — the user may have navigated away while the
+              // toast was visible. Using the captured loadHighlights closure
+              // would overwrite the current chapter's state with the old one.
+              await loadHighlightsRef.current();
+            } catch (err) {
+              addToast(friendlyError(err, t), "error");
+            }
+          },
+        },
+      });
     } catch (err) {
       addToast(friendlyError(err, t), "error");
     }
@@ -1944,7 +1963,7 @@ export default function ReaderPane({
           {/* Settings button */}
           <button
             onClick={onOpenSettings}
-            className="p-1.5 text-ink-muted hover:text-ink transition-colors rounded-lg hover:bg-warm-subtle focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2"
+            className={`p-1.5 transition-colors rounded-lg focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 ${settingsOpen ? "text-accent bg-accent-light" : "text-ink-muted hover:text-ink hover:bg-warm-subtle"}`}
             aria-label={t("reader.openSettings")}
           >
             <svg width="18" height="18" viewBox="0 0 20 20" fill="none">
@@ -2272,9 +2291,7 @@ export default function ReaderPane({
                 )
               ) : !chapterHtml ? (
                 /* ── Paginated: loading chapter ── */
-                <div className="flex-1 flex items-center justify-center">
-                  <div className="w-5 h-5 border-2 border-accent/30 border-t-accent rounded-full animate-spin" />
-                </div>
+                <ReaderSkeleton variant="content" />
               ) : (
                 /* ── Paginated: single chapter ── */
                 <div

@@ -154,6 +154,7 @@
     "searchShortcut": "Rechercher (\u2318F)",
     "highlightColor": "Surligner en {{color}}",
     "clearHighlight": "Supprimer le surlignage",
+    "highlightCreated": "Surlignage ajouté",
     "dismiss": "Fermer",
     "closeToc": "Fermer la table des mati\u00e8res",
     "openToc": "Ouvrir la table des mati\u00e8res",
