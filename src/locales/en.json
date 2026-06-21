@@ -522,7 +522,9 @@
     "networkError": "Could not connect to remote storage",
     "connectionTimeout": "Connection timed out",
     "noConfigSaved": "No backup configuration saved",
-    "testFailed": "Connection test failed: {{error}}"
+    "testFailed": "Connection test failed: {{error}}",
+    "configSaved": "Backup destination saved",
+    "requiredFields": "Required: {{fields}}"
   },
 
   "collections": {
