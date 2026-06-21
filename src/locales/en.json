@@ -676,7 +676,10 @@
     "manageProfiles": "Manage profiles",
     "newProfile": "New profile",
     "profileName": "Profile name",
-    "deleteLabel": "Delete profile {{name}}"
+    "deleteLabel": "Delete profile {{name}}",
+    "deleteConfirmTitle": "Delete “{{name}}”?",
+    "deleteConfirmMessage": "This permanently deletes this profile and its library database. Your imported book files are not removed. This can’t be undone.",
+    "deleteConfirm": "Delete profile"
   },
 
   "detail": {

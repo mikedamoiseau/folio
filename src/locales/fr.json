@@ -661,7 +661,10 @@
     "manageProfiles": "G\u00e9rer les profils",
     "newProfile": "Nouveau profil",
     "profileName": "Nom du profil",
-    "deleteLabel": "Supprimer le profil {{name}}"
+    "deleteLabel": "Supprimer le profil {{name}}",
+    "deleteConfirmTitle": "Supprimer « {{name}} » ?",
+    "deleteConfirmMessage": "Cela supprime définitivement ce profil et sa base de données. Vos fichiers de livres importés ne sont pas supprimés. Cette action est irréversible.",
+    "deleteConfirm": "Supprimer le profil"
   },
 
   "detail": {
