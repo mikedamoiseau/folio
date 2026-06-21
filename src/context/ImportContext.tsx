@@ -124,14 +124,18 @@ export function ImportProvider({ children }: { children: ReactNode }) {
           setLastCompletedAt(Date.now());
         }
         // Keep the final phase visible briefly so the user sees the totals,
-        // then clear the bar. The `error` phase persists instead — a failed
-        // import needs a friendly message + retry, not a 4s flash, so it stays
-        // until the user retries or dismisses it.
+        // then clear the bar. Two cases persist instead of auto-clearing: the
+        // `error` phase (a failed import needs a friendly message + retry, not
+        // a 4s flash) and a `done` batch that had failures (errors > 0) — a
+        // partial-failure summary stays until the user dismisses it so the
+        // failed count isn't a 4s flash either. They stay until retried or
+        // dismissed.
+        const persist = phase === "error" || (phase === "done" && next.errors > 0);
         if (clearTimerRef.current !== null) {
           window.clearTimeout(clearTimerRef.current);
           clearTimerRef.current = null;
         }
-        if (phase !== "error") {
+        if (!persist) {
           clearTimerRef.current = window.setTimeout(() => {
             setProgress(null);
             clearTimerRef.current = null;

@@ -63,6 +63,22 @@ describe("ImportContext error handling", () => {
     expect(screen.getByTestId("phase")).toHaveTextContent("none");
   });
 
+  it("persists a done batch that had failures instead of auto-clearing after 4s", async () => {
+    render(<ImportProvider><Harness /></ImportProvider>);
+    emit({ phase: "done", imported: 15, errors: 2 });
+    expect(screen.getByTestId("phase")).toHaveTextContent("done");
+    act(() => vi.advanceTimersByTime(5000));
+    // partial-failure summary stays so the failed count isn't a 4s flash
+    expect(screen.getByTestId("phase")).toHaveTextContent("done");
+  });
+
+  it("dismiss() clears a persisted done-with-errors summary", async () => {
+    render(<ImportProvider><Harness /></ImportProvider>);
+    emit({ phase: "done", imported: 15, errors: 2 });
+    await act(async () => fireEvent.click(screen.getByText("dismiss")));
+    expect(screen.getByTestId("phase")).toHaveTextContent("none");
+  });
+
   it("dismiss() clears a persisted error", async () => {
     render(<ImportProvider><Harness /></ImportProvider>);
     emit({ phase: "error", filename: "boom" });

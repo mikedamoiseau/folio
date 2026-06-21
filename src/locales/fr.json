@@ -809,6 +809,7 @@
       "importMode": "Lors de l'import de livres",
       "importModeCopy": "Copier dans la bibliothèque",
       "importModeLink": "Lier au fichier original",
+      "importModeHelp": "Copier duplique les fichiers dans votre bibliothèque — sûr, mais utilise plus d'espace disque. Lier lit les fichiers sur place — économise de l'espace, mais ne fonctionne plus si vous déplacez les originaux.",
       "cta": "Continuer"
     },
     "import": {

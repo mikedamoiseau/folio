@@ -146,6 +146,8 @@ describe("OnboardingWizard", () => {
     expect(screen.getByText("Français")).toBeInTheDocument();
     expect(screen.getByText("Lora")).toBeInTheDocument();
     expect(screen.getByText("onboarding.preferences.themeDark")).toBeInTheDocument();
+    // F1d: the Copy vs Link tradeoff is explained inline during onboarding.
+    expect(screen.getByText("onboarding.preferences.importModeHelp")).toBeInTheDocument();
   });
 
   it("changes language when a language button is clicked", () => {

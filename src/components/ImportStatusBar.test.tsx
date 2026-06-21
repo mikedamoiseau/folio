@@ -87,9 +87,9 @@ describe("ImportStatusBar", () => {
         current: 5,
         total: 5,
         filename: "",
-        imported: 4,
+        imported: 5,
         duplicates: 0,
-        errors: 1,
+        errors: 0,
       },
       lastCompletedAt: 12345,
       startFolder: vi.fn(),
@@ -98,6 +98,64 @@ describe("ImportStatusBar", () => {
     });
     const html = renderToString(<ImportStatusBar />);
     expect(html).toContain("library.importBackgroundDone");
+    expect(html).not.toContain("common.cancel");
+    // A clean batch has no dismiss control — it auto-clears after 4s.
+    expect(html).not.toContain("common.close");
+  });
+
+  it("styles the failed count distinctly (red) on a partial batch", () => {
+    useImportMock.mockReturnValue({
+      running: true,
+      progress: {
+        phase: "importing",
+        current: 8,
+        total: 10,
+        filename: "book.epub",
+        imported: 6,
+        duplicates: 0,
+        errors: 2,
+      },
+      lastCompletedAt: null,
+      startFolder: vi.fn(),
+      startFiles: vi.fn(),
+      cancel: vi.fn(),
+    });
+    const html = renderToString(<ImportStatusBar />);
+    // The failed count is wrapped in a red span with a dark companion.
+    expect(html).toMatch(
+      /<span class="text-red-600 dark:text-red-400">[^<]*library\.failed/
+    );
+  });
+
+  it("persists a done-with-errors summary with a dismiss control and red failed count", () => {
+    const dismiss = vi.fn();
+    useImportMock.mockReturnValue({
+      running: false,
+      progress: {
+        phase: "done",
+        current: 17,
+        total: 17,
+        filename: "",
+        imported: 15,
+        duplicates: 0,
+        errors: 2,
+      },
+      lastCompletedAt: 12345,
+      startFolder: vi.fn(),
+      startFiles: vi.fn(),
+      cancel: vi.fn(),
+      retry: vi.fn(),
+      canRetry: true,
+      dismiss,
+    });
+    const html = renderToString(<ImportStatusBar />);
+    // Summary string still present, plus a broken-out red failed count.
+    expect(html).toContain("library.importBackgroundDone");
+    expect(html).toMatch(
+      /<span class="text-red-600 dark:text-red-400">[^<]*library\.failed/
+    );
+    // A dismiss control is offered (the bar persists, see ImportContext).
+    expect(html).toContain("common.close");
     expect(html).not.toContain("common.cancel");
   });
 
