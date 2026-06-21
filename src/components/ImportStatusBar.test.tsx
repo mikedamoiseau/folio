@@ -122,4 +122,57 @@ describe("ImportStatusBar", () => {
     expect(html).toContain("library.noSupportedFiles");
     expect(html).not.toContain("common.cancel");
   });
+
+  it("maps the raw backend error to friendly copy and offers Retry on the error phase", () => {
+    useImportMock.mockReturnValue({
+      running: false,
+      progress: {
+        phase: "error",
+        current: 0,
+        total: 0,
+        filename: "IO: permission denied",
+        imported: 0,
+        duplicates: 0,
+        errors: 0,
+      },
+      lastCompletedAt: null,
+      startFolder: vi.fn(),
+      startFiles: vi.fn(),
+      cancel: vi.fn(),
+      retry: vi.fn(),
+      canRetry: true,
+      dismiss: vi.fn(),
+    });
+    const html = renderToString(<ImportStatusBar />);
+    // raw "permission denied" mapped to a translation key, not surfaced verbatim
+    expect(html).toContain("errors.permissionDenied");
+    expect(html).toContain("library.retryImport");
+    expect(html).not.toContain("common.cancel");
+  });
+
+  it("hides Retry on the error phase when there is no recorded request (rehydrate path)", () => {
+    useImportMock.mockReturnValue({
+      running: false,
+      progress: {
+        phase: "error",
+        current: 0,
+        total: 0,
+        filename: "boom",
+        imported: 0,
+        duplicates: 0,
+        errors: 0,
+      },
+      lastCompletedAt: null,
+      startFolder: vi.fn(),
+      startFiles: vi.fn(),
+      cancel: vi.fn(),
+      retry: vi.fn(),
+      canRetry: false,
+      dismiss: vi.fn(),
+    });
+    const html = renderToString(<ImportStatusBar />);
+    expect(html).not.toContain("library.retryImport");
+    // Dismiss is still available
+    expect(html).toContain("common.close");
+  });
 });
