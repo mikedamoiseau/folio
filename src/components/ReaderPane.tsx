@@ -245,6 +245,8 @@ export default function ReaderPane({
   // Continuous scroll mode state
   const [allChaptersHtml, setAllChaptersHtml] = useState<string[]>([]);
   const [allChaptersLoaded, setAllChaptersLoaded] = useState(false);
+  // Per-chapter load progress for the determinate ChapterLoadProgress bar.
+  const [chaptersLoaded, setChaptersLoaded] = useState(0);
   const chapterDivRefs = useRef<(HTMLDivElement | null)[]>([]);
   // EPUB and MOBI are both chapter-HTML formats and share the Reader's
   // text-rendering path; PDF/CBZ/CBR go through PageViewer instead.
@@ -430,13 +432,40 @@ export default function ReaderPane({
     if (!bookId || loading || !isContinuous) {
       setAllChaptersLoaded(false);
       setAllChaptersHtml([]);
+      setChaptersLoaded(0);
       return;
     }
 
     let cancelled = false;
+    let unlisten: (() => void) | null = null;
+    // Reset the per-chapter counter at the start of each continuous load so
+    // the determinate bar restarts from 0 on book change / retry.
+    setChaptersLoaded(0);
 
     async function loadAll() {
       try {
+        // Await listener registration BEFORE invoking `get_all_chapters` so no
+        // `chapter-load-progress` event can be emitted (e.g. for cached/small
+        // books) before the listener is attached and slip past the counter.
+        // Match payload.bookId so a stale event from a previous book can't
+        // drive this pane's counter.
+        const fn = await listen<{ bookId: string; loaded: number; total: number }>(
+          "chapter-load-progress",
+          (event) => {
+            if (!cancelled && event.payload.bookId === bookId) {
+              setChaptersLoaded(event.payload.loaded);
+            }
+          },
+        );
+        // If the effect was torn down while listen() was registering, the
+        // teardown ran before `unlisten` was set — clean up here instead so
+        // the late-resolved listener doesn't leak.
+        if (cancelled) {
+          fn();
+          return;
+        }
+        unlisten = fn;
+
         const chapters = await invoke<string[]>("get_all_chapters", { bookId });
         if (!cancelled) {
           setAllChaptersHtml(chapters);
@@ -448,7 +477,10 @@ export default function ReaderPane({
     }
 
     loadAll();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+      if (unlisten) unlisten();
+    };
   }, [bookId, loading, isContinuous, chapterRetryCount]);
 
   // ---- Scroll to saved chapter after all chapters load (continuous mode) ----
@@ -2287,7 +2319,7 @@ export default function ReaderPane({
                     })}
                   </div>
                 ) : (
-                  <ChapterLoadProgress total={totalChapters} />
+                  <ChapterLoadProgress total={totalChapters} loaded={chaptersLoaded} />
                 )
               ) : !chapterHtml ? (
                 /* ── Paginated: loading chapter ── */
