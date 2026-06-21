@@ -23,7 +23,8 @@
     "searching": "Searching\u2026",
     "noResults": "No results found.",
     "downloading": "Downloading\u2026",
-    "working": "Working\u2026"
+    "working": "Working\u2026",
+    "undo": "Undo"
   },
 
   "library": {
@@ -86,6 +87,9 @@
     "deselectAll": "Deselect all",
     "bulkDeleteConfirm": "Delete {{count}} books? This cannot be undone.",
     "bulkDeleted": "{{count}} books deleted",
+    "bookRemovedUndo": "\u201c{{title}}\u201d removed",
+    "bulkRemovedUndo": "{{count}} books removed",
+    "removedFromCollectionUndo": "Removed from collection",
     "bulkEdit": "Edit",
     "bulkEditSuccess": "Updated {{count}} books",
     "filterByFormat": "Filter by format",

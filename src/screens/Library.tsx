@@ -27,6 +27,7 @@ import SeriesStackCard from "../components/SeriesStackCard";
 import { LiveRegion } from "../components/LiveRegion";
 import OnboardingWizard from "../components/OnboardingWizard";
 import { useToast } from "../components/Toast";
+import { useUndoableRemoval } from "../lib/useUndoableRemoval";
 import { useDebounce } from "../hooks/useDebounce";
 import { useImport } from "../context/ImportContext";
 import WhatsNewBanner from "../components/WhatsNewBanner";
@@ -59,6 +60,7 @@ export default function Library({ catalogImportedBookIds }: LibraryProps = {}) {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const { addToast } = useToast();
+  const { pendingIds: pendingRemovalIds, remove: removeWithUndo } = useUndoableRemoval(addToast);
   // Backend-supported formats for this build — drives OPDS download-link
   // gating and drag-drop filtering so MOBI/AZW/AZW3 don't appear on builds
   // that weren't compiled with the `mobi` feature.
@@ -351,15 +353,39 @@ export default function Library({ catalogImportedBookIds }: LibraryProps = {}) {
   }, [activeCollectionId]);
 
   const handleRemoveBook = useCallback(
-    async (bookId: string) => {
-      try {
-        await invoke("remove_book", { bookId });
-        await loadBooks(activeCollectionIdRef.current);
-      } catch (err) {
-        setError(friendlyError(err, t));
-      }
+    (bookId: string) => {
+      const title = books.find((b) => b.id === bookId)?.title ?? "";
+      removeWithUndo([bookId], {
+        message: t("library.bookRemovedUndo", { title }),
+        undoLabel: t("common.undo"),
+        commit: async () => {
+          await invoke("remove_book", { bookId });
+          await loadBooks(activeCollectionIdRef.current);
+        },
+        onError: (err) => setError(friendlyError(err, t)),
+      });
     },
-    [loadBooks]
+    [books, loadBooks, removeWithUndo, t]
+  );
+
+  const handleRemoveFromCollection = useCallback(
+    (bookId: string) => {
+      const collectionId = activeCollectionIdRef.current;
+      if (!collectionId) return;
+      removeWithUndo([bookId], {
+        message: t("library.removedFromCollectionUndo"),
+        undoLabel: t("common.undo"),
+        commit: async () => {
+          await invoke("remove_book_from_collection", { bookId, collectionId });
+          // Refresh whatever collection is active *now* — the user may have
+          // navigated away during the 5s undo window, so the captured
+          // `collectionId` can be stale for view purposes.
+          await loadBooks(activeCollectionIdRef.current);
+        },
+        onError: (err) => setError(friendlyError(err, t)),
+      });
+    },
+    [loadBooks, removeWithUndo, t]
   );
 
   const toggleSelected = useCallback((bookId: string) => {
@@ -523,6 +549,7 @@ export default function Library({ catalogImportedBookIds }: LibraryProps = {}) {
   }, [importFiles]);
 
   const filtered = useMemo(() => books
+    .filter((book) => !pendingRemovalIds.has(book.id))
     .filter((book) => {
       if (debouncedSearch) {
         const q = debouncedSearch.toLowerCase();
@@ -575,7 +602,7 @@ export default function Library({ catalogImportedBookIds }: LibraryProps = {}) {
         case "date_added":
         default: return dir * (a.added_at - b.added_at);
       }
-    }), [books, debouncedSearch, sortBy, sortAsc, filterFormat, filterStatus, filterRating, filterSource, progressMap, lastReadMap, activeSeries, filterTagIds, bookTagMap]);
+    }), [books, pendingRemovalIds, debouncedSearch, sortBy, sortAsc, filterFormat, filterStatus, filterRating, filterSource, progressMap, lastReadMap, activeSeries, filterTagIds, bookTagMap]);
 
   const handleShowBookDetail = useCallback(async (id: string) => {
     latestDetailRequestRef.current = id;
@@ -1399,13 +1426,7 @@ export default function Library({ catalogImportedBookIds }: LibraryProps = {}) {
                                 onInfo: handleShowBookDetail,
                                 onRemoveFromCollection:
                                   isManualCollectionView && activeCollectionId
-                                    ? async () => {
-                                        await invoke("remove_book_from_collection", {
-                                          bookId: book.id,
-                                          collectionId: activeCollectionId,
-                                        });
-                                        await loadBooks(activeCollectionId);
-                                      }
+                                    ? () => handleRemoveFromCollection(book.id)
                                     : undefined,
                               }}
                               isScanning={scanningBookId === book.id}
@@ -1509,13 +1530,7 @@ export default function Library({ catalogImportedBookIds }: LibraryProps = {}) {
                       onInfo: handleShowBookDetail,
                       onRemoveFromCollection:
                         isManualCollectionView && activeCollectionId
-                          ? async () => {
-                              await invoke("remove_book_from_collection", {
-                                bookId: book.id,
-                                collectionId: activeCollectionId,
-                              });
-                              await loadBooks(activeCollectionId);
-                            }
+                          ? () => handleRemoveFromCollection(book.id)
                           : undefined,
                     }}
                     isScanning={scanningBookId === book.id}
@@ -1782,15 +1797,20 @@ export default function Library({ catalogImportedBookIds }: LibraryProps = {}) {
           <div className="w-px h-4 bg-paper/20" />
           <button
             type="button"
-            onClick={async () => {
+            onClick={() => {
               if (!confirm(t("library.bulkDeleteConfirm", { count: selectedIds.size }))) return;
-              try {
-                await invoke("bulk_delete_books", { bookIds: [...selectedIds] });
-                addToast(t("library.bulkDeleted", { count: selectedIds.size }), "success");
-                setSelectedIds(new Set());
-                setSelectMode(false);
-                await loadBooks(activeCollectionIdRef.current);
-              } catch (e) { addToast(friendlyError(e, t), "error"); }
+              const ids = [...selectedIds];
+              removeWithUndo(ids, {
+                message: t("library.bulkRemovedUndo", { count: ids.length }),
+                undoLabel: t("common.undo"),
+                commit: async () => {
+                  await invoke("bulk_delete_books", { bookIds: ids });
+                  await loadBooks(activeCollectionIdRef.current);
+                },
+                onError: (e) => addToast(friendlyError(e, t), "error"),
+              });
+              setSelectedIds(new Set());
+              setSelectMode(false);
             }}
             className="text-red-400 hover:text-red-300 text-xs font-medium"
           >
