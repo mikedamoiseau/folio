@@ -2,6 +2,12 @@
 
 _Audited: 2026-06-21. Path walked: first run → import → grid → organize → open book → read → finish → catalog/settings._
 
+> **Status: resolved.** Every item below was addressed on `feature/ux-audit`
+> (PR #67). New conventions/components that came out of it are documented in
+> [`UX-CONVENTIONS.md`](./UX-CONVENTIONS.md) (destructive-action confirm-vs-undo,
+> async-never-fails-silently, shared components). A few deep enhancements were
+> scoped as deliberate follow-ups where noted (e.g. streaming download %/ETA).
+
 > **Correction:** an earlier pass claimed "OnboardingWizard is never rendered." This is **false** — it renders at `Library.tsx:1050`, gated by `isActive`, with welcome + skip + 4 steps. That finding was dropped. Everything below holds.
 
 ## Top 8 (fix first)

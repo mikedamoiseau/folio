@@ -68,7 +68,7 @@ react*, not by how loud the message feels.
 |---|---|---|
 | **Toast** | Transient feedback after a deliberate user action that the user can shrug off and move on from. The view is still usable. Auto-dismisses in `TOAST_AUTO_DISMISS_MS` (4 s). | `useToast().addToast(msg, "success" \| "error" \| "info")` from `components/Toast.tsx` |
 | **Inline error** | Operation-local failure tied to a specific field, button, or panel. Stays visible until the user retries or dismisses. | Local `useState` for the message, rendered as `{error && <p className="text-red-500 text-sm">{error}</p>}` (or the `bg-red-50` banner pattern at screen scope) |
-| **Dialog** | Decisions: confirmations, destructive actions, choices that block the user from continuing. | A modal component with `role="dialog" aria-modal="true"` (see `BulkEditDialog`, `EditBookDialog`, the missing-file dialog in Reader) |
+| **Dialog** | Decisions: confirmations, destructive actions, choices that block the user from continuing. | Reach for the shared `ConfirmDialog` (`components/ConfirmDialog.tsx`) first; for richer forms use a modal with `role="dialog" aria-modal="true"` + `useFocusTrap` (see `BulkEditDialog`, `EditBookDialog`, `MissingFileDialog`) |
 
 Decision rules:
 
@@ -93,6 +93,57 @@ Anti-patterns to avoid:
 The `useToast` hook lives at `components/Toast.tsx`. There is no
 corresponding error-banner hook — banners live close to the screen state
 they describe and don't generalize.
+
+## Destructive actions — confirm vs undo
+
+Two patterns, picked by reversibility. **Never use the browser `confirm()`** —
+it's unstyled, unthemed, and gives no context.
+
+| Action shape | Pattern | API |
+|---|---|---|
+| Reversible (delete book, bulk delete, remove-from-collection) | **Undo toast** — optimistically hide, fire the backend call only after a 5 s window, cancel on Undo | `useUndoableRemoval(addToast)` from `lib/useUndoableRemoval.ts` → `remove(ids, { message, undoLabel, commit, onError })`; filter `pendingIds` out of the list |
+| Irreversible / high-stakes (delete profile, remove catalog, bulk delete confirmation) | **Styled confirm** — a blocking decision dialog | `ConfirmDialog` (`components/ConfirmDialog.tsx`): `title`, `message`, `confirmLabel`, `destructive`, `confirmDisabled`, `onConfirm`, `onCancel` |
+
+Notes:
+
+- The undo toast is **deferred execution**, not DB soft-delete: the
+  irreversible work (file deletion) simply never runs if the user undoes.
+  `Toast` supports this via `addToast(msg, type, { durationMs, action, onTimeout })`
+  — `action` is the Undo button (cancels), `onTimeout` is the commit.
+- Big-but-reversible ops can use **both**: a styled confirm *and* a follow-up
+  undo toast (e.g. bulk delete). Keep the confirm copy honest — say "you'll
+  have a few seconds to undo", not "cannot be undone".
+- A deferred/undo `commit` that refreshes a view must read the **current**
+  target at commit time (a ref), not a value captured when the toast was
+  created — the user may navigate during the window.
+
+## Async operations — never fail silently
+
+Every `invoke()` (or any async action) needs a visible outcome:
+
+- **Don't** swallow errors with `.catch(() => {})`. A toggle that fails to
+  persist must revert its optimistic state **and** surface the failure
+  (inline error or error toast).
+- A success that closes a dialog / leaves no visible state change needs a
+  confirmation toast ("Saved").
+- A long operation (import, chapter load, download) needs progress: a
+  determinate counter/bar when the backend emits progress events, an honest
+  indeterminate state otherwise — **never a fabricated percentage**.
+- A persisted setting that is write-only (no readback) needs an "unsaved"
+  indicator and/or save-on-blur so the value isn't lost on close.
+
+## Shared UI components
+
+Reach for these before hand-rolling:
+
+| Component | Use |
+|---|---|
+| `ConfirmDialog` | Destructive / blocking confirmations (replaces `confirm()`) |
+| `OverflowMenu` | Tuck low-frequency header/toolbar actions behind a `⋯` menu instead of a flat icon row |
+| `EmptyState` | Library-scope empty states |
+| `ReaderSkeleton` | Reader loading placeholder — `variant="full"` (route fallback) or `variant="content"` (chapter load) |
+| `useFocusTrap` | Tab/Escape trapping + autofocus for any modal |
+| `useUndoableRemoval` | Deferred-execution undo for list removals |
 
 ## Dark mode — semantic tokens by default; risk-shade colors need `dark:`
 
