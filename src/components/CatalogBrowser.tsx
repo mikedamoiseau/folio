@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useTranslation } from "react-i18next";
 import { friendlyError } from "../lib/errors";
-import { pickSupportedOpdsLink, isValidHttpUrl } from "../lib/utils";
+import { pickSupportedOpdsLink, isValidHttpUrl, formatBytes } from "../lib/utils";
 import { FALLBACK_FORMATS, useSupportedFormats } from "../lib/supportedFormats";
 import OpdsPresetPicker from "./OpdsPresetPicker";
 import ConfirmDialog from "./ConfirmDialog";
@@ -17,6 +17,7 @@ interface OpdsLink {
   href: string;
   mimeType: string;
   rel: string;
+  sizeBytes?: number | null;
 }
 
 interface OpdsEntry {
@@ -363,6 +364,9 @@ export default function CatalogBrowser({ onClose, onBookImported }: CatalogBrows
                                   + {picked?.label ?? ""}
                                 </button>
                               )}
+                              {picked?.link.sizeBytes != null && !isDownloaded && (
+                                <span className="text-[11px] text-ink-muted">{formatBytes(picked.link.sizeBytes)}</span>
+                              )}
                             </div>
                           )}
                         </div>
@@ -599,6 +603,9 @@ export default function CatalogBrowser({ onClose, onBookImported }: CatalogBrows
                                 + {picked.label}
                               </button>
                             )
+                          )}
+                          {picked?.link.sizeBytes != null && !isDownloaded && (
+                            <span className="text-[11px] text-ink-muted">{formatBytes(picked.link.sizeBytes)}</span>
                           )}
                         </div>
                       )}

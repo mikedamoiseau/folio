@@ -231,6 +231,18 @@ export function isSupportedFile(filename: string): boolean {
   return SUPPORTED_EXTENSIONS.some((ext) => lower.endsWith(ext));
 }
 
+/**
+ * Format a byte count human-readably (e.g. "0 B", "2.4 MB"). Returns an empty
+ * string for null/undefined so callers can omit the size when a feed omits it.
+ */
+export function formatBytes(bytes: number | null | undefined): string {
+  if (bytes == null) return "";
+  if (bytes === 0) return "0 B";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  const i = Math.floor(Math.log(bytes) / Math.log(1024));
+  return `${(bytes / Math.pow(1024, i)).toFixed(i === 0 ? 0 : 1)} ${units[i]}`;
+}
+
 export interface MetadataPill {
   label: string;
 }
