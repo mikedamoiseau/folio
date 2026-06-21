@@ -67,14 +67,34 @@ function getPinStrength(pin: string): { strength: PinStrength; error: string | n
   return { strength: "fair", error: null };
 }
 
-function Accordion({ title, children, open, onToggle }: { title: string; children: ReactNode; open: boolean; onToggle: () => void }) {
+export function Accordion({
+  title,
+  children,
+  open,
+  onToggle,
+  query = "",
+  keywords = "",
+}: {
+  title: string;
+  children: ReactNode;
+  open: boolean;
+  onToggle: () => void;
+  /** Active settings-search query. When set, non-matching sections hide and matches force-open. */
+  query?: string;
+  /** Extra searchable terms (key setting labels inside this section). */
+  keywords?: string;
+}) {
   const sectionId = `section-${title.replace(/\s+/g, "-").toLowerCase()}`;
+  const q = query.trim().toLowerCase();
+  if (q && !`${title} ${keywords}`.toLowerCase().includes(q)) return null;
+  // While searching, force matching sections open so the content is visible.
+  const isOpen = q ? true : open;
   return (
     <section>
       <button
         type="button"
         onClick={onToggle}
-        aria-expanded={open}
+        aria-expanded={isOpen}
         aria-controls={sectionId}
         className="w-full flex items-center justify-between py-1 group"
       >
@@ -87,7 +107,7 @@ function Accordion({ title, children, open, onToggle }: { title: string; childre
           viewBox="0 0 20 20"
           fill="none"
           aria-hidden="true"
-          className={`text-ink-muted/50 group-hover:text-ink-muted transition-transform duration-200 ${open ? "rotate-180" : ""}`}
+          className={`text-ink-muted/50 group-hover:text-ink-muted transition-transform duration-200 ${isOpen ? "rotate-180" : ""}`}
         >
           <path d="M5 7.5L10 12.5L15 7.5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
@@ -96,7 +116,7 @@ function Accordion({ title, children, open, onToggle }: { title: string; childre
         id={sectionId}
         role="region"
         aria-label={title}
-        className={`grid transition-[grid-template-rows] duration-200 ease-out ${open ? "grid-rows-[1fr] mt-3" : "grid-rows-[0fr]"}`}
+        className={`grid transition-[grid-template-rows] duration-200 ease-out ${isOpen ? "grid-rows-[1fr] mt-3" : "grid-rows-[0fr]"}`}
       >
         <div className="overflow-hidden">
           <div className="bg-warm-subtle/40 rounded-xl p-4">
@@ -354,6 +374,7 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
     useTheme();
   const [openSection, setOpenSection] = useState<string | null>("appearance");
   const toggleSection = (id: string) => setOpenSection((prev) => (prev === id ? null : id));
+  const [settingsQuery, setSettingsQuery] = useState("");
   const panelRef = useRef<HTMLDivElement>(null);
   const previousFocus = useRef<HTMLElement | null>(null);
 
@@ -1106,10 +1127,43 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
           </button>
         </div>
 
+        {/* Search / filter */}
+        <div className="px-5 pt-4">
+          <div className="relative">
+            <svg
+              width="14" height="14" viewBox="0 0 20 20" fill="none" aria-hidden="true"
+              className="absolute left-2.5 top-1/2 -translate-y-1/2 text-ink-muted/60"
+            >
+              <circle cx="9" cy="9" r="5.5" stroke="currentColor" strokeWidth="1.5" />
+              <path d="M13 13l4 4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+            </svg>
+            <input
+              type="text"
+              value={settingsQuery}
+              onChange={(e) => setSettingsQuery(e.target.value)}
+              placeholder={t("settings.searchPlaceholder")}
+              aria-label={t("settings.searchPlaceholder")}
+              className="w-full h-9 pl-8 pr-8 bg-warm-subtle rounded-lg text-sm text-ink placeholder-ink-muted/50 border border-transparent focus:border-accent focus:outline-none"
+            />
+            {settingsQuery && (
+              <button
+                type="button"
+                onClick={() => setSettingsQuery("")}
+                aria-label={t("common.clear")}
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-ink-muted hover:text-ink text-xs"
+              >
+                <svg width="14" height="14" viewBox="0 0 20 20" fill="none">
+                  <path d="M15 5L5 15M5 5l10 10" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                </svg>
+              </button>
+            )}
+          </div>
+        </div>
+
         {/* Settings content */}
         <div className="flex-1 overflow-y-auto p-5 space-y-7">
           {/* General */}
-          <Accordion title={t("settings.general")} open={openSection === "general"} onToggle={() => toggleSection("general")}>
+          <Accordion title={t("settings.general")} open={openSection === "general"} onToggle={() => toggleSection("general")} query={settingsQuery} keywords={t("settings.searchTermsGeneral")}>
             <div className="space-y-2">
               <label className="flex items-center justify-between gap-3 bg-warm-subtle rounded-xl px-3 py-2.5">
                 <div>
@@ -1215,7 +1269,7 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
           </Accordion>
 
           {/* Theme */}
-          <Accordion title={t("settings.appearance")} open={openSection === "appearance"} onToggle={() => toggleSection("appearance")}>
+          <Accordion title={t("settings.appearance")} open={openSection === "appearance"} onToggle={() => toggleSection("appearance")} query={settingsQuery} keywords={t("settings.searchTermsAppearance")}>
             {/* Saved Themes */}
             <div className="pb-4 mb-4 border-b border-warm-border/50">
               <h4 className="text-xs font-semibold uppercase tracking-wider text-ink-muted mb-2">
@@ -1535,7 +1589,7 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
           </Accordion>
 
           {/* Page Layout */}
-          <Accordion title={t("settings.pageLayout")} open={openSection === "layout"} onToggle={() => toggleSection("layout")}>
+          <Accordion title={t("settings.pageLayout")} open={openSection === "layout"} onToggle={() => toggleSection("layout")} query={settingsQuery} keywords={t("settings.searchTermsLayout")}>
             <div className="flex gap-1 bg-warm-subtle rounded-xl p-1">
               {(["paginated", "continuous"] as const).map((option) => (
                 <button
@@ -1619,7 +1673,7 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
           </Accordion>
 
           {/* Library */}
-          <Accordion title={t("settings.librarySection")} open={openSection === "library"} onToggle={() => toggleSection("library")}>
+          <Accordion title={t("settings.librarySection")} open={openSection === "library"} onToggle={() => toggleSection("library")} query={settingsQuery} keywords={t("settings.searchTermsLibrary")}>
             <div className="space-y-2">
               <div className="bg-warm-subtle rounded-xl px-3 py-2.5">
                 <p className="text-xs text-ink-muted mb-0.5">{t("settings.storageFolder")}</p>
@@ -1758,7 +1812,7 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
           </Accordion>
 
           {/* Backup & Restore */}
-          <Accordion title={t("settings.backupRestore")} open={openSection === "backup"} onToggle={() => toggleSection("backup")}>
+          <Accordion title={t("settings.backupRestore")} open={openSection === "backup"} onToggle={() => toggleSection("backup")} query={settingsQuery} keywords={t("settings.searchTermsBackup")}>
             <div className="space-y-2">
               <label className="flex items-start gap-2.5 cursor-pointer px-1">
                 <input
@@ -1798,7 +1852,7 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
           </Accordion>
 
           {/* Metadata Scan */}
-          <Accordion title={t("settings.metadataScan")} open={openSection === "scan"} onToggle={() => toggleSection("scan")}>
+          <Accordion title={t("settings.metadataScan")} open={openSection === "scan"} onToggle={() => toggleSection("scan")} query={settingsQuery} keywords={t("settings.searchTermsScan")}>
             <div className="space-y-2">
               <label className="flex items-start gap-2.5 cursor-pointer px-1">
                 <input type="checkbox" checked={autoScanImport}
@@ -1926,7 +1980,7 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
             </div>
           </Accordion>
 
-          <Accordion title={t("settings.remoteAccess")} open={openSection === "webserver"} onToggle={() => toggleSection("webserver")}>
+          <Accordion title={t("settings.remoteAccess")} open={openSection === "webserver"} onToggle={() => toggleSection("webserver")} query={settingsQuery} keywords={t("settings.searchTermsWebserver")}>
             <div className="space-y-2">
               {/* PIN input (R4-2: save feedback, R4-1: guard) */}
               <div className="bg-warm-subtle rounded-xl px-3 py-2.5">
@@ -2070,7 +2124,7 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
           </Accordion>
 
           {backupProviders.length > 0 && (
-            <Accordion title={t("settings.remoteBackup")} open={openSection === "remote"} onToggle={() => toggleSection("remote")}>
+            <Accordion title={t("settings.remoteBackup")} open={openSection === "remote"} onToggle={() => toggleSection("remote")} query={settingsQuery} keywords={t("settings.searchTermsRemote")}>
               <div className="space-y-2">
                 {/* Provider selector */}
                 <div className="bg-warm-subtle rounded-xl px-3 py-2.5">
@@ -2244,11 +2298,11 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
             </Accordion>
           )}
 
-          <Accordion title={t("plugins.section")} open={openSection === "plugins"} onToggle={() => toggleSection("plugins")}>
+          <Accordion title={t("plugins.section")} open={openSection === "plugins"} onToggle={() => toggleSection("plugins")} query={settingsQuery} keywords={t("settings.searchTermsPlugins")}>
             <PluginsPanel onToast={(msg) => addToast(msg, "error")} />
           </Accordion>
 
-          <Accordion title={t("settings.aboutSection")} open={openSection === "about"} onToggle={() => toggleSection("about")}>
+          <Accordion title={t("settings.aboutSection")} open={openSection === "about"} onToggle={() => toggleSection("about")} query={settingsQuery} keywords={t("settings.searchTermsAbout")}>
             <div className="space-y-3 text-sm">
               <p className="text-ink">
                 {appVersion
