@@ -20,7 +20,7 @@ import KeyboardShortcutsHelp from "../components/KeyboardShortcutsHelp";
 import TagFilter from "../components/TagFilter";
 import { startDrag, endDrag, isDragging, getDraggedCoverSrc, subscribe } from "../lib/dragState";
 import { friendlyError } from "../lib/errors";
-import { pickSupportedOpdsLink, getReadingStatus, providerDisplayName } from "../lib/utils";
+import { pickSupportedOpdsLink, getReadingStatus, providerDisplayName, hasActiveLibraryFilters } from "../lib/utils";
 import { FALLBACK_FORMATS, getSupportedFormats, useSupportedFormats } from "../lib/supportedFormats";
 import HighlightSearchModal from "../components/HighlightSearchModal";
 import SeriesStackCard from "../components/SeriesStackCard";
@@ -949,7 +949,14 @@ export default function Library({ catalogImportedBookIds }: LibraryProps = {}) {
           {hasBooks && (
             <button
               type="button"
-              onClick={() => { setSelectMode((m) => !m); setSelectedIds(new Set()); }}
+              onClick={() => {
+                // Clear selection only when *leaving* select mode, so a stale
+                // selection can't drive bulk actions after re-entering. The
+                // selection stays stable while in select mode (F2d), but
+                // exiting is a deliberate "done selecting" (codex review).
+                if (selectMode) setSelectedIds(new Set());
+                setSelectMode((m) => !m);
+              }}
               className={`p-1.5 rounded-lg transition-colors ${selectMode ? "bg-accent/20 text-accent" : "text-ink-muted hover:text-ink hover:bg-warm-subtle"}`}
               title={selectMode ? t("library.exitSelect") : t("library.selectBooks")}
             >
@@ -1544,25 +1551,41 @@ export default function Library({ catalogImportedBookIds }: LibraryProps = {}) {
             );
           })()
         ) : (
-          <div className="flex flex-col items-center justify-center h-full text-center">
-            <p className="text-base font-medium text-ink">
-              {t("library.noMatchFilters")}
-            </p>
-            <p className="text-sm text-ink-muted mt-1">
-              {search
-                ? t("library.noResultsFor", { query: search })
-                : t("library.adjustFilters")}
-            </p>
-            {(filterFormat !== "all" || filterStatus !== "all" || filterRating !== "all" || filterSource !== "all" || search) && (
-              <button
-                type="button"
-                onClick={() => { setSearch(""); setFilterFormat("all"); setFilterStatus("all"); setFilterRating("all"); setFilterSource("all"); }}
-                className="mt-3 px-4 py-1.5 text-sm text-accent hover:text-accent-hover transition-colors"
-              >
-                {t("library.clearAllFilters")}
-              </button>
-            )}
-          </div>
+          (() => {
+            const hasActiveFilters = hasActiveLibraryFilters({
+              search,
+              filterFormat,
+              filterStatus,
+              filterRating,
+              filterSource,
+              filterTagIds,
+            });
+            return (
+              <div className="flex flex-col items-center justify-center h-full text-center">
+                <p className="text-base font-medium text-ink">
+                  {hasActiveFilters
+                    ? t("library.noMatchFilters")
+                    : t("library.emptyNoBooks", { defaultValue: "No books to show" })}
+                </p>
+                <p className="text-sm text-ink-muted mt-1">
+                  {!hasActiveFilters
+                    ? t("library.emptyNoBooksHint", { defaultValue: "There are no books in this view yet." })
+                    : search
+                      ? t("library.noResultsFor", { query: search })
+                      : t("library.adjustFilters")}
+                </p>
+                {hasActiveFilters && (
+                  <button
+                    type="button"
+                    onClick={() => { setSearch(""); setFilterFormat("all"); setFilterStatus("all"); setFilterRating("all"); setFilterSource("all"); setFilterTagIds([]); }}
+                    className="mt-3 px-4 py-1.5 text-sm text-accent hover:text-accent-hover transition-colors"
+                  >
+                    {t("library.clearAllFilters")}
+                  </button>
+                )}
+              </div>
+            );
+          })()
         )}
       </div>
 
@@ -1890,7 +1913,7 @@ function SelectCheckbox({
 }) {
   return (
     <div
-      className={`absolute top-2 left-2 z-10 w-7 h-7 flex items-center justify-center rounded-full border-2 shadow-md cursor-pointer transition-colors ${
+      className={`absolute bottom-2 right-2 z-10 w-7 h-7 flex items-center justify-center rounded-full border-2 shadow-md cursor-pointer transition-colors ${
         checked
           ? "bg-accent border-accent text-paper"
           : "bg-paper/90 border-warm-border text-transparent"

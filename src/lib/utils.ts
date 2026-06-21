@@ -76,6 +76,29 @@ export function filterBooks<T extends BookLike>(
   });
 }
 
+/**
+ * True when any library filter or search is narrowing the visible set.
+ * Used to distinguish "filters hide everything" from "the view is genuinely
+ * empty" in the empty-state copy.
+ */
+export function hasActiveLibraryFilters(f: {
+  search: string;
+  filterFormat: string;
+  filterStatus: string;
+  filterRating: string;
+  filterSource: string;
+  filterTagIds: string[];
+}): boolean {
+  return (
+    f.search.length > 0 ||
+    f.filterFormat !== "all" ||
+    f.filterStatus !== "all" ||
+    f.filterRating !== "all" ||
+    f.filterSource !== "all" ||
+    f.filterTagIds.length > 0
+  );
+}
+
 export type SortField =
   | "title"
   | "author"

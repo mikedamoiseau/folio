@@ -268,6 +268,8 @@ export default function BookCard({ book, actions, isScanning, isSelected }: Book
         {confirming && createPortal(
           <DeleteConfirmModal
             title={title}
+            author={author}
+            coverSrc={coverSrc}
             onConfirm={handleConfirm}
             onCancel={handleCancel}
           />,
@@ -314,7 +316,7 @@ export default function BookCard({ book, actions, isScanning, isSelected }: Book
 }
 
 /** Centered modal dialog for confirming book deletion. */
-function DeleteConfirmModal({ title, onConfirm, onCancel }: { title: string; onConfirm: () => void; onCancel: () => void }) {
+function DeleteConfirmModal({ title, author, coverSrc, onConfirm, onCancel }: { title: string; author: string; coverSrc: string | null; onConfirm: () => void; onCancel: () => void }) {
   const { t } = useTranslation();
   const cancelRef = useRef<HTMLButtonElement>(null);
 
@@ -341,8 +343,27 @@ function DeleteConfirmModal({ title, onConfirm, onCancel }: { title: string; onC
           <h3 id="delete-confirm-title" className="font-serif text-base font-semibold text-ink">
             {t("bookCard.confirmDeletion")}
           </h3>
+          <div className="flex items-start gap-3">
+            {coverSrc ? (
+              <img
+                src={coverSrc}
+                alt=""
+                className="w-12 h-[72px] shrink-0 rounded object-cover border border-warm-border"
+              />
+            ) : (
+              <div className="w-12 h-[72px] shrink-0 rounded bg-warm-subtle border border-warm-border flex items-center justify-center">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" className="text-ink-muted opacity-50">
+                  <path d="M4 19.5v-15A2.5 2.5 0 016.5 2H20v20H6.5a2.5 2.5 0 010-5H20" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+              </div>
+            )}
+            <div className="min-w-0">
+              <p className="text-sm font-medium text-ink">{title}</p>
+              {author && <p className="text-xs text-ink-muted mt-0.5">{author}</p>}
+            </div>
+          </div>
           <p className="text-sm text-ink-muted">
-            {t("bookCard.confirmDelete", { title })}
+            {t("bookCard.confirmDeleteQuestion", { defaultValue: "Remove this book from your library?" })}
           </p>
           <div className="flex gap-3 justify-end pt-1">
             <button
