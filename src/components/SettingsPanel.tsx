@@ -6,6 +6,7 @@ import { open as openFilePicker } from "@tauri-apps/plugin-dialog";
 import { useTranslation } from "react-i18next";
 import { useTheme, MIN_FONT_SIZE, MAX_FONT_SIZE, type ColorTokens } from "../context/ThemeContext";
 import { friendlyError } from "../lib/errors";
+import { isPinUnsaved, shouldSaveOnBlur } from "../lib/pinSaveState";
 import { useOnboardingContext } from "../context/OnboardingContext";
 import { useToast } from "./Toast";
 import {
@@ -513,6 +514,10 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
   const [webUiEnabled, setWebUiEnabled] = useState(false);
   const [opdsEnabled, setOpdsEnabled] = useState(false);
   const [pinSaved, setPinSaved] = useState(false);
+  // The last PIN value successfully persisted via `web_server_set_pin`. Drives
+  // the dirty/unsaved + save-on-blur decisions. This is distinct from
+  // `pinSaved`, which is only the transient "PIN saved ✓" confirmation.
+  const [savedPin, setSavedPin] = useState("");
   const [pinError, setPinError] = useState<string | null>(null);
 
   // Custom fonts
@@ -676,6 +681,25 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
       }
     } catch {}
   }, []);
+
+  // Save the typed PIN. Shared by the explicit button and the blur handler.
+  // Returns true on success. Never submits an invalid PIN.
+  const savePin = useCallback(async () => {
+    const { error } = getPinStrength(webServerPin);
+    if (error) { setPinError(t(error)); return false; }
+    try {
+      await invoke("web_server_set_pin", { pin: webServerPin });
+      setWebServerError(null);
+      setPinError(null);
+      setSavedPin(webServerPin);
+      setPinSaved(true);
+      setTimeout(() => setPinSaved(false), 2000);
+      return true;
+    } catch (e) {
+      setWebServerError(friendlyError(e, t));
+      return false;
+    }
+  }, [webServerPin, t]);
 
   useEffect(() => {
     if (!open) return;
@@ -2000,6 +2024,12 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                     setPinSaved(false);
                     setPinError(null);
                   }}
+                  onBlur={() => {
+                    const isValid = getPinStrength(webServerPin).error === null;
+                    if (shouldSaveOnBlur(webServerPin, savedPin, isValid)) {
+                      savePin();
+                    }
+                  }}
                   placeholder={t("settings.pinPlaceholder")}
                   maxLength={8}
                   className="w-full bg-transparent text-sm text-ink focus:outline-none"
@@ -2026,21 +2056,14 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                   {webServerPin && (
                     <button
                       type="button"
-                      onClick={async () => {
-                        const { error } = getPinStrength(webServerPin);
-                        if (error) { setPinError(t(error)); return; }
-                        try {
-                          await invoke("web_server_set_pin", { pin: webServerPin });
-                          setWebServerError(null);
-                          setPinError(null);
-                          setPinSaved(true);
-                          setTimeout(() => setPinSaved(false), 2000);
-                        } catch (e) { setWebServerError(friendlyError(e, t)); }
-                      }}
+                      onClick={() => savePin()}
                       className="text-xs text-accent hover:underline"
                     >
                       {t("settings.savePin")}
                     </button>
+                  )}
+                  {isPinUnsaved(webServerPin, savedPin) && !pinError && (
+                    <span className="text-xs text-yellow-500">{t("settings.pinUnsaved")}</span>
                   )}
                   {pinSaved && <span className="text-xs text-green-400">{t("settings.pinSaved")}</span>}
                   {pinError && <span className="text-xs text-red-400">{pinError}</span>}
