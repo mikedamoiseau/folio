@@ -764,7 +764,12 @@
     "year": "Year",
     "language": "Language",
     "publisher": "Publisher",
-    "multipleValues": "Multiple values"
+    "multipleValues": "Multiple values",
+    "optInHint": "Check a field to change it. Unchecked fields are left untouched.",
+    "mixedBanner": "Some fields differ across the {{count}} selected books. Checking a differing field overwrites that value in all {{count}}.",
+    "overwriteWarning": "Overwrites the differing value in all {{count}} books.",
+    "differs": "differs",
+    "enableField": "Edit {{field}} for all selected books"
   },
 
   "onboarding": {

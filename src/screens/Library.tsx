@@ -1831,7 +1831,10 @@ export default function Library({ catalogImportedBookIds }: LibraryProps = {}) {
       {bulkEditing && (
         <BulkEditDialog
           bookIds={[...selectedIds]}
-          books={filtered}
+          // Pass the full library, not `filtered`: selection can include books
+          // hidden by the active search/filter, and the dialog must detect
+          // differing values across the *entire* selection it will overwrite.
+          books={books}
           onClose={() => setBulkEditing(false)}
           onSave={async (updatedCount) => {
             setBulkEditing(false);

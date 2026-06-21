@@ -749,7 +749,12 @@
     "year": "Ann\u00e9e",
     "language": "Langue",
     "publisher": "\u00c9diteur",
-    "multipleValues": "Valeurs multiples"
+    "multipleValues": "Valeurs multiples",
+    "optInHint": "Cochez un champ pour le modifier. Les champs non cochés sont laissés intacts.",
+    "mixedBanner": "Certains champs diffèrent parmi les {{count}} livres sélectionnés. Cocher un champ qui diffère écrase cette valeur dans les {{count}}.",
+    "overwriteWarning": "Écrase la valeur qui diffère dans les {{count}} livres.",
+    "differs": "diffère",
+    "enableField": "Modifier {{field}} pour tous les livres sélectionnés"
   },
 
   "onboarding": {
