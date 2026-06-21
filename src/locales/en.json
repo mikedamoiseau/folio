@@ -829,7 +829,12 @@
       "addFilesHint": "EPUB, PDF, CBZ, CBR, MOBI",
       "importFolder": "Import Folder",
       "importFolderHint": "Add all books from a folder",
-      "dragDrop": "or drag & drop files here"
+      "dragDrop": "or drag & drop files here",
+      "emptyBanner": "No supported book files (.epub, .pdf, .cbz, .cbr) were found there.",
+      "errorBanner": "Something went wrong while importing. You can try again.",
+      "cancelledBanner": "Import cancelled. You can try again or skip for now.",
+      "retry": "Try again",
+      "continueAnyway": "Continue without importing"
     },
     "tips": {
       "title": "You're All Set",
