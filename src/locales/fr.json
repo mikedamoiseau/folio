@@ -589,6 +589,12 @@
     "noEntries": "Aucune entr\u00e9e trouv\u00e9e.",
     "loadMore": "Charger plus\u2026",
     "downloadFailed": "\u00c9chec du t\u00e9l\u00e9chargement de \u00ab\u00a0{{title}}\u00a0\u00bb\u00a0: {{error}}",
+    "downloadingFormat": "T\u00e9l\u00e9chargement {{format}}\u2026",
+    "empty": {
+      "title": "Aucun catalogue pour le moment",
+      "subtitle": "Ajoutez un catalogue OPDS pour parcourir et t\u00e9l\u00e9charger des livres depuis des biblioth\u00e8ques publiques et des librairies en ligne.",
+      "browsePresets": "Parcourir les presets"
+    },
     "presets": {
       "browseButton": "Parcourir les presets",
       "title": "Parcourir les presets",
