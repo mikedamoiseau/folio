@@ -40,6 +40,8 @@ interface ImportContextValue {
   cancel: () => Promise<void>;
   /** Re-run the most recent import request (used by the error-phase retry). */
   retry: () => Promise<void>;
+  /** True once an import request has been issued this session (enables retry). */
+  canRetry: boolean;
   /** Manually clear a persisted (error) status bar. */
   dismiss: () => void;
 }
@@ -90,6 +92,7 @@ export function ImportProvider({ children }: { children: ReactNode }) {
   const [lastCompletedAt, setLastCompletedAt] = useState<number | null>(null);
   const clearTimerRef = useRef<number | null>(null);
   const lastRequestRef = useRef<ImportRequest | null>(null);
+  const [canRetry, setCanRetry] = useState(false);
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
@@ -174,6 +177,7 @@ export function ImportProvider({ children }: { children: ReactNode }) {
 
   const startFolder = useCallback(async (folderPath: string) => {
     lastRequestRef.current = { kind: "folder", path: folderPath };
+    setCanRetry(true);
     setProgress({ ...IDLE, phase: "scanning", filename: folderPath });
     setRunning(true);
     try {
@@ -187,6 +191,7 @@ export function ImportProvider({ children }: { children: ReactNode }) {
   const startFiles = useCallback(async (paths: string[]) => {
     if (paths.length === 0) return;
     lastRequestRef.current = { kind: "files", paths };
+    setCanRetry(true);
     setProgress({ ...IDLE, phase: "importing", total: paths.length });
     setRunning(true);
     try {
@@ -220,8 +225,8 @@ export function ImportProvider({ children }: { children: ReactNode }) {
   }, [startFolder, startFiles]);
 
   const value = useMemo<ImportContextValue>(
-    () => ({ running, progress, lastCompletedAt, startFolder, startFiles, cancel, retry, dismiss }),
-    [running, progress, lastCompletedAt, startFolder, startFiles, cancel, retry, dismiss]
+    () => ({ running, progress, lastCompletedAt, startFolder, startFiles, cancel, retry, canRetry, dismiss }),
+    [running, progress, lastCompletedAt, startFolder, startFiles, cancel, retry, canRetry, dismiss]
   );
 
   return <ImportContext.Provider value={value}>{children}</ImportContext.Provider>;

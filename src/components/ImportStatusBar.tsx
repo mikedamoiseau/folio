@@ -3,7 +3,7 @@ import { useImport } from "../context/ImportContext";
 import { friendlyError } from "../lib/errors";
 
 export default function ImportStatusBar() {
-  const { progress, running, cancel, retry, dismiss } = useImport();
+  const { progress, running, cancel, retry, canRetry, dismiss } = useImport();
   const { t } = useTranslation();
 
   if (!progress) return null;
@@ -27,7 +27,9 @@ export default function ImportStatusBar() {
     // Backend stuffs the error string into `filename` for the error phase
     // (the event shape has no dedicated message field). Translate the raw
     // backend string into friendly copy instead of surfacing "IO: ...".
-    primary = t("library.importBackgroundError", { error: friendlyError(filename, t) });
+    primary = t("library.importBackgroundError", {
+      error: friendlyError(filename, t) || t("errors.generic"),
+    });
   } else {
     primary = "";
   }
@@ -93,14 +95,16 @@ export default function ImportStatusBar() {
         )}
         {phase === "error" && (
           <div className="shrink-0 flex items-center gap-1.5">
-            <button
-              onClick={() => {
-                void retry();
-              }}
-              className="text-xs px-2 py-1 rounded bg-accent text-white hover:bg-accent-hover"
-            >
-              {t("library.retryImport")}
-            </button>
+            {canRetry && (
+              <button
+                onClick={() => {
+                  void retry();
+                }}
+                className="text-xs px-2 py-1 rounded bg-accent text-white hover:bg-accent-hover"
+              >
+                {t("library.retryImport")}
+              </button>
+            )}
             <button
               onClick={dismiss}
               className="text-xs px-2 py-1 rounded border border-warm-border text-ink-muted hover:text-ink hover:bg-warm-subtle"
