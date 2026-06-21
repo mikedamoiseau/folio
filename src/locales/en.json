@@ -587,6 +587,8 @@
     "connectionTestFailed": "Couldn’t reach this feed — {{error}}",
     "removeCatalog": "Remove {{name}}",
     "removeCatalogTitle": "Remove catalog",
+    "removeCatalogConfirmTitle": "Remove “{{name}}”?",
+    "removeCatalogConfirmMessage": "This removes the catalog from your list. Your imported books are not affected, and you can add it back anytime.",
     "catalog": "Catalog",
     "searchThisCatalog": "Search this catalog\u2026",
     "noEntries": "No entries found.",

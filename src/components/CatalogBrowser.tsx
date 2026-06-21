@@ -5,6 +5,7 @@ import { friendlyError } from "../lib/errors";
 import { pickSupportedOpdsLink, isValidHttpUrl } from "../lib/utils";
 import { FALLBACK_FORMATS, useSupportedFormats } from "../lib/supportedFormats";
 import OpdsPresetPicker from "./OpdsPresetPicker";
+import ConfirmDialog from "./ConfirmDialog";
 
 interface OpdsCatalog {
   name: string;
@@ -63,6 +64,7 @@ export default function CatalogBrowser({ onClose, onBookImported }: CatalogBrows
   const [newCatalogUrl, setNewCatalogUrl] = useState("");
   const [addingCatalog, setAddingCatalog] = useState(false);
   const [addCatalogError, setAddCatalogError] = useState<string | null>(null);
+  const [removeCatalogTarget, setRemoveCatalogTarget] = useState<{ name: string; url: string } | null>(null);
 
   // Search (per-catalog and unified)
   const [searchQuery, setSearchQuery] = useState("");
@@ -360,26 +362,26 @@ export default function CatalogBrowser({ onClose, onBookImported }: CatalogBrows
               /* Catalog list (hidden during unified search) */
               <>
               {catalogs.map((cat) => (
-                <button
-                  key={cat.url}
-                  onClick={() => browseTo(cat.url, cat.name)}
-                  className="w-full flex items-center gap-3 px-5 py-3 text-left hover:bg-warm-subtle transition-colors group"
-                >
-                  <div className="w-8 h-8 rounded-lg bg-accent-light flex items-center justify-center shrink-0">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" className="text-accent">
-                      <path d="M12 6.042A8.967 8.967 0 006 3.75c-1.052 0-2.062.18-3 .512v14.25A8.987 8.987 0 016 18c2.305 0 4.408.867 6 2.292m0-14.25a8.966 8.966 0 016-2.292c1.052 0 2.062.18 3 .512v14.25A8.987 8.987 0 0018 18a8.967 8.967 0 00-6 2.292m0-14.25v14.25" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-                    </svg>
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium text-ink">{cat.name}</p>
-                    <p className="text-[11px] text-ink-muted truncate">{cat.url}</p>
-                  </div>
-                  <svg width="14" height="14" viewBox="0 0 20 20" fill="none" className="text-ink-muted shrink-0 group-hover:hidden">
-                    <path d="M8 4l6 6-6 6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-                  </svg>
+                // Row + remove are sibling buttons (not nested) — a button
+                // inside a button is invalid HTML and breaks click handling.
+                <div key={cat.url} className="relative flex items-center group">
                   <button
-                    onClick={(e) => { e.stopPropagation(); handleRemoveCatalog(cat.url); }}
-                    className="hidden group-hover:flex p-1 text-ink-muted hover:text-red-500 transition-colors shrink-0"
+                    onClick={() => browseTo(cat.url, cat.name)}
+                    className="w-full flex items-center gap-3 px-5 py-3 text-left hover:bg-warm-subtle transition-colors"
+                  >
+                    <div className="w-8 h-8 rounded-lg bg-accent-light flex items-center justify-center shrink-0">
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" className="text-accent">
+                        <path d="M12 6.042A8.967 8.967 0 006 3.75c-1.052 0-2.062.18-3 .512v14.25A8.987 8.987 0 016 18c2.305 0 4.408.867 6 2.292m0-14.25a8.966 8.966 0 016-2.292c1.052 0 2.062.18 3 .512v14.25A8.987 8.987 0 0018 18a8.967 8.967 0 00-6 2.292m0-14.25v14.25" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                      </svg>
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium text-ink">{cat.name}</p>
+                      <p className="text-[11px] text-ink-muted truncate">{cat.url}</p>
+                    </div>
+                  </button>
+                  <button
+                    onClick={() => setRemoveCatalogTarget({ name: cat.name, url: cat.url })}
+                    className="absolute right-3 p-1 text-ink-muted hover:text-red-500 transition-colors opacity-0 group-hover:opacity-100 focus-visible:opacity-100 bg-surface rounded"
                     aria-label={t("catalog.removeCatalog", { name: cat.name })}
                     title={t("catalog.removeCatalogTitle")}
                   >
@@ -387,7 +389,7 @@ export default function CatalogBrowser({ onClose, onBookImported }: CatalogBrows
                       <path d="M15 5L5 15M5 5l10 10" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
                     </svg>
                   </button>
-                </button>
+                </div>
               ))}
 
               {/* Add custom catalog form */}
@@ -582,6 +584,20 @@ export default function CatalogBrowser({ onClose, onBookImported }: CatalogBrows
           )}
         </div>
       </div>
+
+      {removeCatalogTarget && (
+        <ConfirmDialog
+          title={t("catalog.removeCatalogConfirmTitle", { name: removeCatalogTarget.name })}
+          message={t("catalog.removeCatalogConfirmMessage")}
+          confirmLabel={t("common.remove")}
+          onCancel={() => setRemoveCatalogTarget(null)}
+          onConfirm={() => {
+            const url = removeCatalogTarget.url;
+            setRemoveCatalogTarget(null);
+            void handleRemoveCatalog(url);
+          }}
+        />
+      )}
     </>
   );
 }

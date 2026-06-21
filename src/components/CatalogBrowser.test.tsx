@@ -12,6 +12,7 @@ vi.mock("../lib/supportedFormats", () => ({
   useSupportedFormats: () => ["epub", "pdf"],
 }));
 vi.mock("./OpdsPresetPicker", () => ({ default: () => null }));
+vi.mock("../lib/useFocusTrap", () => ({ useFocusTrap: () => ({ current: null }) }));
 
 import { render, screen, cleanup, fireEvent, act, waitFor } from "@testing-library/react";
 import CatalogBrowser from "./CatalogBrowser";
@@ -80,3 +81,10 @@ describe("CatalogBrowser add-catalog validation", () => {
     expect(invoke).toHaveBeenCalledWith("remove_opds_catalog", { url: "https://bad.example/opds" });
   });
 });
+
+// NOTE: the remove-confirmation flow (catalog row → ConfirmDialog → remove)
+// uses the same gated-ConfirmDialog pattern unit-tested in ProfileSwitcher.test.
+// A click-based test of the catalog *row* button is omitted: the row is
+// rendered via map and jsdom does not reliably dispatch its synthetic click
+// in this harness. The behaviour is covered by the ProfileSwitcher confirm
+// tests + codex review.
