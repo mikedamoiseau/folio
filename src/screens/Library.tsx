@@ -1742,6 +1742,11 @@ export default function Library({ catalogImportedBookIds }: LibraryProps = {}) {
             if (activeCollectionIdRef.current === collectionId) {
               await loadBooks(collectionId);
             }
+            // Confirm the drop — without this the action is silent and, when
+            // dropping onto a collection that isn't the active view, gives no
+            // feedback at all.
+            const name = collections.find((c) => c.id === collectionId)?.name ?? "";
+            addToast(t("library.addedToCollection", { collection: name }), "success");
           } catch (err) {
             setError(friendlyError(err, t));
           }
