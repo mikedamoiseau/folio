@@ -154,6 +154,7 @@
     "searchShortcut": "Search (\u2318F)",
     "highlightColor": "Highlight {{color}}",
     "clearHighlight": "Remove highlight",
+    "highlightCreated": "Highlight added",
     "dismiss": "Dismiss",
     "closeToc": "Close table of contents",
     "openToc": "Open table of contents",
