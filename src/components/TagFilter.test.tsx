@@ -16,10 +16,10 @@ const sampleTags = [
   { id: "t3", name: "romance" },
 ];
 
-const sampleBookTagMap = new Map<string, Set<string>>([
-  ["b1", new Set(["t1", "t2"])],
-  ["b2", new Set(["t1"])],
-  ["b3", new Set(["t3"])],
+const sampleCounts = new Map<string, number>([
+  ["t1", 2],
+  ["t2", 1],
+  ["t3", 1],
 ]);
 
 describe("TagFilter", () => {
@@ -27,7 +27,7 @@ describe("TagFilter", () => {
     const html = renderToString(
       <TagFilter
         allTags={sampleTags}
-        bookTagMap={sampleBookTagMap}
+        tagBookCounts={sampleCounts}
         selectedTagIds={[]}
         onChangeSelectedTagIds={() => {}}
       />
@@ -39,7 +39,7 @@ describe("TagFilter", () => {
     const html = renderToString(
       <TagFilter
         allTags={sampleTags}
-        bookTagMap={sampleBookTagMap}
+        tagBookCounts={sampleCounts}
         selectedTagIds={["t1"]}
         onChangeSelectedTagIds={() => {}}
       />
@@ -51,7 +51,7 @@ describe("TagFilter", () => {
     const html = renderToString(
       <TagFilter
         allTags={sampleTags}
-        bookTagMap={sampleBookTagMap}
+        tagBookCounts={sampleCounts}
         selectedTagIds={[]}
         onChangeSelectedTagIds={() => {}}
       />
@@ -63,7 +63,7 @@ describe("TagFilter", () => {
     const html = renderToString(
       <TagFilter
         allTags={[]}
-        bookTagMap={new Map()}
+        tagBookCounts={new Map()}
         selectedTagIds={[]}
         onChangeSelectedTagIds={() => {}}
       />

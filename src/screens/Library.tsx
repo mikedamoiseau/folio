@@ -20,7 +20,7 @@ import KeyboardShortcutsHelp from "../components/KeyboardShortcutsHelp";
 import TagFilter from "../components/TagFilter";
 import { startDrag, endDrag, isDragging, getDraggedCoverSrc, subscribe } from "../lib/dragState";
 import { friendlyError } from "../lib/errors";
-import { pickSupportedOpdsLink, getReadingStatus, providerDisplayName, hasActiveLibraryFilters } from "../lib/utils";
+import { pickSupportedOpdsLink, getReadingStatus, providerDisplayName, hasActiveLibraryFilters, computeTagBookCounts } from "../lib/utils";
 import { FALLBACK_FORMATS, getSupportedFormats, useSupportedFormats } from "../lib/supportedFormats";
 import HighlightSearchModal from "../components/HighlightSearchModal";
 import SeriesStackCard from "../components/SeriesStackCard";
@@ -550,7 +550,10 @@ export default function Library({ catalogImportedBookIds }: LibraryProps = {}) {
     };
   }, [importFiles]);
 
-  const filtered = useMemo(() => books
+  // Books passing every active filter EXCEPT the tag filter. Used both to
+  // derive the per-tag counts (so they reflect the current filters) and as the
+  // base for the final tag-filtered set.
+  const filteredBeforeTags = useMemo(() => books
     .filter((book) => !pendingRemovalIds.has(book.id))
     .filter((book) => {
       if (debouncedSearch) {
@@ -577,13 +580,23 @@ export default function Library({ catalogImportedBookIds }: LibraryProps = {}) {
     .filter((book) => {
       if (!activeSeries) return true;
       return book.series === activeSeries;
-    })
+    }), [books, pendingRemovalIds, debouncedSearch, filterFormat, filterStatus, filterRating, filterSource, progressMap, activeSeries]);
+
+  // Per-tag counts reflecting all OTHER active filters (excluding the tag
+  // filter itself, so they stay meaningful while multi-selecting tags).
+  const tagBookCounts = useMemo(
+    () => computeTagBookCounts(filteredBeforeTags, bookTagMap),
+    [filteredBeforeTags, bookTagMap],
+  );
+
+  const filtered = useMemo(() => filteredBeforeTags
     .filter((book) => {
       if (filterTagIds.length === 0) return true;
       const tags = bookTagMap.get(book.id);
       if (!tags) return false;
       return filterTagIds.every((id) => tags.has(id));
     })
+    .slice()
     .sort((a, b) => {
       const dir = sortAsc ? 1 : -1;
       switch (sortBy) {
@@ -604,7 +617,7 @@ export default function Library({ catalogImportedBookIds }: LibraryProps = {}) {
         case "date_added":
         default: return dir * (a.added_at - b.added_at);
       }
-    }), [books, pendingRemovalIds, debouncedSearch, sortBy, sortAsc, filterFormat, filterStatus, filterRating, filterSource, progressMap, lastReadMap, activeSeries, filterTagIds, bookTagMap]);
+    }), [filteredBeforeTags, sortBy, sortAsc, progressMap, lastReadMap, filterTagIds, bookTagMap]);
 
   const handleShowBookDetail = useCallback(async (id: string) => {
     latestDetailRequestRef.current = id;
@@ -894,7 +907,7 @@ export default function Library({ catalogImportedBookIds }: LibraryProps = {}) {
           {/* Filter: tags */}
           <TagFilter
             allTags={allTags}
-            bookTagMap={bookTagMap}
+            tagBookCounts={tagBookCounts}
             selectedTagIds={filterTagIds}
             onChangeSelectedTagIds={setFilterTagIds}
           />
