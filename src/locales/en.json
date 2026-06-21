@@ -89,6 +89,7 @@
     "deselectAll": "Deselect all",
     "bulkDeleteConfirm": "Delete {{count}} books? This cannot be undone.",
     "bulkDeleted": "{{count}} books deleted",
+    "addedToCollection": "Added to {{collection}}",
     "bookRemovedUndo": "\u201c{{title}}\u201d removed",
     "bulkRemovedUndo": "{{count}} books removed",
     "removedFromCollectionUndo": "Removed from collection",
