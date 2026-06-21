@@ -573,6 +573,8 @@
     "connectionTestFailed": "Impossible de joindre ce flux — {{error}}",
     "removeCatalog": "Supprimer {{name}}",
     "removeCatalogTitle": "Supprimer le catalogue",
+    "removeCatalogConfirmTitle": "Supprimer « {{name}} » ?",
+    "removeCatalogConfirmMessage": "Cela retire le catalogue de votre liste. Vos livres importés ne sont pas affectés et vous pouvez le rajouter à tout moment.",
     "catalog": "Catalogue",
     "searchThisCatalog": "Rechercher dans ce catalogue\u2026",
     "noEntries": "Aucune entr\u00e9e trouv\u00e9e.",

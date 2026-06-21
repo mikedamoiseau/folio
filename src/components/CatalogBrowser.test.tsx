@@ -12,6 +12,7 @@ vi.mock("../lib/supportedFormats", () => ({
   useSupportedFormats: () => ["epub", "pdf"],
 }));
 vi.mock("./OpdsPresetPicker", () => ({ default: () => null }));
+vi.mock("../lib/useFocusTrap", () => ({ useFocusTrap: () => ({ current: null }) }));
 
 import { render, screen, cleanup, fireEvent, act, waitFor } from "@testing-library/react";
 import CatalogBrowser from "./CatalogBrowser";
@@ -78,5 +79,26 @@ describe("CatalogBrowser add-catalog validation", () => {
     // it was provisionally added, then rolled back
     expect(invoke).toHaveBeenCalledWith("add_opds_catalog", { name: "Broken", url: "https://bad.example/opds" });
     expect(invoke).toHaveBeenCalledWith("remove_opds_catalog", { url: "https://bad.example/opds" });
+  });
+});
+
+describe("CatalogBrowser remove confirmation", () => {
+  it("confirms before removing a catalog (no immediate backend call)", async () => {
+    invoke.mockImplementation((cmd: string) => {
+      if (cmd === "get_opds_catalogs")
+        return Promise.resolve([{ name: "My Feed", url: "https://example.com/opds" }]);
+      return Promise.resolve(undefined);
+    });
+    render(<CatalogBrowser onClose={() => {}} onBookImported={() => {}} />);
+    await waitFor(() => expect(screen.getByText("My Feed")).toBeInTheDocument());
+
+    await act(async () => fireEvent.click(screen.getByLabelText(/catalog\.removeCatalog/)));
+    expect(invoke).not.toHaveBeenCalledWith("remove_opds_catalog", expect.anything());
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "common.remove" })));
+    await waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith("remove_opds_catalog", { url: "https://example.com/opds" })
+    );
   });
 });
