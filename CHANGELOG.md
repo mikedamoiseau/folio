@@ -5,6 +5,34 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+A trust-and-feedback release driven by a full UX audit of the first-run →
+import → organize → read → catalog/settings path. The themes: destructive
+actions are now reversible or confirmed (never silent), every async action
+reports its outcome, and error/empty states are built rather than blank.
+
+### Added
+- **Undo for deletes.** Deleting a book, deleting a multi-selection, and removing a book from a collection now show a brief **Undo** toast; the book is hidden immediately and the actual removal only fires after the window, so an undo reverses it before anything irreversible happens (no file is deleted).
+- **Settings search.** A search box at the top of Settings filters the collapsible sections by name and keyword (e.g. "pin", "css", "backup") and expands matches.
+- **Reader header overflow menu.** The reader header is grouped (navigate / content / display) with low-frequency actions tucked into a `⋯` menu instead of a flat row of icons.
+- **Continuous-load progress.** Continuous-scroll reading shows a real "Loaded X / N chapters" counter (backed by per-chapter progress events) instead of an indeterminate spinner.
+- **Catalog connection test.** Adding a custom OPDS catalog validates the URL and runs a pre-flight fetch/parse (including private/LAN feeds) before saving, so a bad or unreachable feed is caught at add time. A no-catalogs empty state offers a shortcut to the preset picker.
+- **OPDS download size.** Catalog download links show the file size when the feed reports it.
+- **Plugin folder writability check.** Granting a plugin a write folder now verifies the folder is actually writable (enforced in `plugin_enable`, not just the UI) before recording the grant.
+
+### Changed
+- **Confirmations are styled, not native.** A reusable `ConfirmDialog` replaces the browser `confirm()` for destructive decisions — profile delete (also now disabled for the active/default profile), bulk delete (with count), and catalog removal.
+- **Bulk edit is opt-in per field.** Each field has an explicit checkbox; only checked fields are written, with a banner and per-field warning when the selection has differing values — no more silent mass-overwrite. Mixed detection runs over the whole selection, not just the visible subset.
+- **Save feedback everywhere.** Editing book metadata confirms with a "Saved" toast; settings toggles that previously swallowed persistence errors now revert and surface the failure; the web-server PIN shows an "Unsaved" indicator and saves on blur so it isn't lost on close.
+- **Backup Save vs Test split.** The single "Save & Test" button is now separate **Save** and **Test connection** actions with independent results, so a save failure is distinguishable from a connection failure.
+- **Import errors are actionable.** Failures show a friendly message (not a raw backend string), persist instead of vanishing in 4s, and offer **Retry**; partial-batch failures highlight the failed count and stay visible; the onboarding import step shows a banner + retry on empty/error/cancelled instead of getting silently stuck.
+- **Reader recovery & polish.** Chapter-load errors show a recoverable card with **Try again**; the missing-file dialog is a single consolidated prompt; a content skeleton renders while a chapter loads; a just-created highlight can be removed from its toast; the settings button shows an open state.
+- **Grid/organize.** Dragging a book onto a collection confirms with a toast; the delete confirmation shows the cover and full title; the selection is preserved while in selection mode; the select checkbox no longer overlaps the card action buttons; tag-filter counts respect the other active filters; empty results distinguish "no books yet" from "filters hide everything"; the edit-dialog error is a sticky top banner.
+
+### Fixed
+- **Clear-filters now clears tag filters too** — previously a tag-only filter survived "clear all filters".
+- **Invalid nested button** in the catalog row (a `<button>` inside a `<button>`) split into siblings, fixing keyboard/click behavior.
+- **Web-server port** out-of-range values show an inline range error instead of silently clamping to the boundary.
+
 ## [2.4.0] - 2026-06-18
 
 A backup-and-restore release. Library restore now reconstructs the whole
