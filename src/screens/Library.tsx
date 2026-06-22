@@ -20,13 +20,15 @@ import KeyboardShortcutsHelp from "../components/KeyboardShortcutsHelp";
 import TagFilter from "../components/TagFilter";
 import { startDrag, endDrag, isDragging, getDraggedCoverSrc, subscribe } from "../lib/dragState";
 import { friendlyError } from "../lib/errors";
-import { pickSupportedOpdsLink, getReadingStatus, providerDisplayName } from "../lib/utils";
+import { pickSupportedOpdsLink, getReadingStatus, providerDisplayName, hasActiveLibraryFilters, computeTagBookCounts } from "../lib/utils";
 import { FALLBACK_FORMATS, getSupportedFormats, useSupportedFormats } from "../lib/supportedFormats";
 import HighlightSearchModal from "../components/HighlightSearchModal";
 import SeriesStackCard from "../components/SeriesStackCard";
 import { LiveRegion } from "../components/LiveRegion";
 import OnboardingWizard from "../components/OnboardingWizard";
 import { useToast } from "../components/Toast";
+import { useUndoableRemoval } from "../lib/useUndoableRemoval";
+import ConfirmDialog from "../components/ConfirmDialog";
 import { useDebounce } from "../hooks/useDebounce";
 import { useImport } from "../context/ImportContext";
 import WhatsNewBanner from "../components/WhatsNewBanner";
@@ -59,6 +61,8 @@ export default function Library({ catalogImportedBookIds }: LibraryProps = {}) {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const { addToast } = useToast();
+  const { pendingIds: pendingRemovalIds, remove: removeWithUndo } = useUndoableRemoval(addToast);
+  const [bulkDeleteConfirm, setBulkDeleteConfirm] = useState(false);
   // Backend-supported formats for this build — drives OPDS download-link
   // gating and drag-drop filtering so MOBI/AZW/AZW3 don't appear on builds
   // that weren't compiled with the `mobi` feature.
@@ -351,15 +355,39 @@ export default function Library({ catalogImportedBookIds }: LibraryProps = {}) {
   }, [activeCollectionId]);
 
   const handleRemoveBook = useCallback(
-    async (bookId: string) => {
-      try {
-        await invoke("remove_book", { bookId });
-        await loadBooks(activeCollectionIdRef.current);
-      } catch (err) {
-        setError(friendlyError(err, t));
-      }
+    (bookId: string) => {
+      const title = books.find((b) => b.id === bookId)?.title ?? "";
+      removeWithUndo([bookId], {
+        message: t("library.bookRemovedUndo", { title }),
+        undoLabel: t("common.undo"),
+        commit: async () => {
+          await invoke("remove_book", { bookId });
+          await loadBooks(activeCollectionIdRef.current);
+        },
+        onError: (err) => setError(friendlyError(err, t)),
+      });
     },
-    [loadBooks]
+    [books, loadBooks, removeWithUndo, t]
+  );
+
+  const handleRemoveFromCollection = useCallback(
+    (bookId: string) => {
+      const collectionId = activeCollectionIdRef.current;
+      if (!collectionId) return;
+      removeWithUndo([bookId], {
+        message: t("library.removedFromCollectionUndo"),
+        undoLabel: t("common.undo"),
+        commit: async () => {
+          await invoke("remove_book_from_collection", { bookId, collectionId });
+          // Refresh whatever collection is active *now* — the user may have
+          // navigated away during the 5s undo window, so the captured
+          // `collectionId` can be stale for view purposes.
+          await loadBooks(activeCollectionIdRef.current);
+        },
+        onError: (err) => setError(friendlyError(err, t)),
+      });
+    },
+    [loadBooks, removeWithUndo, t]
   );
 
   const toggleSelected = useCallback((bookId: string) => {
@@ -468,20 +496,20 @@ export default function Library({ catalogImportedBookIds }: LibraryProps = {}) {
   }, [importFiles, t]);
 
   const handleImportUrl = useCallback(async (url: string) => {
+    // Errors propagate to the caller (ImportButton) so the URL dialog can show
+    // them inline; the dialog stays open until the import succeeds.
     try {
+      setError(null); // clear any stale library banner before this action
       setImportingUrl(true);
-      setError(null);
       const result = await invoke<{ id: string; newly_imported: boolean }>("download_opds_book", { downloadUrl: url });
       if (result.newly_imported) {
         recentlyImportedRef.current = new Set([result.id]);
       }
       await loadBooks(activeCollectionIdRef.current);
-    } catch (err) {
-      setError(friendlyError(err, t));
     } finally {
       setImportingUrl(false);
     }
-  }, [loadBooks, t]);
+  }, [loadBooks]);
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
@@ -522,7 +550,11 @@ export default function Library({ catalogImportedBookIds }: LibraryProps = {}) {
     };
   }, [importFiles]);
 
-  const filtered = useMemo(() => books
+  // Books passing every active filter EXCEPT the tag filter. Used both to
+  // derive the per-tag counts (so they reflect the current filters) and as the
+  // base for the final tag-filtered set.
+  const filteredBeforeTags = useMemo(() => books
+    .filter((book) => !pendingRemovalIds.has(book.id))
     .filter((book) => {
       if (debouncedSearch) {
         const q = debouncedSearch.toLowerCase();
@@ -548,13 +580,23 @@ export default function Library({ catalogImportedBookIds }: LibraryProps = {}) {
     .filter((book) => {
       if (!activeSeries) return true;
       return book.series === activeSeries;
-    })
+    }), [books, pendingRemovalIds, debouncedSearch, filterFormat, filterStatus, filterRating, filterSource, progressMap, activeSeries]);
+
+  // Per-tag counts reflecting all OTHER active filters (excluding the tag
+  // filter itself, so they stay meaningful while multi-selecting tags).
+  const tagBookCounts = useMemo(
+    () => computeTagBookCounts(filteredBeforeTags, bookTagMap),
+    [filteredBeforeTags, bookTagMap],
+  );
+
+  const filtered = useMemo(() => filteredBeforeTags
     .filter((book) => {
       if (filterTagIds.length === 0) return true;
       const tags = bookTagMap.get(book.id);
       if (!tags) return false;
       return filterTagIds.every((id) => tags.has(id));
     })
+    .slice()
     .sort((a, b) => {
       const dir = sortAsc ? 1 : -1;
       switch (sortBy) {
@@ -575,7 +617,7 @@ export default function Library({ catalogImportedBookIds }: LibraryProps = {}) {
         case "date_added":
         default: return dir * (a.added_at - b.added_at);
       }
-    }), [books, debouncedSearch, sortBy, sortAsc, filterFormat, filterStatus, filterRating, filterSource, progressMap, lastReadMap, activeSeries, filterTagIds, bookTagMap]);
+    }), [filteredBeforeTags, sortBy, sortAsc, progressMap, lastReadMap, filterTagIds, bookTagMap]);
 
   const handleShowBookDetail = useCallback(async (id: string) => {
     latestDetailRequestRef.current = id;
@@ -865,7 +907,7 @@ export default function Library({ catalogImportedBookIds }: LibraryProps = {}) {
           {/* Filter: tags */}
           <TagFilter
             allTags={allTags}
-            bookTagMap={bookTagMap}
+            tagBookCounts={tagBookCounts}
             selectedTagIds={filterTagIds}
             onChangeSelectedTagIds={setFilterTagIds}
           />
@@ -920,7 +962,14 @@ export default function Library({ catalogImportedBookIds }: LibraryProps = {}) {
           {hasBooks && (
             <button
               type="button"
-              onClick={() => { setSelectMode((m) => !m); setSelectedIds(new Set()); }}
+              onClick={() => {
+                // Clear selection only when *leaving* select mode, so a stale
+                // selection can't drive bulk actions after re-entering. The
+                // selection stays stable while in select mode (F2d), but
+                // exiting is a deliberate "done selecting" (codex review).
+                if (selectMode) setSelectedIds(new Set());
+                setSelectMode((m) => !m);
+              }}
               className={`p-1.5 rounded-lg transition-colors ${selectMode ? "bg-accent/20 text-accent" : "text-ink-muted hover:text-ink hover:bg-warm-subtle"}`}
               title={selectMode ? t("library.exitSelect") : t("library.selectBooks")}
             >
@@ -1399,13 +1448,7 @@ export default function Library({ catalogImportedBookIds }: LibraryProps = {}) {
                                 onInfo: handleShowBookDetail,
                                 onRemoveFromCollection:
                                   isManualCollectionView && activeCollectionId
-                                    ? async () => {
-                                        await invoke("remove_book_from_collection", {
-                                          bookId: book.id,
-                                          collectionId: activeCollectionId,
-                                        });
-                                        await loadBooks(activeCollectionId);
-                                      }
+                                    ? () => handleRemoveFromCollection(book.id)
                                     : undefined,
                               }}
                               isScanning={scanningBookId === book.id}
@@ -1509,13 +1552,7 @@ export default function Library({ catalogImportedBookIds }: LibraryProps = {}) {
                       onInfo: handleShowBookDetail,
                       onRemoveFromCollection:
                         isManualCollectionView && activeCollectionId
-                          ? async () => {
-                              await invoke("remove_book_from_collection", {
-                                bookId: book.id,
-                                collectionId: activeCollectionId,
-                              });
-                              await loadBooks(activeCollectionId);
-                            }
+                          ? () => handleRemoveFromCollection(book.id)
                           : undefined,
                     }}
                     isScanning={scanningBookId === book.id}
@@ -1527,25 +1564,41 @@ export default function Library({ catalogImportedBookIds }: LibraryProps = {}) {
             );
           })()
         ) : (
-          <div className="flex flex-col items-center justify-center h-full text-center">
-            <p className="text-base font-medium text-ink">
-              {t("library.noMatchFilters")}
-            </p>
-            <p className="text-sm text-ink-muted mt-1">
-              {search
-                ? t("library.noResultsFor", { query: search })
-                : t("library.adjustFilters")}
-            </p>
-            {(filterFormat !== "all" || filterStatus !== "all" || filterRating !== "all" || filterSource !== "all" || search) && (
-              <button
-                type="button"
-                onClick={() => { setSearch(""); setFilterFormat("all"); setFilterStatus("all"); setFilterRating("all"); setFilterSource("all"); }}
-                className="mt-3 px-4 py-1.5 text-sm text-accent hover:text-accent-hover transition-colors"
-              >
-                {t("library.clearAllFilters")}
-              </button>
-            )}
-          </div>
+          (() => {
+            const hasActiveFilters = hasActiveLibraryFilters({
+              search,
+              filterFormat,
+              filterStatus,
+              filterRating,
+              filterSource,
+              filterTagIds,
+            });
+            return (
+              <div className="flex flex-col items-center justify-center h-full text-center">
+                <p className="text-base font-medium text-ink">
+                  {hasActiveFilters
+                    ? t("library.noMatchFilters")
+                    : t("library.emptyNoBooks", { defaultValue: "No books to show" })}
+                </p>
+                <p className="text-sm text-ink-muted mt-1">
+                  {!hasActiveFilters
+                    ? t("library.emptyNoBooksHint", { defaultValue: "There are no books in this view yet." })
+                    : search
+                      ? t("library.noResultsFor", { query: search })
+                      : t("library.adjustFilters")}
+                </p>
+                {hasActiveFilters && (
+                  <button
+                    type="button"
+                    onClick={() => { setSearch(""); setFilterFormat("all"); setFilterStatus("all"); setFilterRating("all"); setFilterSource("all"); setFilterTagIds([]); }}
+                    className="mt-3 px-4 py-1.5 text-sm text-accent hover:text-accent-hover transition-colors"
+                  >
+                    {t("library.clearAllFilters")}
+                  </button>
+                )}
+              </div>
+            );
+          })()
         )}
       </div>
 
@@ -1727,6 +1780,11 @@ export default function Library({ catalogImportedBookIds }: LibraryProps = {}) {
             if (activeCollectionIdRef.current === collectionId) {
               await loadBooks(collectionId);
             }
+            // Confirm the drop — without this the action is silent and, when
+            // dropping onto a collection that isn't the active view, gives no
+            // feedback at all.
+            const name = collections.find((c) => c.id === collectionId)?.name ?? "";
+            addToast(t("library.addedToCollection", { collection: name }), "success");
           } catch (err) {
             setError(friendlyError(err, t));
           }
@@ -1782,16 +1840,7 @@ export default function Library({ catalogImportedBookIds }: LibraryProps = {}) {
           <div className="w-px h-4 bg-paper/20" />
           <button
             type="button"
-            onClick={async () => {
-              if (!confirm(t("library.bulkDeleteConfirm", { count: selectedIds.size }))) return;
-              try {
-                await invoke("bulk_delete_books", { bookIds: [...selectedIds] });
-                addToast(t("library.bulkDeleted", { count: selectedIds.size }), "success");
-                setSelectedIds(new Set());
-                setSelectMode(false);
-                await loadBooks(activeCollectionIdRef.current);
-              } catch (e) { addToast(friendlyError(e, t), "error"); }
-            }}
+            onClick={() => setBulkDeleteConfirm(true)}
             className="text-red-400 hover:text-red-300 text-xs font-medium"
           >
             {t("common.delete")}
@@ -1808,10 +1857,37 @@ export default function Library({ catalogImportedBookIds }: LibraryProps = {}) {
 
       {/* Toast notifications now rendered by ToastProvider at app root */}
 
+      {bulkDeleteConfirm && (
+        <ConfirmDialog
+          title={t("library.bulkDeleteTitle", { count: selectedIds.size })}
+          message={t("library.bulkDeleteConfirm", { count: selectedIds.size })}
+          confirmLabel={t("common.delete")}
+          onCancel={() => setBulkDeleteConfirm(false)}
+          onConfirm={() => {
+            const ids = [...selectedIds];
+            setBulkDeleteConfirm(false);
+            removeWithUndo(ids, {
+              message: t("library.bulkRemovedUndo", { count: ids.length }),
+              undoLabel: t("common.undo"),
+              commit: async () => {
+                await invoke("bulk_delete_books", { bookIds: ids });
+                await loadBooks(activeCollectionIdRef.current);
+              },
+              onError: (e) => addToast(friendlyError(e, t), "error"),
+            });
+            setSelectedIds(new Set());
+            setSelectMode(false);
+          }}
+        />
+      )}
+
       {bulkEditing && (
         <BulkEditDialog
           bookIds={[...selectedIds]}
-          books={filtered}
+          // Pass the full library, not `filtered`: selection can include books
+          // hidden by the active search/filter, and the dialog must detect
+          // differing values across the *entire* selection it will overwrite.
+          books={books}
           onClose={() => setBulkEditing(false)}
           onSave={async (updatedCount) => {
             setBulkEditing(false);
@@ -1850,7 +1926,7 @@ function SelectCheckbox({
 }) {
   return (
     <div
-      className={`absolute top-2 left-2 z-10 w-7 h-7 flex items-center justify-center rounded-full border-2 shadow-md cursor-pointer transition-colors ${
+      className={`absolute bottom-2 right-2 z-10 w-7 h-7 flex items-center justify-center rounded-full border-2 shadow-md cursor-pointer transition-colors ${
         checked
           ? "bg-accent border-accent text-paper"
           : "bg-paper/90 border-warm-border text-transparent"

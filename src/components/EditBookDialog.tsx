@@ -4,6 +4,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { useTranslation } from "react-i18next";
 import { friendlyError } from "../lib/errors";
 import StarRating from "./StarRating";
+import { useToast } from "./Toast";
 
 interface Tag {
   id: string;
@@ -57,6 +58,7 @@ export default function EditBookDialog({
   onSaved,
 }: EditBookDialogProps) {
   const { t } = useTranslation();
+  const { addToast } = useToast();
   const [title, setTitle] = useState(initialTitle);
   const [author, setAuthor] = useState(initialAuthor);
   const [series, setSeries] = useState(initialSeries ?? "");
@@ -160,6 +162,7 @@ export default function EditBookDialog({
         publishYear: publishYear !== String(initialPublishYear ?? "") ? (publishYear ? parseInt(publishYear) : null) : null,
         rating: bookRating !== initialRating ? (bookRating ?? 0) : null,
       });
+      addToast(t("common.saved"), "success");
       onSaved();
     } catch (err) {
       setError(friendlyError(err, t));
@@ -242,6 +245,14 @@ export default function EditBookDialog({
           </div>
 
           <div className="px-5 py-4 space-y-3 max-h-[60vh] overflow-y-auto">
+            {error && (
+              <div
+                role="alert"
+                className="sticky top-0 z-10 -mt-1 mb-1 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700 dark:border-red-900/40 dark:bg-red-900/20 dark:text-red-300"
+              >
+                {error}
+              </div>
+            )}
             <div>
               <label className="block text-xs font-medium text-ink-muted mb-1">{t("editor.titleLabel")}</label>
               <input
@@ -449,10 +460,6 @@ export default function EditBookDialog({
                 </button>
               )}
             </div>
-
-            {error && (
-              <p className="text-xs text-red-600">{error}</p>
-            )}
           </div>
 
           {isImported === false && (

@@ -1,6 +1,9 @@
-import { describe, it, expect } from "vitest";
+// @vitest-environment jsdom
+import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
+import "@testing-library/jest-dom/vitest";
 import { renderToString } from "react-dom/server";
-import { ToastProvider, ToastContainer, TOAST_AUTO_DISMISS_MS } from "./Toast";
+import { render, screen, cleanup, act, fireEvent } from "@testing-library/react";
+import { ToastProvider, ToastContainer, useToast, TOAST_AUTO_DISMISS_MS } from "./Toast";
 
 describe("Toast System", () => {
   it("ToastProvider renders children", () => {
@@ -18,7 +21,6 @@ describe("Toast System", () => {
         <ToastContainer />
       </ToastProvider>
     );
-    // Container should have aria-live for screen readers
     expect(html).toContain('aria-live="polite"');
     expect(html).toContain('role="status"');
   });
@@ -34,8 +36,93 @@ describe("Toast System", () => {
   });
 
   it("auto-dismisses transient toasts after the documented interval", () => {
-    // Locks the doc/code contract: toasts are short-lived (4s). Anything
-    // longer-lived should use an inline banner — see UX-CONVENTIONS.md.
     expect(TOAST_AUTO_DISMISS_MS).toBe(4000);
+  });
+});
+
+describe("Toast undo action", () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => {
+    vi.useRealTimers();
+    cleanup();
+  });
+
+  function UndoTrigger({
+    onUndo,
+    onTimeout,
+    durationMs,
+  }: {
+    onUndo: () => void;
+    onTimeout: () => void;
+    durationMs?: number;
+  }) {
+    const { addToast } = useToast();
+    return (
+      <button
+        onClick={() =>
+          addToast("Book removed", "info", {
+            durationMs,
+            action: { label: "Undo", onClick: onUndo },
+            onTimeout,
+          })
+        }
+      >
+        trigger
+      </button>
+    );
+  }
+
+  it("clicking Undo runs the undo callback and cancels the timeout", () => {
+    const onUndo = vi.fn();
+    const onTimeout = vi.fn();
+    render(
+      <ToastProvider>
+        <UndoTrigger onUndo={onUndo} onTimeout={onTimeout} durationMs={5000} />
+      </ToastProvider>
+    );
+
+    act(() => fireEvent.click(screen.getByText("trigger")));
+    expect(screen.getByText("Book removed")).toBeInTheDocument();
+
+    act(() => fireEvent.click(screen.getByText("Undo")));
+    expect(onUndo).toHaveBeenCalledTimes(1);
+
+    // Even after the full window elapses, the commit (onTimeout) must NOT fire.
+    act(() => vi.advanceTimersByTime(6000));
+    expect(onTimeout).not.toHaveBeenCalled();
+    expect(screen.queryByText("Book removed")).not.toBeInTheDocument();
+  });
+
+  it("lets the timeout (commit) fire when the window elapses without undo", () => {
+    const onUndo = vi.fn();
+    const onTimeout = vi.fn();
+    render(
+      <ToastProvider>
+        <UndoTrigger onUndo={onUndo} onTimeout={onTimeout} durationMs={5000} />
+      </ToastProvider>
+    );
+
+    act(() => fireEvent.click(screen.getByText("trigger")));
+    act(() => vi.advanceTimersByTime(5000));
+
+    expect(onTimeout).toHaveBeenCalledTimes(1);
+    expect(onUndo).not.toHaveBeenCalled();
+    expect(screen.queryByText("Book removed")).not.toBeInTheDocument();
+  });
+
+  it("manual dismiss commits (runs onTimeout) rather than cancelling", () => {
+    const onUndo = vi.fn();
+    const onTimeout = vi.fn();
+    render(
+      <ToastProvider>
+        <UndoTrigger onUndo={onUndo} onTimeout={onTimeout} durationMs={5000} />
+      </ToastProvider>
+    );
+
+    act(() => fireEvent.click(screen.getByText("trigger")));
+    act(() => fireEvent.click(screen.getByLabelText("Dismiss")));
+
+    expect(onTimeout).toHaveBeenCalledTimes(1);
+    expect(onUndo).not.toHaveBeenCalled();
   });
 });

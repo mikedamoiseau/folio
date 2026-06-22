@@ -76,6 +76,52 @@ export function filterBooks<T extends BookLike>(
   });
 }
 
+/**
+ * Count how many of the given books carry each tag.
+ *
+ * Pass the set of books that already pass every *other* active filter
+ * (search, format, status, rating, source, series) but NOT the tag filter
+ * itself — that way each tag's count reflects how many results selecting it
+ * would yield given the current filters, while staying useful for multi-select.
+ */
+export function computeTagBookCounts<T extends { id: string }>(
+  books: T[],
+  bookTagMap: Map<string, Set<string>>,
+): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const book of books) {
+    const tagIds = bookTagMap.get(book.id);
+    if (!tagIds) continue;
+    for (const tagId of tagIds) {
+      counts.set(tagId, (counts.get(tagId) ?? 0) + 1);
+    }
+  }
+  return counts;
+}
+
+/**
+ * True when any library filter or search is narrowing the visible set.
+ * Used to distinguish "filters hide everything" from "the view is genuinely
+ * empty" in the empty-state copy.
+ */
+export function hasActiveLibraryFilters(f: {
+  search: string;
+  filterFormat: string;
+  filterStatus: string;
+  filterRating: string;
+  filterSource: string;
+  filterTagIds: string[];
+}): boolean {
+  return (
+    f.search.length > 0 ||
+    f.filterFormat !== "all" ||
+    f.filterStatus !== "all" ||
+    f.filterRating !== "all" ||
+    f.filterSource !== "all" ||
+    f.filterTagIds.length > 0
+  );
+}
+
 export type SortField =
   | "title"
   | "author"
@@ -183,6 +229,18 @@ const SUPPORTED_EXTENSIONS = [".epub", ".cbz", ".cbr", ".pdf"];
 export function isSupportedFile(filename: string): boolean {
   const lower = filename.toLowerCase();
   return SUPPORTED_EXTENSIONS.some((ext) => lower.endsWith(ext));
+}
+
+/**
+ * Format a byte count human-readably (e.g. "0 B", "2.4 MB"). Returns an empty
+ * string for null/undefined so callers can omit the size when a feed omits it.
+ */
+export function formatBytes(bytes: number | null | undefined): string {
+  if (bytes == null) return "";
+  if (bytes === 0) return "0 B";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  const i = Math.floor(Math.log(bytes) / Math.log(1024));
+  return `${(bytes / Math.pow(1024, i)).toFixed(i === 0 ? 0 : 1)} ${units[i]}`;
 }
 
 export interface MetadataPill {
@@ -361,4 +419,40 @@ export function getReadingStatus(
   if (!lastReadAt) return "paused";
   const ageDays = (nowSecs - lastReadAt) / 86400;
   return ageDays <= PAUSED_AFTER_DAYS ? "active" : "paused";
+}
+
+/**
+ * True when `value` parses as an absolute http(s) URL. Used to pre-validate
+ * OPDS catalog URLs before attempting a connection test.
+ */
+export function isValidHttpUrl(value: string): boolean {
+  let url: URL;
+  try {
+    url = new URL(value.trim());
+  } catch {
+    return false;
+  }
+  return url.protocol === "http:" || url.protocol === "https:";
+}
+
+/** The valid TCP port range Folio's web server accepts (non-privileged). */
+export const WEB_SERVER_PORT_MIN = 1024;
+export const WEB_SERVER_PORT_MAX = 65535;
+
+/**
+ * Validates a web-server port string. Returns the parsed port when it is an
+ * integer within [WEB_SERVER_PORT_MIN, WEB_SERVER_PORT_MAX], otherwise
+ * `{ valid: false }`. Used to surface an inline range error instead of
+ * silently clamping out-of-range input.
+ */
+export function validateWebServerPort(
+  value: string
+): { valid: true; port: number } | { valid: false } {
+  const trimmed = value.trim();
+  if (!/^\d+$/.test(trimmed)) return { valid: false };
+  const port = parseInt(trimmed, 10);
+  if (port < WEB_SERVER_PORT_MIN || port > WEB_SERVER_PORT_MAX) {
+    return { valid: false };
+  }
+  return { valid: true, port };
 }

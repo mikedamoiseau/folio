@@ -2,9 +2,10 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useTranslation } from "react-i18next";
 import { friendlyError } from "../lib/errors";
-import { pickSupportedOpdsLink } from "../lib/utils";
+import { pickSupportedOpdsLink, isValidHttpUrl, formatBytes } from "../lib/utils";
 import { FALLBACK_FORMATS, useSupportedFormats } from "../lib/supportedFormats";
 import OpdsPresetPicker from "./OpdsPresetPicker";
+import ConfirmDialog from "./ConfirmDialog";
 
 interface OpdsCatalog {
   name: string;
@@ -16,6 +17,7 @@ interface OpdsLink {
   href: string;
   mimeType: string;
   rel: string;
+  sizeBytes?: number | null;
 }
 
 interface OpdsEntry {
@@ -43,6 +45,14 @@ interface CatalogBrowserProps {
 export default function CatalogBrowser({ onClose, onBookImported }: CatalogBrowserProps) {
   const { t } = useTranslation();
   const [catalogs, setCatalogs] = useState<OpdsCatalog[]>([]);
+  // Flipped true after the first successful `get_opds_catalogs`. Gates the
+  // no-catalogs empty state so it never flashes during the initial load nor
+  // appears after a failed load (where `catalogs` is still []). Stays false
+  // on failure. In practice the backend always prepends DEFAULT_CATALOGS so
+  // an empty list is rare — this is a safety net for builds where the
+  // defaults are disabled/removed, keeping the empty state correct rather
+  // than misleading even though it's seldom hit.
+  const [catalogsLoaded, setCatalogsLoaded] = useState(false);
   const [feed, setFeed] = useState<OpdsFeed | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -61,6 +71,9 @@ export default function CatalogBrowser({ onClose, onBookImported }: CatalogBrows
   const [showPresetPicker, setShowPresetPicker] = useState(false);
   const [newCatalogName, setNewCatalogName] = useState("");
   const [newCatalogUrl, setNewCatalogUrl] = useState("");
+  const [addingCatalog, setAddingCatalog] = useState(false);
+  const [addCatalogError, setAddCatalogError] = useState<string | null>(null);
+  const [removeCatalogTarget, setRemoveCatalogTarget] = useState<{ name: string; url: string } | null>(null);
 
   // Search (per-catalog and unified)
   const [searchQuery, setSearchQuery] = useState("");
@@ -72,8 +85,10 @@ export default function CatalogBrowser({ onClose, onBookImported }: CatalogBrows
     try {
       const cs = await invoke<OpdsCatalog[]>("get_opds_catalogs");
       setCatalogs(cs);
+      setCatalogsLoaded(true);
     } catch {
-      // non-fatal
+      // non-fatal — leave `catalogsLoaded` false so the empty state stays
+      // hidden after a failed load (the error UI handles surfacing failures).
     }
   }, []);
 
@@ -151,15 +166,40 @@ export default function CatalogBrowser({ onClose, onBookImported }: CatalogBrows
   }, [onBookImported, t, supportedFormats]);
 
   const handleAddCatalog = async () => {
-    if (!newCatalogName.trim() || !newCatalogUrl.trim()) return;
+    if (addingCatalog) return; // guard re-entry (Enter key / double-click while testing)
+    const name = newCatalogName.trim();
+    const url = newCatalogUrl.trim();
+    if (!name || !url) return;
+
+    // Validate the URL shape before hitting the network.
+    if (!isValidHttpUrl(url)) {
+      setAddCatalogError(t("catalog.invalidUrl"));
+      return;
+    }
+
+    setAddCatalogError(null);
+    setAddingCatalog(true);
     try {
-      await invoke("add_opds_catalog", { name: newCatalogName.trim(), url: newCatalogUrl.trim() });
+      // Save first, then connection-test. `browse_opds` only relaxes its
+      // private/loopback SSRF guard for hosts already in the saved catalog
+      // list, so a LAN/localhost feed must be saved before it can be tested.
+      // `add_opds_catalog` intentionally trusts the user-entered URL.
+      await invoke("add_opds_catalog", { name, url });
+      try {
+        await invoke("browse_opds", { url });
+      } catch (testErr) {
+        // Roll back the provisional add so a broken feed isn't kept.
+        await invoke("remove_opds_catalog", { url }).catch(() => {});
+        throw testErr;
+      }
       setNewCatalogName("");
       setNewCatalogUrl("");
       setShowAddCatalog(false);
       await loadCatalogs();
     } catch (err) {
-      setError(friendlyError(err, t));
+      setAddCatalogError(t("catalog.connectionTestFailed", { error: friendlyError(err, t) }));
+    } finally {
+      setAddingCatalog(false);
     }
   };
 
@@ -307,12 +347,14 @@ export default function CatalogBrowser({ onClose, onBookImported }: CatalogBrows
                               {isDownloaded ? (
                                 <span className="text-[11px] text-accent font-medium">{t("catalog.addedToLibrary")}</span>
                               ) : isDownloading ? (
-                                <span className="text-[11px] text-ink-muted flex items-center gap-1">
+                                <span className="text-[11px] text-accent font-medium flex items-center gap-1.5">
                                   <svg className="animate-spin w-3 h-3" viewBox="0 0 24 24" fill="none">
                                     <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" className="opacity-25" />
                                     <path d="M4 12a8 8 0 018-8" stroke="currentColor" strokeWidth="3" strokeLinecap="round" className="opacity-75" />
                                   </svg>
-                                  {t("common.downloading")}
+                                  {picked?.label
+                                    ? t("catalog.downloadingFormat", { format: picked.label })
+                                    : t("common.downloading")}
                                 </span>
                               ) : (
                                 <button
@@ -321,6 +363,9 @@ export default function CatalogBrowser({ onClose, onBookImported }: CatalogBrows
                                 >
                                   + {picked?.label ?? ""}
                                 </button>
+                              )}
+                              {picked?.link.sizeBytes != null && !isDownloaded && (
+                                <span className="text-[11px] text-ink-muted">{formatBytes(picked.link.sizeBytes)}</span>
                               )}
                             </div>
                           )}
@@ -332,27 +377,48 @@ export default function CatalogBrowser({ onClose, onBookImported }: CatalogBrows
               ) : (
               /* Catalog list (hidden during unified search) */
               <>
-              {catalogs.map((cat) => (
-                <button
-                  key={cat.url}
-                  onClick={() => browseTo(cat.url, cat.name)}
-                  className="w-full flex items-center gap-3 px-5 py-3 text-left hover:bg-warm-subtle transition-colors group"
-                >
-                  <div className="w-8 h-8 rounded-lg bg-accent-light flex items-center justify-center shrink-0">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" className="text-accent">
+              {catalogsLoaded && catalogs.length === 0 && !showAddCatalog && (
+                <div className="flex flex-col items-center justify-center text-center px-8 py-12 gap-3">
+                  <div className="w-12 h-12 rounded-2xl bg-accent-light flex items-center justify-center">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" className="text-accent">
                       <path d="M12 6.042A8.967 8.967 0 006 3.75c-1.052 0-2.062.18-3 .512v14.25A8.987 8.987 0 016 18c2.305 0 4.408.867 6 2.292m0-14.25a8.966 8.966 0 016-2.292c1.052 0 2.062.18 3 .512v14.25A8.987 8.987 0 0018 18a8.967 8.967 0 00-6 2.292m0-14.25v14.25" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
                     </svg>
                   </div>
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium text-ink">{cat.name}</p>
-                    <p className="text-[11px] text-ink-muted truncate">{cat.url}</p>
-                  </div>
-                  <svg width="14" height="14" viewBox="0 0 20 20" fill="none" className="text-ink-muted shrink-0 group-hover:hidden">
-                    <path d="M8 4l6 6-6 6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-                  </svg>
+                  <h3 className="font-serif text-base font-semibold text-ink">{t("catalog.empty.title")}</h3>
+                  <p className="text-sm text-ink-muted leading-relaxed max-w-xs">{t("catalog.empty.subtitle")}</p>
                   <button
-                    onClick={(e) => { e.stopPropagation(); handleRemoveCatalog(cat.url); }}
-                    className="hidden group-hover:flex p-1 text-ink-muted hover:text-red-500 transition-colors shrink-0"
+                    type="button"
+                    onClick={() => {
+                      setShowPresetPicker(true);
+                      setShowAddCatalog(false);
+                    }}
+                    className="mt-1 px-4 py-2 text-sm font-medium text-white bg-accent hover:bg-accent-hover rounded-lg transition-colors"
+                  >
+                    {t("catalog.empty.browsePresets")}
+                  </button>
+                </div>
+              )}
+              {catalogs.map((cat) => (
+                // Row + remove are sibling buttons (not nested) — a button
+                // inside a button is invalid HTML and breaks click handling.
+                <div key={cat.url} className="relative flex items-center group">
+                  <button
+                    onClick={() => browseTo(cat.url, cat.name)}
+                    className="w-full flex items-center gap-3 px-5 py-3 text-left hover:bg-warm-subtle transition-colors"
+                  >
+                    <div className="w-8 h-8 rounded-lg bg-accent-light flex items-center justify-center shrink-0">
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" className="text-accent">
+                        <path d="M12 6.042A8.967 8.967 0 006 3.75c-1.052 0-2.062.18-3 .512v14.25A8.987 8.987 0 016 18c2.305 0 4.408.867 6 2.292m0-14.25a8.966 8.966 0 016-2.292c1.052 0 2.062.18 3 .512v14.25A8.987 8.987 0 0018 18a8.967 8.967 0 00-6 2.292m0-14.25v14.25" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                      </svg>
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium text-ink">{cat.name}</p>
+                      <p className="text-[11px] text-ink-muted truncate">{cat.url}</p>
+                    </div>
+                  </button>
+                  <button
+                    onClick={() => setRemoveCatalogTarget({ name: cat.name, url: cat.url })}
+                    className="absolute right-3 p-1 text-ink-muted hover:text-red-500 transition-colors opacity-0 group-hover:opacity-100 focus-visible:opacity-100 bg-surface rounded"
                     aria-label={t("catalog.removeCatalog", { name: cat.name })}
                     title={t("catalog.removeCatalogTitle")}
                   >
@@ -360,7 +426,7 @@ export default function CatalogBrowser({ onClose, onBookImported }: CatalogBrows
                       <path d="M15 5L5 15M5 5l10 10" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
                     </svg>
                   </button>
-                </button>
+                </div>
               ))}
 
               {/* Add custom catalog form */}
@@ -372,18 +438,21 @@ export default function CatalogBrowser({ onClose, onBookImported }: CatalogBrows
                     className="w-full text-sm bg-warm-subtle border border-warm-border rounded-lg px-3 py-2 text-ink placeholder-ink-muted/50 focus:outline-none focus:border-accent"
                   />
                   <input
-                    type="url" value={newCatalogUrl} onChange={(e) => setNewCatalogUrl(e.target.value)}
+                    type="url" value={newCatalogUrl} onChange={(e) => { setNewCatalogUrl(e.target.value); setAddCatalogError(null); }}
                     placeholder={t("catalog.opdsFeedUrl")}
                     onKeyDown={(e) => { if (e.key === "Enter") handleAddCatalog(); }}
                     className="w-full text-sm bg-warm-subtle border border-warm-border rounded-lg px-3 py-2 text-ink placeholder-ink-muted/50 focus:outline-none focus:border-accent"
                   />
+                  {addCatalogError && (
+                    <p className="text-xs text-red-600">{addCatalogError}</p>
+                  )}
                   <div className="flex gap-2">
-                    <button onClick={handleAddCatalog} disabled={!newCatalogName.trim() || !newCatalogUrl.trim()}
+                    <button onClick={handleAddCatalog} disabled={!newCatalogName.trim() || !newCatalogUrl.trim() || addingCatalog}
                       className="flex-1 py-1.5 text-xs font-medium text-white bg-accent hover:bg-accent-hover rounded-lg transition-colors disabled:opacity-40">
-                      {t("common.add")}
+                      {addingCatalog ? t("catalog.testingConnection") : t("common.add")}
                     </button>
-                    <button onClick={() => setShowAddCatalog(false)}
-                      className="flex-1 py-1.5 text-xs text-ink-muted hover:text-ink transition-colors">
+                    <button onClick={() => { setShowAddCatalog(false); setAddCatalogError(null); }} disabled={addingCatalog}
+                      className="flex-1 py-1.5 text-xs text-ink-muted hover:text-ink transition-colors disabled:opacity-40">
                       {t("common.cancel")}
                     </button>
                   </div>
@@ -408,6 +477,20 @@ export default function CatalogBrowser({ onClose, onBookImported }: CatalogBrows
             )}
           </div>
         </div>
+
+        {removeCatalogTarget && (
+          <ConfirmDialog
+            title={t("catalog.removeCatalogConfirmTitle", { name: removeCatalogTarget.name })}
+            message={t("catalog.removeCatalogConfirmMessage")}
+            confirmLabel={t("common.remove")}
+            onCancel={() => setRemoveCatalogTarget(null)}
+            onConfirm={() => {
+              const url = removeCatalogTarget.url;
+              setRemoveCatalogTarget(null);
+              void handleRemoveCatalog(url);
+            }}
+          />
+        )}
       </>
     );
   }
@@ -502,12 +585,14 @@ export default function CatalogBrowser({ onClose, onBookImported }: CatalogBrows
                           {isDownloaded ? (
                             <span className="text-[11px] text-accent font-medium">{t("catalog.addedToLibrary")}</span>
                           ) : isDownloading ? (
-                            <span className="text-[11px] text-ink-muted flex items-center gap-1">
+                            <span className="text-[11px] text-accent font-medium flex items-center gap-1.5">
                               <svg className="animate-spin w-3 h-3" viewBox="0 0 24 24" fill="none">
                                 <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" className="opacity-25" />
                                 <path d="M4 12a8 8 0 018-8" stroke="currentColor" strokeWidth="3" strokeLinecap="round" className="opacity-75" />
                               </svg>
-                              {t("common.downloading")}
+                              {picked?.label
+                                ? t("catalog.downloadingFormat", { format: picked.label })
+                                : t("common.downloading")}
                             </span>
                           ) : (
                             picked && (
@@ -518,6 +603,9 @@ export default function CatalogBrowser({ onClose, onBookImported }: CatalogBrows
                                 + {picked.label}
                               </button>
                             )
+                          )}
+                          {picked?.link.sizeBytes != null && !isDownloaded && (
+                            <span className="text-[11px] text-ink-muted">{formatBytes(picked.link.sizeBytes)}</span>
                           )}
                         </div>
                       )}

@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useTranslation } from "react-i18next";
 import { friendlyError } from "../lib/errors";
+import ConfirmDialog from "./ConfirmDialog";
 
 interface Profile {
   name: string;
@@ -19,6 +20,9 @@ export default function ProfileSwitcher({ onSwitch }: ProfileSwitcherProps) {
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const [switching, setSwitching] = useState<string | null>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
   const loadProfiles = useCallback(async () => {
@@ -50,6 +54,8 @@ export default function ProfileSwitcher({ onSwitch }: ProfileSwitcherProps) {
 
   const handleSwitch = async (name: string) => {
     if (name === activeProfile) { setOpen(false); return; }
+    if (switching) return; // a switch (with its library re-scan) is in flight
+    setSwitching(name);
     try {
       await invoke("switch_profile", { name });
       await loadProfiles();
@@ -57,6 +63,8 @@ export default function ProfileSwitcher({ onSwitch }: ProfileSwitcherProps) {
       onSwitch();
     } catch (err) {
       setError(friendlyError(err, t));
+    } finally {
+      setSwitching(null);
     }
   };
 
@@ -78,12 +86,19 @@ export default function ProfileSwitcher({ onSwitch }: ProfileSwitcherProps) {
   };
 
   const handleDelete = async (name: string) => {
+    if (deleting) return; // guard against a double-click firing two deletes
     setError(null);
+    setDeleting(true);
     try {
       await invoke("delete_profile", { name });
+      setPendingDelete(null);
       await loadProfiles();
     } catch (err) {
+      // Keep the dialog open and surface the failure inside it — the
+      // dropdown's only error <p> lives in the create-profile branch.
       setError(friendlyError(err, t));
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -125,18 +140,33 @@ export default function ProfileSwitcher({ onSwitch }: ProfileSwitcherProps) {
           {profiles.map((p) => (
             <div
               key={p.name}
-              className={`group flex items-center gap-2 px-3 py-2 cursor-pointer transition-colors ${
+              className={`group flex items-center gap-2 px-3 py-2 transition-colors ${
+                switching ? "cursor-wait" : "cursor-pointer"
+              } ${
                 p.is_active ? "bg-accent-light text-accent" : "text-ink-muted hover:text-ink hover:bg-warm-subtle"
-              }`}
-              onClick={() => handleSwitch(p.name)}
+              } ${switching && switching !== p.name ? "opacity-50" : ""}`}
+              aria-busy={switching === p.name}
+              onClick={() => { if (!switching) handleSwitch(p.name); }}
             >
               <span className="flex-1 text-sm font-medium truncate">{p.name}</span>
-              {p.is_active && (
+              {switching === p.name && (
+                <svg
+                  className="w-3.5 h-3.5 shrink-0 animate-spin text-accent"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  role="status"
+                  aria-label={t("profiles.switching")}
+                >
+                  <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="3" className="opacity-25" />
+                  <path d="M21 12a9 9 0 0 0-9-9" stroke="currentColor" strokeWidth="4" strokeLinecap="round" />
+                </svg>
+              )}
+              {switching !== p.name && p.is_active && (
                 <span className="w-1.5 h-1.5 rounded-full bg-accent shrink-0" />
               )}
-              {!p.is_active && p.name !== "default" && (
+              {!switching && !p.is_active && p.name !== "default" && (
                 <button
-                  onClick={(e) => { e.stopPropagation(); handleDelete(p.name); }}
+                  onClick={(e) => { e.stopPropagation(); setPendingDelete(p.name); }}
                   className="opacity-0 group-hover:opacity-100 p-0.5 text-ink-muted hover:text-red-500 transition-all"
                   aria-label={t("profiles.deleteLabel", { name: p.name })}
                 >
@@ -190,6 +220,19 @@ export default function ProfileSwitcher({ onSwitch }: ProfileSwitcherProps) {
             </button>
           )}
         </div>
+      )}
+
+      {pendingDelete && (
+        <ConfirmDialog
+          title={t("profiles.deleteConfirmTitle", { name: pendingDelete })}
+          message={t("profiles.deleteConfirmMessage")}
+          confirmLabel={t("profiles.deleteConfirm")}
+          confirmDisabled={deleting}
+          onConfirm={() => handleDelete(pendingDelete)}
+          onCancel={() => { setPendingDelete(null); setError(null); }}
+        >
+          {error && <p className="text-xs text-red-500">{error}</p>}
+        </ConfirmDialog>
       )}
     </div>
   );

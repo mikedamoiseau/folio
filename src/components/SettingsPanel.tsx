@@ -6,6 +6,9 @@ import { open as openFilePicker } from "@tauri-apps/plugin-dialog";
 import { useTranslation } from "react-i18next";
 import { useTheme, MIN_FONT_SIZE, MAX_FONT_SIZE, type ColorTokens } from "../context/ThemeContext";
 import { friendlyError } from "../lib/errors";
+import { missingRequiredFields, connectionResultFeedback } from "../lib/backupConnection";
+import { isPinUnsaved, shouldSaveOnBlur } from "../lib/pinSaveState";
+import { validateWebServerPort, WEB_SERVER_PORT_MIN, WEB_SERVER_PORT_MAX, formatBytes } from "../lib/utils";
 import { useOnboardingContext } from "../context/OnboardingContext";
 import { useToast } from "./Toast";
 import {
@@ -67,14 +70,34 @@ function getPinStrength(pin: string): { strength: PinStrength; error: string | n
   return { strength: "fair", error: null };
 }
 
-function Accordion({ title, children, open, onToggle }: { title: string; children: ReactNode; open: boolean; onToggle: () => void }) {
+export function Accordion({
+  title,
+  children,
+  open,
+  onToggle,
+  query = "",
+  keywords = "",
+}: {
+  title: string;
+  children: ReactNode;
+  open: boolean;
+  onToggle: () => void;
+  /** Active settings-search query. When set, non-matching sections hide and matches force-open. */
+  query?: string;
+  /** Extra searchable terms (key setting labels inside this section). */
+  keywords?: string;
+}) {
   const sectionId = `section-${title.replace(/\s+/g, "-").toLowerCase()}`;
+  const q = query.trim().toLowerCase();
+  if (q && !`${title} ${keywords}`.toLowerCase().includes(q)) return null;
+  // While searching, force matching sections open so the content is visible.
+  const isOpen = q ? true : open;
   return (
     <section>
       <button
         type="button"
         onClick={onToggle}
-        aria-expanded={open}
+        aria-expanded={isOpen}
         aria-controls={sectionId}
         className="w-full flex items-center justify-between py-1 group"
       >
@@ -87,7 +110,7 @@ function Accordion({ title, children, open, onToggle }: { title: string; childre
           viewBox="0 0 20 20"
           fill="none"
           aria-hidden="true"
-          className={`text-ink-muted/50 group-hover:text-ink-muted transition-transform duration-200 ${open ? "rotate-180" : ""}`}
+          className={`text-ink-muted/50 group-hover:text-ink-muted transition-transform duration-200 ${isOpen ? "rotate-180" : ""}`}
         >
           <path d="M5 7.5L10 12.5L15 7.5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
@@ -96,7 +119,7 @@ function Accordion({ title, children, open, onToggle }: { title: string; childre
         id={sectionId}
         role="region"
         aria-label={title}
-        className={`grid transition-[grid-template-rows] duration-200 ease-out ${open ? "grid-rows-[1fr] mt-3" : "grid-rows-[0fr]"}`}
+        className={`grid transition-[grid-template-rows] duration-200 ease-out ${isOpen ? "grid-rows-[1fr] mt-3" : "grid-rows-[0fr]"}`}
       >
         <div className="overflow-hidden">
           <div className="bg-warm-subtle/40 rounded-xl p-4">
@@ -339,13 +362,6 @@ interface MigrationDialogState {
   totalSizeBytes: number;
 }
 
-function formatBytes(bytes: number): string {
-  if (bytes === 0) return "0 B";
-  const units = ["B", "KB", "MB", "GB", "TB"];
-  const i = Math.floor(Math.log(bytes) / Math.log(1024));
-  return `${(bytes / Math.pow(1024, i)).toFixed(i === 0 ? 0 : 1)} ${units[i]}`;
-}
-
 export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
   const { t } = useTranslation();
   const { addToast } = useToast();
@@ -354,6 +370,12 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
     useTheme();
   const [openSection, setOpenSection] = useState<string | null>("appearance");
   const toggleSection = (id: string) => setOpenSection((prev) => (prev === id ? null : id));
+  const [settingsQuery, setSettingsQuery] = useState("");
+  // The panel stays mounted across open/close, so clear any prior search each
+  // time it opens — otherwise it reopens filtered with sections hidden.
+  useEffect(() => {
+    if (open) setSettingsQuery("");
+  }, [open]);
   const panelRef = useRef<HTMLDivElement>(null);
   const previousFocus = useRef<HTMLElement | null>(null);
 
@@ -470,8 +492,11 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
   const [backupProgressText, setBackupProgressText] = useState("");
   const [backupStatus, setBackupStatus] = useState<SyncManifest | null>(null);
   const [remoteBackupMessage, setRemoteBackupMessage] = useState<string | null>(null);
+  // Save and Test connection report their outcomes independently so a save
+  // failure is never conflated with a connectivity failure (UX audit F4c).
+  const [saveFeedback, setSaveFeedback] = useState<{ text: string; isError: boolean } | null>(null);
+  const [testFeedback, setTestFeedback] = useState<{ text: string; isError: boolean } | null>(null);
   const [testingConnection, setTestingConnection] = useState(false);
-  const [connectionTestResult, setConnectionTestResult] = useState<ConnectionTestResult | null>(null);
   const [syncEnabled, setSyncEnabled] = useState(false);
   const [lastSyncSuccess, setLastSyncSuccess] = useState<number | null>(null);
   const [lastSyncError, setLastSyncError] = useState<{ at: number; message: string } | null>(null);
@@ -484,9 +509,14 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
   const [webServerQr, setWebServerQr] = useState<string | null>(null);
   const [webServerError, setWebServerError] = useState<string | null>(null);
   const [webServerLoading, setWebServerLoading] = useState(false);
+  const [webServerPortError, setWebServerPortError] = useState<string | null>(null);
   const [webUiEnabled, setWebUiEnabled] = useState(false);
   const [opdsEnabled, setOpdsEnabled] = useState(false);
   const [pinSaved, setPinSaved] = useState(false);
+  // The last PIN value successfully persisted via `web_server_set_pin`. Drives
+  // the dirty/unsaved + save-on-blur decisions. This is distinct from
+  // `pinSaved`, which is only the transient "PIN saved ✓" confirmation.
+  const [savedPin, setSavedPin] = useState("");
   const [pinError, setPinError] = useState<string | null>(null);
 
   // Custom fonts
@@ -651,6 +681,25 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
     } catch {}
   }, []);
 
+  // Save the typed PIN. Shared by the explicit button and the blur handler.
+  // Returns true on success. Never submits an invalid PIN.
+  const savePin = useCallback(async () => {
+    const { error } = getPinStrength(webServerPin);
+    if (error) { setPinError(t(error)); return false; }
+    try {
+      await invoke("web_server_set_pin", { pin: webServerPin });
+      setWebServerError(null);
+      setPinError(null);
+      setSavedPin(webServerPin);
+      setPinSaved(true);
+      setTimeout(() => setPinSaved(false), 2000);
+      return true;
+    } catch (e) {
+      setWebServerError(friendlyError(e, t));
+      return false;
+    }
+  }, [webServerPin, t]);
+
   useEffect(() => {
     if (!open) return;
     const onFocus = () => { loadServerStatus(); };
@@ -748,6 +797,25 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
 
   const handleSetModes = useCallback(
     async (next: { webUi?: boolean; opds?: boolean; port?: number }) => {
+      // Resolve the port to send. When the caller passes an explicit port
+      // (the onBlur path) it is already validated. Otherwise validate the
+      // current field value here — this is the single choke point, so a
+      // toggle change with an out-of-range port in the input never reaches
+      // the backend.
+      let port = next.port;
+      if (port === undefined) {
+        const result = validateWebServerPort(webServerPort);
+        if (!result.valid) {
+          setWebServerPortError(
+            t("settings.portRange", {
+              min: WEB_SERVER_PORT_MIN,
+              max: WEB_SERVER_PORT_MAX,
+            })
+          );
+          return;
+        }
+        port = result.port;
+      }
       setWebServerError(null);
       setWebServerLoading(true);
       try {
@@ -761,7 +829,7 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
         }>("web_server_set_modes", {
           webUi: next.webUi ?? webUiEnabled,
           opds: next.opds ?? opdsEnabled,
-          port: next.port ?? (parseInt(webServerPort, 10) || 7788),
+          port,
         });
         setWebUiEnabled(status.webUiEnabled);
         setOpdsEnabled(status.opdsEnabled);
@@ -914,75 +982,70 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
     setSelectedProvider(providerType);
     setBackupFieldValues({});
     setRemoteBackupMessage(null);
+    setSaveFeedback(null);
+    setTestFeedback(null);
   };
 
-  const connectionResultMessage = (result: ConnectionTestResult): { text: string; isError: boolean } => {
-    switch (result.status) {
-      case "Ok":
-        return { text: t("settings.connected", { ms: result.latency_ms ?? 0 }), isError: false };
-      case "AuthFailed":
-        return { text: t("settings.authFailed"), isError: true };
-      case "PermissionDenied":
-        return { text: t("settings.writePermissionDenied"), isError: true };
-      case "NetworkError":
-        return { text: result.message || t("settings.networkError"), isError: true };
-      case "Timeout":
-        return { text: t("settings.connectionTimeout"), isError: true };
-    }
+  // Update a single backup config field and invalidate any prior save/test
+  // feedback — once the entered values change, "saved"/test results no longer
+  // describe what's in the form, so they must clear (UX audit F4c follow-up).
+  const updateBackupField = (key: string, value: string) => {
+    setBackupFieldValues((prev) => ({ ...prev, [key]: value }));
+    setSaveFeedback(null);
+    setTestFeedback(null);
   };
 
+  // Save persists the config without running a connectivity check, so a save
+  // failure is reported on its own and never conflated with a connection
+  // failure (UX audit F4c).
   const handleSaveBackupConfig = async () => {
     if (!selectedProvider || !currentProviderInfo) return;
-    // Validate required fields
-    const missing = currentProviderInfo.fields.filter(
-      (f) => f.required && !backupFieldValues[f.key]?.trim()
-    );
+    const missing = missingRequiredFields(currentProviderInfo.fields, backupFieldValues);
     if (missing.length > 0) {
-      setRemoteBackupMessage(`Required: ${missing.map((f) => f.label).join(", ")}`);
+      setSaveFeedback({ text: t("settings.requiredFields", { fields: missing.join(", ") }), isError: true });
+      setTestFeedback(null);
       return;
     }
     setSavingBackupConfig(true);
-    setRemoteBackupMessage(null);
-    setConnectionTestResult(null);
+    setSaveFeedback(null);
+    setTestFeedback(null);
     try {
       const config: BackupConfig = {
         providerType: selectedProvider,
         values: backupFieldValues,
       };
-      const result = await invoke<ConnectionTestResult>("save_backup_config", { config });
-      setConnectionTestResult(result);
-      if (result.status === "Ok") {
-        setSavedBackupConfig(config);
-        const { text } = connectionResultMessage(result);
-        setRemoteBackupMessage(text);
-      } else {
-        const { text } = connectionResultMessage(result);
-        setRemoteBackupMessage(text);
-      }
+      await invoke<ConnectionTestResult>("save_backup_config", { config, skipTest: true });
+      setSavedBackupConfig(config);
+      setSaveFeedback({ text: t("settings.configSaved"), isError: false });
     } catch (err) {
-      setRemoteBackupMessage(t("settings.saveFailed", { error: friendlyError(err, t) }));
+      setSaveFeedback({ text: t("settings.saveFailed", { error: friendlyError(err, t) }), isError: true });
     } finally {
       setSavingBackupConfig(false);
     }
   };
 
+  // Test connection checks connectivity against the currently entered values
+  // and reports its own outcome, distinct from the save feedback above.
   const handleTestConnection = async () => {
-    if (!savedBackupConfig) return;
+    if (!selectedProvider || !currentProviderInfo) return;
+    const missing = missingRequiredFields(currentProviderInfo.fields, backupFieldValues);
+    if (missing.length > 0) {
+      setTestFeedback({ text: t("settings.requiredFields", { fields: missing.join(", ") }), isError: true });
+      setSaveFeedback(null);
+      return;
+    }
     setTestingConnection(true);
-    setConnectionTestResult(null);
-    setRemoteBackupMessage(null);
+    setTestFeedback(null);
+    setSaveFeedback(null);
     try {
-      const config = await invoke<BackupConfig | null>("get_backup_config");
-      if (!config) {
-        setRemoteBackupMessage(t("settings.noConfigSaved"));
-        return;
-      }
+      const config: BackupConfig = {
+        providerType: selectedProvider,
+        values: backupFieldValues,
+      };
       const result = await invoke<ConnectionTestResult>("test_backup_connection", { config });
-      setConnectionTestResult(result);
-      const { text } = connectionResultMessage(result);
-      setRemoteBackupMessage(text);
+      setTestFeedback(connectionResultFeedback(result, t));
     } catch (err) {
-      setRemoteBackupMessage(t("settings.testFailed", { error: friendlyError(err, t) }));
+      setTestFeedback({ text: t("settings.testFailed", { error: friendlyError(err, t) }), isError: true });
     } finally {
       setTestingConnection(false);
     }
@@ -1106,10 +1169,43 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
           </button>
         </div>
 
+        {/* Search / filter */}
+        <div className="px-5 pt-4">
+          <div className="relative">
+            <svg
+              width="14" height="14" viewBox="0 0 20 20" fill="none" aria-hidden="true"
+              className="absolute left-2.5 top-1/2 -translate-y-1/2 text-ink-muted/60"
+            >
+              <circle cx="9" cy="9" r="5.5" stroke="currentColor" strokeWidth="1.5" />
+              <path d="M13 13l4 4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+            </svg>
+            <input
+              type="text"
+              value={settingsQuery}
+              onChange={(e) => setSettingsQuery(e.target.value)}
+              placeholder={t("settings.searchPlaceholder")}
+              aria-label={t("settings.searchPlaceholder")}
+              className="w-full h-9 pl-8 pr-8 bg-warm-subtle rounded-lg text-sm text-ink placeholder-ink-muted/50 border border-transparent focus:border-accent focus:outline-none"
+            />
+            {settingsQuery && (
+              <button
+                type="button"
+                onClick={() => setSettingsQuery("")}
+                aria-label={t("common.clear")}
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-ink-muted hover:text-ink text-xs"
+              >
+                <svg width="14" height="14" viewBox="0 0 20 20" fill="none">
+                  <path d="M15 5L5 15M5 5l10 10" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                </svg>
+              </button>
+            )}
+          </div>
+        </div>
+
         {/* Settings content */}
         <div className="flex-1 overflow-y-auto p-5 space-y-7">
           {/* General */}
-          <Accordion title={t("settings.general")} open={openSection === "general"} onToggle={() => toggleSection("general")}>
+          <Accordion title={t("settings.general")} open={openSection === "general"} onToggle={() => toggleSection("general")} query={settingsQuery} keywords={t("settings.searchTermsGeneral")}>
             <div className="space-y-2">
               <label className="flex items-center justify-between gap-3 bg-warm-subtle rounded-xl px-3 py-2.5">
                 <div>
@@ -1215,7 +1311,7 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
           </Accordion>
 
           {/* Theme */}
-          <Accordion title={t("settings.appearance")} open={openSection === "appearance"} onToggle={() => toggleSection("appearance")}>
+          <Accordion title={t("settings.appearance")} open={openSection === "appearance"} onToggle={() => toggleSection("appearance")} query={settingsQuery} keywords={t("settings.searchTermsAppearance")}>
             {/* Saved Themes */}
             <div className="pb-4 mb-4 border-b border-warm-border/50">
               <h4 className="text-xs font-semibold uppercase tracking-wider text-ink-muted mb-2">
@@ -1535,7 +1631,7 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
           </Accordion>
 
           {/* Page Layout */}
-          <Accordion title={t("settings.pageLayout")} open={openSection === "layout"} onToggle={() => toggleSection("layout")}>
+          <Accordion title={t("settings.pageLayout")} open={openSection === "layout"} onToggle={() => toggleSection("layout")} query={settingsQuery} keywords={t("settings.searchTermsLayout")}>
             <div className="flex gap-1 bg-warm-subtle rounded-xl p-1">
               {(["paginated", "continuous"] as const).map((option) => (
                 <button
@@ -1619,7 +1715,7 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
           </Accordion>
 
           {/* Library */}
-          <Accordion title={t("settings.librarySection")} open={openSection === "library"} onToggle={() => toggleSection("library")}>
+          <Accordion title={t("settings.librarySection")} open={openSection === "library"} onToggle={() => toggleSection("library")} query={settingsQuery} keywords={t("settings.searchTermsLibrary")}>
             <div className="space-y-2">
               <div className="bg-warm-subtle rounded-xl px-3 py-2.5">
                 <p className="text-xs text-ink-muted mb-0.5">{t("settings.storageFolder")}</p>
@@ -1758,7 +1854,7 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
           </Accordion>
 
           {/* Backup & Restore */}
-          <Accordion title={t("settings.backupRestore")} open={openSection === "backup"} onToggle={() => toggleSection("backup")}>
+          <Accordion title={t("settings.backupRestore")} open={openSection === "backup"} onToggle={() => toggleSection("backup")} query={settingsQuery} keywords={t("settings.searchTermsBackup")}>
             <div className="space-y-2">
               <label className="flex items-start gap-2.5 cursor-pointer px-1">
                 <input
@@ -1798,14 +1894,19 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
           </Accordion>
 
           {/* Metadata Scan */}
-          <Accordion title={t("settings.metadataScan")} open={openSection === "scan"} onToggle={() => toggleSection("scan")}>
+          <Accordion title={t("settings.metadataScan")} open={openSection === "scan"} onToggle={() => toggleSection("scan")} query={settingsQuery} keywords={t("settings.searchTermsScan")}>
             <div className="space-y-2">
               <label className="flex items-start gap-2.5 cursor-pointer px-1">
                 <input type="checkbox" checked={autoScanImport}
                   onChange={async (e) => {
                     const val = e.target.checked;
                     setAutoScanImport(val);
-                    await invoke("set_setting_value", { key: "auto_scan_import", value: val ? "true" : "false" }).catch(() => {});
+                    try {
+                      await invoke("set_setting_value", { key: "auto_scan_import", value: val ? "true" : "false" });
+                    } catch (err) {
+                      setAutoScanImport(!val); // revert — the setting did not persist
+                      addToast(friendlyError(err, t), "error");
+                    }
                   }}
                   className="mt-0.5 accent-accent" />
                 <span className="text-sm text-ink leading-snug">
@@ -1818,7 +1919,12 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                   onChange={async (e) => {
                     const val = e.target.checked;
                     setAutoScanStartup(val);
-                    await invoke("set_setting_value", { key: "auto_scan_startup", value: val ? "true" : "false" }).catch(() => {});
+                    try {
+                      await invoke("set_setting_value", { key: "auto_scan_startup", value: val ? "true" : "false" });
+                    } catch (err) {
+                      setAutoScanStartup(!val); // revert — the setting did not persist
+                      addToast(friendlyError(err, t), "error");
+                    }
                   }}
                   className="mt-0.5 accent-accent" />
                 <span className="text-sm text-ink leading-snug">
@@ -1916,7 +2022,7 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
             </div>
           </Accordion>
 
-          <Accordion title={t("settings.remoteAccess")} open={openSection === "webserver"} onToggle={() => toggleSection("webserver")}>
+          <Accordion title={t("settings.remoteAccess")} open={openSection === "webserver"} onToggle={() => toggleSection("webserver")} query={settingsQuery} keywords={t("settings.searchTermsWebserver")}>
             <div className="space-y-2">
               {/* PIN input (R4-2: save feedback, R4-1: guard) */}
               <div className="bg-warm-subtle rounded-xl px-3 py-2.5">
@@ -1930,6 +2036,12 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                     setWebServerPin(v);
                     setPinSaved(false);
                     setPinError(null);
+                  }}
+                  onBlur={() => {
+                    const isValid = getPinStrength(webServerPin).error === null;
+                    if (shouldSaveOnBlur(webServerPin, savedPin, isValid)) {
+                      savePin();
+                    }
                   }}
                   placeholder={t("settings.pinPlaceholder")}
                   maxLength={8}
@@ -1957,21 +2069,14 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                   {webServerPin && (
                     <button
                       type="button"
-                      onClick={async () => {
-                        const { error } = getPinStrength(webServerPin);
-                        if (error) { setPinError(t(error)); return; }
-                        try {
-                          await invoke("web_server_set_pin", { pin: webServerPin });
-                          setWebServerError(null);
-                          setPinError(null);
-                          setPinSaved(true);
-                          setTimeout(() => setPinSaved(false), 2000);
-                        } catch (e) { setWebServerError(friendlyError(e, t)); }
-                      }}
+                      onClick={() => savePin()}
                       className="text-xs text-accent hover:underline"
                     >
                       {t("settings.savePin")}
                     </button>
+                  )}
+                  {isPinUnsaved(webServerPin, savedPin) && !pinError && (
+                    <span className="text-xs text-yellow-500">{t("settings.pinUnsaved")}</span>
                   )}
                   {pinSaved && <span className="text-xs text-green-400">{t("settings.pinSaved")}</span>}
                   {pinError && <span className="text-xs text-red-400">{pinError}</span>}
@@ -1984,18 +2089,48 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                 <input
                   type="number"
                   value={webServerPort}
-                  onChange={(e) => setWebServerPort(e.target.value)}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    setWebServerPort(v);
+                    // Surface the valid range inline instead of silently
+                    // clamping; clear once the value is back in range.
+                    setWebServerPortError(
+                      v.trim() === "" || validateWebServerPort(v).valid
+                        ? null
+                        : t("settings.portRange", {
+                            min: WEB_SERVER_PORT_MIN,
+                            max: WEB_SERVER_PORT_MAX,
+                          })
+                    );
+                  }}
                   onBlur={() => {
-                    const port = parseInt(webServerPort, 10);
-                    if (port && (webUiEnabled || opdsEnabled)) {
-                      handleSetModes({ port });
+                    const result = validateWebServerPort(webServerPort);
+                    if (!result.valid) {
+                      setWebServerPortError(
+                        t("settings.portRange", {
+                          min: WEB_SERVER_PORT_MIN,
+                          max: WEB_SERVER_PORT_MAX,
+                        })
+                      );
+                      return;
+                    }
+                    setWebServerPortError(null);
+                    if (webUiEnabled || opdsEnabled) {
+                      handleSetModes({ port: result.port });
                     }
                   }}
                   className="w-full bg-transparent text-sm text-ink focus:outline-none"
                   id="web-server-port"
-                  min={1024}
-                  max={65535}
+                  aria-invalid={webServerPortError ? true : undefined}
+                  aria-describedby={webServerPortError ? "web-server-port-error" : undefined}
+                  min={WEB_SERVER_PORT_MIN}
+                  max={WEB_SERVER_PORT_MAX}
                 />
+                {webServerPortError && (
+                  <p id="web-server-port-error" className="text-xs text-red-600 dark:text-red-400 mt-1">
+                    {webServerPortError}
+                  </p>
+                )}
               </div>
 
               {/* Web UI / OPDS toggles. Server runs iff at least one is on. */}
@@ -2060,7 +2195,7 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
           </Accordion>
 
           {backupProviders.length > 0 && (
-            <Accordion title={t("settings.remoteBackup")} open={openSection === "remote"} onToggle={() => toggleSection("remote")}>
+            <Accordion title={t("settings.remoteBackup")} open={openSection === "remote"} onToggle={() => toggleSection("remote")} query={settingsQuery} keywords={t("settings.searchTermsRemote")}>
               <div className="space-y-2">
                 {/* Provider selector */}
                 <div className="bg-warm-subtle rounded-xl px-3 py-2.5">
@@ -2087,10 +2222,7 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                           type="checkbox"
                           checked={backupFieldValues[field.key] === "true"}
                           onChange={(e) =>
-                            setBackupFieldValues((prev) => ({
-                              ...prev,
-                              [field.key]: e.target.checked ? "true" : "false",
-                            }))
+                            updateBackupField(field.key, e.target.checked ? "true" : "false")
                           }
                           className="accent-accent"
                         />
@@ -2109,12 +2241,7 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                       <input
                         type={field.fieldType === "password" ? "password" : "text"}
                         value={backupFieldValues[field.key] ?? ""}
-                        onChange={(e) =>
-                          setBackupFieldValues((prev) => ({
-                            ...prev,
-                            [field.key]: e.target.value,
-                          }))
-                        }
+                        onChange={(e) => updateBackupField(field.key, e.target.value)}
                         placeholder={field.placeholder}
                         className="w-full bg-transparent text-sm text-ink placeholder:text-ink-muted/50 focus:outline-none"
                       />
@@ -2122,14 +2249,45 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                   );
                 })}
 
-                {/* Save config */}
-                <button
-                  onClick={handleSaveBackupConfig}
-                  disabled={savingBackupConfig || !selectedProvider}
-                  className="w-full px-3 py-2 text-sm font-medium bg-accent text-surface rounded-xl hover:opacity-90 transition-opacity disabled:opacity-40"
-                >
-                  {savingBackupConfig ? t("settings.testingConnection") : t("settings.saveAndTest")}
-                </button>
+                {/* Save and Test connection — two distinct actions, each
+                    with its own feedback so a save failure can be told apart
+                    from a connection failure. */}
+                <div className="flex gap-2">
+                  <button
+                    onClick={handleSaveBackupConfig}
+                    disabled={savingBackupConfig || !selectedProvider}
+                    className="flex-1 px-3 py-2 text-sm font-medium bg-accent text-surface rounded-xl hover:opacity-90 transition-opacity disabled:opacity-40"
+                  >
+                    {savingBackupConfig ? t("common.saving") : t("common.save")}
+                  </button>
+                  <button
+                    onClick={handleTestConnection}
+                    disabled={testingConnection || !selectedProvider}
+                    className="flex-1 px-3 py-2 text-sm font-medium text-ink-muted hover:text-ink bg-warm-subtle hover:bg-warm-border rounded-xl transition-colors disabled:opacity-40 flex items-center justify-center gap-2"
+                  >
+                    {testingConnection && (
+                      <svg className="animate-spin w-3.5 h-3.5 shrink-0" viewBox="0 0 24 24" fill="none">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
+                      </svg>
+                    )}
+                    {testingConnection ? t("settings.testingConnection") : t("settings.testConnection")}
+                  </button>
+                </div>
+
+                {/* Save feedback — distinct from connection feedback */}
+                {saveFeedback && (
+                  <p className={`text-xs px-1 ${saveFeedback.isError ? "text-red-500" : "text-green-600"}`}>
+                    {saveFeedback.text}
+                  </p>
+                )}
+
+                {/* Test connection feedback — distinct from save feedback */}
+                {testFeedback && (
+                  <p className={`text-xs px-1 ${testFeedback.isError ? "text-red-500" : "text-green-600"}`}>
+                    {testFeedback.text}
+                  </p>
+                )}
 
                 {/* Backup now — only shown when a config has been saved */}
                 {savedBackupConfig && (
@@ -2161,23 +2319,6 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                   </button>
                 )}
 
-                {/* Test connection — only shown when a config has been saved */}
-                {savedBackupConfig && (
-                  <button
-                    onClick={handleTestConnection}
-                    disabled={testingConnection || runningBackup}
-                    className="w-full px-3 py-2 text-sm text-ink-muted hover:text-ink bg-warm-subtle hover:bg-warm-border rounded-xl transition-colors text-left disabled:opacity-40 flex items-center gap-2"
-                  >
-                    {testingConnection && (
-                      <svg className="animate-spin w-3.5 h-3.5 shrink-0" viewBox="0 0 24 24" fill="none">
-                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
-                      </svg>
-                    )}
-                    {testingConnection ? t("settings.testingConnection") : t("settings.testConnection")}
-                  </button>
-                )}
-
                 {/* Last backup timestamp */}
                 {backupStatus && (
                   <p className="text-xs text-ink-muted px-1">
@@ -2188,9 +2329,9 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                   </p>
                 )}
 
-                {/* Status messages */}
+                {/* Status messages (backup run progress / result) */}
                 {remoteBackupMessage && (
-                  <p className={`text-xs px-1 ${connectionTestResult && connectionTestResult.status !== "Ok" ? "text-red-500" : connectionTestResult?.status === "Ok" ? "text-green-600" : "text-ink-muted"}`}>
+                  <p className="text-xs px-1 text-ink-muted">
                     {remoteBackupMessage}
                   </p>
                 )}
@@ -2234,11 +2375,11 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
             </Accordion>
           )}
 
-          <Accordion title={t("plugins.section")} open={openSection === "plugins"} onToggle={() => toggleSection("plugins")}>
-            <PluginsPanel onToast={(msg) => addToast(msg, "error")} />
+          <Accordion title={t("plugins.section")} open={openSection === "plugins"} onToggle={() => toggleSection("plugins")} query={settingsQuery} keywords={t("settings.searchTermsPlugins")}>
+            <PluginsPanel onToast={(msg, type) => addToast(msg, type ?? "error")} />
           </Accordion>
 
-          <Accordion title={t("settings.aboutSection")} open={openSection === "about"} onToggle={() => toggleSection("about")}>
+          <Accordion title={t("settings.aboutSection")} open={openSection === "about"} onToggle={() => toggleSection("about")} query={settingsQuery} keywords={t("settings.searchTermsAbout")}>
             <div className="space-y-3 text-sm">
               <p className="text-ink">
                 {appVersion

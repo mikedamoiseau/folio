@@ -5,14 +5,19 @@ import { listen } from "@tauri-apps/api/event";
 import { useTranslation } from "react-i18next";
 import { useTheme, MIN_FONT_SIZE, MAX_FONT_SIZE } from "../context/ThemeContext";
 import PageViewer from "./PageViewer";
+import ChapterErrorCard from "./ChapterErrorCard";
+import ChapterLoadProgress from "./ChapterLoadProgress";
 import PageThumbnailStrip from "./PageThumbnailStrip";
 import KeyboardShortcutsHelp from "./KeyboardShortcutsHelp";
 import HighlightsPanel, { HIGHLIGHT_COLORS } from "./HighlightsPanel";
 import BookmarksPanel from "./BookmarksPanel";
 import BookmarkToast from "./BookmarkToast";
 import BookCompletionModal from "./BookCompletionModal";
+import MissingFileDialog from "./MissingFileDialog";
 import { useBookCompletion } from "../hooks/useBookCompletion";
 import LanguageSwitcher from "./LanguageSwitcher";
+import OverflowMenu from "./OverflowMenu";
+import ReaderSkeleton from "./ReaderSkeleton";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { friendlyError, isBookFileMissing } from "../lib/errors";
 import { useToast } from "./Toast";
@@ -218,6 +223,7 @@ export default function ReaderPane({
   }, [focusHint, dndMode]);
 
   const [chapterError, setChapterError] = useState<string | null>(null);
+  const [chapterRetryCount, setChapterRetryCount] = useState(0);
   const [missingFileDialog, setMissingFileDialog] = useState(false);
 
   const completion = useBookCompletion(bookId, chapterIndex, totalChapters);
@@ -239,6 +245,8 @@ export default function ReaderPane({
   // Continuous scroll mode state
   const [allChaptersHtml, setAllChaptersHtml] = useState<string[]>([]);
   const [allChaptersLoaded, setAllChaptersLoaded] = useState(false);
+  // Per-chapter load progress for the determinate ChapterLoadProgress bar.
+  const [chaptersLoaded, setChaptersLoaded] = useState(0);
   const chapterDivRefs = useRef<(HTMLDivElement | null)[]>([]);
   // EPUB and MOBI are both chapter-HTML formats and share the Reader's
   // text-rendering path; PDF/CBZ/CBR go through PageViewer instead.
@@ -424,13 +432,40 @@ export default function ReaderPane({
     if (!bookId || loading || !isContinuous) {
       setAllChaptersLoaded(false);
       setAllChaptersHtml([]);
+      setChaptersLoaded(0);
       return;
     }
 
     let cancelled = false;
+    let unlisten: (() => void) | null = null;
+    // Reset the per-chapter counter at the start of each continuous load so
+    // the determinate bar restarts from 0 on book change / retry.
+    setChaptersLoaded(0);
 
     async function loadAll() {
       try {
+        // Await listener registration BEFORE invoking `get_all_chapters` so no
+        // `chapter-load-progress` event can be emitted (e.g. for cached/small
+        // books) before the listener is attached and slip past the counter.
+        // Match payload.bookId so a stale event from a previous book can't
+        // drive this pane's counter.
+        const fn = await listen<{ bookId: string; loaded: number; total: number }>(
+          "chapter-load-progress",
+          (event) => {
+            if (!cancelled && event.payload.bookId === bookId) {
+              setChaptersLoaded(event.payload.loaded);
+            }
+          },
+        );
+        // If the effect was torn down while listen() was registering, the
+        // teardown ran before `unlisten` was set — clean up here instead so
+        // the late-resolved listener doesn't leak.
+        if (cancelled) {
+          fn();
+          return;
+        }
+        unlisten = fn;
+
         const chapters = await invoke<string[]>("get_all_chapters", { bookId });
         if (!cancelled) {
           setAllChaptersHtml(chapters);
@@ -442,8 +477,11 @@ export default function ReaderPane({
     }
 
     loadAll();
-    return () => { cancelled = true; };
-  }, [bookId, loading, isContinuous]);
+    return () => {
+      cancelled = true;
+      if (unlisten) unlisten();
+    };
+  }, [bookId, loading, isContinuous, chapterRetryCount]);
 
   // ---- Scroll to saved chapter after all chapters load (continuous mode) ----
 
@@ -543,7 +581,7 @@ export default function ReaderPane({
     return () => {
       cancelled = true;
     };
-  }, [bookId, chapterIndex, loading]);
+  }, [bookId, chapterIndex, loading, chapterRetryCount]);
 
   // ---- Restore scroll position after chapter HTML renders ----
 
@@ -953,7 +991,7 @@ export default function ReaderPane({
   const handleCreateHighlight = useCallback(async (color: string) => {
     if (!bookId || !selectionPopup) return;
     try {
-      await invoke("add_highlight", {
+      const created = await invoke<ChapterHighlight>("add_highlight", {
         bookId,
         chapterIndex,
         text: selectionPopup.text,
@@ -965,6 +1003,24 @@ export default function ReaderPane({
       setSelectionPopup(null);
       window.getSelection()?.removeAllRanges();
       await loadHighlights();
+      // Offer an immediate remove affordance for the just-created highlight.
+      addToast(t("reader.highlightCreated"), "success", {
+        action: {
+          label: t("common.remove"),
+          onClick: async () => {
+            try {
+              await invoke("remove_highlight", { highlightId: created.id });
+              // Refresh via the ref so we always load highlights for the
+              // CURRENT chapter — the user may have navigated away while the
+              // toast was visible. Using the captured loadHighlights closure
+              // would overwrite the current chapter's state with the old one.
+              await loadHighlightsRef.current();
+            } catch (err) {
+              addToast(friendlyError(err, t), "error");
+            }
+          },
+        },
+      });
     } catch (err) {
       addToast(friendlyError(err, t), "error");
     }
@@ -1484,6 +1540,28 @@ export default function ReaderPane({
 
   // ---- Render ----
 
+  // A missing underlying file is a terminal condition reachable from either the
+  // initial load or a chapter fetch. Render the recovery dialog from a single
+  // place so the user sees one clear dialog rather than two stages.
+  if (missingFileDialog) {
+    return (
+      <MissingFileDialog
+        onCancel={() => {
+          setMissingFileDialog(false);
+          navigate("/");
+        }}
+        onRemove={async () => {
+          try {
+            await invoke("remove_book", { bookId });
+          } catch {
+            // Already gone or other error — navigate away regardless
+          }
+          navigate("/");
+        }}
+      />
+    );
+  }
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-full bg-paper">
@@ -1514,50 +1592,6 @@ export default function ReaderPane({
         >
           {t("reader.backToLibrary")}
         </button>
-        {missingFileDialog && (
-          <>
-            <div className="absolute inset-0 bg-ink/40 backdrop-blur-sm z-[80]" aria-hidden="true" />
-            <div
-              role="dialog"
-              aria-label={t("reader.missingFileTitle")}
-              aria-modal="true"
-              className="absolute inset-0 z-[90] flex items-center justify-center p-4"
-            >
-              <div className="bg-surface rounded-2xl shadow-2xl w-full max-w-md border border-warm-border p-6 space-y-5">
-                <h3 className="font-serif text-base font-semibold text-ink">
-                  {t("reader.missingFileTitle")}
-                </h3>
-                <p className="text-sm text-ink-muted">
-                  {t("reader.missingFileMessage")}
-                </p>
-                <div className="flex gap-3 justify-end pt-1">
-                  <button
-                    onClick={() => {
-                      setMissingFileDialog(false);
-                      navigate("/");
-                    }}
-                    className="px-4 py-2 text-sm text-ink-muted hover:text-ink transition-colors"
-                  >
-                    {t("common.cancel")}
-                  </button>
-                  <button
-                    onClick={async () => {
-                      try {
-                        await invoke("remove_book", { bookId });
-                      } catch {
-                        // Already gone or other error — navigate away regardless
-                      }
-                      navigate("/");
-                    }}
-                    className="px-4 py-2 text-sm bg-red-600 text-white rounded-xl hover:bg-red-700 transition-colors font-medium"
-                  >
-                    {t("reader.removeFromLibrary")}
-                  </button>
-                </div>
-              </div>
-            </div>
-          </>
-        )}
       </div>
     );
   }
@@ -1788,6 +1822,8 @@ export default function ReaderPane({
             </svg>
           </button>
 
+          <div className="w-px h-5 bg-warm-border/60 mx-0.5 shrink-0" aria-hidden="true" />
+
           {/* Font size controls */}
           <div className="flex items-center gap-0.5 mr-1">
             <button
@@ -1927,36 +1963,39 @@ export default function ReaderPane({
             </button>
           )}
 
-          {/* DND toggle */}
-          <button
-            onClick={() => setDndMode((prev) => !prev)}
-            className={`p-1.5 transition-colors rounded-lg focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 ${dndMode ? "text-accent bg-accent-light" : "text-ink-muted hover:text-ink hover:bg-warm-subtle"}`}
-            aria-label={t("reader.toggleFocusMode")}
-            title={t("reader.focusMode")}
-          >
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
-              <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="1.5" />
-              <path d="M12 8v4l2.5 2.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-            </svg>
-          </button>
+          <div className="w-px h-5 bg-warm-border/60 mx-0.5 shrink-0" aria-hidden="true" />
+
+          {/* App group: low-frequency actions tucked into an overflow menu so
+              the header stays grouped rather than a flat row of icons. */}
+          <OverflowMenu label={t("reader.moreActions")}>
+            <button
+              onClick={() => setDndMode((prev) => !prev)}
+              role="menuitem"
+              className={`flex items-center gap-2 px-3 py-2 text-sm transition-colors text-left w-full hover:bg-warm-subtle ${dndMode ? "text-accent" : "text-ink-muted hover:text-ink"}`}
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" className="shrink-0">
+                <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="1.5" />
+                <path d="M12 8v4l2.5 2.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+              {t("reader.focusMode")}
+            </button>
+            <button
+              onClick={() => setShowShortcuts(true)}
+              role="menuitem"
+              className="flex items-center gap-2 px-3 py-2 text-sm text-ink-muted hover:text-ink hover:bg-warm-subtle transition-colors text-left w-full"
+            >
+              <span className="w-[18px] text-center font-medium shrink-0">?</span>
+              {t("shortcuts.title")}
+            </button>
+          </OverflowMenu>
 
           {/* Language switcher */}
           <LanguageSwitcher />
 
-          {/* Keyboard shortcuts hint */}
-          <button
-            onClick={() => setShowShortcuts(true)}
-            className="p-1.5 text-ink-muted hover:text-ink transition-colors rounded-lg hover:bg-warm-subtle focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 text-xs font-medium w-6 h-6 flex items-center justify-center"
-            aria-label={t("shortcuts.title")}
-            title={t("shortcuts.title")}
-          >
-            ?
-          </button>
-
           {/* Settings button */}
           <button
             onClick={onOpenSettings}
-            className="p-1.5 text-ink-muted hover:text-ink transition-colors rounded-lg hover:bg-warm-subtle focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2"
+            className={`p-1.5 transition-colors rounded-lg focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 ${settingsOpen ? "text-accent bg-accent-light" : "text-ink-muted hover:text-ink hover:bg-warm-subtle"}`}
             aria-label={t("reader.openSettings")}
           >
             <svg width="18" height="18" viewBox="0 0 20 20" fill="none">
@@ -2242,9 +2281,13 @@ export default function ReaderPane({
               })()}
 
               {chapterError ? (
-                <div className="max-w-[680px] mx-auto px-8 py-10">
-                  <p className="text-red-500 text-sm">{t("reader.failedToLoadChapter", { error: chapterError })}</p>
-                </div>
+                <ChapterErrorCard
+                  error={chapterError}
+                  onRetry={() => {
+                    setChapterError(null);
+                    setChapterRetryCount((c) => c + 1);
+                  }}
+                />
               ) : isContinuous ? (
                 /* ── Continuous scroll: all chapters stacked ── */
                 allChaptersLoaded ? (
@@ -2276,16 +2319,11 @@ export default function ReaderPane({
                     })}
                   </div>
                 ) : (
-                  <div className="flex-1 flex flex-col items-center justify-center gap-2">
-                    <div className="w-5 h-5 border-2 border-accent/30 border-t-accent rounded-full animate-spin" />
-                    <p className="text-sm text-ink-muted">{t("reader.loadingChapters", { count: totalChapters })}</p>
-                  </div>
+                  <ChapterLoadProgress total={totalChapters} loaded={chaptersLoaded} />
                 )
               ) : !chapterHtml ? (
                 /* ── Paginated: loading chapter ── */
-                <div className="flex-1 flex items-center justify-center">
-                  <div className="w-5 h-5 border-2 border-accent/30 border-t-accent rounded-full animate-spin" />
-                </div>
+                <ReaderSkeleton variant="content" />
               ) : (
                 /* ── Paginated: single chapter ── */
                 <div
@@ -2357,50 +2395,6 @@ export default function ReaderPane({
           readingTimeSecs={completion.readingTimeSecs}
           onClose={completion.dismiss}
         />
-      )}
-      {missingFileDialog && (
-        <>
-          <div className="absolute inset-0 bg-ink/40 backdrop-blur-sm z-[80]" aria-hidden="true" />
-          <div
-            role="dialog"
-            aria-label={t("reader.missingFileTitle")}
-            aria-modal="true"
-            className="absolute inset-0 z-[90] flex items-center justify-center p-4"
-          >
-            <div className="bg-surface rounded-2xl shadow-2xl w-full max-w-md border border-warm-border p-6 space-y-5">
-              <h3 className="font-serif text-base font-semibold text-ink">
-                {t("reader.missingFileTitle")}
-              </h3>
-              <p className="text-sm text-ink-muted">
-                {t("reader.missingFileMessage")}
-              </p>
-              <div className="flex gap-3 justify-end pt-1">
-                <button
-                  onClick={() => {
-                    setMissingFileDialog(false);
-                    navigate("/");
-                  }}
-                  className="px-4 py-2 text-sm text-ink-muted hover:text-ink transition-colors"
-                >
-                  {t("common.cancel")}
-                </button>
-                <button
-                  onClick={async () => {
-                    try {
-                      await invoke("remove_book", { bookId });
-                    } catch {
-                      // Already gone or other error — navigate away regardless
-                    }
-                    navigate("/");
-                  }}
-                  className="px-4 py-2 text-sm bg-red-600 text-white rounded-xl hover:bg-red-700 transition-colors font-medium"
-                >
-                  {t("reader.removeFromLibrary")}
-                </button>
-              </div>
-            </div>
-          </div>
-        </>
       )}
       </div>
     </div>

@@ -1,10 +1,12 @@
 import { useState, useRef, useEffect } from "react";
 import { useTranslation } from "react-i18next";
+import { friendlyError } from "../lib/errors";
+import { isValidHttpUrl } from "../lib/utils";
 
 interface ImportButtonProps {
   onImportFiles: () => void;
   onImportFolder: () => void;
-  onImportUrl: (url: string) => void;
+  onImportUrl: (url: string) => void | Promise<void>;
   loading?: boolean;
   progress?: { current: number; total: number } | null;
 }
@@ -20,8 +22,16 @@ export default function ImportButton({
   const [menuOpen, setMenuOpen] = useState(false);
   const [urlDialogOpen, setUrlDialogOpen] = useState(false);
   const [url, setUrl] = useState("");
+  const [urlError, setUrlError] = useState<string | null>(null);
+  const [importing, setImporting] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
   const urlInputRef = useRef<HTMLInputElement>(null);
+
+  const closeUrlDialog = () => {
+    setUrlDialogOpen(false);
+    setUrl("");
+    setUrlError(null);
+  };
 
   const label =
     loading && progress && progress.total > 1
@@ -47,12 +57,24 @@ export default function ImportButton({
     if (urlDialogOpen) urlInputRef.current?.focus();
   }, [urlDialogOpen]);
 
-  const handleUrlSubmit = () => {
+  const handleUrlSubmit = async () => {
+    if (importing) return;
     const trimmed = url.trim();
     if (!trimmed) return;
-    setUrlDialogOpen(false);
-    setUrl("");
-    onImportUrl(trimmed);
+    if (!isValidHttpUrl(trimmed)) {
+      setUrlError(t("import.invalidUrl"));
+      return;
+    }
+    setUrlError(null);
+    setImporting(true);
+    try {
+      await onImportUrl(trimmed);
+      closeUrlDialog();
+    } catch (err) {
+      setUrlError(friendlyError(err, t));
+    } finally {
+      setImporting(false);
+    }
   };
 
   return (
@@ -147,7 +169,7 @@ export default function ImportButton({
         <>
           <div
             className="fixed inset-0 bg-ink/20 backdrop-blur-sm z-40 animate-fade-in"
-            onClick={() => setUrlDialogOpen(false)}
+            onClick={() => (importing ? undefined : closeUrlDialog())}
           />
           <div className="fixed top-1/3 left-1/2 -translate-x-1/2 w-[420px] max-w-[90vw] bg-surface border border-warm-border rounded-2xl shadow-xl z-50 p-6 animate-fade-in">
             <h3 className="font-serif text-base font-semibold text-ink mb-4">
@@ -157,32 +179,43 @@ export default function ImportButton({
               ref={urlInputRef}
               type="url"
               value={url}
-              onChange={(e) => setUrl(e.target.value)}
+              disabled={importing}
+              onChange={(e) => {
+                setUrl(e.target.value);
+                if (urlError) setUrlError(null);
+              }}
               onKeyDown={(e) => {
                 if (e.key === "Enter") handleUrlSubmit();
-                if (e.key === "Escape") setUrlDialogOpen(false);
+                if (e.key === "Escape" && !importing) closeUrlDialog();
               }}
               placeholder={t("import.urlPlaceholder")}
-              className="w-full h-10 px-3 bg-warm-subtle rounded-lg text-sm text-ink placeholder-ink-muted border border-transparent focus:border-accent/40 focus:outline-none focus:bg-surface transition-colors"
+              className="w-full h-10 px-3 bg-warm-subtle rounded-lg text-sm text-ink placeholder-ink-muted border border-transparent focus:border-accent/40 focus:outline-none focus:bg-surface transition-colors disabled:opacity-60"
             />
-            <p className="mt-2 text-xs text-ink-muted">
-              {t("import.urlHint")}
-            </p>
+            {urlError ? (
+              <p className="mt-2 text-xs text-red-500 dark:text-red-400">
+                {urlError}
+              </p>
+            ) : (
+              <p className="mt-2 text-xs text-ink-muted">
+                {t("import.urlHint")}
+              </p>
+            )}
             <div className="mt-5 flex justify-end gap-2">
               <button
                 type="button"
-                onClick={() => setUrlDialogOpen(false)}
-                className="px-4 py-2 text-sm text-ink-muted hover:text-ink rounded-lg transition-colors"
+                onClick={closeUrlDialog}
+                disabled={importing}
+                className="px-4 py-2 text-sm text-ink-muted hover:text-ink rounded-lg transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
               >
                 {t("common.cancel")}
               </button>
               <button
                 type="button"
                 onClick={handleUrlSubmit}
-                disabled={!url.trim()}
+                disabled={!url.trim() || importing}
                 className="px-4 py-2 bg-accent text-white text-sm font-medium rounded-xl hover:bg-accent-hover disabled:opacity-40 disabled:cursor-not-allowed transition-all"
               >
-                {t("common.import")}
+                {importing ? t("import.importing") : t("common.import")}
               </button>
             </div>
           </div>

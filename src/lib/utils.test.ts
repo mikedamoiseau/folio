@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   formatDuration,
+  formatBytes,
   filterBooks,
   sortBooks,
   groupBy,
@@ -15,6 +16,10 @@ import {
   getReadingStatus,
   PAUSED_AFTER_DAYS,
   providerDisplayName,
+  computeTagBookCounts,
+  validateWebServerPort,
+  WEB_SERVER_PORT_MIN,
+  WEB_SERVER_PORT_MAX,
   type BookLike,
 } from "./utils";
 
@@ -676,5 +681,126 @@ describe("providerDisplayName", () => {
 
   it("falls back to the raw id for unknown providers", () => {
     expect(providerDisplayName("somenew_api")).toBe("somenew_api");
+  });
+});
+
+import { isValidHttpUrl } from "./utils";
+
+describe("isValidHttpUrl", () => {
+  it("accepts http and https absolute URLs", () => {
+    expect(isValidHttpUrl("https://example.com/opds")).toBe(true);
+    expect(isValidHttpUrl("http://192.168.0.5:8080/feed")).toBe(true);
+    expect(isValidHttpUrl("  https://trimmed.example/ ")).toBe(true);
+  });
+  it("rejects empty, malformed, and non-http schemes", () => {
+    expect(isValidHttpUrl("")).toBe(false);
+    expect(isValidHttpUrl("not a url")).toBe(false);
+    expect(isValidHttpUrl("ftp://example.com")).toBe(false);
+    expect(isValidHttpUrl("javascript:alert(1)")).toBe(false);
+    expect(isValidHttpUrl("example.com")).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// computeTagBookCounts (F2g — counts reflect the currently-filtered set)
+// ---------------------------------------------------------------------------
+
+describe("computeTagBookCounts", () => {
+  const bookTagMap = new Map<string, Set<string>>([
+    ["b1", new Set(["t1", "t2"])],
+    ["b2", new Set(["t1"])],
+    ["b3", new Set(["t3"])],
+    ["b4", new Set(["t2"])],
+  ]);
+
+  it("counts every book in the library when nothing is filtered out", () => {
+    const books = [{ id: "b1" }, { id: "b2" }, { id: "b3" }, { id: "b4" }];
+    const counts = computeTagBookCounts(books, bookTagMap);
+    expect(counts.get("t1")).toBe(2);
+    expect(counts.get("t2")).toBe(2);
+    expect(counts.get("t3")).toBe(1);
+  });
+
+  it("reflects the currently-filtered book set, not the whole library", () => {
+    // Simulate another active filter that left only b2 and b3 visible.
+    const filtered = [{ id: "b2" }, { id: "b3" }];
+    const counts = computeTagBookCounts(filtered, bookTagMap);
+    expect(counts.get("t1")).toBe(1); // only b2 carries t1 in the filtered set
+    expect(counts.get("t3")).toBe(1); // only b3 carries t3
+    expect(counts.get("t2")).toBeUndefined(); // b1/b4 filtered out -> no t2
+  });
+
+  it("ignores books with no tags and yields an empty map for an empty set", () => {
+    expect(computeTagBookCounts([], bookTagMap).size).toBe(0);
+    const counts = computeTagBookCounts([{ id: "unknown" }], bookTagMap);
+    expect(counts.size).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// validateWebServerPort
+// ---------------------------------------------------------------------------
+
+describe("validateWebServerPort", () => {
+  it("accepts an in-range port and returns the parsed number", () => {
+    expect(validateWebServerPort("7788")).toEqual({ valid: true, port: 7788 });
+  });
+
+  it("accepts the boundary values", () => {
+    expect(validateWebServerPort(String(WEB_SERVER_PORT_MIN))).toEqual({
+      valid: true,
+      port: WEB_SERVER_PORT_MIN,
+    });
+    expect(validateWebServerPort(String(WEB_SERVER_PORT_MAX))).toEqual({
+      valid: true,
+      port: WEB_SERVER_PORT_MAX,
+    });
+  });
+
+  it("rejects values above the range (no silent clamp to 65535)", () => {
+    expect(validateWebServerPort("99999")).toEqual({ valid: false });
+  });
+
+  it("rejects values below the range", () => {
+    expect(validateWebServerPort("80")).toEqual({ valid: false });
+    expect(validateWebServerPort("0")).toEqual({ valid: false });
+  });
+
+  it("rejects non-numeric, empty, and negative input", () => {
+    expect(validateWebServerPort("")).toEqual({ valid: false });
+    expect(validateWebServerPort("abc")).toEqual({ valid: false });
+    expect(validateWebServerPort("-1")).toEqual({ valid: false });
+    expect(validateWebServerPort("80.5")).toEqual({ valid: false });
+  });
+
+  it("tolerates surrounding whitespace", () => {
+    expect(validateWebServerPort("  7788  ")).toEqual({ valid: true, port: 7788 });
+  });
+});
+
+describe("formatBytes", () => {
+  it("formats zero", () => {
+    expect(formatBytes(0)).toBe("0 B");
+  });
+
+  it("formats bytes with no decimals", () => {
+    expect(formatBytes(512)).toBe("512 B");
+  });
+
+  it("formats kilobytes", () => {
+    expect(formatBytes(2048)).toBe("2.0 KB");
+  });
+
+  it("formats megabytes", () => {
+    expect(formatBytes(2.4 * 1024 * 1024)).toBe("2.4 MB");
+  });
+
+  it("formats gigabytes", () => {
+    expect(formatBytes(3 * 1024 * 1024 * 1024)).toBe("3.0 GB");
+  });
+
+  it("returns empty string for null/undefined", () => {
+    expect(formatBytes(null)).toBe("");
+    expect(formatBytes(undefined)).toBe("");
   });
 });

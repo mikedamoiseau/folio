@@ -40,7 +40,11 @@ interface ExamplePlugin {
  * consent dialog that spells out each permission's data category, and offers
  * a gallery of bundled example plugins to install.
  */
-export default function PluginsPanel({ onToast }: { onToast?: (msg: string) => void }) {
+export default function PluginsPanel({
+  onToast,
+}: {
+  onToast?: (msg: string, type?: "success" | "error") => void;
+}) {
   const { t } = useTranslation();
   const [plugins, setPlugins] = useState<PluginView[]>([]);
   const [examples, setExamples] = useState<ExamplePlugin[]>([]);
@@ -55,8 +59,10 @@ export default function PluginsPanel({ onToast }: { onToast?: (msg: string) => v
       ]);
       setPlugins(list);
       setExamples(ex);
+      return true;
     } catch (e) {
       onToast?.(String(e));
+      return false;
     }
   }, [onToast]);
 
@@ -104,6 +110,16 @@ export default function PluginsPanel({ onToast }: { onToast?: (msg: string) => v
             setBusy(false);
             return;
           }
+          // The chosen export folder must be writable. A write probe is the
+          // only reliable check (readonly() lies on network mounts).
+          const writable = await invoke<boolean>("check_dir_writable", {
+            path: dir,
+          });
+          if (!writable) {
+            onToast?.(t("plugins.folderNotWritable"), "error");
+            setBusy(false);
+            return;
+          }
           grants.push({ permission: perm.id, params: dir });
         } else {
           grants.push({ permission: perm.id, params: null });
@@ -123,9 +139,13 @@ export default function PluginsPanel({ onToast }: { onToast?: (msg: string) => v
     setBusy(true);
     try {
       await invoke("plugin_reload");
-      await refresh();
+      // Only claim success once the list actually refreshed; refresh()
+      // surfaces its own error toast on failure, so don't also fire success.
+      if (await refresh()) {
+        onToast?.(t("plugins.reloadSuccess"), "success");
+      }
     } catch (e) {
-      onToast?.(String(e));
+      onToast?.(String(e), "error");
     } finally {
       setBusy(false);
     }
@@ -154,9 +174,13 @@ export default function PluginsPanel({ onToast }: { onToast?: (msg: string) => v
     setBusy(true);
     try {
       await invoke("plugin_install_example", { exampleId: id });
-      await refresh();
+      // Only claim success once the list actually refreshed; refresh()
+      // surfaces its own error toast on failure, so don't also fire success.
+      if (await refresh()) {
+        onToast?.(t("plugins.installSuccess"), "success");
+      }
     } catch (e) {
-      onToast?.(String(e));
+      onToast?.(String(e), "error");
     } finally {
       setBusy(false);
     }

@@ -3,6 +3,7 @@
     "cancel": "Cancel",
     "save": "Save",
     "saving": "Saving\u2026",
+    "saved": "Saved",
     "delete": "Delete",
     "remove": "Remove",
     "close": "Close",
@@ -23,7 +24,8 @@
     "searching": "Searching\u2026",
     "noResults": "No results found.",
     "downloading": "Downloading\u2026",
-    "working": "Working\u2026"
+    "working": "Working\u2026",
+    "undo": "Undo"
   },
 
   "library": {
@@ -51,6 +53,8 @@
     "otherBooks": "Other Books",
     "booksCount": "{{count}} books",
     "noMatchFilters": "No books match the current filters",
+    "emptyNoBooks": "No books to show",
+    "emptyNoBooksHint": "There are no books in this view yet.",
     "noResultsFor": "No results for \"{{query}}\". Try a different search term.",
     "adjustFilters": "Try adjusting your sort, format, or status filters.",
     "clearAllFilters": "Clear all filters",
@@ -66,6 +70,7 @@
     "importBackgroundDone": "Import finished — {{imported}} added, {{duplicates}} skipped, {{errors}} failed",
     "importBackgroundCancelled": "Import cancelled — {{imported}} added, {{duplicates}} skipped, {{errors}} failed",
     "importBackgroundError": "Import failed — {{error}}",
+    "retryImport": "Retry",
     "importCancelling": "Cancelling…",
     "collectionEmpty": "This collection is empty",
     "collectionEmptyManual": "Drag books onto this collection to add them.",
@@ -84,8 +89,13 @@
     "selected": "selected",
     "selectAll": "Select all",
     "deselectAll": "Deselect all",
-    "bulkDeleteConfirm": "Delete {{count}} books? This cannot be undone.",
+    "bulkDeleteConfirm": "They’ll be removed from your library. You’ll have a few seconds to undo.",
+    "bulkDeleteTitle": "Delete {{count}} books?",
     "bulkDeleted": "{{count}} books deleted",
+    "addedToCollection": "Added to {{collection}}",
+    "bookRemovedUndo": "\u201c{{title}}\u201d removed",
+    "bulkRemovedUndo": "{{count}} books removed",
+    "removedFromCollectionUndo": "Removed from collection",
     "bulkEdit": "Edit",
     "bulkEditSuccess": "Updated {{count}} books",
     "filterByFormat": "Filter by format",
@@ -122,6 +132,7 @@
     "pageLoadTimeout": "Page took too long to load. Try again?",
     "retryLoadPage": "Retry",
     "loadingChapters": "Loading {{count}} chapters\u2026",
+    "loadedChapters": "Loaded {{loaded}} / {{total}} chapters\u2026",
     "failedToLoadChapter": "Failed to load chapter: {{error}}",
     "searchInBook": "Search in book...",
     "searchingText": "Searching...",
@@ -137,11 +148,13 @@
     "timeLeft": "{{time}} left",
     "timeLeftTitle": "{{chapter}} left in chapter, {{book}} left in book",
     "focusMode": "Focus mode (d)",
+    "moreActions": "More actions",
     "dualPageSpread": "Dual-page spread",
     "mangaMode": "Manga mode (RTL)",
     "searchShortcut": "Search (\u2318F)",
     "highlightColor": "Highlight {{color}}",
     "clearHighlight": "Remove highlight",
+    "highlightCreated": "Highlight added",
     "dismiss": "Dismiss",
     "closeToc": "Close table of contents",
     "openToc": "Open table of contents",
@@ -190,7 +203,8 @@
     "importFolder": "Import folder",
     "importFromUrl": "Import from URL",
     "urlPlaceholder": "https://example.com/book.epub",
-    "urlHint": "Direct link to an EPUB, PDF, CBZ, or CBR file."
+    "urlHint": "Direct link to an EPUB, PDF, CBZ, or CBR file.",
+    "invalidUrl": "Enter a valid http(s) URL."
   },
 
   "empty": {
@@ -210,6 +224,7 @@
     "scanForMetadata": "Scan for metadata",
     "removeFromCollection": "Remove from collection",
     "confirmDelete": "Delete \u201c{{title}}\u201d?",
+    "confirmDeleteQuestion": "Remove this book from your library?",
     "confirmDeletion": "Confirm deletion",
     "clickToEditName": "Click to edit name",
     "percentThrough": "{{percent}}% through",
@@ -263,6 +278,9 @@
     "section": "Plugins",
     "intro": "Plugins are small scripts that react to events in Folio — like tagging books on import or notifying you when you finish one. Only install plugins from sources you trust.",
     "reload": "Reload plugins",
+    "reloadSuccess": "Plugins reloaded",
+    "installSuccess": "Plugin installed",
+    "folderNotWritable": "The selected folder is not writable. Choose a different folder and try again.",
     "openFolder": "Open plugins folder",
     "runNow": "Run now",
     "networkHosts": "Will contact: {{hosts}}",
@@ -294,6 +312,17 @@
   "settings": {
     "title": "Settings",
     "closeLabel": "Close settings",
+    "searchPlaceholder": "Search settings…",
+    "searchTermsGeneral": "startup launch autostart cache storage",
+    "searchTermsAppearance": "theme dark light mode font color colour custom css typography text size",
+    "searchTermsLayout": "page layout dual page spread manga continuous scroll reading mode animation",
+    "searchTermsLibrary": "library folder import mode copy link export location",
+    "searchTermsBackup": "backup restore export data snapshot",
+    "searchTermsScan": "metadata scan enrichment provider openlibrary google books cover author",
+    "searchTermsWebserver": "remote access web server pin port opds network browser",
+    "searchTermsRemote": "remote backup sftp ssh connection host schedule",
+    "searchTermsPlugins": "plugins extensions install reload",
+    "searchTermsAbout": "about version licence license credits",
     "appearance": "Appearance",
     "light": "Light",
     "sepia": "Sepia",
@@ -413,10 +442,12 @@
     "pinSequential": "Sequential pattern",
     "pinRepeating": "Repeating pattern",
     "port": "Port",
+    "portRange": "Port must be {{min}}–{{max}}",
     "startServer": "Start Server",
     "stopServer": "Stop Server",
     "serverRunningAt": "Server running at",
     "pinSaved": "PIN saved",
+    "pinUnsaved": "Unsaved",
     "starting": "Starting\u2026",
     "stopping": "Stopping\u2026",
     "copyUrl": "Copy URL",
@@ -499,7 +530,9 @@
     "networkError": "Could not connect to remote storage",
     "connectionTimeout": "Connection timed out",
     "noConfigSaved": "No backup configuration saved",
-    "testFailed": "Connection test failed: {{error}}"
+    "testFailed": "Connection test failed: {{error}}",
+    "configSaved": "Backup destination saved",
+    "requiredFields": "Required: {{fields}}"
   },
 
   "collections": {
@@ -562,13 +595,24 @@
     "addCustomCatalog": "Add custom OPDS catalog",
     "catalogName": "Catalog name",
     "opdsFeedUrl": "OPDS feed URL",
+    "invalidUrl": "Enter a valid http(s) URL.",
+    "testingConnection": "Testing…",
+    "connectionTestFailed": "Couldn’t reach this feed — {{error}}",
     "removeCatalog": "Remove {{name}}",
     "removeCatalogTitle": "Remove catalog",
+    "removeCatalogConfirmTitle": "Remove “{{name}}”?",
+    "removeCatalogConfirmMessage": "This removes the catalog from your list. Your imported books are not affected, and you can add it back anytime.",
     "catalog": "Catalog",
     "searchThisCatalog": "Search this catalog\u2026",
     "noEntries": "No entries found.",
     "loadMore": "Load more\u2026",
     "downloadFailed": "Failed to download \"{{title}}\": {{error}}",
+    "downloadingFormat": "Downloading {{format}}…",
+    "empty": {
+      "title": "No catalogs yet",
+      "subtitle": "Add an OPDS catalog to browse and download books from public libraries and online stores.",
+      "browsePresets": "Browse presets"
+    },
     "presets": {
       "browseButton": "Browse presets",
       "title": "Browse presets",
@@ -670,9 +714,13 @@
 
   "profiles": {
     "manageProfiles": "Manage profiles",
+    "switching": "Switching profile…",
     "newProfile": "New profile",
     "profileName": "Profile name",
-    "deleteLabel": "Delete profile {{name}}"
+    "deleteLabel": "Delete profile {{name}}",
+    "deleteConfirmTitle": "Delete “{{name}}”?",
+    "deleteConfirmMessage": "This permanently deletes this profile and its library database. Your imported book files are not removed. This can’t be undone.",
+    "deleteConfirm": "Delete profile"
   },
 
   "detail": {
@@ -757,7 +805,12 @@
     "year": "Year",
     "language": "Language",
     "publisher": "Publisher",
-    "multipleValues": "Multiple values"
+    "multipleValues": "Multiple values",
+    "optInHint": "Check a field to change it. Unchecked fields are left untouched.",
+    "mixedBanner": "Some fields differ across the {{count}} selected books. Checking a differing field overwrites that value in all {{count}}.",
+    "overwriteWarning": "Overwrites the differing value in all {{count}} books.",
+    "differs": "differs",
+    "enableField": "Edit {{field}} for all selected books"
   },
 
   "onboarding": {
@@ -782,6 +835,7 @@
       "importMode": "When importing books",
       "importModeCopy": "Copy to library",
       "importModeLink": "Link to original",
+      "importModeHelp": "Copy duplicates files into your library — safe, but uses more disk space. Link reads files in place — saves space, but breaks if you move the originals.",
       "cta": "Continue"
     },
     "import": {
@@ -791,7 +845,12 @@
       "addFilesHint": "EPUB, PDF, CBZ, CBR, MOBI",
       "importFolder": "Import Folder",
       "importFolderHint": "Add all books from a folder",
-      "dragDrop": "or drag & drop files here"
+      "dragDrop": "or drag & drop files here",
+      "emptyBanner": "No supported book files (.epub, .pdf, .cbz, .cbr) were found there.",
+      "errorBanner": "Something went wrong while importing. You can try again.",
+      "cancelledBanner": "Import cancelled. You can try again or skip for now.",
+      "retry": "Try again",
+      "continueAnyway": "Continue without importing"
     },
     "tips": {
       "title": "You're All Set",

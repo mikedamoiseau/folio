@@ -3,6 +3,7 @@
     "cancel": "Annuler",
     "save": "Enregistrer",
     "saving": "Enregistrement\u2026",
+    "saved": "Enregistr\u00e9",
     "delete": "Supprimer",
     "remove": "Retirer",
     "close": "Fermer",
@@ -23,7 +24,8 @@
     "searching": "Recherche\u2026",
     "noResults": "Aucun r\u00e9sultat trouv\u00e9.",
     "downloading": "T\u00e9l\u00e9chargement\u2026",
-    "working": "En cours\u2026"
+    "working": "En cours\u2026",
+    "undo": "Annuler"
   },
 
   "library": {
@@ -51,6 +53,8 @@
     "otherBooks": "Autres livres",
     "booksCount": "{{count}} livres",
     "noMatchFilters": "Aucun livre ne correspond aux filtres actuels",
+    "emptyNoBooks": "Aucun livre à afficher",
+    "emptyNoBooksHint": "Aucun livre dans cette vue pour le moment.",
     "noResultsFor": "Aucun r\u00e9sultat pour \u00ab\u00a0{{query}}\u00a0\u00bb. Essayez un autre terme de recherche.",
     "adjustFilters": "Essayez d\u2019ajuster vos filtres de tri, format ou statut.",
     "clearAllFilters": "Effacer tous les filtres",
@@ -66,6 +70,7 @@
     "importBackgroundDone": "Import termin\u00e9 \u2014 {{imported}} ajout\u00e9(s), {{duplicates}} ignor\u00e9(s), {{errors}} \u00e9chec(s)",
     "importBackgroundCancelled": "Import annul\u00e9 \u2014 {{imported}} ajout\u00e9(s), {{duplicates}} ignor\u00e9(s), {{errors}} \u00e9chec(s)",
     "importBackgroundError": "\u00c9chec de l'import \u2014 {{error}}",
+    "retryImport": "R\u00e9essayer",
     "importCancelling": "Annulation\u2026",
     "collectionEmpty": "Cette collection est vide",
     "collectionEmptyManual": "Glissez des livres sur cette collection pour les ajouter.",
@@ -84,8 +89,13 @@
     "selected": "s\u00e9lectionn\u00e9(s)",
     "selectAll": "Tout s\u00e9lectionner",
     "deselectAll": "Tout d\u00e9s\u00e9lectionner",
-    "bulkDeleteConfirm": "Supprimer {{count}} livres ? Cette action est irr\u00e9versible.",
+    "bulkDeleteConfirm": "Ils seront retir\u00e9s de votre biblioth\u00e8que. Vous aurez quelques secondes pour annuler.",
+    "bulkDeleteTitle": "Supprimer {{count}} livres ?",
     "bulkDeleted": "{{count}} livres supprim\u00e9s",
+    "addedToCollection": "Ajout\u00e9 \u00e0 {{collection}}",
+    "bookRemovedUndo": "\u00ab {{title}} \u00bb retir\u00e9",
+    "bulkRemovedUndo": "{{count}} livres retir\u00e9s",
+    "removedFromCollectionUndo": "Retir\u00e9 de la collection",
     "bulkEdit": "Modifier",
     "bulkEditSuccess": "{{count}} livres mis \u00e0 jour",
     "filterByFormat": "Filtrer par format",
@@ -122,6 +132,7 @@
     "pageLoadTimeout": "Le chargement de la page a pris trop de temps. R\u00e9essayer ?",
     "retryLoadPage": "R\u00e9essayer",
     "loadingChapters": "Chargement de {{count}} chapitres\u2026",
+    "loadedChapters": "{{loaded}} / {{total}} chapitres charg\u00e9s\u2026",
     "failedToLoadChapter": "\u00c9chec du chargement du chapitre\u00a0: {{error}}",
     "searchInBook": "Rechercher dans le livre...",
     "searchingText": "Recherche...",
@@ -137,11 +148,13 @@
     "timeLeft": "{{time}} restant",
     "timeLeftTitle": "{{chapter}} restant dans le chapitre, {{book}} restant dans le livre",
     "focusMode": "Mode concentration (d)",
+    "moreActions": "Plus d'actions",
     "dualPageSpread": "Double page",
     "mangaMode": "Mode manga (droite \u00e0 gauche)",
     "searchShortcut": "Rechercher (\u2318F)",
     "highlightColor": "Surligner en {{color}}",
     "clearHighlight": "Supprimer le surlignage",
+    "highlightCreated": "Surlignage ajouté",
     "dismiss": "Fermer",
     "closeToc": "Fermer la table des mati\u00e8res",
     "openToc": "Ouvrir la table des mati\u00e8res",
@@ -189,7 +202,8 @@
     "importFolder": "Importer un dossier",
     "importFromUrl": "Importer depuis une URL",
     "urlPlaceholder": "https://example.com/book.epub",
-    "urlHint": "Lien direct vers un fichier EPUB, PDF, CBZ ou CBR."
+    "urlHint": "Lien direct vers un fichier EPUB, PDF, CBZ ou CBR.",
+    "invalidUrl": "Saisissez une URL http(s) valide."
   },
 
   "empty": {
@@ -209,6 +223,7 @@
     "scanForMetadata": "Scanner les m\u00e9tadonn\u00e9es",
     "removeFromCollection": "Retirer de la collection",
     "confirmDelete": "Supprimer \u00ab\u00a0{{title}}\u00a0\u00bb\u00a0?",
+    "confirmDeleteQuestion": "Retirer ce livre de votre biblioth\u00e8que ?",
     "confirmDeletion": "Confirmer la suppression",
     "clickToEditName": "Cliquer pour modifier le nom",
     "percentThrough": "{{percent}}\u00a0% de progression",
@@ -262,6 +277,9 @@
     "section": "Extensions",
     "intro": "Les extensions sont de petits scripts qui r\u00e9agissent aux \u00e9v\u00e9nements de Folio \u2014 comme \u00e9tiqueter les livres \u00e0 l'import ou vous pr\u00e9venir quand vous en terminez un. N'installez que des extensions de sources de confiance.",
     "reload": "Recharger les extensions",
+    "reloadSuccess": "Extensions rechargées",
+    "installSuccess": "Extension installée",
+    "folderNotWritable": "Le dossier sélectionné n'est pas accessible en écriture. Choisissez un autre dossier et réessayez.",
     "openFolder": "Ouvrir le dossier des extensions",
     "runNow": "Exécuter maintenant",
     "networkHosts": "Contactera : {{hosts}}",
@@ -293,6 +311,17 @@
   "settings": {
     "title": "Param\u00e8tres",
     "closeLabel": "Fermer les param\u00e8tres",
+    "searchPlaceholder": "Rechercher dans les param\u00e8tres\u2026",
+    "searchTermsGeneral": "d\u00e9marrage lancement autostart cache stockage",
+    "searchTermsAppearance": "th\u00e8me sombre clair mode police couleur css personnalis\u00e9 typographie taille texte",
+    "searchTermsLayout": "mise en page double page manga d\u00e9filement continu lecture animation",
+    "searchTermsLibrary": "biblioth\u00e8que dossier importation copier lier exporter emplacement",
+    "searchTermsBackup": "sauvegarde restauration export donn\u00e9es",
+    "searchTermsScan": "m\u00e9tadonn\u00e9es analyse enrichissement fournisseur openlibrary google books couverture auteur",
+    "searchTermsWebserver": "acc\u00e8s distant serveur web pin port opds r\u00e9seau navigateur",
+    "searchTermsRemote": "sauvegarde distante sftp ssh connexion h\u00f4te planification",
+    "searchTermsPlugins": "plugins extensions installer recharger",
+    "searchTermsAbout": "\u00e0 propos version licence cr\u00e9dits",
     "appearance": "Apparence",
     "light": "Clair",
     "sepia": "S\u00e9pia",
@@ -399,10 +428,12 @@
     "pinPlaceholder": "D\u00e9finir un code PIN",
     "savePin": "Enregistrer le PIN",
     "port": "Port",
+    "portRange": "Le port doit \u00eatre compris entre {{min}} et {{max}}",
     "startServer": "D\u00e9marrer le serveur",
     "stopServer": "Arr\u00eater le serveur",
     "serverRunningAt": "Serveur actif \u00e0",
     "pinSaved": "PIN enregistr\u00e9",
+    "pinUnsaved": "Non enregistr\u00e9",
     "starting": "D\u00e9marrage\u2026",
     "stopping": "Arr\u00eat\u2026",
     "copyUrl": "Copier l\u2019URL",
@@ -485,7 +516,9 @@
     "networkError": "Could not connect to remote storage",
     "connectionTimeout": "Connection timed out",
     "noConfigSaved": "No backup configuration saved",
-    "testFailed": "Connection test failed: {{error}}"
+    "testFailed": "Connection test failed: {{error}}",
+    "configSaved": "Destination de sauvegarde enregistrée",
+    "requiredFields": "Requis : {{fields}}"
   },
 
   "collections": {
@@ -548,13 +581,24 @@
     "addCustomCatalog": "Ajouter un catalogue OPDS personnalis\u00e9",
     "catalogName": "Nom du catalogue",
     "opdsFeedUrl": "URL du flux OPDS",
+    "invalidUrl": "Saisissez une URL http(s) valide.",
+    "testingConnection": "Test en cours…",
+    "connectionTestFailed": "Impossible de joindre ce flux — {{error}}",
     "removeCatalog": "Supprimer {{name}}",
     "removeCatalogTitle": "Supprimer le catalogue",
+    "removeCatalogConfirmTitle": "Supprimer « {{name}} » ?",
+    "removeCatalogConfirmMessage": "Cela retire le catalogue de votre liste. Vos livres importés ne sont pas affectés et vous pouvez le rajouter à tout moment.",
     "catalog": "Catalogue",
     "searchThisCatalog": "Rechercher dans ce catalogue\u2026",
     "noEntries": "Aucune entr\u00e9e trouv\u00e9e.",
     "loadMore": "Charger plus\u2026",
     "downloadFailed": "\u00c9chec du t\u00e9l\u00e9chargement de \u00ab\u00a0{{title}}\u00a0\u00bb\u00a0: {{error}}",
+    "downloadingFormat": "T\u00e9l\u00e9chargement {{format}}\u2026",
+    "empty": {
+      "title": "Aucun catalogue pour le moment",
+      "subtitle": "Ajoutez un catalogue OPDS pour parcourir et t\u00e9l\u00e9charger des livres depuis des biblioth\u00e8ques publiques et des librairies en ligne.",
+      "browsePresets": "Parcourir les presets"
+    },
     "presets": {
       "browseButton": "Parcourir les presets",
       "title": "Parcourir les presets",
@@ -655,9 +699,13 @@
 
   "profiles": {
     "manageProfiles": "G\u00e9rer les profils",
+    "switching": "Changement de profil\u2026",
     "newProfile": "Nouveau profil",
     "profileName": "Nom du profil",
-    "deleteLabel": "Supprimer le profil {{name}}"
+    "deleteLabel": "Supprimer le profil {{name}}",
+    "deleteConfirmTitle": "Supprimer « {{name}} » ?",
+    "deleteConfirmMessage": "Cela supprime définitivement ce profil et sa base de données. Vos fichiers de livres importés ne sont pas supprimés. Cette action est irréversible.",
+    "deleteConfirm": "Supprimer le profil"
   },
 
   "detail": {
@@ -742,7 +790,12 @@
     "year": "Ann\u00e9e",
     "language": "Langue",
     "publisher": "\u00c9diteur",
-    "multipleValues": "Valeurs multiples"
+    "multipleValues": "Valeurs multiples",
+    "optInHint": "Cochez un champ pour le modifier. Les champs non cochés sont laissés intacts.",
+    "mixedBanner": "Certains champs diffèrent parmi les {{count}} livres sélectionnés. Cocher un champ qui diffère écrase cette valeur dans les {{count}}.",
+    "overwriteWarning": "Écrase la valeur qui diffère dans les {{count}} livres.",
+    "differs": "diffère",
+    "enableField": "Modifier {{field}} pour tous les livres sélectionnés"
   },
 
   "onboarding": {
@@ -767,6 +820,7 @@
       "importMode": "Lors de l'import de livres",
       "importModeCopy": "Copier dans la bibliothèque",
       "importModeLink": "Lier au fichier original",
+      "importModeHelp": "Copier duplique les fichiers dans votre bibliothèque — sûr, mais utilise plus d'espace disque. Lier lit les fichiers sur place — économise de l'espace, mais ne fonctionne plus si vous déplacez les originaux.",
       "cta": "Continuer"
     },
     "import": {
@@ -776,7 +830,12 @@
       "addFilesHint": "EPUB, PDF, CBZ, CBR, MOBI",
       "importFolder": "Importer un dossier",
       "importFolderHint": "Ajouter tous les livres d'un dossier",
-      "dragDrop": "ou glissez-déposez vos fichiers ici"
+      "dragDrop": "ou glissez-déposez vos fichiers ici",
+      "emptyBanner": "Aucun fichier de livre pris en charge (.epub, .pdf, .cbz, .cbr) n'a été trouvé à cet endroit.",
+      "errorBanner": "Une erreur s'est produite lors de l'importation. Vous pouvez réessayer.",
+      "cancelledBanner": "Importation annulée. Vous pouvez réessayer ou passer cette étape.",
+      "retry": "Réessayer",
+      "continueAnyway": "Continuer sans importer"
     },
     "tips": {
       "title": "Tout est prêt",

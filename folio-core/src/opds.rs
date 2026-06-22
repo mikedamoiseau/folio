@@ -165,6 +165,9 @@ pub struct OpdsLink {
     pub href: String,
     pub mime_type: String,
     pub rel: String,
+    /// Download size in bytes, parsed from the OPDS `length` attribute.
+    /// `None` when the feed omits it (many feeds do).
+    pub size_bytes: Option<u64>,
 }
 
 /// Parsed OPDS feed.
@@ -328,6 +331,7 @@ fn parse_feed_with_trusted(xml: &str, base_url: &str, trusted: &[String]) -> Fol
                         let mut href = String::new();
                         let mut rel = String::new();
                         let mut mime = String::new();
+                        let mut size_bytes: Option<u64> = None;
                         for attr in e.attributes().flatten() {
                             let key = std::str::from_utf8(attr.key.as_ref()).unwrap_or("");
                             let val = attr.unescape_value().unwrap_or_default().to_string();
@@ -335,6 +339,7 @@ fn parse_feed_with_trusted(xml: &str, base_url: &str, trusted: &[String]) -> Fol
                                 "href" => href = resolve(&val),
                                 "rel" => rel = val,
                                 "type" => mime = val,
+                                "length" => size_bytes = val.parse::<u64>().ok(),
                                 _ => {}
                             }
                         }
@@ -377,6 +382,7 @@ fn parse_feed_with_trusted(xml: &str, base_url: &str, trusted: &[String]) -> Fol
                                         href,
                                         mime_type: mime,
                                         rel,
+                                        size_bytes,
                                     });
                                 }
                             }
@@ -625,6 +631,26 @@ mod tests {
             "https://example.com/download/book.epub"
         );
         assert_eq!(entry.links[0].mime_type, "application/epub+zip");
+        // No `length` attribute → size_bytes is None.
+        assert_eq!(entry.links[0].size_bytes, None);
+    }
+
+    #[test]
+    fn parse_feed_acquisition_length_populates_size_bytes() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <feed xmlns="http://www.w3.org/2005/Atom">
+          <title>Test Catalog</title>
+          <entry>
+            <id>urn:uuid:size</id>
+            <title>Sized Book</title>
+            <link href="/download/book.epub" type="application/epub+zip" rel="http://opds-spec.org/acquisition" length="12345"/>
+          </entry>
+        </feed>"#;
+
+        let feed = parse_feed(xml, "https://example.com/opds").unwrap();
+        assert_eq!(feed.entries.len(), 1);
+        assert_eq!(feed.entries[0].links.len(), 1);
+        assert_eq!(feed.entries[0].links[0].size_bytes, Some(12345));
     }
 
     #[test]

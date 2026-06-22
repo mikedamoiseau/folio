@@ -478,6 +478,33 @@ pub async fn get_supported_formats() -> FolioResult<Vec<&'static str>> {
     Ok(supported_import_extensions().to_vec())
 }
 
+/// Best-effort check that `dir` is a writable directory.
+///
+/// Metadata-based checks (`readonly()`) are unreliable on network mounts
+/// (see the known SMBFS issue), so the only dependable test is an actual
+/// write probe: create a uniquely-named temp file in the directory, write a
+/// byte, then remove it. The temp file is always cleaned up, even on partial
+/// failure. Returns `false` when `dir` is not an existing directory.
+pub(crate) fn probe_dir_writable(dir: &std::path::Path) -> bool {
+    if !dir.is_dir() {
+        return false;
+    }
+
+    let probe = dir.join(format!(".folio-write-test-{}", Uuid::new_v4()));
+    let result = std::fs::write(&probe, b"0").is_ok();
+    // Best-effort cleanup regardless of whether the write succeeded.
+    let _ = std::fs::remove_file(&probe);
+    result
+}
+
+/// Verify a folder is actually writable before recording a `write:files`
+/// grant. Writability is a boolean answer, so failures (missing path, not a
+/// directory, permission denied) return `Ok(false)` rather than an error.
+#[tauri::command]
+pub async fn check_dir_writable(path: String) -> FolioResult<bool> {
+    Ok(probe_dir_writable(std::path::Path::new(&path)))
+}
+
 #[tauri::command]
 #[tracing::instrument(
     skip(file_path, state, _app),
@@ -1748,9 +1775,38 @@ pub async fn get_chapter_metadata_batch(
     }
 }
 
+/// Per-chapter progress emitted while `get_all_chapters` streams a book's
+/// chapters to the frontend for continuous-scroll mode.
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ChapterLoadProgress {
+    book_id: String,
+    loaded: usize,
+    total: usize,
+}
+
+/// Throttle rule for `chapter-load-progress` events: emitting one per chapter
+/// floods the IPC bridge on large books (hundreds of chapters). For small
+/// books (`total <= 50`) emit every chapter; otherwise emit roughly every 1%
+/// of progress. The final chapter (`loaded == total`) always emits so the bar
+/// reliably reaches 100%.
+///
+/// `loaded` is 1-based (the count of chapters loaded so far, i.e. `i + 1`).
+fn should_emit_chapter_progress(loaded: usize, total: usize) -> bool {
+    if total == 0 {
+        return false;
+    }
+    if loaded == total {
+        return true;
+    }
+    let step = if total <= 50 { 1 } else { (total / 100).max(1) };
+    loaded.is_multiple_of(step)
+}
+
 #[tauri::command]
 pub async fn get_all_chapters(
     book_id: String,
+    app: AppHandle,
     state: State<'_, AppState>,
 ) -> FolioResult<Vec<String>> {
     let _t = state.ipc_metrics.time("get_all_chapters");
@@ -1782,6 +1838,17 @@ pub async fn get_all_chapters(
                     &book_id,
                 )?;
                 chapters.push(html);
+                let loaded = i + 1;
+                if should_emit_chapter_progress(loaded, total_chapters as usize) {
+                    let _ = app.emit(
+                        "chapter-load-progress",
+                        ChapterLoadProgress {
+                            book_id: book_id.clone(),
+                            loaded,
+                            total: total_chapters as usize,
+                        },
+                    );
+                }
             }
             Ok(chapters)
         }
@@ -1801,6 +1868,17 @@ pub async fn get_all_chapters(
                     &book_id,
                 )?;
                 chapters.push(html);
+                let loaded = i + 1;
+                if should_emit_chapter_progress(loaded, total_chapters as usize) {
+                    let _ = app.emit(
+                        "chapter-load-progress",
+                        ChapterLoadProgress {
+                            book_id: book_id.clone(),
+                            loaded,
+                            total: total_chapters as usize,
+                        },
+                    );
+                }
             }
             Ok(chapters)
         }
@@ -4240,8 +4318,26 @@ pub async fn get_backup_providers() -> FolioResult<Vec<crate::backup::ProviderIn
 #[tauri::command]
 pub async fn save_backup_config(
     config: crate::backup::BackupConfig,
+    skip_test: Option<bool>,
     state: State<'_, AppState>,
 ) -> Result<crate::backup::ConnectionTestResult, String> {
+    // When `skip_test` is set, persist the config without running a
+    // connection test. This lets the UI offer a "Save" action distinct
+    // from "Test connection", so a save failure is never conflated with a
+    // connectivity failure (and credentials can be saved while a remote is
+    // temporarily unreachable).
+    if skip_test.unwrap_or(false) {
+        let clean = crate::backup::store_secrets(&config).map_err(|e| e.to_string())?;
+        let conn = state
+            .active_db()
+            .map_err(|e| e.to_string())?
+            .get()
+            .map_err(|e| e.to_string())?;
+        let json = serde_json::to_string(&clean).map_err(|e| e.to_string())?;
+        db::set_setting(&conn, "backup_config", &json).map_err(|e| e.to_string())?;
+        return Ok(crate::backup::ConnectionTestResult::Ok { latency_ms: 0 });
+    }
+
     // Snapshot existing secrets for rollback on test failure
     let old_secrets = {
         let conn = state
@@ -6215,6 +6311,67 @@ pub async fn get_ipc_metrics(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn probe_dir_writable_true_for_writable_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(probe_dir_writable(dir.path()));
+        // The probe file must be cleaned up.
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn probe_dir_writable_false_for_missing_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("does-not-exist");
+        assert!(!probe_dir_writable(&missing));
+    }
+
+    #[test]
+    fn probe_dir_writable_false_for_file_path() {
+        // A regular file is not a directory.
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("a-file.txt");
+        std::fs::write(&file, b"x").unwrap();
+        assert!(!probe_dir_writable(&file));
+    }
+
+    // NOTE: a read-only-directory test is intentionally skipped — reliably
+    // creating an unwritable directory is fiddly and platform-dependent
+    // (root bypasses mode bits, Windows ignores them). The missing-path and
+    // file-path cases cover the non-writable branches portably.
+
+    #[test]
+    fn chapter_progress_emits_every_chapter_for_small_books() {
+        // total <= 50: every chapter is a meaningful step.
+        for loaded in 1..=10 {
+            assert!(should_emit_chapter_progress(loaded, 10));
+        }
+    }
+
+    #[test]
+    fn chapter_progress_throttles_large_books() {
+        // total = 280 -> step = 2; emit on even counts only, plus the last.
+        let total = 280;
+        assert!(should_emit_chapter_progress(2, total));
+        assert!(!should_emit_chapter_progress(3, total));
+        assert!(should_emit_chapter_progress(4, total));
+    }
+
+    #[test]
+    fn chapter_progress_always_emits_final() {
+        // The final chapter emits even when it isn't on a step boundary.
+        assert!(should_emit_chapter_progress(280, 280));
+        assert!(should_emit_chapter_progress(101, 101));
+        // total = 300 -> step = 3; 299 is not a multiple of 3 but 300 is the final.
+        assert!(!should_emit_chapter_progress(299, 300));
+        assert!(should_emit_chapter_progress(300, 300));
+    }
+
+    #[test]
+    fn chapter_progress_handles_zero_total() {
+        assert!(!should_emit_chapter_progress(0, 0));
+    }
 
     #[test]
     fn get_login_history_reads_web_session_rows() {

@@ -38,7 +38,17 @@ interface ImportContextValue {
   startFolder: (folderPath: string) => Promise<void>;
   startFiles: (paths: string[]) => Promise<void>;
   cancel: () => Promise<void>;
+  /** Re-run the most recent import request (used by the error-phase retry). */
+  retry: () => Promise<void>;
+  /** True once an import request has been issued this session (enables retry). */
+  canRetry: boolean;
+  /** Manually clear a persisted (error) status bar. */
+  dismiss: () => void;
 }
+
+type ImportRequest =
+  | { kind: "folder"; path: string }
+  | { kind: "files"; paths: string[] };
 
 const IDLE: ImportProgress = {
   phase: "idle",
@@ -81,6 +91,8 @@ export function ImportProvider({ children }: { children: ReactNode }) {
   const [running, setRunning] = useState(false);
   const [lastCompletedAt, setLastCompletedAt] = useState<number | null>(null);
   const clearTimerRef = useRef<number | null>(null);
+  const lastRequestRef = useRef<ImportRequest | null>(null);
+  const [canRetry, setCanRetry] = useState(false);
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
@@ -112,14 +124,23 @@ export function ImportProvider({ children }: { children: ReactNode }) {
           setLastCompletedAt(Date.now());
         }
         // Keep the final phase visible briefly so the user sees the totals,
-        // then clear the bar.
+        // then clear the bar. Two cases persist instead of auto-clearing: the
+        // `error` phase (a failed import needs a friendly message + retry, not
+        // a 4s flash) and a `done` batch that had failures (errors > 0) — a
+        // partial-failure summary stays until the user dismisses it so the
+        // failed count isn't a 4s flash either. They stay until retried or
+        // dismissed.
+        const persist = phase === "error" || (phase === "done" && next.errors > 0);
         if (clearTimerRef.current !== null) {
           window.clearTimeout(clearTimerRef.current);
-        }
-        clearTimerRef.current = window.setTimeout(() => {
-          setProgress(null);
           clearTimerRef.current = null;
-        }, 4000);
+        }
+        if (!persist) {
+          clearTimerRef.current = window.setTimeout(() => {
+            setProgress(null);
+            clearTimerRef.current = null;
+          }, 4000);
+        }
       } else {
         setRunning(true);
       }
@@ -159,6 +180,8 @@ export function ImportProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const startFolder = useCallback(async (folderPath: string) => {
+    lastRequestRef.current = { kind: "folder", path: folderPath };
+    setCanRetry(true);
     setProgress({ ...IDLE, phase: "scanning", filename: folderPath });
     setRunning(true);
     try {
@@ -171,6 +194,8 @@ export function ImportProvider({ children }: { children: ReactNode }) {
 
   const startFiles = useCallback(async (paths: string[]) => {
     if (paths.length === 0) return;
+    lastRequestRef.current = { kind: "files", paths };
+    setCanRetry(true);
     setProgress({ ...IDLE, phase: "importing", total: paths.length });
     setRunning(true);
     try {
@@ -185,9 +210,27 @@ export function ImportProvider({ children }: { children: ReactNode }) {
     await invoke("cancel_import");
   }, []);
 
+  const dismiss = useCallback(() => {
+    if (clearTimerRef.current !== null) {
+      window.clearTimeout(clearTimerRef.current);
+      clearTimerRef.current = null;
+    }
+    setProgress(null);
+  }, []);
+
+  // Re-run the last import. Already-imported books are deduplicated by hash
+  // on the backend, so retrying the whole batch safely re-attempts only the
+  // files that previously failed.
+  const retry = useCallback(async () => {
+    const req = lastRequestRef.current;
+    if (!req) return;
+    if (req.kind === "folder") await startFolder(req.path);
+    else await startFiles(req.paths);
+  }, [startFolder, startFiles]);
+
   const value = useMemo<ImportContextValue>(
-    () => ({ running, progress, lastCompletedAt, startFolder, startFiles, cancel }),
-    [running, progress, lastCompletedAt, startFolder, startFiles, cancel]
+    () => ({ running, progress, lastCompletedAt, startFolder, startFiles, cancel, retry, canRetry, dismiss }),
+    [running, progress, lastCompletedAt, startFolder, startFiles, cancel, retry, canRetry, dismiss]
   );
 
   return <ImportContext.Provider value={value}>{children}</ImportContext.Provider>;

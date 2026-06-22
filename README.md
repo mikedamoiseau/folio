@@ -38,6 +38,7 @@ Folio is for the opposite case: you already have the files, and you want a bette
 - Import via file picker, drag-and-drop, direct URL, or folder scan
 - Copy-on-import into an app-managed library folder
 - Duplicate detection using SHA-256 file hashing
+- Undo for accidental deletes (single, bulk, and remove-from-collection)
 - Search by title or author
 - Sort by date added, last read, title, author, progress, or rating
 - Filter by format, reading status, and minimum rating

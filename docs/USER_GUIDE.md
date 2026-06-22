@@ -148,10 +148,12 @@ To act on multiple books at once, click the **selection icon** in the toolbar (g
 - Click book cards to select or deselect them. A checkbox appears on each card.
 - A floating action bar appears at the bottom showing the selection count.
 - **Select all / Deselect all** — toggle between selecting all visible books or clearing the selection.
-- **Delete** — remove all selected books (with a confirmation prompt).
+- **Delete** — remove all selected books (with a confirmation dialog showing the count).
 - **Cancel** — exit selection mode.
 
-Selection mode disables drag-and-drop to prevent accidental actions.
+Selection mode disables drag-and-drop to prevent accidental actions. Your selection is kept while you stay in selection mode and is cleared when you exit.
+
+**Undo:** deleting a book, deleting a selection, and removing a book from a collection all show a brief **Undo** toast — click it within a few seconds to reverse the action before it's applied.
 
 ---
 
@@ -403,16 +405,16 @@ Open the catalog browser from the library. Pick a catalog to browse its categori
 
 ### Downloading
 
-Click a download link to grab a book (EPUB, PDF, CBZ, CBR, or MOBI/AZW/AZW3) and import it directly into your library.
+Click a download link to grab a book (EPUB, PDF, CBZ, CBR, or MOBI/AZW/AZW3) and import it directly into your library. When the catalog reports a file size, it's shown next to the download.
 
 ### Adding more catalogs
 
 Two paths from the catalog list view:
 
 - **Browse presets** — opens an inline picker with a curated list of OPDS catalogs (Gallica, OpenEdition, ManyBooks, arXiv, Elephant Editions, Hungarian / Bulgarian libraries, Anarchist Library, others). Filter by language, by category, or with the search box. Click **+ Add** on any row to install it. Already-added presets show an "Added" badge.
-- **Add custom URL** — enter the OPDS root URL of any catalog, including self-hosted Calibre/COPS servers and other Folio instances on your LAN (e.g. `http://192.168.0.12:7788/opds`).
+- **Add custom URL** — enter the OPDS root URL of any catalog, including self-hosted Calibre/COPS servers and other Folio instances on your LAN (e.g. `http://192.168.0.12:7788/opds`). The URL is validated and Folio runs a quick connection test before saving, so a typo or unreachable feed is caught immediately instead of failing later when you browse.
 
-Custom catalogs can be removed at any time.
+Custom catalogs can be removed at any time (with a confirmation). If you ever have no catalogs, the panel shows a shortcut to the preset picker.
 
 ---
 
@@ -429,6 +431,8 @@ Create and switch profiles from the profile dropdown in the library header. The 
 Click the gear icon in the reader header (or library toolbar) to open Settings.
 
 ![Settings panel](../screenshots/02-settings-panel.png)
+
+Settings are grouped into collapsible sections. Use the **search box** at the top to filter sections by name or keyword (e.g. "pin", "css", "backup") and jump straight to what you need.
 
 ### Theme
 
@@ -634,7 +638,7 @@ Folio can sync your library to a remote storage provider for off-site backup. Co
 **How it works:**
 
 1. Select a provider and fill in connection details
-2. Click **Save Configuration** (passwords are stored in your OS keychain, not in the database)
+2. Click **Save** to store the configuration (passwords are stored in your OS keychain, not in the database), or **Test connection** to verify the details reach the server — each reports its own result, so you can tell a save problem from a connection problem
 3. Click **Backup Now** to start a sync
 
 **What gets synced:** Book files, covers, reading progress, bookmarks, highlights, and collections. Metadata files (JSON) always contain the full library. Book files are uploaded incrementally — only new or changed files are transferred.
@@ -717,7 +721,7 @@ The server runs whenever at least one toggle is on. Turn both off to stop the se
 ### Setting up
 
 1. Open **Settings** and scroll to the **Remote Access** section
-2. Enter a **PIN** (this is the password for web access) and click **Save PIN**
+2. Enter a **PIN** (this is the password for web access) and click **Save PIN**. An "Unsaved" indicator appears while the typed PIN differs from the saved one, and a valid PIN is also saved automatically when you click away — so you won't lose it by closing the panel mid-type.
 3. Tick **Web UI**, **OPDS**, or both
 4. A URL and QR code appear — scan the QR code with your phone or type the URL in any browser
 
