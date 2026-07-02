@@ -662,6 +662,9 @@ export default function PageViewer({
               className="max-h-full max-w-full object-contain rounded-sm shadow-[0_4px_24px_-4px_rgba(44,34,24,0.18)]"
               style={dualPage && rightImageData ? { maxWidth: "50%" } : undefined}
               draggable={false}
+              onError={() =>
+                setError(t("reader.failedToLoadPage", { error: t("reader.imageDecodeError") }))
+              }
             />
           )}
           {rightImageData && (
@@ -671,6 +674,9 @@ export default function PageViewer({
               className="max-h-full object-contain rounded-sm shadow-[0_4px_24px_-4px_rgba(44,34,24,0.18)]"
               style={{ maxWidth: "50%" }}
               draggable={false}
+              onError={() =>
+                setError(t("reader.failedToLoadPage", { error: t("reader.imageDecodeError") }))
+              }
             />
           )}
         </div>
