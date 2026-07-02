@@ -3,7 +3,7 @@
 All notable changes to this project will be documented in this file.
 This project adheres to [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [2.5.0] - 2026-07-02
 
 A trust-and-feedback release driven by a full UX audit of the first-run →
 import → organize → read → catalog/settings path. The themes: destructive
@@ -32,6 +32,8 @@ reports its outcome, and error/empty states are built rather than blank.
 - **Clear-filters now clears tag filters too** — previously a tag-only filter survived "clear all filters".
 - **Invalid nested button** in the catalog row (a `<button>` inside a `<button>`) split into siblings, fixing keyboard/click behavior.
 - **Web-server port** out-of-range values show an inline range error instead of silently clamping to the boundary.
+- **Blank pages in reader.** Page images are delivered as `blob:` URLs, but the CSP `img-src` never allowed `blob:`, so under enforced CSP (production builds) every page rendered as a broken image (a blank page with just a "Page N of M" box) — all formats, all profiles. `blob:` added to `img-src`. Worked in `tauri dev` (relaxed CSP), which is why it shipped.
+- **Silent page-load failures.** The page `<img>` had no `onError` handler, so an image that failed to render showed only the browser's broken-image state with no visible error. It now surfaces the error overlay.
 
 ## [2.4.0] - 2026-06-18
 
