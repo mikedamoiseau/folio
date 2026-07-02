@@ -150,7 +150,15 @@ Open the `.dmg`, drag **Folio.app** to **Applications**, then launch it.
 
 Because Folio is not currently notarized with an Apple Developer certificate, macOS may block it on first launch.
 
-Run this once after installing:
+**Recommended — right-click to open (no Terminal):**
+
+1. In **Applications**, right-click (or Control-click) **Folio.app**.
+2. Choose **Open** from the menu.
+3. In the dialog, click **Open** again.
+
+This is only needed the first time. macOS remembers the choice, and afterwards you can launch Folio normally. On macOS 15 (Sequoia) and later, if there is no **Open** option in the right-click menu, double-click the app once, then go to **System Settings → Privacy & Security** and click **Open Anyway**.
+
+**Alternative — clear the quarantine flag from Terminal:**
 
 ```bash
 xattr -cr /Applications/Folio.app

@@ -52,11 +52,9 @@ Go to the [GitHub Releases page](https://github.com/mikedamoiseau/folio/releases
 >
 > Because this app is not notarized, macOS 14 (Sonoma) and later may block it with a _"Folio.app is damaged and can't be opened"_ message.
 >
-> **Fix:** open Terminal and run:
-> ```bash
-> xattr -cr /Applications/Folio.app
-> ```
-> Then launch the app as normal. This removes the quarantine flag and only needs to be done once after each install or update.
+> **Fix (recommended, no Terminal):** in Applications, right-click (Control-click) **Folio.app**, choose **Open**, then click **Open** again in the dialog. On macOS 15 (Sequoia) and later, if there is no **Open** option, double-click once, then open **System Settings → Privacy & Security** and click **Open Anyway**. Only needed the first time — macOS remembers the choice.
+>
+> **Alternative (Terminal):** run `xattr -cr /Applications/Folio.app`, then launch normally. This removes the quarantine flag and only needs to be done once after each install or update.
 
 **Windows:** Run the `.msi` installer and follow the prompts.
 
@@ -884,10 +882,8 @@ If you do not need MOBI support, use the Intel (x86_64) macOS release build — 
 
 Check that your OS meets the minimum version listed in [Getting Started](#1-getting-started).
 
-**macOS — "damaged and can't be opened" or "unidentified developer":** This is a Gatekeeper quarantine flag on unsigned apps. Run the following in Terminal, then try launching again:
+**macOS — "damaged and can't be opened" or "unidentified developer":** This is a Gatekeeper quarantine flag on unsigned apps. Easiest fix: right-click (Control-click) **Folio.app** in Applications, choose **Open**, then click **Open** again. Or, after a blocked launch, go to **System Settings > Privacy & Security** and click **Open Anyway**. If neither works, clear the flag from Terminal and try launching again:
 
 ```bash
 xattr -cr /Applications/Folio.app
 ```
-
-Alternatively go to **System Settings > Privacy & Security** and click **Open Anyway** after the first blocked launch attempt.
