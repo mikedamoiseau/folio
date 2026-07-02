@@ -57,17 +57,20 @@ const books = await invoke<Book[]>("get_library");
 ```rust
 // Backend (src-tauri/src/commands.rs)
 #[tauri::command]
-pub async fn get_library(state: State<'_, AppState>) -> Result<Vec<Book>, String>
+pub async fn get_library(state: State<'_, AppState>) -> FolioResult<Vec<Book>>
 ```
 
 Commands are registered in `src-tauri/src/lib.rs` via `invoke_handler`. Every new command must be added there.
 
 ### Backend Layers
 
-- **commands.rs** — Tauri command handlers (the API surface). Route to format-specific parsers and DB functions.
-- **db.rs** — All SQLite CRUD operations. Functions receive `&Connection` from an r2d2 pool, never manage connection lifecycle.
-- **models.rs** — Shared structs: `Book`, `ReadingProgress`, `Bookmark`, `Collection`, etc.
-- **epub.rs / pdf.rs / cbz.rs / cbr.rs** — Format-specific parsing. Each extracts metadata, content, and cover images.
+The backend is two crates: **`folio`** (`src-tauri/src/`) — the Tauri shell, IPC commands, and web server — and **`folio-core`** (`folio-core/src/`) — parsing, DB, and models, with no Tauri dependency.
+
+- **commands.rs** (`src-tauri/src/`) — Tauri command handlers (the API surface). Route to format-specific parsers and DB functions.
+- **lib.rs** (`src-tauri/src/`) — App setup; registers commands in `invoke_handler`.
+- **db.rs** (`folio-core/src/`) — All SQLite CRUD operations. Functions receive `&Connection` from an r2d2 pool, never manage connection lifecycle.
+- **models.rs** (`folio-core/src/`) — Shared structs: `Book`, `ReadingProgress`, `Bookmark`, `Collection`, `BookFormat`, etc.
+- **epub.rs / pdf.rs / cbz.rs / cbr.rs / mobi/** (`folio-core/src/`) — Format-specific parsing. Each extracts metadata, content, and cover images.
 
 ### Frontend Layers
 
@@ -79,7 +82,7 @@ Commands are registered in `src-tauri/src/lib.rs` via `invoke_handler`. Every ne
 
 - **Frontend:** React hooks + Context (ThemeContext). No external state library.
 - **Backend:** `AppState` holds a `DbPool` (r2d2 connection pool to SQLite).
-- **Database:** SQLite at the platform app data directory (`library.db`). Schema auto-migrates on startup via `db.rs::run_schema()`.
+- **Database:** SQLite at the platform app data directory (`library.db`). Schema auto-migrates on startup via `folio-core/src/db.rs::run_schema()`.
 
 ### Book Storage
 
@@ -87,11 +90,11 @@ Books are copied into an app-managed library folder (default `~/Documents/folio/
 
 ## Adding Common Things
 
-**New Tauri command:** Define in `commands.rs` → register in `lib.rs` `invoke_handler` → call via `invoke()` in React.
+**New Tauri command:** Define in `src-tauri/src/commands.rs` (return `FolioResult<T>`) → register in `src-tauri/src/lib.rs` `invoke_handler` → call via `invoke()` in React.
 
-**New book format:** Create module (e.g., `mobi.rs`) → add `BookFormat` enum variant in `models.rs` → add match arm in `import_book` in `commands.rs`.
+**New book format:** Create module in `folio-core/src/` (e.g., `fb2.rs`; declare it in `folio-core/src/lib.rs`) → add `BookFormat` enum variant in `folio-core/src/models.rs` → add extension + match arms in `import_book` in `src-tauri/src/commands.rs` → list the extension in `supported_import_extensions()`.
 
-**Database schema change:** Add migration SQL to `db.rs::run_schema()` (additive — use `CREATE TABLE IF NOT EXISTS` / `ALTER TABLE` patterns).
+**Database schema change:** Add migration SQL to `folio-core/src/db.rs::run_schema()` (additive — use `CREATE TABLE IF NOT EXISTS` / guarded `ALTER TABLE` patterns).
 
 ## Format Support
 
