@@ -417,59 +417,169 @@ async fn get_book(
 
 // ── Covers ───────────────────────────────────────────────────────────────────
 
-#[derive(serde::Deserialize)]
-struct CoverQuery {
-    size: Option<String>,
+/// Finding 8: covers are decorative artwork, not book content — far less
+/// sensitive than page images/chapter text, and OPDS e-reader clients
+/// re-fetch full covers constantly under per-request Basic Auth (no
+/// cookie/session reuse to worry about). A blanket `no-store` whenever a PIN
+/// is configured regressed those clients for little real security benefit,
+/// so covers (both the full image and `?size=thumb`) always get a cacheable
+/// response regardless of PIN — unlike `session_cache_control`'s policy for
+/// page images/page-count, which must stay PIN-aware since those requests
+/// never pass through `auth_middleware` once a cached response exists.
+const COVER_CACHE_CONTROL: &str = "private, max-age=86400";
+
+/// Finding 5: `Query<CoverQuery>` (axum's `serde_urlencoded`-backed
+/// extractor) hard-rejects request shapes real clients send in practice — a
+/// duplicate `size` key, or a `%` sequence that isn't valid percent-encoding
+/// — turning what used to serve fine into a 400. Parse the query string
+/// ourselves instead: take the *last* `size=` occurrence (mirrors how most
+/// frameworks resolve duplicate keys) and never fail the request over
+/// anything else — an unparseable or unrecognized value already falls
+/// through to the "serve full cover" branch below, same as `size=banana`
+/// always has.
+fn parse_cover_size(query: Option<&str>) -> Option<String> {
+    let mut size = None;
+    for pair in query?.split('&') {
+        let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
+        if key == "size" {
+            size = Some(urlencoding::decode(value).unwrap_or_default().into_owned());
+        }
+    }
+    size
 }
 
-/// Item 11: `?size=thumb` resolution — serve the persisted sibling
-/// `thumb.jpg` if present; otherwise generate one via
-/// `image_util::make_thumbnail` at the same width the desktop app uses
-/// (`crate::commands::THUMB_WIDTH`, same `thumb.jpg` naming as
-/// `crate::commands::thumb_storage_key`), persist it best-effort, and serve
-/// it. `Ok(None)` (cover already small) or a generation error falls back to
-/// the full cover bytes. Decode+resize is CPU-bound, so it runs in
-/// `spawn_blocking`; the caller has already dropped its DB connection by
-/// this point (same pattern as the `file_size` fix for `get_book`).
-async fn get_cover_thumb_bytes(
-    cover_path: &str,
-) -> Result<(Vec<u8>, String), (StatusCode, String)> {
-    let thumb_path = std::path::Path::new(cover_path).with_file_name("thumb.jpg");
-    if let Ok(bytes) = std::fs::read(&thumb_path) {
+/// Finding 1: true only when `cover_path`'s parent directory canonicalizes
+/// to somewhere inside `covers_root`. `cover_path` is a DB-backed value that
+/// predates this hardening pass — reading it (here and in the full-cover
+/// route) stays unguarded — but the disk write the thumbnail cache
+/// introduces below must never be steered outside the app-managed covers
+/// directory by a malformed or adversarial row.
+fn cover_write_path_is_safe(covers_root: &std::path::Path, cover_path: &std::path::Path) -> bool {
+    let (Some(parent), Ok(canon_root)) = (cover_path.parent(), covers_root.canonicalize()) else {
+        return false;
+    };
+    parent
+        .canonicalize()
+        .map(|canon_parent| canon_parent.starts_with(&canon_root))
+        .unwrap_or(false)
+}
+
+/// Item 11 cover-thumbnail resolution, hardened per code review (findings
+/// 1-4, 7): serves the persisted `thumb.jpg` sibling only when it is at
+/// least as fresh as the cover it was made from (finding 2a — otherwise a
+/// replaced cover serves stale art forever), regenerates and atomically
+/// persists a new one otherwise (finding 3), and only ever writes inside the
+/// app's covers root (finding 1). Generation/persist failures are logged and
+/// fall back to serving whatever bytes are already in hand (finding 7)
+/// rather than 500ing. Synchronous — the caller runs this inside a single
+/// `spawn_blocking` (finding 6).
+fn resolve_cover_thumb(
+    covers_root: &std::path::Path,
+    cover_path: &std::path::Path,
+) -> std::io::Result<(Vec<u8>, String)> {
+    use std::io::Write;
+
+    let thumb_path = cover_path.with_file_name(crate::commands::THUMB_FILENAME);
+
+    let cover_mtime = std::fs::metadata(cover_path)?.modified()?;
+
+    // A stat/read failure here is an ordinary cache miss (no thumb yet, or a
+    // race with a concurrent writer) — not something worth logging. Fall
+    // through and regenerate.
+    let cached = std::fs::metadata(&thumb_path)
+        .and_then(|m| m.modified())
+        .ok()
+        .filter(|&thumb_mtime| thumb_mtime >= cover_mtime)
+        .and_then(|_| std::fs::read(&thumb_path).ok());
+    if let Some(bytes) = cached {
         return Ok((bytes, "image/jpeg".to_string()));
     }
 
-    let full_bytes = std::fs::read(cover_path).map_err(folio_status)?;
-    let full_mime = mime_guess::from_path(cover_path)
-        .first_or_octet_stream()
-        .to_string();
+    let full_bytes = std::fs::read(cover_path)?;
 
-    let bytes_for_thumb = full_bytes.clone();
-    let generated = tokio::task::spawn_blocking(move || {
-        folio_core::image_util::make_thumbnail(&bytes_for_thumb, crate::commands::THUMB_WIDTH)
-    })
-    .await
-    .ok()
-    .and_then(|r| r.ok())
-    .flatten();
+    let generated =
+        folio_core::image_util::make_thumbnail(&full_bytes, crate::commands::THUMB_WIDTH)
+            .unwrap_or_else(|e| {
+                log::warn!(
+                    "cover thumbnail generation failed for '{}': {e}",
+                    cover_path.display()
+                );
+                None
+            });
 
-    match generated {
-        Some(thumb_bytes) => {
-            // Best-effort persist: serve from memory even if the write fails.
-            let write_path = thumb_path;
-            let write_bytes = thumb_bytes.clone();
-            let _ = tokio::task::spawn_blocking(move || std::fs::write(&write_path, &write_bytes))
-                .await;
-            Ok((thumb_bytes, "image/jpeg".to_string()))
+    let Some(thumb_bytes) = generated else {
+        let mime = mime_guess::from_path(cover_path)
+            .first_or_octet_stream()
+            .to_string();
+        return Ok((full_bytes, mime));
+    };
+
+    if cover_write_path_is_safe(covers_root, cover_path) {
+        // Finding 4 (TOCTOU): re-stat the cover right before persisting. If
+        // it changed since `cover_mtime` was captured above (the desktop app
+        // replaced cover+thumb concurrently), skip the write — persisting
+        // now would clobber the fresh thumb with stale art, and the stale
+        // write's own mtime would still pass future freshness checks.
+        let still_current = std::fs::metadata(cover_path)
+            .and_then(|m| m.modified())
+            .map(|m| m == cover_mtime)
+            .unwrap_or(false);
+
+        if still_current {
+            if let Err(e) =
+                folio_core::storage::write_atomic(&thumb_path, |f| f.write_all(&thumb_bytes))
+            {
+                log::warn!(
+                    "cover thumbnail persist failed for '{}': {e}",
+                    thumb_path.display()
+                );
+            }
+        } else {
+            log::warn!(
+                "skipping thumbnail persist for '{}': cover changed during generation",
+                cover_path.display()
+            );
         }
-        None => Ok((full_bytes, full_mime)),
+    } else {
+        log::warn!(
+            "skipping thumbnail persist for '{}': cover path resolves outside the covers root",
+            cover_path.display()
+        );
+    }
+
+    Ok((thumb_bytes, "image/jpeg".to_string()))
+}
+
+/// Async wrapper: runs [`resolve_cover_thumb`] in a single `spawn_blocking`
+/// (finding 6 — decode/resize/persist is all CPU- and I/O-bound). A panic
+/// inside that closure (finding 7) must not 500 the request when the cover
+/// itself is perfectly readable, so it falls back to serving the full cover
+/// via `tokio::fs` instead.
+async fn get_cover_thumb_bytes(
+    covers_root: std::path::PathBuf,
+    cover_path: String,
+) -> Result<(Vec<u8>, String), (StatusCode, String)> {
+    let cover_path_buf = std::path::PathBuf::from(&cover_path);
+    match tokio::task::spawn_blocking(move || resolve_cover_thumb(&covers_root, &cover_path_buf))
+        .await
+    {
+        Ok(Ok(result)) => Ok(result),
+        Ok(Err(e)) => Err(folio_status(e)),
+        Err(join_err) => {
+            log::warn!("cover thumbnail worker panicked for '{cover_path}': {join_err}");
+            let bytes = tokio::fs::read(&cover_path).await.map_err(folio_status)?;
+            let mime = mime_guess::from_path(&cover_path)
+                .first_or_octet_stream()
+                .to_string();
+            Ok((bytes, mime))
+        }
     }
 }
 
 async fn get_cover(
     State(state): State<WebState>,
     Path(id): Path<String>,
-    Query(params): Query<CoverQuery>,
+    uri: axum::http::Uri,
 ) -> Result<Response, (StatusCode, String)> {
     let cover_path = {
         let conn = state.conn().map_err(folio_status)?;
@@ -480,8 +590,9 @@ async fn get_cover(
             .ok_or_else(|| (StatusCode::NOT_FOUND, "No cover available".to_string()))?
     };
 
-    let (bytes, mime) = if params.size.as_deref() == Some("thumb") {
-        get_cover_thumb_bytes(&cover_path).await?
+    let size = parse_cover_size(uri.query());
+    let (bytes, mime) = if size.as_deref() == Some("thumb") {
+        get_cover_thumb_bytes(state.covers_root(), cover_path).await?
     } else {
         let bytes = std::fs::read(&cover_path).map_err(folio_status)?;
         let mime = mime_guess::from_path(&cover_path)
@@ -490,19 +601,10 @@ async fn get_cover(
         (bytes, mime)
     };
 
-    // See `get_page_image` for why this is conditional on PIN configuration:
-    // a cached response would let the same browser keep serving covers for
-    // up to a day after a session expires, bypassing `auth_middleware`.
-    let cache_control = if state.has_pin() {
-        "no-store"
-    } else {
-        "private, max-age=3600"
-    };
-
     Ok((
         [
             (header::CONTENT_TYPE, mime),
-            (header::CACHE_CONTROL, cache_control.to_string()),
+            (header::CACHE_CONTROL, COVER_CACHE_CONTROL.to_string()),
         ],
         bytes,
     )
@@ -741,6 +843,22 @@ async fn get_epub_image(
 
 // ── PDF / Comic Pages ────────────────────────────────────────────────────────
 
+/// Cache-control for content that must respect session expiry: PDF/CBZ/CBR
+/// page images and page counts are rasterized from the book file itself, so
+/// they're safe to cache in the browser when the server is unauthenticated
+/// (no PIN, no session gate). Once a PIN is configured, a cached response
+/// would let the same browser keep serving protected pages for up to an hour
+/// after the session expires — those requests never reach `auth_middleware`
+/// at all. `no-store` closes that gap. Contrast `COVER_CACHE_CONTROL`, which
+/// doesn't need this treatment (finding 8).
+fn session_cache_control(state: &WebState) -> &'static str {
+    if state.has_pin() {
+        "no-store"
+    } else {
+        "private, max-age=3600"
+    }
+}
+
 async fn get_page_image(
     State(state): State<WebState>,
     Path((id, index)): Path<(String, u32)>,
@@ -751,18 +869,7 @@ async fn get_page_image(
         .ok_or_else(|| (StatusCode::NOT_FOUND, "Book not found".to_string()))?;
 
     let file_path = state.resolve_book_path(&book).map_err(folio_status)?;
-
-    // Page images are rasterized from an immutable book file, so they're
-    // safe to cache for a while when the server is unauthenticated (no PIN,
-    // no session gate). Once a PIN is configured, a cached response would
-    // let the same browser keep serving protected pages for up to an hour
-    // after the session expires — those requests never reach auth_middleware
-    // at all. `no-store` closes that gap.
-    let page_cache_control = if state.has_pin() {
-        "no-store"
-    } else {
-        "private, max-age=3600"
-    };
+    let page_cache_control = session_cache_control(&state);
 
     match book.format {
         BookFormat::Pdf => {
@@ -831,12 +938,7 @@ async fn get_page_count(
         }
     };
 
-    // See `get_page_image` for why this is conditional on PIN configuration.
-    let page_cache_control = if state.has_pin() {
-        "no-store"
-    } else {
-        "private, max-age=3600"
-    };
+    let page_cache_control = session_cache_control(&state);
 
     Ok((
         [(header::CACHE_CONTROL, page_cache_control)],

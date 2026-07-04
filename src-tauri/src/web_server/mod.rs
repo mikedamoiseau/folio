@@ -74,6 +74,16 @@ impl WebState {
         Ok(Arc::new(folio_core::storage::LocalStorage::new(root)?))
     }
 
+    /// The app-managed covers root, `{data_dir}/covers` — mirrors
+    /// `AppState::covers_storage`'s layout. Used by
+    /// `api::cover_write_path_is_safe` to confirm a book's (DB-backed, so
+    /// potentially malformed) `cover_path` resolves inside this directory
+    /// before the `?size=thumb` cache is allowed to write a sibling
+    /// `thumb.jpg` next to it.
+    pub fn covers_root(&self) -> PathBuf {
+        self.data_dir.join("covers")
+    }
+
     /// Whether a PIN is currently configured (i.e. web auth is enabled).
     /// Mirrors the check `auth_middleware` performs. A poisoned lock is
     /// treated as "PIN configured" so callers fail toward the safer choice
@@ -1405,9 +1415,16 @@ mod tests {
 
     #[tokio::test]
     async fn cover_thumb_persists_and_second_request_serves_cached_file() {
-        let state = test_state();
+        let mut state = test_state();
         let dir = tempfile::tempdir().unwrap();
-        let cover_path = dir.path().join("cover.jpg");
+        // Finding 1 requires the thumbnail write to land inside
+        // `{data_dir}/covers` — lay the fixture out like the real app does
+        // (`{data_dir}/covers/{book_id}/cover.jpg`) so the persist isn't
+        // skipped by the new safety guard.
+        state.data_dir = dir.path().to_path_buf();
+        let cover_dir = dir.path().join("covers").join("thumb-2");
+        std::fs::create_dir_all(&cover_dir).unwrap();
+        let cover_path = cover_dir.join("cover.jpg");
         write_test_jpeg(&cover_path, 1200, 1800);
         {
             let conn = state.conn().unwrap();
@@ -1425,7 +1442,7 @@ mod tests {
             .unwrap();
         assert_eq!(resp.status(), 200);
 
-        let thumb_path = dir.path().join("thumb.jpg");
+        let thumb_path = cover_dir.join("thumb.jpg");
         assert!(thumb_path.exists(), "first request must persist thumb.jpg");
 
         // Overwrite the persisted thumbnail with a marker so we can prove
@@ -1600,7 +1617,7 @@ mod tests {
                     .unwrap()
                     .to_str()
                     .unwrap(),
-                "private, max-age=3600",
+                "private, max-age=86400",
                 "{url} should be cacheable when no PIN is configured"
             );
         }
@@ -1608,8 +1625,13 @@ mod tests {
         let _ = tx.send(());
     }
 
+    // Finding 8: covers are decorative artwork, not book content — unlike
+    // page images/page-count, they stay cacheable even once a PIN is
+    // configured (OPDS e-reader clients re-fetch full covers constantly
+    // under per-request Basic Auth, and a blanket `no-store` regressed them
+    // for little real security benefit).
     #[tokio::test]
-    async fn cover_cache_control_with_pin_is_no_store() {
+    async fn cover_cache_control_with_pin_is_still_cacheable() {
         let state = test_state();
         *state.pin_hash.lock().unwrap() = Some(auth::hash_pin("1234"));
         let dir = tempfile::tempdir().unwrap();
@@ -1639,10 +1661,174 @@ mod tests {
                     .unwrap()
                     .to_str()
                     .unwrap(),
-                "no-store",
-                "{url} must not be cacheable once a PIN is configured"
+                "private, max-age=86400",
+                "{url} should stay cacheable even once a PIN is configured — covers aren't \
+                 session-sensitive like page content"
             );
         }
+
+        let _ = tx.send(());
+    }
+
+    // Finding 1: a `cover_path` outside the app's covers root (e.g. a
+    // malformed/adversarial DB row) must still be servable — reading it is
+    // pre-existing behavior — but the thumbnail-cache write this feature
+    // introduces must never be steered outside that directory.
+    #[tokio::test]
+    async fn cover_thumb_write_skipped_outside_covers_root() {
+        let state = test_state();
+        // `test_state()` fixes `data_dir` to `/tmp`, so a cover living in an
+        // unrelated tempdir (same shape every other cover test used before
+        // this review pass) resolves outside `{data_dir}/covers`.
+        let dir = tempfile::tempdir().unwrap();
+        let cover_path = dir.path().join("cover.jpg");
+        write_test_jpeg(&cover_path, 1200, 1800);
+        {
+            let conn = state.conn().unwrap();
+            crate::db::insert_book(&conn, &cover_test_book("thumb-8", Some(&cover_path))).unwrap();
+        }
+        let (_state, port, tx) = spawn_progress_test_server(state).await;
+        let client = reqwest::Client::new();
+
+        let resp = client
+            .get(format!(
+                "http://127.0.0.1:{port}/api/books/thumb-8/cover?size=thumb"
+            ))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+        let bytes = resp.bytes().await.unwrap();
+        let (w, _h) = dims_of(&bytes);
+        assert!(
+            w <= crate::commands::THUMB_WIDTH,
+            "must still serve an in-memory-generated thumbnail even when the write is skipped"
+        );
+
+        let thumb_path = dir.path().join("thumb.jpg");
+        assert!(
+            !thumb_path.exists(),
+            "a cover_path outside the covers root must never get a thumb.jpg written next to it"
+        );
+
+        let _ = tx.send(());
+    }
+
+    // Finding 2a: a persisted thumbnail must not be served forever once the
+    // cover it was made from has been replaced.
+    #[tokio::test]
+    async fn cover_thumb_regenerates_after_cover_replaced() {
+        let mut state = test_state();
+        let dir = tempfile::tempdir().unwrap();
+        state.data_dir = dir.path().to_path_buf();
+        let cover_dir = dir.path().join("covers").join("thumb-9");
+        std::fs::create_dir_all(&cover_dir).unwrap();
+        let cover_path = cover_dir.join("cover.jpg");
+        write_test_jpeg(&cover_path, 1200, 1800);
+        {
+            let conn = state.conn().unwrap();
+            crate::db::insert_book(&conn, &cover_test_book("thumb-9", Some(&cover_path))).unwrap();
+        }
+        let (_state, port, tx) = spawn_progress_test_server(state).await;
+        let client = reqwest::Client::new();
+
+        let resp = client
+            .get(format!(
+                "http://127.0.0.1:{port}/api/books/thumb-9/cover?size=thumb"
+            ))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+        let (_w1, h1) = dims_of(&resp.bytes().await.unwrap());
+
+        let thumb_path = cover_dir.join("thumb.jpg");
+        assert!(thumb_path.exists(), "first request must persist thumb.jpg");
+
+        // Replace the cover with a differently-shaped image and force its
+        // mtime strictly ahead of the persisted thumbnail's — the freshness
+        // check (finding 2a) has nothing else to key off of.
+        write_test_jpeg(&cover_path, 900, 300);
+        let future = std::time::SystemTime::now() + std::time::Duration::from_secs(120);
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&cover_path)
+            .unwrap()
+            .set_modified(future)
+            .unwrap();
+
+        let resp2 = client
+            .get(format!(
+                "http://127.0.0.1:{port}/api/books/thumb-9/cover?size=thumb"
+            ))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp2.status(), 200);
+        let (_w2, h2) = dims_of(&resp2.bytes().await.unwrap());
+
+        assert_ne!(
+            h1, h2,
+            "thumbnail must reflect the replaced cover's new aspect ratio, not stale cached art"
+        );
+
+        let _ = tx.send(());
+    }
+
+    // Finding 5: `Query<CoverQuery>` used to hard-400 on request shapes real
+    // clients send (duplicate params from a proxy, malformed percent
+    // encoding). Both must now serve a normal 200 instead.
+    #[tokio::test]
+    async fn cover_duplicate_size_param_is_lenient() {
+        let state = test_state();
+        let dir = tempfile::tempdir().unwrap();
+        let cover_path = dir.path().join("cover.jpg");
+        write_test_jpeg(&cover_path, 1200, 1800);
+        {
+            let conn = state.conn().unwrap();
+            crate::db::insert_book(&conn, &cover_test_book("thumb-10", Some(&cover_path))).unwrap();
+        }
+        let (_state, port, tx) = spawn_progress_test_server(state).await;
+        let client = reqwest::Client::new();
+
+        let resp = client
+            .get(format!(
+                "http://127.0.0.1:{port}/api/books/thumb-10/cover?size=thumb&size=thumb"
+            ))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200, "duplicate size params must not 400");
+
+        let _ = tx.send(());
+    }
+
+    #[tokio::test]
+    async fn cover_malformed_percent_encoding_falls_back_to_full() {
+        let state = test_state();
+        let dir = tempfile::tempdir().unwrap();
+        let cover_path = dir.path().join("cover.jpg");
+        write_test_jpeg(&cover_path, 1200, 1800);
+        let original_bytes = std::fs::read(&cover_path).unwrap();
+        {
+            let conn = state.conn().unwrap();
+            crate::db::insert_book(&conn, &cover_test_book("thumb-11", Some(&cover_path))).unwrap();
+        }
+        let (_state, port, tx) = spawn_progress_test_server(state).await;
+        let client = reqwest::Client::new();
+
+        // `%zz` isn't valid percent-encoding — it must fall back to serving
+        // the full cover rather than 400ing.
+        let resp = client
+            .get(format!(
+                "http://127.0.0.1:{port}/api/books/thumb-11/cover?size=%zz"
+            ))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+        let bytes = resp.bytes().await.unwrap();
+        assert_eq!(bytes.as_ref(), original_bytes.as_slice());
 
         let _ = tx.send(());
     }
