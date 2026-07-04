@@ -639,21 +639,54 @@ async fn get_page_image(
 
     let file_path = state.resolve_book_path(&book).map_err(folio_status)?;
 
+    // Page images are rasterized from an immutable book file, so they're
+    // safe to cache for a while when the server is unauthenticated (no PIN,
+    // no session gate). Once a PIN is configured, a cached response would
+    // let the same browser keep serving protected pages for up to an hour
+    // after the session expires — those requests never reach auth_middleware
+    // at all. `no-store` closes that gap.
+    let page_cache_control = if state.has_pin() {
+        "no-store"
+    } else {
+        "private, max-age=3600"
+    };
+
     match book.format {
         BookFormat::Pdf => {
             let (bytes, mime) =
                 crate::pdf::get_page_image_bytes(&file_path, index, None).map_err(folio_status)?;
-            Ok(([(header::CONTENT_TYPE, mime.to_string())], bytes).into_response())
+            Ok((
+                [
+                    (header::CONTENT_TYPE, mime.to_string()),
+                    (header::CACHE_CONTROL, page_cache_control.to_string()),
+                ],
+                bytes,
+            )
+                .into_response())
         }
         BookFormat::Cbz => {
             let (bytes, mime) =
                 crate::cbz::get_page_image_bytes(&file_path, index, None).map_err(folio_status)?;
-            Ok(([(header::CONTENT_TYPE, mime)], bytes).into_response())
+            Ok((
+                [
+                    (header::CONTENT_TYPE, mime),
+                    (header::CACHE_CONTROL, page_cache_control.to_string()),
+                ],
+                bytes,
+            )
+                .into_response())
         }
         BookFormat::Cbr => {
             let (bytes, mime) =
                 crate::cbr::get_page_image_bytes(&file_path, index, None).map_err(folio_status)?;
-            Ok(([(header::CONTENT_TYPE, mime)], bytes).into_response())
+            Ok((
+                [
+                    (header::CONTENT_TYPE, mime),
+                    (header::CACHE_CONTROL, page_cache_control.to_string()),
+                ],
+                bytes,
+            )
+                .into_response())
         }
         _ => Err((
             StatusCode::BAD_REQUEST,
@@ -665,7 +698,7 @@ async fn get_page_image(
 async fn get_page_count(
     State(state): State<WebState>,
     Path(id): Path<String>,
-) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+) -> Result<Response, (StatusCode, String)> {
     let conn = state.conn().map_err(folio_status)?;
     let book = db::get_book(&conn, &id)
         .map_err(folio_status)?
@@ -685,7 +718,18 @@ async fn get_page_count(
         }
     };
 
-    Ok(Json(serde_json::json!({ "count": count })))
+    // See `get_page_image` for why this is conditional on PIN configuration.
+    let page_cache_control = if state.has_pin() {
+        "no-store"
+    } else {
+        "private, max-age=3600"
+    };
+
+    Ok((
+        [(header::CACHE_CONTROL, page_cache_control)],
+        Json(serde_json::json!({ "count": count })),
+    )
+        .into_response())
 }
 
 // ── Download ─────────────────────────────────────────────────────────────────

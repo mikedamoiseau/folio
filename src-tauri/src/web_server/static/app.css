@@ -129,15 +129,49 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .btn-secondary:hover { background: var(--warm-subtle); }
 
 /* ── Reader ────────────────────────────────────── */
-.reader { max-width: 800px; margin: 0 auto; padding: var(--gap); }
-.reader .nav { display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--warm-border); margin-bottom: var(--gap); }
-.reader .nav button { padding: 6px 16px; background: var(--surface); border: 1px solid var(--warm-border); border-radius: var(--radius); color: var(--ink); cursor: pointer; }
-.reader .nav button:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
-.reader .nav button:disabled { opacity: 0.55; cursor: default; }
-.reader .content { font-family: "Lora", Georgia, serif; line-height: 1.7; }
-.reader .content img { max-width: 100%; height: auto; }
-.reader .page-img { display: flex; justify-content: center; }
-.reader .page-img img { max-width: 100%; max-height: 90vh; border-radius: 4px; }
+/* Shared chrome: a top header + bottom toolbar, both hidden together via
+   .chrome-hidden (middle-click / chrome-toggle-fab). The stage fills the
+   remaining space so the page image (fit-height) or text column never
+   needs the whole document to scroll. */
+.reader-page, .reader-chapter { display: flex; flex-direction: column; height: 100vh; position: relative; }
+.reader-page.chrome-hidden .reader-chrome-top,
+.reader-page.chrome-hidden .reader-chrome-bottom,
+.reader-chapter.chrome-hidden .reader-chrome-top,
+.reader-chapter.chrome-hidden .reader-chrome-bottom { display: none; }
+.reader-chrome-top, .reader-chrome-bottom { flex-shrink: 0; }
+
+.reader-stage { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; overflow: hidden; background: var(--warm-subtle); }
+/* K5: the stage is focused after each chapter render so native Space/
+   PageDown scrolling works; suppress the focus ring on this container
+   (its content remains keyboard-navigable on its own merits). */
+.reader-stage:focus { outline: none; }
+.reader-page.fit-width .reader-stage { align-items: flex-start; overflow: auto; }
+.reader-stage img#page-img { max-width: 100%; max-height: 100%; object-fit: contain; cursor: pointer; user-select: none; -webkit-user-drag: none; }
+.reader-page.fit-width .reader-stage img#page-img { width: 100%; max-width: 100%; height: auto; max-height: none; }
+.reader-page-error, .reader-error { color: var(--error); text-align: center; padding: 24px; }
+
+.reader-chapter .reader-stage { display: block; overflow-y: auto; padding: var(--gap); }
+.reader-chapter .content { max-width: 700px; margin: 0 auto; font-family: "Lora", Georgia, serif; line-height: 1.7; }
+.reader-chapter .content img { max-width: 100%; height: auto; }
+
+.reader-toolbar { display: flex; align-items: center; gap: 10px; padding: 10px var(--gap); border-top: 1px solid var(--warm-border); background: var(--paper); }
+.reader-toolbar button { padding: 6px 16px; background: var(--surface); border: 1px solid var(--warm-border); border-radius: var(--radius); color: var(--ink); cursor: pointer; white-space: nowrap; }
+.reader-toolbar button:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.reader-toolbar button:disabled { opacity: 0.55; cursor: default; }
+.reader-toolbar #page-label { white-space: nowrap; font-variant-numeric: tabular-nums; color: var(--ink-muted); font-size: 0.85rem; }
+.reader-toolbar input[type="range"] { flex: 1; accent-color: var(--accent); }
+
+.chrome-toggle-fab { position: fixed; right: 16px; bottom: 16px; width: 40px; height: 40px; border-radius: 50%; background: var(--surface); border: 1px solid var(--warm-border); color: var(--ink-muted); cursor: pointer; display: flex; align-items: center; justify-content: center; box-shadow: 0 4px 12px var(--shadow); z-index: 20; font-size: 1.2rem; }
+.chrome-toggle-fab:hover { color: var(--accent); border-color: var(--accent); }
+
+/* ── Shortcuts Overlay ─────────────────────────── */
+.shortcuts-overlay { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.5); display: flex; align-items: center; justify-content: center; z-index: 100; }
+.shortcuts-panel { background: var(--surface); border: 1px solid var(--warm-border); border-radius: 12px; padding: 24px 28px; max-width: 360px; box-shadow: 0 12px 32px var(--shadow); }
+.shortcuts-panel h2 { margin-bottom: 16px; font-size: 1.1rem; color: var(--accent); }
+.shortcuts-panel dl { display: grid; grid-template-columns: auto 1fr; gap: 6px 16px; margin-bottom: 20px; }
+.shortcuts-panel dt { font-weight: 600; color: var(--ink); white-space: nowrap; }
+.shortcuts-panel dd { color: var(--ink-muted); font-size: 0.9rem; }
+.shortcuts-panel button { padding: 8px 20px; background: var(--accent-hover); color: var(--on-accent); border: none; border-radius: var(--radius); cursor: pointer; font-weight: 600; }
 
 /* ── Empty / Loading ───────────────────────────── */
 .empty { text-align: center; padding: 60px var(--gap); color: var(--ink-muted); }
@@ -191,4 +225,6 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .stat-cards { gap: 8px; }
   .stat-value { font-size: 1.1rem; }
   .collections { padding: 12px; }
+  .reader-toolbar { flex-wrap: wrap; padding: 8px 12px; }
+  .reader-toolbar input[type="range"] { order: 1; flex-basis: 100%; }
 }
