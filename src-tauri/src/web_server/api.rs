@@ -780,29 +780,28 @@ async fn put_progress(
         .map_err(folio_status)?
         .ok_or_else(|| (StatusCode::NOT_FOUND, "Book not found".to_string()))?;
 
-    // Mirrors the desktop `save_reading_progress` command's own bounds check.
-    if book.total_chapters > 0 && body.chapter_index >= book.total_chapters {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            format!(
-                "chapter_index {} is out of range (book has {} chapters)",
-                body.chapter_index, book.total_chapters
-            ),
-        ));
-    }
+    // F4: intentionally NOT bounds-checked against `book.total_chapters`
+    // here. The reader paginates against a live `/page-count`, which can
+    // exceed a stale `total_chapters` (e.g. after re-pagination) — rejecting
+    // those saves made progress beyond the stale bound silently fail. The
+    // client clamps the index when it reads progress back.
     let scroll_position =
         crate::commands::validate_scroll_position(body.scroll_position).map_err(folio_status)?;
 
-    let progress = crate::models::ReadingProgress {
-        book_id: id,
-        chapter_index: body.chapter_index,
+    // F1: goes through the same completion-detection path as the desktop
+    // `save_reading_progress` command (`apply_reading_progress`) so a
+    // web-driven completion logs the same activity entry and bus event.
+    // `None` here means no desktop window-toast event is emitted for a
+    // web-only completion — see `apply_reading_progress`'s doc comment.
+    let progress = crate::commands::apply_reading_progress(
+        &conn,
+        &book,
+        &id,
+        body.chapter_index,
         scroll_position,
-        last_read_at: std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs() as i64,
-    };
-    db::upsert_reading_progress(&conn, &progress).map_err(folio_status)?;
+        None,
+    )
+    .map_err(folio_status)?;
 
     Ok(Json(progress))
 }

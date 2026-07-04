@@ -1400,14 +1400,19 @@ mod tests {
         let _ = tx.send(());
     }
 
+    // F4: `total_chapters` can be stale relative to the reader's live
+    // /page-count (e.g. re-paginated PDF/CBZ). Rejecting indices beyond the
+    // stored total made saves beyond that stale bound silently fail. The web
+    // PUT now accepts any non-negative index and stores it as-is; the client
+    // clamps when reading progress back.
     #[tokio::test]
-    async fn progress_put_chapter_index_out_of_range_returns_400() {
+    async fn progress_put_chapter_index_beyond_total_is_accepted() {
         let state = test_state();
         {
             let conn = state.conn().unwrap();
             crate::db::insert_book(&conn, &progress_test_book("prog-4", 10)).unwrap();
         }
-        let (_state, port, tx) = spawn_progress_test_server(state).await;
+        let (state, port, tx) = spawn_progress_test_server(state).await;
         let client = reqwest::Client::new();
 
         let resp = client
@@ -1416,7 +1421,76 @@ mod tests {
             .send()
             .await
             .unwrap();
-        assert_eq!(resp.status(), 400);
+        assert_eq!(resp.status(), 200);
+
+        let conn = state.conn().unwrap();
+        let progress = crate::db::get_reading_progress(&conn, "prog-4")
+            .unwrap()
+            .expect("progress should be stored even though it exceeds total_chapters");
+        assert_eq!(progress.chapter_index, 10);
+
+        let _ = tx.send(());
+    }
+
+    // F1: a web-driven completion (PUT landing on the last chapter) must
+    // perform the same activity-log side effect the desktop
+    // `save_reading_progress` command performs, and must not fire twice.
+    #[tokio::test]
+    async fn progress_put_last_chapter_logs_completion_activity() {
+        let state = test_state();
+        {
+            let conn = state.conn().unwrap();
+            crate::db::insert_book(&conn, &progress_test_book("prog-6", 5)).unwrap();
+        }
+        let (state, port, tx) = spawn_progress_test_server(state).await;
+        let client = reqwest::Client::new();
+
+        // Land on the last chapter (index 4 of 5).
+        let resp = client
+            .put(format!("http://127.0.0.1:{port}/api/books/prog-6/progress"))
+            .json(&serde_json::json!({"chapter_index": 4, "scroll_position": 0.5}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+
+        {
+            let conn = state.conn().unwrap();
+            let activity = crate::db::get_all_activity(&conn).unwrap();
+            let completions: Vec<_> = activity
+                .iter()
+                .filter(|a| {
+                    a.action == "book_completed" && a.entity_id.as_deref() == Some("prog-6")
+                })
+                .collect();
+            assert_eq!(
+                completions.len(),
+                1,
+                "expected exactly one completion activity entry, got {activity:?}"
+            );
+        }
+
+        // A second save that stays on the last chapter (e.g. a scroll-only
+        // update) must not log a second completion.
+        let resp = client
+            .put(format!("http://127.0.0.1:{port}/api/books/prog-6/progress"))
+            .json(&serde_json::json!({"chapter_index": 4, "scroll_position": 0.9}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+
+        let conn = state.conn().unwrap();
+        let activity = crate::db::get_all_activity(&conn).unwrap();
+        let completions: Vec<_> = activity
+            .iter()
+            .filter(|a| a.action == "book_completed" && a.entity_id.as_deref() == Some("prog-6"))
+            .collect();
+        assert_eq!(
+            completions.len(),
+            1,
+            "completion must not be logged twice for repeat saves on the last chapter"
+        );
 
         let _ = tx.send(());
     }
