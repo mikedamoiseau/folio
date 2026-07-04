@@ -1007,4 +1007,106 @@ mod tests {
 
         let _ = tx.send(());
     }
+
+    #[tokio::test]
+    async fn page_image_and_page_count_responses_have_cache_control_header() {
+        let state = test_state();
+
+        // Minimal CBZ fixture with a single (fake) page image.
+        let dir = tempfile::tempdir().unwrap();
+        let cbz_path = dir.path().join("test.cbz");
+        {
+            let file = std::fs::File::create(&cbz_path).unwrap();
+            let mut zip = zip::ZipWriter::new(file);
+            let options = zip::write::SimpleFileOptions::default();
+            zip.start_file("page01.jpg", options).unwrap();
+            std::io::Write::write_all(&mut zip, b"fake jpg bytes").unwrap();
+            zip.finish().unwrap();
+        }
+
+        let book = crate::models::Book {
+            id: "cache-test-book".to_string(),
+            title: "Cache Test".to_string(),
+            author: "Author".to_string(),
+            file_path: cbz_path.to_string_lossy().to_string(),
+            cover_path: None,
+            total_chapters: 1,
+            added_at: 0,
+            format: crate::models::BookFormat::Cbz,
+            file_hash: None,
+            description: None,
+            genres: None,
+            rating: None,
+            isbn: None,
+            openlibrary_key: None,
+            enrichment_status: None,
+            series: None,
+            volume: None,
+            language: None,
+            publisher: None,
+            publish_year: None,
+            is_imported: false,
+        };
+        {
+            let conn = state.conn().unwrap();
+            crate::db::insert_book(&conn, &book).unwrap();
+        }
+
+        let router = build_router(
+            state,
+            ServerModes {
+                web_ui: true,
+                opds: true,
+            },
+        );
+        let listener = tokio::net::TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], 0)))
+            .await
+            .unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (tx, rx) = oneshot::channel::<()>();
+        tokio::spawn(async move {
+            axum::serve(
+                listener,
+                router.into_make_service_with_connect_info::<SocketAddr>(),
+            )
+            .with_graceful_shutdown(async {
+                let _ = rx.await;
+            })
+            .await
+            .ok();
+        });
+
+        let client = reqwest::Client::new();
+
+        let resp = client
+            .get(format!(
+                "http://127.0.0.1:{port}/api/books/cache-test-book/pages/0"
+            ))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+        let cache_control = resp
+            .headers()
+            .get("cache-control")
+            .expect("pages/{index} response should set Cache-Control")
+            .to_str()
+            .unwrap();
+        assert!(cache_control.contains("max-age"));
+
+        let resp = client
+            .get(format!(
+                "http://127.0.0.1:{port}/api/books/cache-test-book/page-count"
+            ))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+        assert!(
+            resp.headers().get("cache-control").is_some(),
+            "page-count response should set Cache-Control"
+        );
+
+        let _ = tx.send(());
+    }
 }

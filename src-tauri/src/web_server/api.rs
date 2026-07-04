@@ -639,21 +639,47 @@ async fn get_page_image(
 
     let file_path = state.resolve_book_path(&book).map_err(folio_status)?;
 
+    // Page images are rasterized from an immutable book file, so they're
+    // safe to cache for a while (private: PIN-protected setups shouldn't
+    // let shared/CDN caches store them).
+    const PAGE_CACHE_CONTROL: &str = "private, max-age=3600";
+
     match book.format {
         BookFormat::Pdf => {
             let (bytes, mime) =
                 crate::pdf::get_page_image_bytes(&file_path, index, None).map_err(folio_status)?;
-            Ok(([(header::CONTENT_TYPE, mime.to_string())], bytes).into_response())
+            Ok((
+                [
+                    (header::CONTENT_TYPE, mime.to_string()),
+                    (header::CACHE_CONTROL, PAGE_CACHE_CONTROL.to_string()),
+                ],
+                bytes,
+            )
+                .into_response())
         }
         BookFormat::Cbz => {
             let (bytes, mime) =
                 crate::cbz::get_page_image_bytes(&file_path, index, None).map_err(folio_status)?;
-            Ok(([(header::CONTENT_TYPE, mime)], bytes).into_response())
+            Ok((
+                [
+                    (header::CONTENT_TYPE, mime),
+                    (header::CACHE_CONTROL, PAGE_CACHE_CONTROL.to_string()),
+                ],
+                bytes,
+            )
+                .into_response())
         }
         BookFormat::Cbr => {
             let (bytes, mime) =
                 crate::cbr::get_page_image_bytes(&file_path, index, None).map_err(folio_status)?;
-            Ok(([(header::CONTENT_TYPE, mime)], bytes).into_response())
+            Ok((
+                [
+                    (header::CONTENT_TYPE, mime),
+                    (header::CACHE_CONTROL, PAGE_CACHE_CONTROL.to_string()),
+                ],
+                bytes,
+            )
+                .into_response())
         }
         _ => Err((
             StatusCode::BAD_REQUEST,
@@ -665,7 +691,7 @@ async fn get_page_image(
 async fn get_page_count(
     State(state): State<WebState>,
     Path(id): Path<String>,
-) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+) -> Result<Response, (StatusCode, String)> {
     let conn = state.conn().map_err(folio_status)?;
     let book = db::get_book(&conn, &id)
         .map_err(folio_status)?
@@ -685,7 +711,11 @@ async fn get_page_count(
         }
     };
 
-    Ok(Json(serde_json::json!({ "count": count })))
+    Ok((
+        [(header::CACHE_CONTROL, "private, max-age=3600")],
+        Json(serde_json::json!({ "count": count })),
+    )
+        .into_response())
 }
 
 // ── Download ─────────────────────────────────────────────────────────────────
