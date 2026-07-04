@@ -4,12 +4,15 @@
   --paper:        #faf8f3;
   --surface:      #ffffff;
   --ink:          #2c2218;
-  --ink-muted:    #8c7b6e;
+  --ink-muted:    #6e6055;
   --warm-border:  #e5ddd4;
   --warm-subtle:  #f0ead8;
   --accent:       #c2714e;
   --accent-hover: #a85f3f;
   --accent-light: #f7ede6;
+  --on-accent:    #fff;
+  --error:        #b3362a;
+  --shadow:       rgba(44, 34, 24, 0.18);
   --radius: 8px; --gap: 16px;
 }
 
@@ -24,6 +27,9 @@
     --accent:       #d4886a;
     --accent-hover: #c27050;
     --accent-light: #2e1f17;
+    --on-accent:    #1a1614;
+    --error:        #e08074;
+    --shadow:       rgba(0, 0, 0, 0.5);
   }
 }
 
@@ -37,18 +43,24 @@
   --accent:       #d4886a;
   --accent-hover: #c27050;
   --accent-light: #2e1f17;
+  --on-accent:    #1a1614;
+  --error:        #e08074;
+  --shadow:       rgba(0, 0, 0, 0.5);
 }
 
 :root[data-theme="light"] {
   --paper:        #faf8f3;
   --surface:      #ffffff;
   --ink:          #2c2218;
-  --ink-muted:    #8c7b6e;
+  --ink-muted:    #6e6055;
   --warm-border:  #e5ddd4;
   --warm-subtle:  #f0ead8;
   --accent:       #c2714e;
   --accent-hover: #a85f3f;
   --accent-light: #f7ede6;
+  --on-accent:    #fff;
+  --error:        #b3362a;
+  --shadow:       rgba(44, 34, 24, 0.18);
 }
 
 body {
@@ -68,9 +80,9 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .login { display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; gap: 16px; }
 .login h1 { font-size: 2rem; color: var(--accent); }
 .login input { padding: 12px 16px; font-size: 1.1rem; border: 1px solid var(--warm-border); border-radius: var(--radius); background: var(--surface); color: var(--ink); width: 200px; text-align: center; letter-spacing: 8px; }
-.login button { padding: 12px 32px; background: var(--accent); color: #fff; border: none; border-radius: var(--radius); font-size: 1rem; cursor: pointer; font-weight: 600; }
+.login button { padding: 12px 32px; background: var(--accent-hover); color: var(--on-accent); border: none; border-radius: var(--radius); font-size: 1rem; cursor: pointer; font-weight: 600; }
 .login button:hover { background: var(--accent-hover); }
-.login .error { color: #c0392b; font-size: 0.9rem; }
+.login .error { color: var(--error); font-size: 0.9rem; }
 
 /* ── Header ────────────────────────────────────── */
 .header { display: flex; align-items: center; padding: 12px var(--gap); border-bottom: 1px solid var(--warm-border); gap: 16px; position: sticky; top: 0; background: var(--paper); z-index: 10; }
@@ -86,15 +98,17 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .filter-pills { display: flex; gap: 6px; align-items: center; white-space: nowrap; }
 .pill { padding: 5px 12px; background: var(--surface); border: 1px solid var(--warm-border); border-radius: 20px; color: var(--ink-muted); font-size: 0.78rem; cursor: pointer; transition: all 0.15s; }
 .pill:hover { color: var(--ink); border-color: var(--accent); }
-.pill.active { background: var(--accent); color: #fff; border-color: var(--accent); font-weight: 600; }
+.pill.active { background: var(--accent-hover); color: var(--on-accent); border-color: var(--accent-hover); font-weight: 600; }
 .pill-count { font-size: 0.65rem; opacity: 0.75; margin-left: 2px; }
-.filter-sep { color: var(--warm-border); font-size: 0.7rem; user-select: none; }
+.pill.active .pill-count { opacity: 1; }
+.filter-sep { color: var(--ink-muted); font-size: 0.7rem; user-select: none; }
 
 /* ── Book Grid ─────────────────────────────────── */
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: var(--gap); padding: var(--gap); }
 .card { background: var(--surface); border: 1px solid var(--warm-border); border-radius: 12px; overflow: hidden; cursor: pointer; transition: transform 0.2s ease, box-shadow 0.2s ease; }
-.card:hover { transform: translateY(-2px); box-shadow: 0 8px 24px -4px rgba(44, 34, 24, 0.18); }
+.card:hover { transform: translateY(-2px); box-shadow: 0 8px 24px -4px var(--shadow); }
 .card img { width: 100%; aspect-ratio: 2/3; object-fit: cover; background: var(--warm-subtle); display: block; }
+.cover-fallback { background: var(--warm-subtle); }
 .card .info { padding: 10px; }
 .card .title { font-size: 0.85rem; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .card .author { font-size: 0.75rem; color: var(--ink-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 2px; }
@@ -109,7 +123,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .detail .info p { color: var(--ink-muted); margin-bottom: 4px; font-size: 0.9rem; }
 .detail .actions { display: flex; gap: 8px; margin-top: 12px; }
 .detail .actions a, .detail .actions button { padding: 10px 20px; border-radius: var(--radius); text-decoration: none; font-weight: 600; font-size: 0.9rem; cursor: pointer; border: none; }
-.btn-primary { background: var(--accent); color: #fff; }
+.btn-primary { background: var(--accent-hover); color: var(--on-accent); }
 .btn-primary:hover { background: var(--accent-hover); }
 .btn-secondary { background: var(--surface); color: var(--ink); border: 1px solid var(--warm-border) !important; }
 .btn-secondary:hover { background: var(--warm-subtle); }
@@ -119,7 +133,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .reader .nav { display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--warm-border); margin-bottom: var(--gap); }
 .reader .nav button { padding: 6px 16px; background: var(--surface); border: 1px solid var(--warm-border); border-radius: var(--radius); color: var(--ink); cursor: pointer; }
 .reader .nav button:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
-.reader .nav button:disabled { opacity: 0.4; cursor: default; }
+.reader .nav button:disabled { opacity: 0.55; cursor: default; }
 .reader .content { font-family: "Lora", Georgia, serif; line-height: 1.7; }
 .reader .content img { max-width: 100%; height: auto; }
 .reader .page-img { display: flex; justify-content: center; }
