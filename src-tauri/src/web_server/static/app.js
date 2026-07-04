@@ -30,6 +30,10 @@
   }
 
   function route() {
+    // K4: the shortcuts overlay is appended to document.body and must not
+    // survive a navigation — it would block the next view and swallow
+    // shortcuts on it.
+    closeShortcutsOverlay();
     const hash = window.location.hash || "#";
     if (hash === "#" || hash === "#/") return showLibrary();
     if (hash === "#/stats") return showStats();
@@ -50,7 +54,16 @@
   function isTypingTarget(el) {
     if (!el) return false;
     const tag = el.tagName;
+    // K2: the range slider is an <input> but isn't a "typing" surface — treat
+    // it separately so shortcuts like Escape/Backspace/f still work after
+    // interacting with it (native Arrow/Home/End stepping is handled before
+    // this check runs; see the keydown listener below).
+    if (tag === "INPUT" && el.type === "range") return false;
     return tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA";
+  }
+
+  function isRangeInput(el) {
+    return !!el && el.tagName === "INPUT" && el.type === "range";
   }
 
   function toggleFullscreen() {
@@ -92,6 +105,10 @@
   }
 
   document.addEventListener("keydown", (e) => {
+    // K3: never hijack modified shortcuts (Cmd/Ctrl+F find, Cmd+ArrowLeft
+    // history back, etc.) — bail before any preventDefault.
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+
     if (e.key === "?" && !isTypingTarget(e.target)) {
       e.preventDefault();
       openShortcutsOverlay();
@@ -108,6 +125,12 @@
       e.target.value = "";
       e.target.blur();
       refreshLibrary("");
+      return;
+    }
+
+    // K2: the range slider keeps native Arrow/Home/End stepping; every other
+    // shortcut key falls through to the normal handling below.
+    if (isRangeInput(e.target) && ["ArrowLeft", "ArrowRight", "Home", "End"].includes(e.key)) {
       return;
     }
 
@@ -128,7 +151,18 @@
       else if (e.key === "Home") { e.preventDefault(); readerState.handlers.first(); }
       else if (e.key === "End") { e.preventDefault(); readerState.handlers.last(); }
       else if (e.key === "f" || e.key === "F") { e.preventDefault(); toggleFullscreen(); }
-      else if (e.key === "Escape" || e.key === "Backspace") { e.preventDefault(); readerState.handlers.goBack(); }
+      else if (e.key === " " || e.key === "Spacebar") {
+        // K5: fallback scroll in case the stage doesn't have native focus.
+        e.preventDefault();
+        scrollReaderStage(e.shiftKey ? -1 : 1);
+      }
+      else if (e.key === "Escape" || e.key === "Backspace") {
+        // K1: let the browser exit fullscreen natively; don't also navigate
+        // back and lose the reading position.
+        if (e.key === "Escape" && document.fullscreenElement) return;
+        e.preventDefault();
+        readerState.handlers.goBack();
+      }
       return;
     }
 
@@ -408,15 +442,46 @@
   // Chrome (header + bottom toolbar) is built ONCE per book; page/chapter
   // turns within the same book only swap the stage content (renderReaderContent)
   // instead of re-fetching the book/page-count and tearing down the DOM.
+  // R2/R3: true while `location.hash` still points at this reader route for
+  // this book. Re-checked after every await in `showReader` so a user who
+  // navigates away mid-load doesn't get a stale render clobbering whatever
+  // they navigated to.
+  function hashTargetsReader(id) {
+    const hash = window.location.hash || "#";
+    return hash.startsWith(`#/book/${id}/`) && hash.includes("/read");
+  }
+
+  // R3: clamp a possibly-malformed page/chapter index (NaN, negative,
+  // out-of-range) into [0, count-1].
+  function clampIndex(index, count) {
+    const max = Math.max(count - 1, 0);
+    if (!Number.isFinite(index)) return 0;
+    return Math.min(Math.max(index, 0), max);
+  }
+
   async function showReader(id, index) {
     currentView = "reader";
     const sameBook = readerState && readerState.id === id;
 
     if (!sameBook) {
+      // R2: drop any stale state up front so a concurrent load for a
+      // different book can't be mistaken for a "same book" fast path.
+      readerState = null;
       app().innerHTML = '<div class="loading">Loading...</div>';
       const resp = await api("/api/books/" + id);
-      if (!resp) return;
-      const book = await resp.json();
+      if (!resp || !hashTargetsReader(id)) return;
+      if (!resp.ok) {
+        app().innerHTML = `<div class="error">${esc(`Couldn't load this book (HTTP ${resp.status})`)}</div>`;
+        return;
+      }
+      let book;
+      try {
+        book = await resp.json();
+      } catch (e) {
+        app().innerHTML = `<div class="error">${esc("Couldn't load this book (invalid response)")}</div>`;
+        return;
+      }
+      if (!hashTargetsReader(id)) return;
 
       // MOBI and EPUB both render through the chapter-HTML endpoint; the
       // server-side `/api/books/:id/chapters/:index` route dispatches to
@@ -428,24 +493,42 @@
         count = book.total_chapters || 1;
       } else {
         const countResp = await api(`/api/books/${id}/page-count`);
-        if (!countResp) return;
+        if (!countResp || !hashTargetsReader(id)) return;
+        if (!countResp.ok) {
+          app().innerHTML = `<div class="error">${esc(`Couldn't load page count (HTTP ${countResp.status})`)}</div>`;
+          return;
+        }
         count = (await countResp.json()).count;
+        if (!hashTargetsReader(id)) return;
       }
 
+      const clamped = clampIndex(index, count);
       readerState = {
         id,
         book,
         mode: isHtmlBook ? "chapter" : "page",
-        index,
+        index: clamped,
         count,
         chromeHidden: false,
         fitMode: localStorage.getItem("folio_reader_fit_mode") || "fit-height",
         handlers: null,
+        renderGen: 0,
       };
       readerState.handlers = makeReaderHandlers(id);
       renderReaderChrome();
+      if (clamped !== index) {
+        // Normalize the URL; the resulting hashchange re-enters this
+        // function on the "same book" fast path below to actually render.
+        navigate(`#/book/${id}/${clamped}/read`);
+        return;
+      }
     } else {
-      readerState.index = index;
+      const clamped = clampIndex(index, readerState.count);
+      readerState.index = clamped;
+      if (clamped !== index) {
+        navigate(`#/book/${id}/${clamped}/read`);
+        return;
+      }
     }
 
     await renderReaderContent();
@@ -471,6 +554,11 @@
 
   function gotoReaderIndex(newIndex) {
     if (!readerState || newIndex < 0 || newIndex >= readerState.count) return;
+    // R1-adjacent: update in-memory state synchronously so rapid successive
+    // calls (e.g. holding/repeating ArrowRight) each see the just-updated
+    // index rather than all reading the same stale value before the
+    // asynchronous `hashchange` round-trip catches up.
+    readerState.index = newIndex;
     navigate("#/book/" + readerState.id + "/" + newIndex + "/read");
   }
 
@@ -526,7 +614,7 @@
     const { book, mode, count, index, fitMode } = readerState;
     const rootClass = mode === "page" ? `reader-page ${fitMode}` : "reader-chapter";
     const stageInner = mode === "page"
-      ? `<img id="page-img" alt="">`
+      ? `<img id="page-img" alt=""><div class="reader-page-error" id="page-error" hidden></div>`
       : `<div class="content" id="reader-content"></div>`;
     const fitToggleBtn = mode === "page"
       ? `<button id="fit-toggle-btn">${fitMode === "fit-height" ? "Fit: Height" : "Fit: Width"}</button>`
@@ -542,7 +630,7 @@
             ${navIconsHtml("")}
           </div>
         </div>
-        <div class="reader-stage" id="reader-stage">${stageInner}</div>
+        <div class="reader-stage" id="reader-stage" tabindex="-1">${stageInner}</div>
         <div class="reader-chrome-bottom">
           <div class="reader-toolbar">
             <button id="prev-btn">Prev</button>
@@ -559,13 +647,24 @@
     $("#prev-btn").addEventListener("click", () => readerState.handlers.prev());
     $("#next-btn").addEventListener("click", () => readerState.handlers.next());
     $("#chrome-toggle-btn").addEventListener("click", () => readerState.handlers.toggleChrome());
-    $("#page-slider").addEventListener("change", (e) => gotoReaderIndex(parseInt(e.target.value, 10)));
+    $("#page-slider").addEventListener("change", (e) => {
+      // K2: return focus to the document so shortcuts work immediately
+      // after a slider drag, without waiting on isTypingTarget special-casing.
+      e.target.blur();
+      gotoReaderIndex(parseInt(e.target.value, 10));
+    });
     bindNavIcons();
 
     if (mode === "page") {
       const img = $("#page-img");
       bindClickZones(img);
       bindSwipe(img);
+      img.addEventListener("error", handlePageImageError);
+      img.addEventListener("load", () => {
+        img.style.display = "";
+        const errEl = $("#page-error");
+        if (errEl) errEl.hidden = true;
+      });
       $("#fit-toggle-btn").addEventListener("click", () => {
         readerState.fitMode = readerState.fitMode === "fit-height" ? "fit-width" : "fit-height";
         localStorage.setItem("folio_reader_fit_mode", readerState.fitMode);
@@ -578,15 +677,35 @@
 
   async function renderReaderContent() {
     const { id, mode, index, count } = readerState;
+    // R1: monotonic per-book render generation. Captured before each await
+    // below; if it no longer matches after the await, a newer render (or a
+    // fresh book load) has superseded this one — abandon without touching
+    // the DOM.
+    readerState.renderGen = (readerState.renderGen || 0) + 1;
+    const gen = readerState.renderGen;
     updateProgressUI();
 
     if (mode === "chapter") {
       const contentEl = $("#reader-content");
       if (contentEl) contentEl.innerHTML = '<div class="loading">Loading...</div>';
       const chResp = await api(`/api/books/${id}/chapters/${index}`);
+      if (!readerState || readerState.renderGen !== gen) return;
       if (!chResp) return;
+      // S1: non-2xx bodies are plain-text error strings that may contain
+      // book-derived content (e.g. from a crafted EPUB) — never insert them
+      // as HTML. Render a static, escaped message instead.
+      if (!chResp.ok) {
+        if (contentEl) {
+          contentEl.innerHTML = `<div class="reader-error">${esc(`Couldn't load this chapter (HTTP ${chResp.status})`)}</div>`;
+        }
+        return;
+      }
       const html = await chResp.text();
+      if (!readerState || readerState.renderGen !== gen) return;
       if (contentEl) contentEl.innerHTML = html;
+      // K5: native Space/PageDown scrolling needs the scroll container focused.
+      const stage = $("#reader-stage");
+      if (stage) stage.focus();
     } else {
       const img = $("#page-img");
       if (img) {
@@ -597,6 +716,31 @@
       if (index + 1 < count) new Image().src = pageUrl(id, index + 1);
       if (index - 1 >= 0) new Image().src = pageUrl(id, index - 1);
     }
+  }
+
+  // R4: page-mode turns only ever set img.src, so a 401 on session expiry
+  // fails silently (broken image, no redirect to login). Probe a cheap
+  // authenticated endpoint — api() already redirects to login on 401 — to
+  // distinguish "session expired" from a genuine image failure.
+  async function handlePageImageError() {
+    if (!readerState) return;
+    const check = await api(`/api/books/${readerState.id}`);
+    if (!check) return; // 401 — api() already redirected to the login screen
+    const img = $("#page-img");
+    const errEl = $("#page-error");
+    if (img) img.style.display = "none";
+    if (errEl) {
+      errEl.hidden = false;
+      errEl.innerHTML = esc("Couldn't load this page.");
+    }
+  }
+
+  // K5: fallback for Space/Shift+Space when the stage doesn't have native
+  // focus. Scrolls by ~90% of the visible stage height.
+  function scrollReaderStage(direction) {
+    const stage = $("#reader-stage");
+    if (!stage) return;
+    stage.scrollBy({ top: stage.clientHeight * 0.9 * direction, behavior: "auto" });
   }
 
   function updateProgressUI() {

@@ -73,6 +73,17 @@ impl WebState {
         let root = self.data_dir.join("images");
         Ok(Arc::new(folio_core::storage::LocalStorage::new(root)?))
     }
+
+    /// Whether a PIN is currently configured (i.e. web auth is enabled).
+    /// Mirrors the check `auth_middleware` performs. A poisoned lock is
+    /// treated as "PIN configured" so callers fail toward the safer choice
+    /// (e.g. a non-cacheable response) rather than toward open access.
+    pub fn has_pin(&self) -> bool {
+        self.pin_hash
+            .lock()
+            .map(|guard| guard.is_some())
+            .unwrap_or(true)
+    }
 }
 
 /// Map any error convertible to [`FolioError`] into an HTTP `(status, message)`
@@ -1008,23 +1019,21 @@ mod tests {
         let _ = tx.send(());
     }
 
-    #[tokio::test]
-    async fn page_image_and_page_count_responses_have_cache_control_header() {
-        let state = test_state();
+    /// Minimal CBZ fixture with a single (fake) page image, for the
+    /// page-image/page-count cache-control tests below.
+    fn write_cache_test_cbz(dir: &std::path::Path) -> std::path::PathBuf {
+        let cbz_path = dir.join("test.cbz");
+        let file = std::fs::File::create(&cbz_path).unwrap();
+        let mut zip = zip::ZipWriter::new(file);
+        let options = zip::write::SimpleFileOptions::default();
+        zip.start_file("page01.jpg", options).unwrap();
+        std::io::Write::write_all(&mut zip, b"fake jpg bytes").unwrap();
+        zip.finish().unwrap();
+        cbz_path
+    }
 
-        // Minimal CBZ fixture with a single (fake) page image.
-        let dir = tempfile::tempdir().unwrap();
-        let cbz_path = dir.path().join("test.cbz");
-        {
-            let file = std::fs::File::create(&cbz_path).unwrap();
-            let mut zip = zip::ZipWriter::new(file);
-            let options = zip::write::SimpleFileOptions::default();
-            zip.start_file("page01.jpg", options).unwrap();
-            std::io::Write::write_all(&mut zip, b"fake jpg bytes").unwrap();
-            zip.finish().unwrap();
-        }
-
-        let book = crate::models::Book {
+    fn cache_test_book(cbz_path: &std::path::Path) -> crate::models::Book {
+        crate::models::Book {
             id: "cache-test-book".to_string(),
             title: "Cache Test".to_string(),
             author: "Author".to_string(),
@@ -1046,10 +1055,20 @@ mod tests {
             publisher: None,
             publish_year: None,
             is_imported: false,
-        };
+        }
+    }
+
+    #[tokio::test]
+    async fn page_image_and_page_count_cache_control_no_pin() {
+        let state = test_state();
+        // pin_hash is None — no PIN configured, so responses are safe to
+        // cache in the browser for a while.
+
+        let dir = tempfile::tempdir().unwrap();
+        let cbz_path = write_cache_test_cbz(dir.path());
         {
             let conn = state.conn().unwrap();
-            crate::db::insert_book(&conn, &book).unwrap();
+            crate::db::insert_book(&conn, &cache_test_book(&cbz_path)).unwrap();
         }
 
         let router = build_router(
@@ -1086,13 +1105,15 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resp.status(), 200);
-        let cache_control = resp
-            .headers()
-            .get("cache-control")
-            .expect("pages/{index} response should set Cache-Control")
-            .to_str()
-            .unwrap();
-        assert!(cache_control.contains("max-age"));
+        assert_eq!(
+            resp.headers()
+                .get("cache-control")
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            "private, max-age=3600",
+            "pages/{{index}} should be cacheable when no PIN is configured"
+        );
 
         let resp = client
             .get(format!(
@@ -1102,9 +1123,97 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resp.status(), 200);
-        assert!(
-            resp.headers().get("cache-control").is_some(),
-            "page-count response should set Cache-Control"
+        assert_eq!(
+            resp.headers()
+                .get("cache-control")
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            "private, max-age=3600",
+            "page-count should be cacheable when no PIN is configured"
+        );
+
+        let _ = tx.send(());
+    }
+
+    // S2: once a PIN is configured, a cached page image/page-count response
+    // would let the same browser keep serving protected pages for up to an
+    // hour after the session expires — those requests never reach
+    // `auth_middleware` at all. `no-store` closes that gap.
+    #[tokio::test]
+    async fn page_image_and_page_count_cache_control_with_pin_is_no_store() {
+        let state = test_state();
+        *state.pin_hash.lock().unwrap() = Some(auth::hash_pin("1234"));
+
+        let dir = tempfile::tempdir().unwrap();
+        let cbz_path = write_cache_test_cbz(dir.path());
+        {
+            let conn = state.conn().unwrap();
+            crate::db::insert_book(&conn, &cache_test_book(&cbz_path)).unwrap();
+        }
+
+        let router = build_router(
+            state,
+            ServerModes {
+                web_ui: true,
+                opds: true,
+            },
+        );
+        let listener = tokio::net::TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], 0)))
+            .await
+            .unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (tx, rx) = oneshot::channel::<()>();
+        tokio::spawn(async move {
+            axum::serve(
+                listener,
+                router.into_make_service_with_connect_info::<SocketAddr>(),
+            )
+            .with_graceful_shutdown(async {
+                let _ = rx.await;
+            })
+            .await
+            .ok();
+        });
+
+        let client = reqwest::Client::new();
+
+        let resp = client
+            .get(format!(
+                "http://127.0.0.1:{port}/api/books/cache-test-book/pages/0"
+            ))
+            .basic_auth("folio", Some("1234"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+        assert_eq!(
+            resp.headers()
+                .get("cache-control")
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            "no-store",
+            "pages/{{index}} must not be cacheable once a PIN is configured"
+        );
+
+        let resp = client
+            .get(format!(
+                "http://127.0.0.1:{port}/api/books/cache-test-book/page-count"
+            ))
+            .basic_auth("folio", Some("1234"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+        assert_eq!(
+            resp.headers()
+                .get("cache-control")
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            "no-store",
+            "page-count must not be cacheable once a PIN is configured"
         );
 
         let _ = tx.send(());

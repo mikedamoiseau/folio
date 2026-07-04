@@ -141,9 +141,14 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .reader-chrome-top, .reader-chrome-bottom { flex-shrink: 0; }
 
 .reader-stage { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; overflow: hidden; background: var(--warm-subtle); }
+/* K5: the stage is focused after each chapter render so native Space/
+   PageDown scrolling works; suppress the focus ring on this container
+   (its content remains keyboard-navigable on its own merits). */
+.reader-stage:focus { outline: none; }
 .reader-page.fit-width .reader-stage { align-items: flex-start; overflow: auto; }
 .reader-stage img#page-img { max-width: 100%; max-height: 100%; object-fit: contain; cursor: pointer; user-select: none; -webkit-user-drag: none; }
 .reader-page.fit-width .reader-stage img#page-img { width: 100%; max-width: 100%; height: auto; max-height: none; }
+.reader-page-error, .reader-error { color: var(--error); text-align: center; padding: 24px; }
 
 .reader-chapter .reader-stage { display: block; overflow-y: auto; padding: var(--gap); }
 .reader-chapter .content { max-width: 700px; margin: 0 auto; font-family: "Lora", Georgia, serif; line-height: 1.7; }

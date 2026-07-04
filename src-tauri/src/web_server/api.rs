@@ -640,9 +640,16 @@ async fn get_page_image(
     let file_path = state.resolve_book_path(&book).map_err(folio_status)?;
 
     // Page images are rasterized from an immutable book file, so they're
-    // safe to cache for a while (private: PIN-protected setups shouldn't
-    // let shared/CDN caches store them).
-    const PAGE_CACHE_CONTROL: &str = "private, max-age=3600";
+    // safe to cache for a while when the server is unauthenticated (no PIN,
+    // no session gate). Once a PIN is configured, a cached response would
+    // let the same browser keep serving protected pages for up to an hour
+    // after the session expires — those requests never reach auth_middleware
+    // at all. `no-store` closes that gap.
+    let page_cache_control = if state.has_pin() {
+        "no-store"
+    } else {
+        "private, max-age=3600"
+    };
 
     match book.format {
         BookFormat::Pdf => {
@@ -651,7 +658,7 @@ async fn get_page_image(
             Ok((
                 [
                     (header::CONTENT_TYPE, mime.to_string()),
-                    (header::CACHE_CONTROL, PAGE_CACHE_CONTROL.to_string()),
+                    (header::CACHE_CONTROL, page_cache_control.to_string()),
                 ],
                 bytes,
             )
@@ -663,7 +670,7 @@ async fn get_page_image(
             Ok((
                 [
                     (header::CONTENT_TYPE, mime),
-                    (header::CACHE_CONTROL, PAGE_CACHE_CONTROL.to_string()),
+                    (header::CACHE_CONTROL, page_cache_control.to_string()),
                 ],
                 bytes,
             )
@@ -675,7 +682,7 @@ async fn get_page_image(
             Ok((
                 [
                     (header::CONTENT_TYPE, mime),
-                    (header::CACHE_CONTROL, PAGE_CACHE_CONTROL.to_string()),
+                    (header::CACHE_CONTROL, page_cache_control.to_string()),
                 ],
                 bytes,
             )
@@ -711,8 +718,15 @@ async fn get_page_count(
         }
     };
 
+    // See `get_page_image` for why this is conditional on PIN configuration.
+    let page_cache_control = if state.has_pin() {
+        "no-store"
+    } else {
+        "private, max-age=3600"
+    };
+
     Ok((
-        [(header::CACHE_CONTROL, "private, max-age=3600")],
+        [(header::CACHE_CONTROL, page_cache_control)],
         Json(serde_json::json!({ "count": count })),
     )
         .into_response())
