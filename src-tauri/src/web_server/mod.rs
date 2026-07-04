@@ -155,6 +155,14 @@ pub fn get_local_ip() -> Option<String> {
     Some(ip.to_string())
 }
 
+/// Item 6: CSP hash for the tiny inline bootstrap script in index.html's
+/// `<head>` that sets `data-theme` before first paint (avoids a flash of the
+/// wrong theme). Must be regenerated (sha256, base64) if that script's exact
+/// text ever changes — a mismatch here means the browser silently blocks the
+/// script instead of erroring, so `test_csp_allows_theme_bootstrap_script_hash`
+/// exists to catch drift in CI.
+const THEME_BOOTSTRAP_SCRIPT_HASH: &str = "'sha256-FGUWTgqSoem8FWO0BBhrwgmMQsdK1kJ8wuiBBS6w55w='";
+
 /// Middleware that adds security headers to all responses (R3-3).
 async fn security_headers_middleware(
     req: axum::http::Request<axum::body::Body>,
@@ -166,9 +174,12 @@ async fn security_headers_middleware(
     headers.insert("x-frame-options", "DENY".parse().unwrap());
     headers.insert(
         "content-security-policy",
-        "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:"
-            .parse()
-            .unwrap(),
+        format!(
+            "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; \
+             script-src 'self' {THEME_BOOTSTRAP_SCRIPT_HASH}"
+        )
+        .parse()
+        .unwrap(),
     );
     response
 }
@@ -692,6 +703,65 @@ mod tests {
         assert!(resp.headers().contains_key("x-content-type-options"));
         assert!(resp.headers().contains_key("x-frame-options"));
         assert!(resp.headers().contains_key("content-security-policy"));
+
+        let _ = tx.send(());
+    }
+
+    // Item 6: the theme bootstrap inline script in index.html (sets
+    // data-theme before first paint, avoiding a flash of the wrong theme)
+    // must be allowed by CSP via a script-src hash rather than a blanket
+    // 'unsafe-inline' — assert the exact hash is present, sourced from the
+    // same constant `security_headers_middleware` uses, so a drift between
+    // the script text and the hash fails loudly here instead of silently
+    // breaking in the browser (CSP violation, no visible error to the user).
+    #[tokio::test]
+    async fn test_csp_allows_theme_bootstrap_script_hash() {
+        let state = test_state();
+        let addr = SocketAddr::from(([127, 0, 0, 1], 0));
+        let router = build_router(
+            state,
+            ServerModes {
+                web_ui: true,
+                opds: true,
+            },
+        );
+        let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (tx, rx) = oneshot::channel::<()>();
+        tokio::spawn(async move {
+            axum::serve(
+                listener,
+                router.into_make_service_with_connect_info::<SocketAddr>(),
+            )
+            .with_graceful_shutdown(async {
+                let _ = rx.await;
+            })
+            .await
+            .ok();
+        });
+
+        let client = reqwest::Client::new();
+        let resp = client
+            .get(format!("http://127.0.0.1:{port}/"))
+            .send()
+            .await
+            .unwrap();
+
+        let csp = resp
+            .headers()
+            .get("content-security-policy")
+            .expect("CSP header present")
+            .to_str()
+            .unwrap()
+            .to_string();
+        assert!(
+            csp.contains(THEME_BOOTSTRAP_SCRIPT_HASH),
+            "CSP script-src should allow the theme bootstrap script hash: {csp}"
+        );
+        assert!(
+            csp.contains("script-src 'self'"),
+            "script-src should still allow the external app.js: {csp}"
+        );
 
         let _ = tx.send(());
     }
