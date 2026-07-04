@@ -331,4 +331,10 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
     transition-duration: 0.01ms !important;
     animation-duration: 0.01ms !important;
   }
+  /* Finding 10: an animation-duration of 0.01ms with `infinite` still keeps
+     restarting forever — just very fast flickering, not actually stopped.
+     Turn the shimmer off outright and keep the static skeleton background. */
+  .skeleton-cover, .skeleton-line {
+    animation: none;
+  }
 }

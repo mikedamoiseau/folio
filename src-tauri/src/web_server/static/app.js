@@ -49,9 +49,6 @@
   function safeSessionSet(key, value) {
     try { sessionStorage.setItem(key, value); } catch (e) { /* best-effort */ }
   }
-  function safeSessionRemove(key) {
-    try { sessionStorage.removeItem(key); } catch (e) { /* best-effort */ }
-  }
 
   // Finding 11: a hand-edited or corrupted stored value must never flow
   // straight into data-theme/aria-label — coerce anything outside the known
@@ -151,11 +148,15 @@
   let lastSentIndex = {};     // bookId -> last chapter_index confirmed sent this session
   let saveChains = {};        // bookId -> promise tail; serializes PUTs per book (F9)
 
-  // Item 10: dismissible, aria-live toast for surfacing fetch failures that
-  // would otherwise render as a silent empty view. A single shared container
-  // (created lazily) stacks multiple toasts; each auto-dismisses after 6s or
-  // on click of its own close button.
-  function showToast(msg) {
+  // Item 10 / Finding 7: dismissible, aria-live toast for surfacing fetch
+  // failures that would otherwise render as a silent empty view. A single
+  // shared container stacks multiple toasts; each auto-dismisses after 6s or
+  // on click of its own close button. The container is created once, up
+  // front (see the `ensureToastContainer()` call near the bottom of this
+  // file) rather than lazily inside the first showToast() call — a screen
+  // reader needs the aria-live region already present in the DOM before the
+  // announcement lands, or the very first toast can go unannounced.
+  function ensureToastContainer() {
     let container = $("#toast-container");
     if (!container) {
       container = document.createElement("div");
@@ -165,6 +166,11 @@
       container.setAttribute("aria-live", "polite");
       document.body.appendChild(container);
     }
+    return container;
+  }
+
+  function showToast(msg) {
+    const container = ensureToastContainer();
     const toast = document.createElement("div");
     toast.className = "toast";
     toast.innerHTML = `<span>${esc(msg)}</span><button type="button" class="toast-close" aria-label="Dismiss">&times;</button>`;
@@ -174,24 +180,50 @@
     setTimeout(remove, 6000);
   }
 
-  // Item 10: a thrown network error (e.g. the server process died) must not
-  // become an unhandled rejection that leaves a caller stuck on "Loading..."
-  // forever — normalize it to the same `null` result api() already returns
-  // for an expired session (401), which every caller already treats as "stop,
-  // this request didn't complete". Callers that need to distinguish "already
-  // redirected to login" from "genuine failure, please surface it" check the
-  // `authenticated` flag (see loadBooks/showLibraryLoadError) rather than
-  // toasting from inside this shared helper — most callers (e.g. the
-  // shelves) are best-effort and must stay silent on failure.
+  // Finding 1: api() must let its many callers distinguish a *handled* 401
+  // (showLogin() already ran — every caller just returns, nothing to show)
+  // from a genuine failure that must be surfaced instead of leaving a
+  // skeleton/spinner running forever. A `fetch()` throw (offline, the server
+  // process died, DNS hiccup on a LAN) is rethrown as ApiNetworkError rather
+  // than collapsing to the same `null` a handled 401 returns — every caller
+  // below is wrapped in a try/catch that either renders a visible error (the
+  // library, detail, reader, stats, collections views) or, for genuinely
+  // best-effort call sites (shelves, filter bar, the resume-position check),
+  // swallows it and degrades gracefully, exactly as it already does for a
+  // 404/500 on the same endpoint. A non-network HTTP failure (4xx/5xx other
+  // than 401) is NOT thrown here — it comes back as a normal, non-ok
+  // Response so callers that render a primary view can show the status code.
+  class ApiNetworkError extends Error {}
+
   async function api(path) {
     let resp;
     try {
       resp = await fetch(path, { credentials: "same-origin" });
     } catch (e) {
-      return null;
+      throw new ApiNetworkError(e && e.message ? e.message : String(e));
     }
     if (resp.status === 401) { authenticated = false; showLogin(); return null; }
     return resp;
+  }
+
+  // Finding 4: short, differentiated failure text depending on *why* a fetch
+  // failed, instead of one blanket "Couldn't reach Folio server" message for
+  // network errors, HTTP errors, and bad JSON alike.
+  function apiFailureToastMessage(e) {
+    return e instanceof ApiNetworkError ? "Couldn't reach Folio server" : "Unexpected response";
+  }
+  function httpErrorToastMessage(status) {
+    return `Server error (${status}) — check the Folio app`;
+  }
+
+  // Finding 1: shared "this whole view failed to load" fallback for views
+  // that render into the full #app container (detail, reader) rather than a
+  // sub-container that already has its own empty/error styling (library,
+  // stats, collections use `.empty` on their existing content element
+  // instead — see showLibraryLoadError/showStats/showCollections). Reuses
+  // the reader loader's pre-existing bare `class="error"` convention.
+  function renderViewError(message) {
+    app().innerHTML = `<div class="error">${esc(message)}</div>`;
   }
 
   // ── Loading Skeletons (Item 10) ────────────────
@@ -653,13 +685,15 @@
     const bar = $("#filter-bar");
     if (!bar) return;
 
+    // Best-effort: the filter bar simply doesn't render if these fail (same
+    // as an empty collections/series result) — never throws.
     const [collectionsResp, seriesResp] = await Promise.all([
-      api("/api/collections"),
-      api("/api/series"),
+      api("/api/collections").catch(() => undefined),
+      api("/api/series").catch(() => undefined),
     ]);
 
-    cachedCollections = collectionsResp ? await collectionsResp.json() : [];
-    cachedSeries = seriesResp ? await seriesResp.json() : [];
+    cachedCollections = collectionsResp && collectionsResp.ok ? await collectionsResp.json() : [];
+    cachedSeries = seriesResp && seriesResp.ok ? await seriesResp.json() : [];
 
     // Don't show bar if nothing to filter
     if (cachedCollections.length === 0 && cachedSeries.length === 0) {
@@ -764,17 +798,15 @@
       if (contentEl) contentEl.innerHTML = skeletonGridHtml();
     }
 
+    // Finding 5: scroll restore now happens inside loadBooks() itself, only
+    // after a real successful render — never unconditionally here, which
+    // would also fire on a 401/failed load and scroll the wrong view.
     await loadBooks(activeQuery);
-    // Item 10: only meaningful right after a fresh grid render — restores
-    // the scrollY saved (per-hash) the moment the user left this exact
-    // library view for a book's detail/reader page.
-    restoreLibraryScrollPosition();
   }
 
   // Item 10: preserves the library's scroll position across a detail/reader
   // round trip. Saved keyed by the exact hash being left (so a different
-  // filter/search/sort state never restores the wrong scroll offset),
-  // restored once (then forgotten) by restoreLibraryScrollPosition().
+  // filter/search/sort state never restores the wrong scroll offset).
   function libraryScrollKey(hash) {
     return "folio_scroll_" + hash;
   }
@@ -783,10 +815,19 @@
     safeSessionSet(libraryScrollKey(rawHash()), String(window.scrollY));
   }
   function restoreLibraryScrollPosition() {
+    // Finding 5: guard against restoring onto a view the user has since
+    // navigated away from (e.g. a slow load that resolves after they already
+    // opened a book) — only ever scroll while still on the library.
+    if (currentView !== "library") return;
     const key = libraryScrollKey(rawHash());
     const saved = safeSessionGet(key);
     if (saved == null) return;
-    safeSessionRemove(key);
+    // Finding 6 (codex): don't consume the key on restore — a Forward
+    // navigation after a Back would otherwise find it already gone and lose
+    // the saved position a second time. saveLibraryScrollPosition()
+    // overwrites this same key on every departure instead; unbounded growth
+    // isn't a concern (sessionStorage, one small key per distinct hash,
+    // forgotten at the end of the tab's session).
     const y = parseInt(saved, 10);
     if (Number.isFinite(y)) window.scrollTo(0, y);
   }
@@ -823,19 +864,26 @@
   // reports "not missing" so a merely-empty-but-still-valid filter is left
   // alone.
   async function activeFilterEntityMissing() {
-    if (activeCollectionId) {
-      const resp = await api("/api/collections");
-      if (!resp || !resp.ok) return false;
-      const collections = await resp.json();
-      return !collections.some(c => c.id === activeCollectionId);
+    // Finding 1: api() now throws (ApiNetworkError) instead of returning
+    // null for a network failure — this check's doc comment above already
+    // promises to never throw, so that must be caught here too.
+    try {
+      if (activeCollectionId) {
+        const resp = await api("/api/collections");
+        if (!resp || !resp.ok) return false;
+        const collections = await resp.json();
+        return !collections.some(c => c.id === activeCollectionId);
+      }
+      if (activeSeries) {
+        const resp = await api("/api/series");
+        if (!resp || !resp.ok) return false;
+        const series = await resp.json();
+        return !series.some(s => s.name === activeSeries);
+      }
+      return false;
+    } catch (e) {
+      return false;
     }
-    if (activeSeries) {
-      const resp = await api("/api/series");
-      if (!resp || !resp.ok) return false;
-      const series = await resp.json();
-      return !series.some(s => s.name === activeSeries);
-    }
-    return false;
   }
 
   async function loadBooks(query) {
@@ -855,24 +903,37 @@
       url = "/api/books" + (qs ? "?" + qs : "");
     }
 
-    const resp = await api(url);
-    if (gen !== libraryRenderGen) return;
     // Item 10: the main library grid is the one fetch in this file whose
-    // failure must be loud — api() returning null here is either an already-
-    // handled 401 (showLogin() ran, `authenticated` is now false — no toast,
-    // it'd just be noise over the login screen) or a genuine network error
-    // (`authenticated` still true) worth surfacing. A non-network HTTP
-    // failure (e.g. a 500) reaches here as a normal, non-ok Response.
-    if (!resp) {
-      if (authenticated) showLibraryLoadError();
+    // failure must be loud. Finding 3: a load that resolves after the user
+    // has already navigated away from the library (to detail/reader/stats/
+    // collections) must not toast or error-render over whatever view they're
+    // looking at now — `libraryRenderGen` only catches a *newer library*
+    // request superseding this one, not "left the library entirely", so
+    // every failure branch below also checks `currentView === "library"`.
+    let resp;
+    try {
+      resp = await api(url);
+    } catch (e) {
+      // Finding 1: api() throws ApiNetworkError for a network failure
+      // instead of returning null (that's reserved for an already-handled
+      // 401 — see the plain `if (!resp)` branch below).
+      if (gen !== libraryRenderGen) return;
+      if (currentView === "library") showLibraryLoadError(apiFailureToastMessage(e));
       return;
     }
-    if (!resp.ok) { showLibraryLoadError(); return; }
+    if (gen !== libraryRenderGen) return;
+    if (!resp) return; // handled 401 — showLogin() already ran.
+    if (!resp.ok) {
+      // Finding 4: surface the actual status instead of a generic
+      // "couldn't reach the server" — the server IS reachable here.
+      if (currentView === "library") showLibraryLoadError(httpErrorToastMessage(resp.status));
+      return;
+    }
     let books;
     try {
       books = await resp.json();
     } catch (e) {
-      showLibraryLoadError();
+      if (currentView === "library") showLibraryLoadError("Unexpected response");
       return;
     }
     if (gen !== libraryRenderGen) return;
@@ -906,6 +967,10 @@
         b.title.toLowerCase().includes(q) || b.author.toLowerCase().includes(q)
       );
       renderBooks(filtered);
+      // Finding 5: only restore scroll after a real, successful grid render
+      // — never on a 401/failed load, which would consume the saved offset
+      // and scroll whatever's currently on screen to the wrong spot.
+      restoreLibraryScrollPosition();
       return;
     }
 
@@ -919,7 +984,10 @@
     // of it — a shelf-fetch failure (network error, non-OK response) must
     // never leave the page stuck on "Loading".
     renderBooks(books);
-    if (!showShelves) return;
+    if (!showShelves) {
+      restoreLibraryScrollPosition();
+      return;
+    }
 
     try {
       const continueResp = await api("/api/books/continue-reading?limit=12");
@@ -937,6 +1005,10 @@
     } catch (e) {
       // Best-effort: the plain grid rendered above stays intact.
     }
+    // Finding 5: restore once the layout has settled into its final shape
+    // (grid-only or grid+shelves) — restoring earlier, right after the plain
+    // grid render, would be undone by the shelves rendering on top of it.
+    restoreLibraryScrollPosition();
   }
 
   // Item 10: friendly, context-specific empty states instead of a bare "No
@@ -949,10 +1021,13 @@
     return '<div class="empty">Your library is empty. Import some books to get started.</div>';
   }
 
-  function showLibraryLoadError() {
+  // Finding 4: `message` is the differentiated toast text (network vs. HTTP
+  // vs. parse failure) chosen by loadBooks' catch/status branches; callers
+  // that don't care (none left) would fall back to the network wording.
+  function showLibraryLoadError(message) {
     const contentEl = $("#library-content");
     if (contentEl) contentEl.innerHTML = '<div class="empty">Couldn&rsquo;t load your library.</div>';
-    showToast("Couldn't reach Folio server");
+    showToast(message || "Couldn't reach Folio server");
   }
 
   function bookCardHtml(b) {
@@ -1206,9 +1281,34 @@
     readerState = null;
     resumePromptActive = false;
     app().innerHTML = detailSkeletonHtml();
-    const resp = await api("/api/books/" + id);
+
+    // Finding 1: the book fetch is the one thing this page can't render
+    // without — unlike the best-effort progress/series fetches below, its
+    // failure (network error, non-2xx, bad JSON) must replace the skeleton
+    // with a visible message + toast instead of leaving it spinning forever.
+    let resp;
+    try {
+      resp = await api("/api/books/" + id);
+    } catch (e) {
+      if (!hashTargetsDetail(id)) return;
+      renderViewError(apiFailureToastMessage(e));
+      showToast(apiFailureToastMessage(e));
+      return;
+    }
     if (!resp || !hashTargetsDetail(id)) return;
-    const book = await resp.json();
+    if (!resp.ok) {
+      renderViewError(`Couldn't load this book (HTTP ${resp.status})`);
+      showToast(httpErrorToastMessage(resp.status));
+      return;
+    }
+    let book;
+    try {
+      book = await resp.json();
+    } catch (e) {
+      renderViewError("Couldn't load this book (unexpected response)");
+      showToast("Unexpected response");
+      return;
+    }
     if (!hashTargetsDetail(id)) return;
 
     const isHtmlBook = book.format === "epub" || book.format === "mobi";
@@ -1225,20 +1325,26 @@
     // Finding I: these two fetches only depend on the book response already
     // in hand, not on each other — run them concurrently instead of one
     // after the other.
+    // Finding 1: these two are genuinely best-effort (per the comments
+    // above) — a network failure here must degrade the same way a 404/500
+    // already does (no progress / no series nav), not abort the whole page.
+    // `.catch(() => undefined)` keeps that network-error outcome distinct
+    // from the `null` api() returns for an already-handled 401, which still
+    // must abort (see the F5/F6 check below).
     const [progResp, seriesResp] = await Promise.all([
-      isReadable ? api(`/api/books/${id}/progress`) : Promise.resolve(null),
-      book.series ? api(`/api/books?series=${encodeURIComponent(book.series)}`) : Promise.resolve(null),
+      isReadable ? api(`/api/books/${id}/progress`).catch(() => undefined) : Promise.resolve(null),
+      book.series ? api(`/api/books?series=${encodeURIComponent(book.series)}`).catch(() => undefined) : Promise.resolve(null),
     ]);
     // F5/F6: a null response for a fetch that was actually made means api()
     // already redirected to the login screen (401) — continuing would render
     // the detail page over it.
-    if (isReadable && !progResp) return;
-    if (book.series && !seriesResp) return;
+    if (isReadable && progResp === null) return;
+    if (book.series && seriesResp === null) return;
     if (!hashTargetsDetail(id)) return;
 
     let progress = null;
     if (isReadable) {
-      if (progResp.ok) {
+      if (progResp && progResp.ok) {
         try { progress = await progResp.json(); } catch (e) { progress = null; }
         if (!hashTargetsDetail(id)) return;
       }
@@ -1248,7 +1354,7 @@
     const continueHash = isReadable ? `#/book/${id}/${progress ? progress.chapter_index : 0}/read` : "";
 
     let seriesNav = null;
-    if (book.series && seriesResp.ok) {
+    if (book.series && seriesResp && seriesResp.ok) {
       try {
         seriesNav = resolveSeriesNav(await seriesResp.json(), id);
       } catch (e) { seriesNav = null; }
@@ -1386,17 +1492,32 @@
       readerState = null;
       resumePromptActive = false;
       app().innerHTML = readerSkeletonHtml();
-      const resp = await api("/api/books/" + id);
+
+      // Finding 1: the book fetch is required to render anything at all —
+      // unlike the resume-position check below, its failure (network error,
+      // non-2xx, bad JSON) must replace the skeleton with a visible message
+      // + toast instead of leaving it spinning forever.
+      let resp;
+      try {
+        resp = await api("/api/books/" + id);
+      } catch (e) {
+        if (!hashTargetsReader(id)) return;
+        renderViewError(apiFailureToastMessage(e));
+        showToast(apiFailureToastMessage(e));
+        return;
+      }
       if (!resp || !hashTargetsReader(id)) return;
       if (!resp.ok) {
-        app().innerHTML = `<div class="error">${esc(`Couldn't load this book (HTTP ${resp.status})`)}</div>`;
+        renderViewError(`Couldn't load this book (HTTP ${resp.status})`);
+        showToast(httpErrorToastMessage(resp.status));
         return;
       }
       let book;
       try {
         book = await resp.json();
       } catch (e) {
-        app().innerHTML = `<div class="error">${esc("Couldn't load this book (invalid response)")}</div>`;
+        renderViewError("Couldn't load this book (unexpected response)");
+        showToast("Unexpected response");
         return;
       }
       if (!hashTargetsReader(id)) return;
@@ -1412,13 +1533,30 @@
       if (isHtmlBook) {
         count = book.total_chapters || 1;
       } else {
-        const countResp = await api(`/api/books/${id}/page-count`);
-        if (!countResp || !hashTargetsReader(id)) return;
-        if (!countResp.ok) {
-          app().innerHTML = `<div class="error">${esc(`Couldn't load page count (HTTP ${countResp.status})`)}</div>`;
+        let countResp;
+        try {
+          countResp = await api(`/api/books/${id}/page-count`);
+        } catch (e) {
+          if (!hashTargetsReader(id)) return;
+          renderViewError(apiFailureToastMessage(e));
+          showToast(apiFailureToastMessage(e));
           return;
         }
-        count = (await countResp.json()).count;
+        if (!countResp || !hashTargetsReader(id)) return;
+        if (!countResp.ok) {
+          renderViewError(`Couldn't load page count (HTTP ${countResp.status})`);
+          showToast(httpErrorToastMessage(countResp.status));
+          return;
+        }
+        let countBody;
+        try {
+          countBody = await countResp.json();
+        } catch (e) {
+          renderViewError("Couldn't load page count (unexpected response)");
+          showToast("Unexpected response");
+          return;
+        }
+        count = countBody.count;
         if (!hashTargetsReader(id)) return;
       }
 
@@ -1432,14 +1570,24 @@
       // not get reinterpreted as "the user wants to resume". Also skipped
       // when the detail page's Continue/Start Over buttons already made
       // this call for this book (readerEntryIntent).
+      // Finding 1: this check is best-effort (mirrors showDetail's progress
+      // fetch) — a network failure must not block the book from opening, it
+      // should just skip the resume prompt, same as a 404 already does.
       let savedIndex = null;
       let savedScroll = 0;
       if (!intent && index === 0) {
-        const progResp = await api(`/api/books/${id}/progress`);
-        // F5: a null response means api() already redirected to the login
-        // screen (401) — continuing would render the reader over it.
-        if (!progResp || !hashTargetsReader(id)) return;
-        if (progResp.ok) {
+        let progResp;
+        try {
+          progResp = await api(`/api/books/${id}/progress`);
+        } catch (e) {
+          progResp = undefined;
+        }
+        // F5: a null (not undefined) response means api() already redirected
+        // to the login screen (401) — continuing would render the reader
+        // over it. `undefined` (network error, caught above) falls through
+        // to "no saved progress" instead.
+        if (progResp === null || !hashTargetsReader(id)) return;
+        if (progResp && progResp.ok) {
           let progress = null;
           try { progress = await progResp.json(); } catch (e) { progress = null; }
           if (progress && progress.chapter_index > 0) {
@@ -1733,7 +1881,21 @@
     if (mode === "chapter") {
       const contentEl = $("#reader-content");
       if (contentEl) contentEl.innerHTML = '<div class="loading">Loading...</div>';
-      const chResp = await api(`/api/books/${id}/chapters/${index}`);
+      // Finding 1: a network error here previously propagated as an
+      // unhandled rejection, leaving the "Loading..." text stuck forever —
+      // catch it and show the same escaped reader-error message a non-2xx
+      // response already gets, plus a toast.
+      let chResp;
+      try {
+        chResp = await api(`/api/books/${id}/chapters/${index}`);
+      } catch (e) {
+        if (!readerState || readerState.renderGen !== gen) return;
+        if (contentEl) {
+          contentEl.innerHTML = `<div class="reader-error">${esc(apiFailureToastMessage(e))}</div>`;
+        }
+        showToast(apiFailureToastMessage(e));
+        return;
+      }
       if (!readerState || readerState.renderGen !== gen) return;
       if (!chResp) return;
       // S1: non-2xx bodies are plain-text error strings that may contain
@@ -1881,8 +2043,16 @@
   // distinguish "session expired" from a genuine image failure.
   async function handlePageImageError() {
     if (!readerState) return;
-    const check = await api(`/api/books/${readerState.id}`);
-    if (!check) return; // 401 — api() already redirected to the login screen
+    // Finding 1: a network error here means the probe itself couldn't run —
+    // that's just as much "can't load this page" as any other outcome, so
+    // fall through to the same error box instead of the 401 early return.
+    let check;
+    try {
+      check = await api(`/api/books/${readerState.id}`);
+    } catch (e) {
+      check = undefined;
+    }
+    if (check === null) return; // 401 — api() already redirected to the login screen
     const img = $("#page-img");
     const errEl = $("#page-error");
     if (img) img.style.display = "none";
@@ -1936,11 +2106,40 @@
     $("#back-btn").addEventListener("click", goHome);
     bindNavIcons();
 
-    const resp = await api("/api/stats");
-    if (!resp) return;
-    const s = await resp.json();
+    // Finding 1: stats previously had no failure handling at all beyond a
+    // 401 — a network error, non-2xx response, or bad JSON left "Loading..."
+    // on screen forever. `currentView !== "stats"` guards every branch below
+    // against rendering over a view the user has since navigated to.
+    let resp;
+    try {
+      resp = await api("/api/stats");
+    } catch (e) {
+      if (currentView !== "stats") return;
+      const container = $(".stats");
+      if (container) container.innerHTML = `<div class="empty">${esc(apiFailureToastMessage(e))}</div>`;
+      showToast(apiFailureToastMessage(e));
+      return;
+    }
+    if (!resp || currentView !== "stats") return;
+    if (!resp.ok) {
+      const container = $(".stats");
+      if (container) container.innerHTML = `<div class="empty">${esc(`Couldn't load stats (HTTP ${resp.status})`)}</div>`;
+      showToast(httpErrorToastMessage(resp.status));
+      return;
+    }
+    let s;
+    try {
+      s = await resp.json();
+    } catch (e) {
+      const container = $(".stats");
+      if (container) container.innerHTML = `<div class="empty">${esc("Unexpected response")}</div>`;
+      showToast("Unexpected response");
+      return;
+    }
+    if (currentView !== "stats") return;
 
     const container = $(".stats");
+    if (!container) return;
     if (!s || (s.totalSessions === 0 && s.totalReadingTimeSecs === 0)) {
       container.innerHTML = '<div class="empty">No reading stats yet. Start reading on the desktop app to see your progress here.</div>';
       return;
@@ -1994,15 +2193,48 @@
     $("#back-btn").addEventListener("click", goHome);
     bindNavIcons();
 
-    const [collectionsResp, seriesResp] = await Promise.all([
-      api("/api/collections"),
-      api("/api/series"),
-    ]);
-
-    const collections = collectionsResp ? await collectionsResp.json() : [];
-    const series = seriesResp ? await seriesResp.json() : [];
+    // Finding 1: this previously had no failure handling at all — a network
+    // error, non-2xx response, or bad JSON left "Loading..." on screen
+    // forever (or, on a 401, could throw trying to use `.collections` after
+    // showLogin() had already replaced it). `currentView !== "collections"`
+    // guards every branch below against rendering over a view the user has
+    // since navigated to.
+    let collectionsResp, seriesResp;
+    try {
+      [collectionsResp, seriesResp] = await Promise.all([
+        api("/api/collections"),
+        api("/api/series"),
+      ]);
+    } catch (e) {
+      if (currentView !== "collections") return;
+      const container = $(".collections");
+      if (container) container.innerHTML = `<div class="empty">${esc(apiFailureToastMessage(e))}</div>`;
+      showToast(apiFailureToastMessage(e));
+      return;
+    }
+    if (currentView !== "collections") return;
+    // A 401 on either fetch already redirected to the login screen.
+    if (collectionsResp === null || seriesResp === null) return;
+    const badResp = !collectionsResp.ok ? collectionsResp : !seriesResp.ok ? seriesResp : null;
+    if (badResp) {
+      const container = $(".collections");
+      if (container) container.innerHTML = `<div class="empty">${esc(`Couldn't load collections (HTTP ${badResp.status})`)}</div>`;
+      showToast(httpErrorToastMessage(badResp.status));
+      return;
+    }
+    let collections, series;
+    try {
+      collections = await collectionsResp.json();
+      series = await seriesResp.json();
+    } catch (e) {
+      const container = $(".collections");
+      if (container) container.innerHTML = `<div class="empty">${esc("Unexpected response")}</div>`;
+      showToast("Unexpected response");
+      return;
+    }
 
     const container = $(".collections");
+    if (!container) return;
     if (collections.length === 0 && series.length === 0) {
       container.innerHTML = '<div class="empty">No collections yet. Create collections in the desktop app.</div>';
       return;
@@ -2185,9 +2417,43 @@
     } catch (e) { /* best-effort */ }
   }
 
+  // Finding 7: create the toast live region immediately, before anything
+  // else has a chance to need it — see ensureToastContainer()'s comment.
+  ensureToastContainer();
+
+  // Finding 2: an offline/unreachable-server launch (the whole point of the
+  // service worker caching the shell above) with no friendly fallback here
+  // — reuses the resume-prompt's centered-panel markup/classes rather than
+  // introducing new CSS for a one-off screen.
+  function renderOfflineState() {
+    app().innerHTML = `
+      <div class="resume-prompt">
+        <div class="resume-prompt-panel">
+          <h2>Folio</h2>
+          <p>Couldn&rsquo;t reach the Folio server. Check your connection and try again.</p>
+          <div class="resume-actions">
+            <button class="btn-primary" id="retry-init-btn">Retry</button>
+          </div>
+        </div>
+      </div>`;
+    const btn = $("#retry-init-btn");
+    if (btn) btn.onclick = init;
+  }
+
   // ── Init ──────────────────────────────────────
   async function init() {
-    const test = await fetch("/api/books", { credentials: "same-origin" });
+    // Finding 2: this initial probe is a raw fetch (not api(), which would
+    // itself call showLogin() on 401 before `authenticated` is known here)
+    // — but it needs the same guard: an unhandled rejection (offline PWA
+    // launch, server not up yet) would otherwise abort this whole IIFE and
+    // leave #app permanently blank, since nothing else initializes the page.
+    let test;
+    try {
+      test = await fetch("/api/books", { credentials: "same-origin" });
+    } catch (e) {
+      renderOfflineState();
+      return;
+    }
     if (test.status === 401) { showLogin(); return; }
     authenticated = true;
     route();

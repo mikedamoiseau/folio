@@ -19,6 +19,26 @@ const SW_JS: &str = include_str!("static/sw.js");
 const ICON_192: &[u8] = include_bytes!("static/icon-192.png");
 const ICON_512: &[u8] = include_bytes!("static/icon-512.png");
 
+/// Finding 11: every path this module serves as a public, unauthenticated
+/// static shell asset — the single source of truth shared by [`routes`]
+/// below (each path here must have a matching `.route(...)` registration,
+/// checked by `mod::tests::all_public_shell_assets_are_reachable_without_auth`)
+/// and by `auth::auth_middleware`'s public-path carve-out, which matches
+/// against this constant directly instead of duplicating the path list.
+/// `static/sw.js`'s `SHELL_ASSETS` mirrors this list for precaching — see
+/// the pointer comment there.
+pub(crate) const PUBLIC_SHELL_ASSETS: &[&str] = &[
+    "/",
+    "/app.js",
+    "/app.css",
+    "/favicon.ico",
+    "/favicon.png",
+    "/manifest.json",
+    "/sw.js",
+    "/icon-192.png",
+    "/icon-512.png",
+];
+
 /// Build routes for the embedded web UI.
 pub fn routes() -> Router<WebState> {
     Router::new()

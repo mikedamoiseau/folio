@@ -1885,13 +1885,73 @@ mod tests {
         assert_public_route_ok("/icon-512.png", "image/png").await;
     }
 
+    // Finding 9: a manual CACHE_VERSION bump enforced only by a code-comment
+    // reminder means a changed app.js/app.css/index.html/manifest.json can
+    // ship without invalidating browsers' already-installed SW caches,
+    // serving the stale shell forever. This computes a short content hash
+    // over the concatenated shell assets — independently of sw.js — and
+    // asserts CACHE_VERSION embeds it, so any future asset edit without
+    // regenerating the version fails here with the expected hash to paste
+    // in, the same pattern `test_csp_allows_theme_bootstrap_script_hash`
+    // (web_server::tests, this file) already uses for the CSP hash.
     #[tokio::test]
-    async fn sw_js_contains_cache_version() {
+    async fn cache_version_embeds_shell_asset_content_hash() {
+        use sha2::{Digest, Sha256};
+
+        const INDEX_HTML: &str = include_str!("static/index.html");
+        const APP_JS: &str = include_str!("static/app.js");
+        const APP_CSS: &str = include_str!("static/app.css");
+        const MANIFEST_JSON: &str = include_str!("static/manifest.json");
         const SW_JS: &str = include_str!("static/sw.js");
+
+        let mut hasher = Sha256::new();
+        hasher.update(INDEX_HTML.as_bytes());
+        hasher.update(APP_JS.as_bytes());
+        hasher.update(APP_CSS.as_bytes());
+        hasher.update(MANIFEST_JSON.as_bytes());
+        let digest = format!("{:x}", hasher.finalize());
+        let expected_fragment = &digest[..12];
+
+        let cache_version_line = SW_JS
+            .lines()
+            .find(|l| l.trim_start().starts_with("const CACHE_VERSION"))
+            .expect("sw.js must define a CACHE_VERSION so shell-asset changes can invalidate old caches");
+
         assert!(
-            SW_JS.contains("CACHE_VERSION"),
-            "sw.js must define a CACHE_VERSION so shell-asset changes can invalidate old caches"
+            cache_version_line.contains(expected_fragment),
+            "sw.js's CACHE_VERSION is stale relative to the current shell asset content \
+             (index.html + app.js + app.css + manifest.json). Update it to embed \
+             {expected_fragment:?}, e.g. CACHE_VERSION = \"folio-shell-{expected_fragment}\"; \
+             found: {cache_version_line}"
         );
+    }
+
+    // Finding 11: PUBLIC_SHELL_ASSETS is the single source of truth shared by
+    // web_ui::routes() and auth::auth_middleware's carve-out — this walks the
+    // list end-to-end against a live, PIN-protected server, so a path added
+    // to one but not the other (or simply mistyped) fails loudly here rather
+    // than as a silent 401 on someone's PWA install screen.
+    #[tokio::test]
+    async fn all_public_shell_assets_are_reachable_without_auth() {
+        let state = test_state();
+        *state.pin_hash.lock().unwrap() = Some(auth::hash_pin("1357"));
+        let (_state, port, tx) = spawn_progress_test_server(state).await;
+        let client = reqwest::Client::new();
+
+        for path in web_ui::PUBLIC_SHELL_ASSETS {
+            let resp = client
+                .get(format!("http://127.0.0.1:{port}{path}"))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(
+                resp.status(),
+                200,
+                "{path} is listed in PUBLIC_SHELL_ASSETS but is not publicly reachable"
+            );
+        }
+
+        let _ = tx.send(());
     }
 
     #[tokio::test]

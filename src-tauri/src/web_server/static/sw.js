@@ -2,11 +2,18 @@
 // shell only. Reading content and API data are never cached (freshness/auth
 // complexity isn't worth it for v1; see docs/web-ui-improvements.md Item 9).
 //
-// Bump CACHE_VERSION whenever any shell asset below changes (app.js, app.css,
-// index.html, favicon, manifest, icons) so clients pick up the new files
-// instead of serving stale ones from the old cache. See the matching
-// reminder comment in web_ui.rs next to the include_str!/include_bytes!
-// embeds.
+// Finding 9: CACHE_VERSION must embed a short content hash of the shell
+// assets (index.html + app.js + app.css + manifest.json) — enforced by
+// `cache_version_embeds_shell_asset_content_hash` in mod.rs, which fails CI
+// with the expected hash whenever one of those files changes without this
+// being regenerated to match. Don't hand-edit the version without re-running
+// that test.
+//
+// SHELL_ASSETS mirrors `web_ui::PUBLIC_SHELL_ASSETS` in web_ui.rs (Finding
+// 11) — that's the source of truth for which paths are public/unauthed on
+// the Rust side; keep this array in sync with it by hand (a JS file can't
+// import a Rust const), plus `/favicon.ico` which isn't a distinct shell
+// asset worth precaching separately from `/favicon.png`.
 //
 // Secure-context caveat: service workers only register on secure contexts
 // (https, or http://localhost). Folio's primary LAN use case — a phone
@@ -15,7 +22,7 @@
 // activates; app.js's registration call is feature-detected/try-catched so
 // this is silent, not an error. The manifest + icons still work for iOS
 // Safari "Add to Home Screen" over plain HTTP.
-const CACHE_VERSION = "folio-shell-v1";
+const CACHE_VERSION = "folio-shell-de21716a5206";
 
 const SHELL_ASSETS = [
   "/",
@@ -29,7 +36,15 @@ const SHELL_ASSETS = [
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
-    caches.open(CACHE_VERSION).then((cache) => cache.addAll(SHELL_ASSETS))
+    caches.open(CACHE_VERSION).then((cache) =>
+      // Finding 8: web_ui.rs serves these with `Cache-Control: public,
+      // max-age=3600` — a plain `cache.addAll(SHELL_ASSETS)` lets the
+      // browser's own HTTP cache satisfy the fetch, which can populate a
+      // freshly-versioned SW cache with an hour-old copy of app.js/app.css
+      // right after a deploy. `cache: "reload"` forces each request past the
+      // HTTP cache to the network.
+      cache.addAll(SHELL_ASSETS.map((url) => new Request(url, { cache: "reload" })))
+    )
   );
   self.skipWaiting();
 });
@@ -70,7 +85,12 @@ self.addEventListener("fetch", (event) => {
   event.respondWith(
     caches.match(event.request).then((cached) => {
       if (cached) return cached;
-      return fetch(event.request).then((resp) => {
+      // Finding 8: same HTTP-cache concern as the install handler above —
+      // this fallback only runs on a cache miss (a shell asset not covered
+      // by SHELL_ASSETS/install, or a request racing an in-progress
+      // install), but it must still bypass a possibly stale HTTP cache entry
+      // rather than trust it into the SW cache.
+      return fetch(event.request, { cache: "no-cache" }).then((resp) => {
         if (resp && resp.ok) {
           const clone = resp.clone();
           caches.open(CACHE_VERSION).then((cache) => cache.put(event.request, clone));
