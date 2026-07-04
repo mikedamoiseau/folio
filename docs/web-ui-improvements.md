@@ -396,3 +396,44 @@ Integration tests in mod.rs first (red→green), with a synthetic large cover fi
 | 7 | **11** (cover thumbnails) | Added later; independent perf item, safe to run after the UI stabilizes |
 
 Each batch: feature branch, run full CI suite locally before push (see Shared Context rule 5), PR to main.
+
+---
+
+# Implementation Decision Log
+
+All 11 items were implemented 2026-07-04/05 on the epic branch `feature/web-ui-revamp` (sub-branches `web-ui/01-design-system`, `web-ui/02-reader-ux`, `web-ui/04-progress-sync`, `web-ui/05-shelves-detail`, `web-ui/06-theme-navigation`, `web-ui/09-pwa-polish`, `web-ui/11-cover-thumbnails`, each merged after a two-reviewer loop: workflow-based `/code-review` at high effort + Codex review, with all confirmed findings fixed before merge). Final merged state passes the full CI suite: `cargo fmt --check`, `cargo clippy --workspace --all-targets -D warnings`, 236 src-tauri tests, 503 folio-core tests, `npm run type-check`, 580 frontend tests. **The branch has not been pushed** — pushing/PR was not part of the brief.
+
+Decisions taken autonomously, for later review:
+
+## Design / UX
+1. **Typography without embedded fonts** (Item 1): font stacks reference "DM Sans"/"Playfair Display" with system fallbacks; no WOFF2 files embedded (no binary growth, no new static assets). Reviewers noted most visitors will get the fallback fonts. Revisit if exact font parity matters.
+2. **Light-mode `--ink-muted` darkened to `#6e6055`** (diverges from the desktop token `#8c7b6e`) to meet WCAG AA on small text. Other tokens ported verbatim.
+3. **Primary buttons use `--accent-hover` as background with a new `--on-accent` text token** (white in light, near-black in dark) — the only scheme that passed ≥4.5:1 in both palettes while keeping the terracotta look.
+4. **Sepia theme skipped** (Item 6) — desktop sepia tokens live in `src/lib/themes` and porting them was disproportionate; toggle is light/dark/system only.
+5. **Series stacks in the grid skipped** (Item 7 stretch) — conflicts with Item 5's shelves; large blast radius.
+6. **"All Books" / go-home clears filters only, preserves search query and sort** — matches old pill behavior; full reset felt like data loss.
+7. **`theme-color` meta is static light accent** (`#c2714e`); live theme-matching would require touching the CSP-hashed bootstrap script.
+
+## API / backend
+8. **Progress API shape** (Item 4): `chapter_index` doubles as page index for page-based formats (mirrors desktop persistence); web writes real scroll ratio for chapter mode. PUT accepts any non-negative index — the upper-bound check against `books.total_chapters` was removed because the reader navigates by live page-count and stale DB values caused silently-dropped saves; clients clamp on read.
+9. **Completion side effects** unified in `commands.rs::apply_reading_progress(Option<&AppHandle>)` — web PUTs run the same completion-detection/activity-log path as desktop saves; the only thing a web-driven completion skips is the desktop-only window toast.
+10. **Web reading sessions skipped** (Item 4 optional): `reading_sessions` exists but wiring session lifecycle into the web reader was not "near-free". Stats page still shows desktop-derived stats only for time-based metrics.
+11. **Continue Reading predicate** excludes `total_chapters = 0` books, aligned with `get_reading_stats`' finished-predicate, so no book can be simultaneously "finished" in stats and "in progress" on the shelf.
+12. **Page-image/page-count cache headers are PIN-aware** (`no-store` with PIN, `private, max-age=3600` without) — protects book content after session expiry on shared browsers, at the cost of losing HTTP-cache reuse for preloaded pages on PIN setups.
+13. **Cover cache headers are NOT PIN-aware** (`private, max-age=86400` both sizes): cover artwork is far less sensitive than page content, and `no-store` would force OPDS e-reader clients (Basic Auth per request; this machine runs OPDS+PIN) to re-download megabytes of covers per catalog view.
+14. **Thumbnails** (Item 11) reuse the desktop's `THUMB_WIDTH = 320` / `thumb.jpg` convention; on-demand generation validates the write path against the covers root, uses atomic temp+rename writes, mtime freshness + TOCTOU re-check, and falls back to full bytes on any failure. Unknown/malformed `?size=` values are treated as `full` (lenient, last value wins) so OPDS clients/proxies appending params never 400.
+15. **`GET /api/books/{id}` gained `file_size`** stat'd from disk at request time via `spawn_blocking` (no schema change); `null` on any error.
+
+## Frontend architecture
+16. **URL is the source of truth for library state** (`#/library?q=&series=&collection=&sort=`); bare `#` = canonical unfiltered home. Keystrokes use `history.replaceState`; discrete actions push real hash entries. Params are parsed from `location.href`'s raw fragment, not `location.hash` (Firefox percent-decodes the latter).
+17. **`esc()` escapes `"` and `'`** in addition to text-node entities — one escaper for both text and attribute contexts.
+18. **`api()` returns `null` only for handled 401s** (login already rendered); network/HTTP failures throw a typed error that every view renders visibly (toast + inline error, differentiated messages for unreachable vs HTTP error vs bad payload).
+19. **All localStorage/sessionStorage access goes through `safeStorage*` helpers** — storage-denied browser configs must not crash the app.
+20. **Service worker caches the app shell only**; `/api` and `/opds` are never intercepted. `CACHE_VERSION` embeds a content hash of the shell assets, enforced by a CI test that recomputes the hash — shipping changed assets without bumping fails the build. Install/runtime fetches bypass the HTTP cache (`cache: 'reload'`/`no-cache`).
+21. **PWA secure-context caveat**: service worker + install require https or localhost; the primary LAN use case (`http://192.168.x.x:7788`) gets manifest/icons benefits (iOS add-to-homescreen) but no offline shell. Documented in sw.js; no TLS added.
+22. **CSP**: theme bootstrap inline script is allowed via sha256 hash (no `unsafe-inline`); the hash is verified against the actual `index.html` script text by a CI test.
+
+## Process notes
+23. TDD was strict red→green for all Rust endpoints/queries; frontend "tests" are Playwright acceptance scripts (9 scripts, ~240 assertions total, in the session scratchpad — they are session artifacts, not committed). Two agents noted writing script and implementation concurrently rather than strictly test-first; red state was still demonstrated for the load-bearing assertions.
+24. Known pre-existing issues surfaced but NOT fixed (out of scope): `cargo clippy --features mobi` fails locally on missing `mobi.h` (environment gap, reproduced on base commit); `/api/books` takes ~8s under load with a ~2000-book library (serialization + no pagination — candidate for a future item); pdfium page rendering is serialized server-side (~3.5s/page under contention).
+25. A pre-existing bug was fixed opportunistically in Item 5's round: `showLibrary()` destroyed the collections screen's series-row click-through by unconditionally resetting filter state (broken since the initial web UI commit).
