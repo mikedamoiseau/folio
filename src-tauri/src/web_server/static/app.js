@@ -1033,7 +1033,7 @@
   function bookCardHtml(b) {
     return `
       <div class="card" data-id="${b.id}" tabindex="0" role="button" aria-label="${esc(`Open ${b.title}`)}">
-        <img src="/api/books/${b.id}/cover" alt="" loading="lazy" data-cover-title="${esc(b.title)}">
+        <img src="/api/books/${b.id}/cover?size=thumb" alt="" loading="lazy" data-cover-title="${esc(b.title)}">
         <div class="info">
           <div class="title" title="${esc(b.title)}">${esc(b.title)}</div>
           <div class="author">${esc(b.author)}</div>
@@ -1099,7 +1099,7 @@
       : "";
     return `
       <div class="shelf-card" data-id="${b.id}" data-mode="${mode}"${posAttrs} tabindex="0" role="button" aria-label="${esc(`Open ${b.title}`)}">
-        <img src="/api/books/${b.id}/cover" alt="" loading="lazy" data-cover-title="${esc(b.title)}">
+        <img src="/api/books/${b.id}/cover?size=thumb" alt="" loading="lazy" data-cover-title="${esc(b.title)}">
         <div class="shelf-title" title="${esc(b.title)}">${esc(b.title)}</div>
         ${bar}
       </div>`;

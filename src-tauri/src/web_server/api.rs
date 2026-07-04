@@ -417,29 +417,92 @@ async fn get_book(
 
 // ── Covers ───────────────────────────────────────────────────────────────────
 
+#[derive(serde::Deserialize)]
+struct CoverQuery {
+    size: Option<String>,
+}
+
+/// Item 11: `?size=thumb` resolution — serve the persisted sibling
+/// `thumb.jpg` if present; otherwise generate one via
+/// `image_util::make_thumbnail` at the same width the desktop app uses
+/// (`crate::commands::THUMB_WIDTH`, same `thumb.jpg` naming as
+/// `crate::commands::thumb_storage_key`), persist it best-effort, and serve
+/// it. `Ok(None)` (cover already small) or a generation error falls back to
+/// the full cover bytes. Decode+resize is CPU-bound, so it runs in
+/// `spawn_blocking`; the caller has already dropped its DB connection by
+/// this point (same pattern as the `file_size` fix for `get_book`).
+async fn get_cover_thumb_bytes(
+    cover_path: &str,
+) -> Result<(Vec<u8>, String), (StatusCode, String)> {
+    let thumb_path = std::path::Path::new(cover_path).with_file_name("thumb.jpg");
+    if let Ok(bytes) = std::fs::read(&thumb_path) {
+        return Ok((bytes, "image/jpeg".to_string()));
+    }
+
+    let full_bytes = std::fs::read(cover_path).map_err(folio_status)?;
+    let full_mime = mime_guess::from_path(cover_path)
+        .first_or_octet_stream()
+        .to_string();
+
+    let bytes_for_thumb = full_bytes.clone();
+    let generated = tokio::task::spawn_blocking(move || {
+        folio_core::image_util::make_thumbnail(&bytes_for_thumb, crate::commands::THUMB_WIDTH)
+    })
+    .await
+    .ok()
+    .and_then(|r| r.ok())
+    .flatten();
+
+    match generated {
+        Some(thumb_bytes) => {
+            // Best-effort persist: serve from memory even if the write fails.
+            let write_path = thumb_path;
+            let write_bytes = thumb_bytes.clone();
+            let _ = tokio::task::spawn_blocking(move || std::fs::write(&write_path, &write_bytes))
+                .await;
+            Ok((thumb_bytes, "image/jpeg".to_string()))
+        }
+        None => Ok((full_bytes, full_mime)),
+    }
+}
+
 async fn get_cover(
     State(state): State<WebState>,
     Path(id): Path<String>,
+    Query(params): Query<CoverQuery>,
 ) -> Result<Response, (StatusCode, String)> {
-    let conn = state.conn().map_err(folio_status)?;
-    let book = db::get_book(&conn, &id)
-        .map_err(folio_status)?
-        .ok_or_else(|| (StatusCode::NOT_FOUND, "Book not found".to_string()))?;
+    let cover_path = {
+        let conn = state.conn().map_err(folio_status)?;
+        let book = db::get_book(&conn, &id)
+            .map_err(folio_status)?
+            .ok_or_else(|| (StatusCode::NOT_FOUND, "Book not found".to_string()))?;
+        book.cover_path
+            .ok_or_else(|| (StatusCode::NOT_FOUND, "No cover available".to_string()))?
+    };
 
-    let cover_path = book
-        .cover_path
-        .ok_or_else(|| (StatusCode::NOT_FOUND, "No cover available".to_string()))?;
+    let (bytes, mime) = if params.size.as_deref() == Some("thumb") {
+        get_cover_thumb_bytes(&cover_path).await?
+    } else {
+        let bytes = std::fs::read(&cover_path).map_err(folio_status)?;
+        let mime = mime_guess::from_path(&cover_path)
+            .first_or_octet_stream()
+            .to_string();
+        (bytes, mime)
+    };
 
-    let bytes = std::fs::read(&cover_path).map_err(folio_status)?;
-
-    let mime = mime_guess::from_path(&cover_path)
-        .first_or_octet_stream()
-        .to_string();
+    // See `get_page_image` for why this is conditional on PIN configuration:
+    // a cached response would let the same browser keep serving covers for
+    // up to a day after a session expires, bypassing `auth_middleware`.
+    let cache_control = if state.has_pin() {
+        "no-store"
+    } else {
+        "private, max-age=3600"
+    };
 
     Ok((
         [
             (header::CONTENT_TYPE, mime),
-            (header::CACHE_CONTROL, "public, max-age=86400".to_string()),
+            (header::CACHE_CONTROL, cache_control.to_string()),
         ],
         bytes,
     )

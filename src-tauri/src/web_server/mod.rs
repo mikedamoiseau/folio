@@ -1318,6 +1318,335 @@ mod tests {
         let _ = tx.send(());
     }
 
+    // ── Item 11: cover thumbnails ────────────────────────────────────────────
+
+    /// Encodes a solid-color JPEG of the given dimensions to `path`.
+    fn write_test_jpeg(path: &std::path::Path, w: u32, h: u32) {
+        let buf: image::ImageBuffer<image::Rgb<u8>, Vec<u8>> =
+            image::ImageBuffer::from_fn(w, h, |_, _| image::Rgb([180u8, 90, 60]));
+        let file = std::fs::File::create(path).unwrap();
+        let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(file, 90);
+        encoder.encode_image(&buf).unwrap();
+    }
+
+    fn cover_test_book(id: &str, cover_path: Option<&std::path::Path>) -> crate::models::Book {
+        crate::models::Book {
+            id: id.to_string(),
+            title: "Cover Test".to_string(),
+            author: "Author".to_string(),
+            file_path: "/nonexistent/cover-test.epub".to_string(),
+            cover_path: cover_path.map(|p| p.to_string_lossy().to_string()),
+            total_chapters: 1,
+            added_at: 0,
+            format: crate::models::BookFormat::Epub,
+            file_hash: None,
+            description: None,
+            genres: None,
+            rating: None,
+            isbn: None,
+            openlibrary_key: None,
+            enrichment_status: None,
+            series: None,
+            volume: None,
+            language: None,
+            publisher: None,
+            publish_year: None,
+            is_imported: false,
+        }
+    }
+
+    fn dims_of(bytes: &[u8]) -> (u32, u32) {
+        image::ImageReader::new(std::io::Cursor::new(bytes))
+            .with_guessed_format()
+            .unwrap()
+            .into_dimensions()
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn cover_thumb_returns_downscaled_jpeg() {
+        let state = test_state();
+        let dir = tempfile::tempdir().unwrap();
+        let cover_path = dir.path().join("cover.jpg");
+        write_test_jpeg(&cover_path, 1200, 1800);
+        {
+            let conn = state.conn().unwrap();
+            crate::db::insert_book(&conn, &cover_test_book("thumb-1", Some(&cover_path))).unwrap();
+        }
+        let (_state, port, tx) = spawn_progress_test_server(state).await;
+        let client = reqwest::Client::new();
+
+        let resp = client
+            .get(format!(
+                "http://127.0.0.1:{port}/api/books/thumb-1/cover?size=thumb"
+            ))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+        assert_eq!(
+            resp.headers()
+                .get("content-type")
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            "image/jpeg"
+        );
+        let bytes = resp.bytes().await.unwrap();
+        let (w, _h) = dims_of(&bytes);
+        assert!(
+            w <= crate::commands::THUMB_WIDTH,
+            "thumb width {w} must be <= desktop THUMB_WIDTH {}",
+            crate::commands::THUMB_WIDTH
+        );
+
+        let _ = tx.send(());
+    }
+
+    #[tokio::test]
+    async fn cover_thumb_persists_and_second_request_serves_cached_file() {
+        let state = test_state();
+        let dir = tempfile::tempdir().unwrap();
+        let cover_path = dir.path().join("cover.jpg");
+        write_test_jpeg(&cover_path, 1200, 1800);
+        {
+            let conn = state.conn().unwrap();
+            crate::db::insert_book(&conn, &cover_test_book("thumb-2", Some(&cover_path))).unwrap();
+        }
+        let (_state, port, tx) = spawn_progress_test_server(state).await;
+        let client = reqwest::Client::new();
+
+        let resp = client
+            .get(format!(
+                "http://127.0.0.1:{port}/api/books/thumb-2/cover?size=thumb"
+            ))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+
+        let thumb_path = dir.path().join("thumb.jpg");
+        assert!(thumb_path.exists(), "first request must persist thumb.jpg");
+
+        // Overwrite the persisted thumbnail with a marker so we can prove
+        // the second request serves the cached file instead of regenerating.
+        let marker = b"MARKER-BYTES-NOT-A-REAL-JPEG-BUT-READ-AS-IS".to_vec();
+        std::fs::write(&thumb_path, &marker).unwrap();
+
+        let resp2 = client
+            .get(format!(
+                "http://127.0.0.1:{port}/api/books/thumb-2/cover?size=thumb"
+            ))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp2.status(), 200);
+        let bytes2 = resp2.bytes().await.unwrap();
+        assert_eq!(
+            bytes2.as_ref(),
+            marker.as_slice(),
+            "second request must serve the persisted thumb.jpg unchanged, not regenerate"
+        );
+
+        let _ = tx.send(());
+    }
+
+    #[tokio::test]
+    async fn cover_thumb_returns_original_bytes_for_small_cover() {
+        let state = test_state();
+        let dir = tempfile::tempdir().unwrap();
+        let cover_path = dir.path().join("cover.jpg");
+        // Below THUMB_WIDTH (320) — make_thumbnail returns Ok(None).
+        write_test_jpeg(&cover_path, 200, 300);
+        let original_bytes = std::fs::read(&cover_path).unwrap();
+        {
+            let conn = state.conn().unwrap();
+            crate::db::insert_book(&conn, &cover_test_book("thumb-3", Some(&cover_path))).unwrap();
+        }
+        let (_state, port, tx) = spawn_progress_test_server(state).await;
+        let client = reqwest::Client::new();
+
+        let resp = client
+            .get(format!(
+                "http://127.0.0.1:{port}/api/books/thumb-3/cover?size=thumb"
+            ))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+        let bytes = resp.bytes().await.unwrap();
+        assert_eq!(
+            bytes.as_ref(),
+            original_bytes.as_slice(),
+            "small cover must be served unchanged when thumb is requested"
+        );
+
+        let thumb_path = dir.path().join("thumb.jpg");
+        assert!(
+            !thumb_path.exists(),
+            "no thumb.jpg should be persisted for an already-small cover"
+        );
+
+        let _ = tx.send(());
+    }
+
+    #[tokio::test]
+    async fn cover_no_size_param_is_byte_identical_to_previous_behavior() {
+        let state = test_state();
+        let dir = tempfile::tempdir().unwrap();
+        let cover_path = dir.path().join("cover.jpg");
+        write_test_jpeg(&cover_path, 1200, 1800);
+        let original_bytes = std::fs::read(&cover_path).unwrap();
+        {
+            let conn = state.conn().unwrap();
+            crate::db::insert_book(&conn, &cover_test_book("thumb-4", Some(&cover_path))).unwrap();
+        }
+        let (_state, port, tx) = spawn_progress_test_server(state).await;
+        let client = reqwest::Client::new();
+
+        let resp = client
+            .get(format!("http://127.0.0.1:{port}/api/books/thumb-4/cover"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+        let bytes = resp.bytes().await.unwrap();
+        assert_eq!(bytes.as_ref(), original_bytes.as_slice());
+
+        let _ = tx.send(());
+    }
+
+    #[tokio::test]
+    async fn cover_unknown_size_value_falls_back_to_full() {
+        let state = test_state();
+        let dir = tempfile::tempdir().unwrap();
+        let cover_path = dir.path().join("cover.jpg");
+        write_test_jpeg(&cover_path, 1200, 1800);
+        let original_bytes = std::fs::read(&cover_path).unwrap();
+        {
+            let conn = state.conn().unwrap();
+            crate::db::insert_book(&conn, &cover_test_book("thumb-5", Some(&cover_path))).unwrap();
+        }
+        let (_state, port, tx) = spawn_progress_test_server(state).await;
+        let client = reqwest::Client::new();
+
+        let resp = client
+            .get(format!(
+                "http://127.0.0.1:{port}/api/books/thumb-5/cover?size=banana"
+            ))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+        let bytes = resp.bytes().await.unwrap();
+        assert_eq!(bytes.as_ref(), original_bytes.as_slice());
+
+        let _ = tx.send(());
+    }
+
+    #[tokio::test]
+    async fn cover_no_cover_404s_for_both_sizes() {
+        let state = test_state();
+        {
+            let conn = state.conn().unwrap();
+            crate::db::insert_book(&conn, &cover_test_book("no-cover-1", None)).unwrap();
+        }
+        let (_state, port, tx) = spawn_progress_test_server(state).await;
+        let client = reqwest::Client::new();
+
+        let resp = client
+            .get(format!(
+                "http://127.0.0.1:{port}/api/books/no-cover-1/cover"
+            ))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 404);
+
+        let resp = client
+            .get(format!(
+                "http://127.0.0.1:{port}/api/books/no-cover-1/cover?size=thumb"
+            ))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 404);
+
+        let _ = tx.send(());
+    }
+
+    #[tokio::test]
+    async fn cover_cache_control_no_pin() {
+        let state = test_state();
+        let dir = tempfile::tempdir().unwrap();
+        let cover_path = dir.path().join("cover.jpg");
+        write_test_jpeg(&cover_path, 1200, 1800);
+        {
+            let conn = state.conn().unwrap();
+            crate::db::insert_book(&conn, &cover_test_book("thumb-6", Some(&cover_path))).unwrap();
+        }
+        let (_state, port, tx) = spawn_progress_test_server(state).await;
+        let client = reqwest::Client::new();
+
+        for url in [
+            format!("http://127.0.0.1:{port}/api/books/thumb-6/cover"),
+            format!("http://127.0.0.1:{port}/api/books/thumb-6/cover?size=thumb"),
+        ] {
+            let resp = client.get(&url).send().await.unwrap();
+            assert_eq!(resp.status(), 200);
+            assert_eq!(
+                resp.headers()
+                    .get("cache-control")
+                    .unwrap()
+                    .to_str()
+                    .unwrap(),
+                "private, max-age=3600",
+                "{url} should be cacheable when no PIN is configured"
+            );
+        }
+
+        let _ = tx.send(());
+    }
+
+    #[tokio::test]
+    async fn cover_cache_control_with_pin_is_no_store() {
+        let state = test_state();
+        *state.pin_hash.lock().unwrap() = Some(auth::hash_pin("1234"));
+        let dir = tempfile::tempdir().unwrap();
+        let cover_path = dir.path().join("cover.jpg");
+        write_test_jpeg(&cover_path, 1200, 1800);
+        {
+            let conn = state.conn().unwrap();
+            crate::db::insert_book(&conn, &cover_test_book("thumb-7", Some(&cover_path))).unwrap();
+        }
+        let (_state, port, tx) = spawn_progress_test_server(state).await;
+        let client = reqwest::Client::new();
+
+        for url in [
+            format!("http://127.0.0.1:{port}/api/books/thumb-7/cover"),
+            format!("http://127.0.0.1:{port}/api/books/thumb-7/cover?size=thumb"),
+        ] {
+            let resp = client
+                .get(&url)
+                .basic_auth("folio", Some("1234"))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), 200);
+            assert_eq!(
+                resp.headers()
+                    .get("cache-control")
+                    .unwrap()
+                    .to_str()
+                    .unwrap(),
+                "no-store",
+                "{url} must not be cacheable once a PIN is configured"
+            );
+        }
+
+        let _ = tx.send(());
+    }
+
     // ── Item 4: Two-way reading progress sync ───────────────────────────────
 
     fn progress_test_book(id: &str, total_chapters: u32) -> crate::models::Book {
