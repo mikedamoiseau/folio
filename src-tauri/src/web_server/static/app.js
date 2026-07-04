@@ -61,6 +61,21 @@
     window.location.hash = hash;
   }
 
+  // Finding C: every explicit "go back to the home screen" action (header
+  // back buttons, Esc/Backspace from detail) must clear any active
+  // collection/series filter — otherwise a filter set on a previous library
+  // visit silently survives into an unrelated round trip through
+  // detail/stats/collections, landing back on a filtered grid with the
+  // shelves suppressed. This is deliberately distinct from navigations that
+  // set a filter on purpose right before going home (showDetail's series
+  // link, showCollections' collection/series rows) — those must keep working
+  // and do NOT go through this helper.
+  function goHome() {
+    activeCollectionId = null;
+    activeSeries = null;
+    navigate("#");
+  }
+
   function route() {
     // K4: the shortcuts overlay is appended to document.body and must not
     // survive a navigation — it would block the next view and swallow
@@ -217,7 +232,7 @@
     }
 
     if (currentView === "detail") {
-      if (e.key === "Escape" || e.key === "Backspace") { e.preventDefault(); navigate("#"); }
+      if (e.key === "Escape" || e.key === "Backspace") { e.preventDefault(); goHome(); }
     }
   });
 
@@ -398,6 +413,32 @@
     await loadBooks(q);
   }
 
+  // Finding C: best-effort self-heal for a collection/series filter whose
+  // underlying entity was deleted elsewhere (e.g. the desktop app) since the
+  // filter bar was last rendered — without this, the active filter's fetch
+  // legitimately returns zero books and the library gets stuck empty with no
+  // "All Books" pill visible to escape it. Re-fetches the current
+  // collections/series lists (they may have changed since the filter bar was
+  // built) and reports whether the active filter's id/name is still present.
+  // Never throws: an inconclusive check (network error, non-OK response)
+  // reports "not missing" so a merely-empty-but-still-valid filter is left
+  // alone.
+  async function activeFilterEntityMissing() {
+    if (activeCollectionId) {
+      const resp = await api("/api/collections");
+      if (!resp || !resp.ok) return false;
+      const collections = await resp.json();
+      return !collections.some(c => c.id === activeCollectionId);
+    }
+    if (activeSeries) {
+      const resp = await api("/api/series");
+      if (!resp || !resp.ok) return false;
+      const series = await resp.json();
+      return !series.some(s => s.name === activeSeries);
+    }
+    return false;
+  }
+
   async function loadBooks(query) {
     // Item 5: captured once, checked after every await below — see the
     // libraryRenderGen declaration for why.
@@ -420,6 +461,22 @@
     const books = await resp.json();
     if (gen !== libraryRenderGen) return;
 
+    // Finding C: an empty result for an active collection/series filter is
+    // ambiguous — genuinely empty, or the filtered entity no longer exists?
+    // Only the latter needs healing; a real empty collection should still
+    // render as "No books found" with its filter pill active.
+    if ((activeCollectionId || activeSeries) && books.length === 0) {
+      const missing = await activeFilterEntityMissing();
+      if (gen !== libraryRenderGen) return;
+      if (missing) {
+        activeCollectionId = null;
+        activeSeries = null;
+        updateFilterBarActive();
+        renderFilterBar();
+        return loadBooks(query);
+      }
+    }
+
     // If collection is active and search is typed, filter client-side
     if (activeCollectionId && query) {
       const q = query.toLowerCase();
@@ -434,33 +491,30 @@
     // search/series/collection filter (or an empty library) falls back to
     // the plain grid, matching the pre-Item-5 behavior exactly.
     const showShelves = !query && !activeCollectionId && !activeSeries && books.length > 0;
-    if (!showShelves) {
-      renderBooks(books);
-      return;
+
+    // Finding F: render the plain grid as soon as the main books fetch
+    // resolves. The shelves below are strictly best-effort decoration on top
+    // of it — a shelf-fetch failure (network error, non-OK response) must
+    // never leave the page stuck on "Loading".
+    renderBooks(books);
+    if (!showShelves) return;
+
+    try {
+      const continueResp = await api("/api/books/continue-reading?limit=12");
+      if (gen !== libraryRenderGen) return;
+      const continueBooks = continueResp && continueResp.ok ? await continueResp.json() : [];
+      if (gen !== libraryRenderGen) return;
+
+      // Finding H: `books` already contains `added_at` for every item, so
+      // "Recently Added" can be derived client-side regardless of the active
+      // sort — no need to re-fetch the whole library a second time just to
+      // get it back in date-added order.
+      const recentBooks = books.slice().sort((a, b) => (b.added_at || 0) - (a.added_at || 0)).slice(0, 12);
+
+      renderLibraryWithShelves(books, continueBooks, recentBooks);
+    } catch (e) {
+      // Best-effort: the plain grid rendered above stays intact.
     }
-
-    // `books` is already the unfiltered, unsorted-or-default-sorted list —
-    // when the sort is the default (date_added desc, no `sort` param sent
-    // above), it doubles as the "Recently Added" source with no extra
-    // request. Only fetch it separately when a non-default sort is active.
-    const [continueResp, recentBooks] = await Promise.all([
-      api("/api/books/continue-reading?limit=12"),
-      activeSort === "date_added" ? Promise.resolve(books.slice(0, 12)) : loadRecentlyAddedFallback(),
-    ]);
-    if (gen !== libraryRenderGen) return;
-    const continueBooks = continueResp && continueResp.ok ? await continueResp.json() : [];
-    if (gen !== libraryRenderGen) return;
-
-    renderLibraryWithShelves(books, continueBooks, recentBooks);
-  }
-
-  // Only used when the sort dropdown isn't on its default ("Recent") value
-  // while the shelves are still showing — see loadBooks().
-  async function loadRecentlyAddedFallback() {
-    const resp = await api("/api/books");
-    if (!resp || !resp.ok) return [];
-    const all = await resp.json();
-    return all.slice(0, 12);
   }
 
   function bookCardHtml(b) {
@@ -509,7 +563,7 @@
       ? `<div class="shelf-progress"><div class="shelf-progress-fill" style="width:${progressPercent(b.chapter_index, b.total_chapters)}%"></div></div>`
       : "";
     const posAttrs = mode === "continue"
-      ? ` data-chapter-index="${b.chapter_index}" data-scroll-position="${b.scroll_position || 0}"`
+      ? ` data-chapter-index="${b.chapter_index}" data-scroll-position="${b.scroll_position || 0}" data-last-read-at="${b.last_read_at || 0}"`
       : "";
     return `
       <div class="shelf-card" data-id="${b.id}" data-mode="${mode}"${posAttrs}>
@@ -533,11 +587,22 @@
       c.addEventListener("click", () => {
         const id = c.dataset.id;
         if (c.dataset.mode === "continue") {
-          // Item 4 mechanics: hand off to the reader via readerEntryIntent,
-          // exactly like the detail page's Continue button — no duplicated
-          // resume logic.
-          const chapterIndex = parseInt(c.dataset.chapterIndex, 10) || 0;
-          const scrollPosition = parseFloat(c.dataset.scrollPosition) || 0;
+          // Finding B: the shelf's position was fetched at page-load time and
+          // may be stale by the time it's clicked (a later save — including
+          // one still in flight via the un-awaited debounced PUT — can have
+          // moved this tab's actual position on). Reconcile with
+          // lastKnownProgress via the same mergeProgress() the detail page's
+          // Continue button uses, instead of trusting the baked-in data
+          // attributes outright — same shared code path, no duplicated logic.
+          const serverProgress = {
+            book_id: id,
+            chapter_index: parseInt(c.dataset.chapterIndex, 10) || 0,
+            scroll_position: parseFloat(c.dataset.scrollPosition) || 0,
+            last_read_at: parseInt(c.dataset.lastReadAt, 10) || 0,
+          };
+          const merged = mergeProgress(id, serverProgress) || serverProgress;
+          const chapterIndex = merged.chapter_index;
+          const scrollPosition = typeof merged.scroll_position === "number" ? merged.scroll_position : 0;
           readerEntryIntent = { id, action: "continue", scrollPosition };
           navigate(`#/book/${id}/${chapterIndex}/read`);
         } else {
@@ -589,19 +654,22 @@
     };
   }
 
-  // Item 8: resolves this book's position among its series siblings.
-  // `siblings` is the raw `/api/books?series=X` result (BookGridItem[]);
-  // ordered by `volume` when every sibling has one, otherwise by title —
-  // matches the plan's "fall back to title sort if no explicit position
-  // field" rule. Returns null if `id` isn't found in the list (e.g. a race
-  // with metadata edited elsewhere).
+  // Item 8 / Finding K: resolves this book's position among its series
+  // siblings. `siblings` is the raw `/api/books?series=X` result
+  // (BookGridItem[]). If ANY sibling is missing a volume number, the whole
+  // series sorts by title instead — a partial volume sort (numbered books
+  // first, nulls tacked on after by title) would misplace an unnumbered book
+  // that actually belongs earlier in reading order. Title (then id) is
+  // always the tie-breaker, so identical/duplicate volume numbers still sort
+  // deterministically instead of depending on the API's row order. Returns
+  // null if `id` isn't found in the list (e.g. a race with metadata edited
+  // elsewhere).
   function resolveSeriesNav(siblings, id) {
     if (!siblings || siblings.length === 0) return null;
+    const anyMissingVolume = siblings.some(b => b.volume == null);
     const sorted = siblings.slice().sort((a, b) => {
-      if (a.volume != null && b.volume != null) return a.volume - b.volume;
-      if (a.volume != null) return -1;
-      if (b.volume != null) return 1;
-      return a.title.localeCompare(b.title);
+      if (!anyMissingVolume && a.volume !== b.volume) return a.volume - b.volume;
+      return a.title.localeCompare(b.title) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
     });
     const index = sorted.findIndex(b => b.id === id);
     if (index === -1) return null;
@@ -656,8 +724,14 @@
     if (!hasProgress) return "";
     const total = book.total_chapters || 0;
     const current = progress.chapter_index + 1;
-    const pct = progressPercent(progress.chapter_index, total);
     const unit = isPageBased ? "Page" : "Chapter";
+    // Finding G: total_chapters=0 means the page/chapter count isn't known
+    // (yet) — "Chapter N of 0 · NaN%" is meaningless, so just show the
+    // current position with no total/percent/bar.
+    if (total <= 0) {
+      return `<div class="detail-progress"><div class="detail-progress-label">${esc(`${unit} ${current}`)}</div></div>`;
+    }
+    const pct = progressPercent(progress.chapter_index, total);
     return `
       <div class="detail-progress">
         <div class="detail-progress-bar"><div class="detail-progress-fill" style="width:${pct}%"></div></div>
@@ -685,33 +759,38 @@
     // the saved position) + Start Over instead of a plain Read button. A
     // progress fetch that 404s/errors is treated the same as "no progress" —
     // never blocks the detail page from rendering.
+    // Item 8: series prev/next, resolved client-side from the series's full
+    // book list. Best-effort — a failed fetch just omits the nav buttons.
+    // Finding I: these two fetches only depend on the book response already
+    // in hand, not on each other — run them concurrently instead of one
+    // after the other.
+    const [progResp, seriesResp] = await Promise.all([
+      isReadable ? api(`/api/books/${id}/progress`) : Promise.resolve(null),
+      book.series ? api(`/api/books?series=${encodeURIComponent(book.series)}`) : Promise.resolve(null),
+    ]);
+    // F5/F6: a null response for a fetch that was actually made means api()
+    // already redirected to the login screen (401) — continuing would render
+    // the detail page over it.
+    if (isReadable && !progResp) return;
+    if (book.series && !seriesResp) return;
+    if (!hashTargetsDetail(id)) return;
+
     let progress = null;
     if (isReadable) {
-      const progResp = await api(`/api/books/${id}/progress`);
-      // F5/F6: a null response means api() already redirected to the login
-      // screen (401) — continuing would render the detail page over it.
-      if (!progResp) return;
-      if (!hashTargetsDetail(id)) return;
       if (progResp.ok) {
         try { progress = await progResp.json(); } catch (e) { progress = null; }
+        if (!hashTargetsDetail(id)) return;
       }
       progress = mergeProgress(id, progress);
     }
     const hasProgress = !!(progress && progress.chapter_index > 0);
     const continueHash = isReadable ? `#/book/${id}/${progress ? progress.chapter_index : 0}/read` : "";
 
-    // Item 8: series prev/next, resolved client-side from the series's full
-    // book list. Best-effort — a failed fetch just omits the nav buttons.
     let seriesNav = null;
-    if (book.series) {
-      const seriesResp = await api(`/api/books?series=${encodeURIComponent(book.series)}`);
-      if (!seriesResp) return;
-      if (!hashTargetsDetail(id)) return;
-      if (seriesResp.ok) {
-        try {
-          seriesNav = resolveSeriesNav(await seriesResp.json(), id);
-        } catch (e) { seriesNav = null; }
-      }
+    if (book.series && seriesResp.ok) {
+      try {
+        seriesNav = resolveSeriesNav(await seriesResp.json(), id);
+      } catch (e) { seriesNav = null; }
       if (!hashTargetsDetail(id)) return;
     }
 
@@ -762,7 +841,7 @@
           </div>
         </div>
       </div>`;
-    $("#back-btn").addEventListener("click", () => navigate("#"));
+    $("#back-btn").addEventListener("click", goHome);
     bindNavIcons();
     const coverImg = $(".detail .cover img");
     if (coverImg) coverImg.addEventListener("error", () => { coverImg.classList.add("cover-fallback"); });
@@ -1384,7 +1463,7 @@
         ${navIconsHtml("stats")}
       </div>
       <div class="stats"><div class="loading">Loading...</div></div>`;
-    $("#back-btn").addEventListener("click", () => navigate("#"));
+    $("#back-btn").addEventListener("click", goHome);
     bindNavIcons();
 
     const resp = await api("/api/stats");
@@ -1441,7 +1520,7 @@
         ${navIconsHtml("collections")}
       </div>
       <div class="collections"><div class="loading">Loading...</div></div>`;
-    $("#back-btn").addEventListener("click", () => navigate("#"));
+    $("#back-btn").addEventListener("click", goHome);
     bindNavIcons();
 
     const [collectionsResp, seriesResp] = await Promise.all([
@@ -1555,11 +1634,18 @@
   }
 
   // ── Helpers ───────────────────────────────────
+  // Security (finding A): textContent -> innerHTML only escapes text-node
+  // metacharacters (&, <, >) — it leaves " and ' untouched, since those are
+  // only special in attribute context. Every caller of esc() in this file
+  // interpolates its result into either a text node OR a quoted HTML
+  // attribute (e.g. `title="${esc(b.title)}"`), so the escaping must be safe
+  // for both: without this, a title/author/series/collection name containing
+  // `"` could break out of an attribute and inject arbitrary markup/handlers.
   function esc(s) {
     if (!s) return "";
     const d = document.createElement("div");
     d.textContent = s;
-    return d.innerHTML;
+    return d.innerHTML.replace(/"/g, "&quot;").replace(/'/g, "&#39;");
   }
 
   function formatDuration(secs) {

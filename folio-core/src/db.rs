@@ -1107,9 +1107,13 @@ pub fn get_recently_read_books(conn: &Connection, limit: u32) -> Result<Vec<Book
 /// read first — powers the web UI's "Continue Reading" shelf (Item 5).
 /// "Finished" mirrors the predicate `get_reading_stats` uses for
 /// `books_finished` (on or past the last chapter: `chapter_index >=
-/// total_chapters - 1`), so a book counted as finished there never shows up
-/// here as still in progress. `total_chapters = 0` (not yet known) is
-/// treated as never finished.
+/// total_chapters - 1`, unguarded against `total_chapters = 0`), so a book
+/// counted as finished there never shows up here as still in progress.
+/// `total_chapters = 0` (not yet known) is excluded outright rather than
+/// treated as "never finished" — `books_finished`'s unguarded predicate
+/// already counts any progress on such a book as finished, so keeping it
+/// here as well would show it as both finished and in-progress at once. A
+/// book with an unknown page count can't show meaningful progress anyway.
 pub fn get_continue_reading_books(
     conn: &Connection,
     limit: u32,
@@ -1120,8 +1124,9 @@ pub fn get_continue_reading_books(
          FROM books b
          JOIN reading_progress rp ON rp.book_id = b.id
          WHERE rp.chapter_index > 0
-           AND (b.total_chapters = 0 OR rp.chapter_index < b.total_chapters - 1)
-         ORDER BY rp.last_read_at DESC
+           AND b.total_chapters > 0
+           AND rp.chapter_index < b.total_chapters - 1
+         ORDER BY rp.last_read_at DESC, b.id
          LIMIT ?1",
     )?;
     let rows = stmt.query_map(params![limit], |row| {
@@ -2702,6 +2707,41 @@ mod tests {
         // Most recently read (highest last_read_at) first.
         assert_eq!(shelf[0].id, "cr-limit-4");
         assert_eq!(shelf[1].id, "cr-limit-3");
+    }
+
+    // Finding D: total_chapters=0 (unknown) must be excluded from the shelf
+    // entirely. get_reading_stats' books_finished predicate
+    // (`chapter_index >= total_chapters - 1`, unguarded against
+    // total_chapters=0) already counts ANY progress on such a book as
+    // "finished" — treating it as "still in progress" here contradicted that
+    // and showed the same book as both finished (stats) and in-progress
+    // (this shelf) at once.
+    #[test]
+    fn test_get_continue_reading_books_excludes_unknown_total_chapters() {
+        let (_dir, conn) = setup();
+
+        let unknown_total = Book {
+            file_path: "/tmp/cr-unknown-total.epub".to_string(),
+            total_chapters: 0,
+            ..sample_book("cr-unknown-total")
+        };
+        insert_book(&conn, &unknown_total).unwrap();
+        upsert_reading_progress(
+            &conn,
+            &ReadingProgress {
+                book_id: "cr-unknown-total".to_string(),
+                chapter_index: 3,
+                scroll_position: 0.2,
+                last_read_at: 5_000,
+            },
+        )
+        .unwrap();
+
+        let shelf = get_continue_reading_books(&conn, 12).unwrap();
+        assert!(
+            shelf.iter().all(|b| b.id != "cr-unknown-total"),
+            "a book with total_chapters=0 must be excluded from the shelf"
+        );
     }
 
     #[test]

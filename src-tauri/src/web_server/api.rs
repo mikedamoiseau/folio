@@ -389,15 +389,29 @@ async fn get_book(
     State(state): State<WebState>,
     Path(id): Path<String>,
 ) -> Result<Json<BookDetail>, (StatusCode, String)> {
-    let conn = state.conn().map_err(folio_status)?;
-    let book = db::get_book(&conn, &id)
-        .map_err(folio_status)?
-        .ok_or_else(|| (StatusCode::NOT_FOUND, "Book not found".to_string()))?;
-    let file_size = state
-        .resolve_book_path(&book)
-        .ok()
-        .and_then(|p| std::fs::metadata(p).ok())
-        .map(|m| m.len());
+    // Finding E: fetch the book and drop the connection before resolving its
+    // path — `resolve_book_path` acquires its own connection internally for
+    // imported books with a relative path, so holding this one across that
+    // call meant two connections held from the pool (max 5) at once,
+    // stalling concurrent detail requests under load.
+    let book = {
+        let conn = state.conn().map_err(folio_status)?;
+        db::get_book(&conn, &id)
+            .map_err(folio_status)?
+            .ok_or_else(|| (StatusCode::NOT_FOUND, "Book not found".to_string()))?
+    };
+    // The filesystem stat is best-effort (`file_size` stays `None` on any
+    // error) and run on a blocking thread — `std::fs::metadata` on a
+    // network-mounted library folder can stall for seconds, which would
+    // otherwise block a tokio worker thread directly in this async handler.
+    let file_size = match state.resolve_book_path(&book) {
+        Ok(path) => {
+            tokio::task::spawn_blocking(move || std::fs::metadata(path).ok().map(|m| m.len()))
+                .await
+                .unwrap_or(None)
+        }
+        Err(_) => None,
+    };
     Ok(Json(BookDetail { book, file_size }))
 }
 

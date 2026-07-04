@@ -1551,56 +1551,24 @@ mod tests {
         }
     }
 
+    // Finding J: these HTTP-layer tests cover route concerns only —
+    // registration/status, the JSON shape returned over the wire, limit-param
+    // parsing/capping, and auth gating. The underlying SQL filter/order/
+    // exclusion logic (unread vs. finished vs. in-progress, most-recent-first
+    // ordering, total_chapters=0 exclusion) is exercised exhaustively by
+    // `db::tests::test_get_continue_reading_books_*` and must not be
+    // duplicated here.
+
     #[tokio::test]
-    async fn continue_reading_returns_only_in_progress_books_ordered_desc() {
+    async fn continue_reading_returns_json_shape_for_one_item() {
         let state = test_state();
         {
             let conn = state.conn().unwrap();
-            // Never started — excluded.
-            crate::db::insert_book(&conn, &cr_test_book("cr-unread", 10)).unwrap();
+            crate::db::insert_book(&conn, &cr_test_book("cr-shape", 10)).unwrap();
             crate::db::upsert_reading_progress(
                 &conn,
                 &crate::models::ReadingProgress {
-                    book_id: "cr-unread".to_string(),
-                    chapter_index: 0,
-                    scroll_position: 0.0,
-                    last_read_at: 100,
-                },
-            )
-            .unwrap();
-
-            // Finished (on the last chapter) — excluded.
-            crate::db::insert_book(&conn, &cr_test_book("cr-finished", 10)).unwrap();
-            crate::db::upsert_reading_progress(
-                &conn,
-                &crate::models::ReadingProgress {
-                    book_id: "cr-finished".to_string(),
-                    chapter_index: 9,
-                    scroll_position: 1.0,
-                    last_read_at: 200,
-                },
-            )
-            .unwrap();
-
-            // In progress, older — included second.
-            crate::db::insert_book(&conn, &cr_test_book("cr-older", 10)).unwrap();
-            crate::db::upsert_reading_progress(
-                &conn,
-                &crate::models::ReadingProgress {
-                    book_id: "cr-older".to_string(),
-                    chapter_index: 2,
-                    scroll_position: 0.1,
-                    last_read_at: 300,
-                },
-            )
-            .unwrap();
-
-            // In progress, most recent — included first.
-            crate::db::insert_book(&conn, &cr_test_book("cr-newer", 10)).unwrap();
-            crate::db::upsert_reading_progress(
-                &conn,
-                &crate::models::ReadingProgress {
-                    book_id: "cr-newer".to_string(),
+                    book_id: "cr-shape".to_string(),
                     chapter_index: 5,
                     scroll_position: 0.4,
                     last_read_at: 400,
@@ -1621,19 +1589,11 @@ mod tests {
             .unwrap();
         assert_eq!(resp.status(), 200);
         let body: serde_json::Value = resp.json().await.unwrap();
-        let ids: Vec<&str> = body
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|b| b["id"].as_str().unwrap())
-            .collect();
-        assert_eq!(
-            ids,
-            vec!["cr-newer", "cr-older"],
-            "expected only unfinished in-progress books, most recently read first"
-        );
-        assert_eq!(body[0]["chapter_index"], 5);
-        assert_eq!(body[0]["total_chapters"], 10);
+        let arr = body.as_array().unwrap();
+        assert_eq!(arr.len(), 1, "route returns the JSON array shape over HTTP");
+        assert_eq!(arr[0]["id"], "cr-shape");
+        assert_eq!(arr[0]["chapter_index"], 5);
+        assert_eq!(arr[0]["total_chapters"], 10);
 
         let _ = tx.send(());
     }
@@ -1673,8 +1633,48 @@ mod tests {
         let body: serde_json::Value = resp.json().await.unwrap();
         let arr = body.as_array().unwrap();
         assert_eq!(arr.len(), 2, "limit param must cap the result count");
-        assert_eq!(arr[0]["id"], "cr-limit-4");
-        assert_eq!(arr[1]["id"], "cr-limit-3");
+
+        let _ = tx.send(());
+    }
+
+    #[tokio::test]
+    async fn continue_reading_limit_param_caps_at_50() {
+        let state = test_state();
+        {
+            let conn = state.conn().unwrap();
+            for i in 0..55 {
+                let id = format!("cr-cap-{i}");
+                crate::db::insert_book(&conn, &cr_test_book(&id, 10)).unwrap();
+                crate::db::upsert_reading_progress(
+                    &conn,
+                    &crate::models::ReadingProgress {
+                        book_id: id,
+                        chapter_index: 3,
+                        scroll_position: 0.1,
+                        last_read_at: 1000 + i,
+                    },
+                )
+                .unwrap();
+            }
+        }
+
+        let (_state, port, tx) = spawn_progress_test_server(state).await;
+        let client = reqwest::Client::new();
+
+        let resp = client
+            .get(format!(
+                "http://127.0.0.1:{port}/api/books/continue-reading?limit=1000"
+            ))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+        let body: serde_json::Value = resp.json().await.unwrap();
+        assert_eq!(
+            body.as_array().unwrap().len(),
+            50,
+            "limit param must be capped at 50 regardless of the requested value"
+        );
 
         let _ = tx.send(());
     }
