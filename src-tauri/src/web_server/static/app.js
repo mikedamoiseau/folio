@@ -40,6 +40,19 @@
     try { localStorage.setItem(key, value); } catch (e) { /* best-effort */ }
   }
 
+  // Item 10: same guarded pattern as safeStorageGet/Set, but backed by
+  // sessionStorage — used for the per-hash library scroll-position memory
+  // (tab-scoped, meant to be forgotten across sessions).
+  function safeSessionGet(key) {
+    try { return sessionStorage.getItem(key); } catch (e) { return null; }
+  }
+  function safeSessionSet(key, value) {
+    try { sessionStorage.setItem(key, value); } catch (e) { /* best-effort */ }
+  }
+  function safeSessionRemove(key) {
+    try { sessionStorage.removeItem(key); } catch (e) { /* best-effort */ }
+  }
+
   // Finding 11: a hand-edited or corrupted stored value must never flow
   // straight into data-theme/aria-label — coerce anything outside the known
   // set to "system".
@@ -138,10 +151,85 @@
   let lastSentIndex = {};     // bookId -> last chapter_index confirmed sent this session
   let saveChains = {};        // bookId -> promise tail; serializes PUTs per book (F9)
 
+  // Item 10: dismissible, aria-live toast for surfacing fetch failures that
+  // would otherwise render as a silent empty view. A single shared container
+  // (created lazily) stacks multiple toasts; each auto-dismisses after 6s or
+  // on click of its own close button.
+  function showToast(msg) {
+    let container = $("#toast-container");
+    if (!container) {
+      container = document.createElement("div");
+      container.id = "toast-container";
+      container.className = "toast-container";
+      container.setAttribute("role", "status");
+      container.setAttribute("aria-live", "polite");
+      document.body.appendChild(container);
+    }
+    const toast = document.createElement("div");
+    toast.className = "toast";
+    toast.innerHTML = `<span>${esc(msg)}</span><button type="button" class="toast-close" aria-label="Dismiss">&times;</button>`;
+    container.appendChild(toast);
+    const remove = () => toast.remove();
+    toast.querySelector(".toast-close").onclick = remove;
+    setTimeout(remove, 6000);
+  }
+
+  // Item 10: a thrown network error (e.g. the server process died) must not
+  // become an unhandled rejection that leaves a caller stuck on "Loading..."
+  // forever — normalize it to the same `null` result api() already returns
+  // for an expired session (401), which every caller already treats as "stop,
+  // this request didn't complete". Callers that need to distinguish "already
+  // redirected to login" from "genuine failure, please surface it" check the
+  // `authenticated` flag (see loadBooks/showLibraryLoadError) rather than
+  // toasting from inside this shared helper — most callers (e.g. the
+  // shelves) are best-effort and must stay silent on failure.
   async function api(path) {
-    const resp = await fetch(path, { credentials: "same-origin" });
+    let resp;
+    try {
+      resp = await fetch(path, { credentials: "same-origin" });
+    } catch (e) {
+      return null;
+    }
     if (resp.status === 401) { authenticated = false; showLogin(); return null; }
     return resp;
+  }
+
+  // ── Loading Skeletons (Item 10) ────────────────
+  // CSS-shimmer placeholders (mirrors the desktop app's `animate-shimmer`
+  // keyframe in src/index.css) shown while the library grid, detail page, or
+  // reader are loading, instead of a bare "Loading..." string.
+  function skeletonCardHtml() {
+    return `
+      <div class="skeleton-card">
+        <div class="skeleton-cover"></div>
+        <div class="skeleton-line"></div>
+        <div class="skeleton-line short"></div>
+      </div>`;
+  }
+
+  function skeletonGridHtml(count) {
+    let html = "";
+    for (let i = 0; i < (count || 12); i++) html += skeletonCardHtml();
+    return `<div class="skeleton-grid">${html}</div>`;
+  }
+
+  function detailSkeletonHtml() {
+    return `
+      <div class="detail">
+        <div class="meta">
+          <div class="cover"><div class="skeleton-cover" style="border-radius:var(--radius)"></div></div>
+          <div class="info" style="flex:1">
+            <div class="skeleton-line" style="width:70%;height:22px;margin-bottom:14px"></div>
+            <div class="skeleton-line" style="width:40%"></div>
+            <div class="skeleton-line" style="width:90%;margin-top:16px"></div>
+            <div class="skeleton-line" style="width:80%"></div>
+          </div>
+        </div>
+      </div>`;
+  }
+
+  function readerSkeletonHtml() {
+    return `<div class="reader-skeleton"><div class="skeleton-cover"></div></div>`;
   }
 
   // ── Router ────────────────────────────────────
@@ -609,6 +697,7 @@
   // just synced to a new hash while already in the library view.
   async function showLibrary(params) {
     currentView = "library";
+    document.title = "Folio";
     flushProgressSave();
     readerState = null;
     resumePromptActive = false;
@@ -640,7 +729,7 @@
           ${navIconsHtml("")}
         </div>
         <div class="filter-bar" id="filter-bar"></div>
-        <div id="library-content"><div class="loading">Loading...</div></div>`;
+        <div id="library-content">${skeletonGridHtml()}</div>`;
 
       const sortSelect = $("#sort-select");
       sortSelect.value = activeSort;
@@ -672,10 +761,34 @@
       if (sortSelect && sortSelect.value !== activeSort) sortSelect.value = activeSort;
       renderFilterChips();
       const contentEl = $("#library-content");
-      if (contentEl) contentEl.innerHTML = '<div class="loading">Loading...</div>';
+      if (contentEl) contentEl.innerHTML = skeletonGridHtml();
     }
 
     await loadBooks(activeQuery);
+    // Item 10: only meaningful right after a fresh grid render — restores
+    // the scrollY saved (per-hash) the moment the user left this exact
+    // library view for a book's detail/reader page.
+    restoreLibraryScrollPosition();
+  }
+
+  // Item 10: preserves the library's scroll position across a detail/reader
+  // round trip. Saved keyed by the exact hash being left (so a different
+  // filter/search/sort state never restores the wrong scroll offset),
+  // restored once (then forgotten) by restoreLibraryScrollPosition().
+  function libraryScrollKey(hash) {
+    return "folio_scroll_" + hash;
+  }
+  function saveLibraryScrollPosition() {
+    if (currentView !== "library") return;
+    safeSessionSet(libraryScrollKey(rawHash()), String(window.scrollY));
+  }
+  function restoreLibraryScrollPosition() {
+    const key = libraryScrollKey(rawHash());
+    const saved = safeSessionGet(key);
+    if (saved == null) return;
+    safeSessionRemove(key);
+    const y = parseInt(saved, 10);
+    if (Number.isFinite(y)) window.scrollTo(0, y);
   }
 
   // Item 7: keystroke search updates use history.replaceState (not a real
@@ -695,7 +808,7 @@
 
   async function refreshLibrary(query) {
     const contentEl = $("#library-content");
-    if (contentEl) contentEl.innerHTML = '<div class="loading">Loading...</div>';
+    if (contentEl) contentEl.innerHTML = skeletonGridHtml();
     await loadBooks(query);
   }
 
@@ -743,8 +856,25 @@
     }
 
     const resp = await api(url);
-    if (!resp || gen !== libraryRenderGen) return;
-    const books = await resp.json();
+    if (gen !== libraryRenderGen) return;
+    // Item 10: the main library grid is the one fetch in this file whose
+    // failure must be loud — api() returning null here is either an already-
+    // handled 401 (showLogin() ran, `authenticated` is now false — no toast,
+    // it'd just be noise over the login screen) or a genuine network error
+    // (`authenticated` still true) worth surfacing. A non-network HTTP
+    // failure (e.g. a 500) reaches here as a normal, non-ok Response.
+    if (!resp) {
+      if (authenticated) showLibraryLoadError();
+      return;
+    }
+    if (!resp.ok) { showLibraryLoadError(); return; }
+    let books;
+    try {
+      books = await resp.json();
+    } catch (e) {
+      showLibraryLoadError();
+      return;
+    }
     if (gen !== libraryRenderGen) return;
 
     // Finding C: an empty result for an active collection/series filter is
@@ -809,12 +939,28 @@
     }
   }
 
+  // Item 10: friendly, context-specific empty states instead of a bare "No
+  // books found" — the message depends on *why* the grid is empty (nothing
+  // imported yet vs. a search/collection/series that matched nothing).
+  function libraryEmptyMessageHtml() {
+    if (activeQuery) return `<div class="empty">No books match "${esc(activeQuery)}"</div>`;
+    if (activeCollectionId) return '<div class="empty">This collection is empty.</div>';
+    if (activeSeries) return '<div class="empty">No books found in this series.</div>';
+    return '<div class="empty">Your library is empty. Import some books to get started.</div>';
+  }
+
+  function showLibraryLoadError() {
+    const contentEl = $("#library-content");
+    if (contentEl) contentEl.innerHTML = '<div class="empty">Couldn&rsquo;t load your library.</div>';
+    showToast("Couldn't reach Folio server");
+  }
+
   function bookCardHtml(b) {
     return `
-      <div class="card" data-id="${b.id}">
-        <img src="/api/books/${b.id}/cover" alt="" loading="lazy">
+      <div class="card" data-id="${b.id}" tabindex="0" role="button" aria-label="${esc(`Open ${b.title}`)}">
+        <img src="/api/books/${b.id}/cover" alt="" loading="lazy" data-cover-title="${esc(b.title)}">
         <div class="info">
-          <div class="title">${esc(b.title)}</div>
+          <div class="title" title="${esc(b.title)}">${esc(b.title)}</div>
           <div class="author">${esc(b.author)}</div>
           <div class="format">${b.format}</div>
         </div>
@@ -822,17 +968,36 @@
   }
 
   function gridHtml(books) {
-    if (books.length === 0) return '<div class="empty">No books found</div>';
+    if (books.length === 0) return libraryEmptyMessageHtml();
     return '<div class="grid">' + books.map(bookCardHtml).join("") + '</div>';
+  }
+
+  // Item 10: single onerror mechanism shared by every cover site (grid card,
+  // shelf card, detail cover) — replaces a broken/missing cover `<img>` with
+  // a styled placeholder (surface bg, serif title) instead of leaving a
+  // broken-image icon over a gray box.
+  function bindCoverFallback(img) {
+    img.addEventListener("error", () => {
+      const div = document.createElement("div");
+      div.className = "cover-placeholder";
+      div.innerHTML = `<span>${esc(img.dataset.coverTitle || "")}</span>`;
+      img.replaceWith(div);
+    }, { once: true });
+  }
+
+  function openBookFromCard(id) {
+    saveLibraryScrollPosition();
+    navigate("#/book/" + id);
   }
 
   function bindGridCardHandlers() {
     $$(".card").forEach(c => {
-      c.addEventListener("click", () => navigate("#/book/" + c.dataset.id));
+      c.addEventListener("click", () => openBookFromCard(c.dataset.id));
+      c.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openBookFromCard(c.dataset.id); }
+      });
     });
-    $$(".card img").forEach(img => {
-      img.addEventListener("error", () => { img.classList.add("cover-fallback"); img.alt = "No cover"; });
-    });
+    $$(".card img").forEach(bindCoverFallback);
   }
 
   function renderBooks(books) {
@@ -858,8 +1023,8 @@
       ? ` data-chapter-index="${b.chapter_index}" data-scroll-position="${b.scroll_position || 0}" data-last-read-at="${b.last_read_at || 0}"`
       : "";
     return `
-      <div class="shelf-card" data-id="${b.id}" data-mode="${mode}"${posAttrs}>
-        <img src="/api/books/${b.id}/cover" alt="" loading="lazy">
+      <div class="shelf-card" data-id="${b.id}" data-mode="${mode}"${posAttrs} tabindex="0" role="button" aria-label="${esc(`Open ${b.title}`)}">
+        <img src="/api/books/${b.id}/cover" alt="" loading="lazy" data-cover-title="${esc(b.title)}">
         <div class="shelf-title" title="${esc(b.title)}">${esc(b.title)}</div>
         ${bar}
       </div>`;
@@ -874,37 +1039,41 @@
       </div>`;
   }
 
+  function activateShelfCard(c) {
+    saveLibraryScrollPosition();
+    const id = c.dataset.id;
+    if (c.dataset.mode === "continue") {
+      // Finding B: the shelf's position was fetched at page-load time and
+      // may be stale by the time it's clicked (a later save — including
+      // one still in flight via the un-awaited debounced PUT — can have
+      // moved this tab's actual position on). Reconcile with
+      // lastKnownProgress via the same mergeProgress() the detail page's
+      // Continue button uses, instead of trusting the baked-in data
+      // attributes outright — same shared code path, no duplicated logic.
+      const serverProgress = {
+        book_id: id,
+        chapter_index: parseInt(c.dataset.chapterIndex, 10) || 0,
+        scroll_position: parseFloat(c.dataset.scrollPosition) || 0,
+        last_read_at: parseInt(c.dataset.lastReadAt, 10) || 0,
+      };
+      const merged = mergeProgress(id, serverProgress) || serverProgress;
+      const chapterIndex = merged.chapter_index;
+      const scrollPosition = typeof merged.scroll_position === "number" ? merged.scroll_position : 0;
+      readerEntryIntent = { id, action: "continue", scrollPosition };
+      navigate(`#/book/${id}/${chapterIndex}/read`);
+    } else {
+      navigate("#/book/" + id);
+    }
+  }
+
   function bindShelfCardHandlers() {
     $$(".shelf-card").forEach(c => {
-      c.addEventListener("click", () => {
-        const id = c.dataset.id;
-        if (c.dataset.mode === "continue") {
-          // Finding B: the shelf's position was fetched at page-load time and
-          // may be stale by the time it's clicked (a later save — including
-          // one still in flight via the un-awaited debounced PUT — can have
-          // moved this tab's actual position on). Reconcile with
-          // lastKnownProgress via the same mergeProgress() the detail page's
-          // Continue button uses, instead of trusting the baked-in data
-          // attributes outright — same shared code path, no duplicated logic.
-          const serverProgress = {
-            book_id: id,
-            chapter_index: parseInt(c.dataset.chapterIndex, 10) || 0,
-            scroll_position: parseFloat(c.dataset.scrollPosition) || 0,
-            last_read_at: parseInt(c.dataset.lastReadAt, 10) || 0,
-          };
-          const merged = mergeProgress(id, serverProgress) || serverProgress;
-          const chapterIndex = merged.chapter_index;
-          const scrollPosition = typeof merged.scroll_position === "number" ? merged.scroll_position : 0;
-          readerEntryIntent = { id, action: "continue", scrollPosition };
-          navigate(`#/book/${id}/${chapterIndex}/read`);
-        } else {
-          navigate("#/book/" + id);
-        }
+      c.addEventListener("click", () => activateShelfCard(c));
+      c.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" || e.key === " ") { e.preventDefault(); activateShelfCard(c); }
       });
     });
-    $$(".shelf-card img").forEach(img => {
-      img.addEventListener("error", () => { img.classList.add("cover-fallback"); img.alt = "No cover"; });
-    });
+    $$(".shelf-card img").forEach(bindCoverFallback);
   }
 
   function renderLibraryWithShelves(allBooks, continueBooks, recentBooks) {
@@ -1036,7 +1205,7 @@
     flushProgressSave();
     readerState = null;
     resumePromptActive = false;
-    app().innerHTML = '<div class="loading">Loading...</div>';
+    app().innerHTML = detailSkeletonHtml();
     const resp = await api("/api/books/" + id);
     if (!resp || !hashTargetsDetail(id)) return;
     const book = await resp.json();
@@ -1103,9 +1272,10 @@
     if (dateStr) facts.push(`Added ${dateStr}`);
     const factsHtml = facts.length ? `<p class="detail-facts">${esc(facts.join(" · "))}</p>` : "";
 
+    document.title = `${book.title} — Folio`;
     app().innerHTML = `
       <div class="header">
-        <button class="back-btn" id="back-btn">&larr;</button>
+        <button class="back-btn" id="back-btn" aria-label="Back">&larr;</button>
         <h1>${esc(book.title)}</h1>
         <span style="flex:1"></span>
         ${navIconsHtml("")}
@@ -1113,7 +1283,7 @@
       <div class="detail">
         <div class="meta">
           <div class="cover">
-            <img src="/api/books/${id}/cover" alt="">
+            <img src="/api/books/${id}/cover" alt="" data-cover-title="${esc(book.title)}">
           </div>
           <div class="info">
             <h2>${esc(book.title)}</h2>
@@ -1136,7 +1306,7 @@
     $("#back-btn").addEventListener("click", goHome);
     bindNavIcons();
     const coverImg = $(".detail .cover img");
-    if (coverImg) coverImg.addEventListener("error", () => { coverImg.classList.add("cover-fallback"); });
+    if (coverImg) bindCoverFallback(coverImg);
     const readBtn = $("#read-btn");
     if (readBtn) readBtn.addEventListener("click", () => navigate(readHash));
     const continueBtn = $("#continue-btn");
@@ -1215,7 +1385,7 @@
       flushProgressSave();
       readerState = null;
       resumePromptActive = false;
-      app().innerHTML = '<div class="loading">Loading...</div>';
+      app().innerHTML = readerSkeletonHtml();
       const resp = await api("/api/books/" + id);
       if (!resp || !hashTargetsReader(id)) return;
       if (!resp.ok) {
@@ -1230,6 +1400,7 @@
         return;
       }
       if (!hashTargetsReader(id)) return;
+      document.title = `Reading: ${book.title} — Folio`;
 
       // MOBI and EPUB both render through the chapter-HTML endpoint; the
       // server-side `/api/books/:id/chapters/:index` route dispatches to
@@ -1456,7 +1627,7 @@
       <div class="${rootClass}" id="reader-root">
         <div class="reader-chrome-top">
           <div class="header">
-            <button class="back-btn" id="back-btn">&larr;</button>
+            <button class="back-btn" id="back-btn" aria-label="Back">&larr;</button>
             <h1>${esc(book.title)}</h1>
             <span style="flex:1"></span>
             ${navIconsHtml("")}
@@ -1731,10 +1902,16 @@
 
   function updateProgressUI() {
     const { mode, index, count } = readerState;
+    const unit = mode === "page" ? "Page" : "Chapter";
     const label = $("#page-label");
-    if (label) label.textContent = `${mode === "page" ? "Page" : "Chapter"} ${index + 1} / ${count}`;
+    if (label) label.textContent = `${unit} ${index + 1} / ${count}`;
     const slider = $("#page-slider");
-    if (slider) slider.value = index;
+    if (slider) {
+      slider.value = index;
+      // Item 10: screen readers announce this instead of the raw numeric
+      // value while dragging/stepping the slider.
+      slider.setAttribute("aria-valuetext", `${unit} ${index + 1} of ${count}`);
+    }
     const prevBtn = $("#prev-btn");
     const nextBtn = $("#next-btn");
     if (prevBtn) prevBtn.disabled = index <= 0;
@@ -1744,12 +1921,13 @@
   // ── Stats ──────────────────────────────────────
   async function showStats() {
     currentView = "stats";
+    document.title = "Folio";
     flushProgressSave();
     readerState = null;
     resumePromptActive = false;
     app().innerHTML = `
       <div class="header">
-        <button class="back-btn" id="back-btn">&larr;</button>
+        <button class="back-btn" id="back-btn" aria-label="Back">&larr;</button>
         <h1>Reading Stats</h1>
         <span style="flex:1"></span>
         ${navIconsHtml("stats")}
@@ -1801,12 +1979,13 @@
   // ── Collections ────────────────────────────────
   async function showCollections() {
     currentView = "collections";
+    document.title = "Folio";
     flushProgressSave();
     readerState = null;
     resumePromptActive = false;
     app().innerHTML = `
       <div class="header">
-        <button class="back-btn" id="back-btn">&larr;</button>
+        <button class="back-btn" id="back-btn" aria-label="Back">&larr;</button>
         <h1>Collections</h1>
         <span style="flex:1"></span>
         ${navIconsHtml("collections")}
@@ -1977,10 +2156,10 @@
     const chartColor = activePage === "stats" ? "active" : "";
     return `<div class="nav-icons">
       ${themeToggleHtml()}
-      <button class="nav-icon ${folderColor}" title="Collections" data-nav="collections">
+      <button class="nav-icon ${folderColor}" title="Collections" aria-label="Collections" data-nav="collections">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
       </button>
-      <button class="nav-icon ${chartColor}" title="Reading Stats" data-nav="stats">
+      <button class="nav-icon ${chartColor}" title="Reading Stats" aria-label="Reading Stats" data-nav="stats">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 20V10M12 20V4M6 20v-6"/></svg>
       </button>
     </div>`;
@@ -1992,6 +2171,18 @@
     });
     const themeBtn = $("#theme-toggle-btn");
     if (themeBtn) themeBtn.onclick = cycleTheme;
+  }
+
+  // Item 9 (PWA): feature-detected registration — service workers only
+  // register on a secure context (https, or http://localhost). Folio's main
+  // LAN use case (a phone hitting http://192.168.x.x:7788) is plain HTTP and
+  // NOT a secure context, so `serviceWorker` won't even exist in `navigator`
+  // there and this silently no-ops. The manifest + icons still work for iOS
+  // Safari's "Add to Home Screen" over plain HTTP.
+  if ("serviceWorker" in navigator) {
+    try {
+      navigator.serviceWorker.register("/sw.js").catch(() => {});
+    } catch (e) { /* best-effort */ }
   }
 
   // ── Init ──────────────────────────────────────

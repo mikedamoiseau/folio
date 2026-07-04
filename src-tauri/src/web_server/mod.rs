@@ -1830,4 +1830,86 @@ mod tests {
 
         let _ = tx.send(());
     }
+
+    // ── Item 9: PWA shell (manifest/sw/icons) ───────────────────────────────
+    // Each new static route must be reachable WITHOUT auth even when a PIN is
+    // configured (auth.rs's public carve-out) — otherwise a PIN-protected
+    // setup would 401 the install/offline shell before the user ever logs in.
+
+    async fn assert_public_route_ok(path: &str, expected_content_type: &str) {
+        let state = test_state();
+        *state.pin_hash.lock().unwrap() = Some(auth::hash_pin("2468"));
+        let (_state, port, tx) = spawn_progress_test_server(state).await;
+        let client = reqwest::Client::new();
+
+        let resp = client
+            .get(format!("http://127.0.0.1:{port}{path}"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            resp.status(),
+            200,
+            "{path} should be public (200) even with a PIN configured"
+        );
+        let content_type = resp
+            .headers()
+            .get("content-type")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("");
+        assert!(
+            content_type.starts_with(expected_content_type),
+            "{path} content-type was {content_type:?}, expected to start with {expected_content_type:?}"
+        );
+
+        let _ = tx.send(());
+    }
+
+    #[tokio::test]
+    async fn manifest_json_is_public_and_correct_content_type() {
+        assert_public_route_ok("/manifest.json", "application/manifest+json").await;
+    }
+
+    #[tokio::test]
+    async fn sw_js_is_public_and_correct_content_type() {
+        assert_public_route_ok("/sw.js", "application/javascript").await;
+    }
+
+    #[tokio::test]
+    async fn icon_192_is_public_and_correct_content_type() {
+        assert_public_route_ok("/icon-192.png", "image/png").await;
+    }
+
+    #[tokio::test]
+    async fn icon_512_is_public_and_correct_content_type() {
+        assert_public_route_ok("/icon-512.png", "image/png").await;
+    }
+
+    #[tokio::test]
+    async fn sw_js_contains_cache_version() {
+        const SW_JS: &str = include_str!("static/sw.js");
+        assert!(
+            SW_JS.contains("CACHE_VERSION"),
+            "sw.js must define a CACHE_VERSION so shell-asset changes can invalidate old caches"
+        );
+    }
+
+    #[tokio::test]
+    async fn manifest_json_parses_with_required_fields() {
+        const MANIFEST_JSON: &str = include_str!("static/manifest.json");
+        let value: serde_json::Value =
+            serde_json::from_str(MANIFEST_JSON).expect("manifest.json must be valid JSON");
+        assert_eq!(value["name"], "Folio");
+        assert_eq!(value["display"], "standalone");
+        assert!(value["theme_color"].is_string());
+        assert!(value["background_color"].is_string());
+        let icons = value["icons"].as_array().expect("icons array");
+        assert!(
+            icons.len() >= 2,
+            "manifest should list at least the 192 and 512 icons"
+        );
+        let sizes: Vec<&str> = icons.iter().filter_map(|i| i["sizes"].as_str()).collect();
+        assert!(sizes.contains(&"192x192"));
+        assert!(sizes.contains(&"512x512"));
+    }
 }

@@ -284,6 +284,8 @@ pub async fn auth_middleware(
     let path = req.uri().path();
 
     // Allow unauthenticated access to login-related routes, health check, and static assets
+    // (Item 9: manifest/sw/icons must also be public — a PIN-protected setup
+    // would otherwise 401 the PWA shell before the user ever logs in).
     if path == "/api/auth"
         || path == "/api/health"
         || path == "/"
@@ -291,6 +293,10 @@ pub async fn auth_middleware(
         || path == "/app.css"
         || path == "/favicon.ico"
         || path == "/favicon.png"
+        || path == "/manifest.json"
+        || path == "/sw.js"
+        || path == "/icon-192.png"
+        || path == "/icon-512.png"
     {
         return next.run(req).await;
     }
