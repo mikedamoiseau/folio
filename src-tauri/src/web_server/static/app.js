@@ -26,7 +26,29 @@
   // JS re-render needed. The index.html bootstrap script applies the same
   // stored value before first paint to avoid a flash of the wrong theme.
   const THEME_STORAGE_KEY = "folio_theme";
-  let themeMode = localStorage.getItem(THEME_STORAGE_KEY) || "system";
+
+  // Finding 1: a bare localStorage.getItem/setItem call can throw
+  // (SecurityError) under some browser configurations (e.g. Chrome "block
+  // all cookies") — unguarded, that would abort this whole IIFE and
+  // permanently blank the page. Mirrors the try/catch already used by
+  // index.html's bootstrap script; every localStorage call site in this file
+  // goes through these two helpers.
+  function safeStorageGet(key) {
+    try { return localStorage.getItem(key); } catch (e) { return null; }
+  }
+  function safeStorageSet(key, value) {
+    try { localStorage.setItem(key, value); } catch (e) { /* best-effort */ }
+  }
+
+  // Finding 11: a hand-edited or corrupted stored value must never flow
+  // straight into data-theme/aria-label — coerce anything outside the known
+  // set to "system".
+  const VALID_THEME_MODES = ["light", "dark", "system"];
+  function readStoredThemeMode() {
+    const stored = safeStorageGet(THEME_STORAGE_KEY);
+    return VALID_THEME_MODES.includes(stored) ? stored : "system";
+  }
+  let themeMode = readStoredThemeMode();
 
   function systemPrefersDark() {
     return !!(window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches);
@@ -78,6 +100,13 @@
   // clicks).
   let libraryRenderGen = 0;
 
+  // Finding 3: module-scoped (not a closure local inside showLibrary) so it
+  // can be cancelled from setSearchQuery and from showLibrary's own re-entry
+  // path — a closure-local timer survives navigations that happen before its
+  // 300ms elapses (filter click, Esc-clear, view switch), letting a stale
+  // typed value fire afterward and clobber whatever was just navigated to.
+  let searchDebounceTimer = null;
+
   // R2-3/R3-1: current view + reader state, used by the global keyboard
   // shortcut dispatcher and by the reader's own nav handlers.
   let currentView = null; // "login" | "library" | "detail" | "reader" | "stats" | "collections"
@@ -120,6 +149,17 @@
     window.location.hash = hash;
   }
 
+  // Finding 2: Firefox percent-decodes the `location.hash` property itself
+  // (Chromium does not) — reading it directly can silently corrupt a
+  // URLSearchParams parse of a value containing %/&/=/+ (e.g. a series name).
+  // `location.href`'s fragment isn't affected by that quirk, so every read of
+  // the current hash for parsing purposes goes through this instead.
+  function rawHash() {
+    const href = window.location.href;
+    const i = href.indexOf("#");
+    return i >= 0 ? href.slice(i) : "#";
+  }
+
   // Item 7: parse `#/library?q=...&series=...&collection=...&sort=...` (also
   // used for the bare `#`/`#/` home route, which parses to all defaults).
   function parseLibraryParams(hash) {
@@ -147,6 +187,14 @@
     return qs ? "#/library?" + qs : "#";
   }
 
+  // Finding 10: the `{ q, series, collection, sort }` library-state object is
+  // hand-copied at every filter-mutating call site — this is the one source
+  // of "current state", spread and overridden by callers that only change
+  // one or two fields.
+  function currentLibraryState() {
+    return { q: activeQuery, series: activeSeries, collection: activeCollectionId, sort: activeSort };
+  }
+
   // Finding C: every explicit "go back to the home screen" action (header
   // back buttons, Esc/Backspace from detail) must clear any active
   // collection/series filter — otherwise a filter set on a previous library
@@ -156,8 +204,12 @@
   // set a filter on purpose right before going home (showDetail's series
   // link, showCollections' collection/series rows) — those must keep working
   // and do NOT go through this helper.
+  // Finding 4: this must NOT also wipe the active query/sort — "leave this
+  // view" only means dropping the collection/series filter, not resetting
+  // the rest of the library state. libraryHash() collapses back to the bare
+  // "#" on its own when query/sort are also at their defaults.
   function goHome() {
-    navigate("#");
+    navigate(libraryHash({ ...currentLibraryState(), series: null, collection: null }));
   }
 
   function route() {
@@ -165,7 +217,7 @@
     // survive a navigation — it would block the next view and swallow
     // shortcuts on it.
     closeShortcutsOverlay();
-    const hash = window.location.hash || "#";
+    const hash = rawHash();
     if (hash === "#" || hash === "#/" || hash.startsWith("#/library")) {
       return showLibrary(parseLibraryParams(hash));
     }
@@ -402,9 +454,17 @@
   });
 
   function selectFilter(key, value) {
-    const next = { q: activeQuery, sort: activeSort, series: null, collection: null };
+    const next = { ...currentLibraryState(), series: null, collection: null };
     next[key] = value;
-    navigate(libraryHash(next));
+    const hash = libraryHash(next);
+    // Finding 5: re-selecting the already-active filter produces the exact
+    // same hash, so no `hashchange` fires and the grid would silently go
+    // stale — refetch directly instead of navigating in that case.
+    if (hash === rawHash()) {
+      refreshLibrary(activeQuery);
+    } else {
+      navigate(hash);
+    }
   }
 
   function bindFilterDropdown(key, items, mapItem) {
@@ -460,19 +520,36 @@
   // from the current activeCollectionId/activeSeries — called both after a
   // full filter-bar render and whenever the URL changes without a DOM
   // rebuild (e.g. back/forward while still viewing the library).
+  // Finding 8: guards renderFilterBar() (triggered below when the chip can't
+  // resolve activeCollectionId against the cache) against refetching forever
+  // if the collection is genuinely gone — only one refresh is attempted per
+  // distinct activeCollectionId value.
+  let chipRefreshAttemptedForCollectionId = null;
+
   function renderFilterChips() {
     const chips = $("#filter-chips");
     if (chips) {
       let html = "";
       if (activeCollectionId) {
         const c = cachedCollections.find(c => c.id === activeCollectionId);
-        html += chipHtml("collection", c ? c.name : activeCollectionId);
+        if (c) {
+          html += chipHtml("collection", c.name);
+        } else {
+          // Finding 8: never show the raw UUID — the cache may simply be
+          // stale (the collection was deleted/renamed elsewhere since the
+          // filter bar was last rendered). Refresh once and re-render.
+          html += chipHtml("collection", "Collection");
+          if (chipRefreshAttemptedForCollectionId !== activeCollectionId) {
+            chipRefreshAttemptedForCollectionId = activeCollectionId;
+            renderFilterBar();
+          }
+        }
       }
       if (activeSeries) html += chipHtml("series", activeSeries);
       chips.innerHTML = html;
       chips.querySelectorAll("[data-remove]").forEach(btn => {
         btn.onclick = () => {
-          const next = { q: activeQuery, sort: activeSort, series: activeSeries, collection: activeCollectionId };
+          const next = currentLibraryState();
           next[btn.dataset.remove] = null;
           navigate(libraryHash(next));
         };
@@ -508,7 +585,11 @@
       ${cachedSeries.length > 0 ? filterDropdownHtml("series", "Series") : ""}
       <div class="filter-chips" id="filter-chips"></div>`;
 
-    $("#filter-reset-btn").onclick = () => navigate("#");
+    // Finding 4: "All Books" clears the collection/series filter ONLY —
+    // it must preserve the active query/sort, not reset the whole library
+    // state. libraryHash() collapses back to the bare "#" on its own when
+    // query/sort are also at their defaults.
+    $("#filter-reset-btn").onclick = () => navigate(libraryHash({ ...currentLibraryState(), series: null, collection: null }));
 
     if (cachedCollections.length > 0) {
       bindFilterDropdown("collection", cachedCollections, (c) => ({ value: c.id, label: c.name, count: c.bookCount }));
@@ -531,6 +612,11 @@
     flushProgressSave();
     readerState = null;
     resumePromptActive = false;
+    // Finding 3: cancel any pending debounced search — every re-entry into
+    // the library view (filter click, sort change, back/forward, self-heal)
+    // is a point where an abandoned keystroke's stale value must not be
+    // allowed to fire later and clobber what the user just navigated to.
+    clearTimeout(searchDebounceTimer);
 
     params = params || {};
     activeQuery = params.q || "";
@@ -561,14 +647,17 @@
       sortSelect.onchange = () => {
         // Item 7: a sort change is a "filter change", not a keystroke — a
         // real hash push, so back can step back to the previous sort.
-        navigate(libraryHash({ q: activeQuery, series: activeSeries, collection: activeCollectionId, sort: sortSelect.value }));
+        navigate(libraryHash({ ...currentLibraryState(), sort: sortSelect.value }));
       };
 
-      let timer;
       $("#search").oninput = (e) => {
-        clearTimeout(timer);
+        // Finding 3: searchDebounceTimer is module-scoped (not a closure
+        // local) so it can be cancelled from setSearchQuery/showLibrary too —
+        // see their comments for why a closure-local timer here missed the
+        // navigate-away-before-300ms case.
+        clearTimeout(searchDebounceTimer);
         const value = e.target.value;
-        timer = setTimeout(() => setSearchQuery(value), 300);
+        searchDebounceTimer = setTimeout(() => setSearchQuery(value), 300);
       };
 
       bindNavIcons();
@@ -595,8 +684,11 @@
   // back-stop. Shared by the debounced search input and the Esc-to-clear
   // shortcut.
   function setSearchQuery(value) {
+    // Finding 3: covers the Esc-to-clear shortcut, which calls this directly
+    // — the pending debounced call (if any) is now moot.
+    clearTimeout(searchDebounceTimer);
     activeQuery = value;
-    const hash = libraryHash({ q: activeQuery, series: activeSeries, collection: activeCollectionId, sort: activeSort });
+    const hash = libraryHash(currentLibraryState());
     if (window.location.hash !== hash) history.replaceState(null, "", hash);
     refreshLibrary(value);
   }
@@ -667,7 +759,12 @@
         // hash with the dead filter dropped (a real hashchange re-runs
         // showLibrary/loadBooks), rather than mutating the parse-cache vars
         // directly and re-rendering out of step with the address bar.
-        navigate(libraryHash({ q: activeQuery, sort: activeSort, series: null, collection: null }));
+        // Finding 6: also refresh the filter bar itself — otherwise the now
+        // -deleted collection/series would linger in the dropdown lists
+        // (built from the stale cachedCollections/cachedSeries) until some
+        // unrelated full re-render.
+        renderFilterBar();
+        navigate(libraryHash({ ...currentLibraryState(), series: null, collection: null }));
         return;
       }
     }
@@ -1063,7 +1160,7 @@
       e.preventDefault();
       // Item 7: the URL carries the filter directly — no pending-intent
       // variable needed between this click and the library rendering it.
-      navigate(libraryHash({ q: "", series: book.series, collection: null, sort: activeSort }));
+      navigate(libraryHash({ ...currentLibraryState(), q: "", series: book.series, collection: null }));
     });
     const seriesPrevBtn = $("#series-prev-btn");
     if (seriesPrevBtn && seriesNav && seriesNav.prevId) {
@@ -1219,7 +1316,7 @@
       index,
       count,
       chromeHidden: false,
-      fitMode: localStorage.getItem("folio_reader_fit_mode") || "fit-height",
+      fitMode: safeStorageGet("folio_reader_fit_mode") || "fit-height",
       handlers: null,
       renderGen: 0,
       scrollPosition: mode === "chapter" ? (scrollPosition || 0) : 0,
@@ -1402,7 +1499,7 @@
       });
       $("#fit-toggle-btn").addEventListener("click", () => {
         readerState.fitMode = readerState.fitMode === "fit-height" ? "fit-width" : "fit-height";
-        localStorage.setItem("folio_reader_fit_mode", readerState.fitMode);
+        safeStorageSet("folio_reader_fit_mode", readerState.fitMode);
         applyFitMode();
       });
     } else {
@@ -1868,7 +1965,7 @@
   // entirely so the CSS prefers-color-scheme block takes back over.
   function cycleTheme() {
     themeMode = themeMode === "light" ? "dark" : themeMode === "dark" ? "system" : "light";
-    localStorage.setItem(THEME_STORAGE_KEY, themeMode);
+    safeStorageSet(THEME_STORAGE_KEY, themeMode);
     applyTheme();
     const btn = $("#theme-toggle-btn");
     if (btn) btn.innerHTML = themeIconSvg(themeMode);

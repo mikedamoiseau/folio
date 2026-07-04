@@ -13,6 +13,7 @@
   --on-accent:    #fff;
   --error:        #b3362a;
   --shadow:       rgba(44, 34, 24, 0.18);
+  --chip-hover:   rgba(0, 0, 0, 0.08);
   --radius: 8px; --gap: 16px;
 }
 
@@ -30,6 +31,7 @@
     --on-accent:    #1a1614;
     --error:        #e08074;
     --shadow:       rgba(0, 0, 0, 0.5);
+    --chip-hover:   rgba(255, 255, 255, 0.12);
   }
 }
 
@@ -46,6 +48,7 @@
   --on-accent:    #1a1614;
   --error:        #e08074;
   --shadow:       rgba(0, 0, 0, 0.5);
+  --chip-hover:   rgba(255, 255, 255, 0.12);
 }
 
 :root[data-theme="light"] {
@@ -61,6 +64,7 @@
   --on-accent:    #fff;
   --error:        #b3362a;
   --shadow:       rgba(44, 34, 24, 0.18);
+  --chip-hover:   rgba(0, 0, 0, 0.08);
 }
 
 body {
@@ -112,7 +116,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .filter-chips { display: flex; flex-wrap: wrap; gap: 6px; }
 .chip { display: inline-flex; align-items: center; gap: 4px; padding: 5px 6px 5px 12px; background: var(--accent-light); color: var(--accent); border-radius: 20px; font-size: 0.78rem; font-weight: 600; white-space: nowrap; }
 .chip-remove { background: none; border: none; color: inherit; cursor: pointer; font-size: 1rem; line-height: 1; padding: 2px 5px; border-radius: 50%; }
-.chip-remove:hover { background: rgba(0, 0, 0, 0.08); }
+.chip-remove:hover { background: var(--chip-hover); }
 
 /* ── Book Grid ─────────────────────────────────── */
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: var(--gap); padding: var(--gap); }

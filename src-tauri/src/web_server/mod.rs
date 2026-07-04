@@ -710,12 +710,41 @@ mod tests {
     // Item 6: the theme bootstrap inline script in index.html (sets
     // data-theme before first paint, avoiding a flash of the wrong theme)
     // must be allowed by CSP via a script-src hash rather than a blanket
-    // 'unsafe-inline' — assert the exact hash is present, sourced from the
-    // same constant `security_headers_middleware` uses, so a drift between
-    // the script text and the hash fails loudly here instead of silently
-    // breaking in the browser (CSP violation, no visible error to the user).
+    // 'unsafe-inline'. Finding 7: the hash is computed here independently
+    // from the actual served index.html (the same file web_ui.rs embeds via
+    // include_str!) rather than compared against THEME_BOOTSTRAP_SCRIPT_HASH
+    // itself — comparing the constant to the constant it also builds the CSP
+    // header from could never catch drift between the script text and the
+    // hash, which is exactly the case this test exists to catch.
     #[tokio::test]
     async fn test_csp_allows_theme_bootstrap_script_hash() {
+        use base64::Engine;
+        use sha2::{Digest, Sha256};
+
+        // Same source of truth web_ui.rs embeds as INDEX_HTML.
+        const INDEX_HTML: &str = include_str!("static/index.html");
+        let open_tag = "<script>";
+        let start = INDEX_HTML
+            .find(open_tag)
+            .expect("bootstrap <script> tag not found in index.html")
+            + open_tag.len();
+        let end = INDEX_HTML[start..]
+            .find("</script>")
+            .expect("closing </script> tag not found after bootstrap script")
+            + start;
+        let script_body = &INDEX_HTML[start..end];
+
+        let digest = Sha256::digest(script_body.as_bytes());
+        let computed_hash = format!(
+            "'sha256-{}'",
+            base64::engine::general_purpose::STANDARD.encode(digest)
+        );
+        assert_eq!(
+            computed_hash, THEME_BOOTSTRAP_SCRIPT_HASH,
+            "THEME_BOOTSTRAP_SCRIPT_HASH is out of date with index.html's actual bootstrap \
+             script text — regenerate it if the script was intentionally changed"
+        );
+
         let state = test_state();
         let addr = SocketAddr::from(([127, 0, 0, 1], 0));
         let router = build_router(
@@ -755,8 +784,8 @@ mod tests {
             .unwrap()
             .to_string();
         assert!(
-            csp.contains(THEME_BOOTSTRAP_SCRIPT_HASH),
-            "CSP script-src should allow the theme bootstrap script hash: {csp}"
+            csp.contains(&computed_hash),
+            "CSP script-src should allow the independently-computed bootstrap script hash: {csp}"
         );
         assert!(
             csp.contains("script-src 'self'"),
