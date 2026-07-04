@@ -1537,4 +1537,198 @@ mod tests {
 
         let _ = tx.send(());
     }
+
+    // ── Item 5: Continue Reading shelf ──────────────────────────────────────
+
+    /// `progress_test_book` reuses one fixed `file_path` for every call — fine
+    /// when a test inserts a single book, but the `books.file_path` unique
+    /// constraint rejects a second one. These tests insert several, so give
+    /// each a distinct path.
+    fn cr_test_book(id: &str, total_chapters: u32) -> crate::models::Book {
+        crate::models::Book {
+            file_path: format!("/nonexistent/{id}.cbz"),
+            ..progress_test_book(id, total_chapters)
+        }
+    }
+
+    // Finding J: these HTTP-layer tests cover route concerns only —
+    // registration/status, the JSON shape returned over the wire, limit-param
+    // parsing/capping, and auth gating. The underlying SQL filter/order/
+    // exclusion logic (unread vs. finished vs. in-progress, most-recent-first
+    // ordering, total_chapters=0 exclusion) is exercised exhaustively by
+    // `db::tests::test_get_continue_reading_books_*` and must not be
+    // duplicated here.
+
+    #[tokio::test]
+    async fn continue_reading_returns_json_shape_for_one_item() {
+        let state = test_state();
+        {
+            let conn = state.conn().unwrap();
+            crate::db::insert_book(&conn, &cr_test_book("cr-shape", 10)).unwrap();
+            crate::db::upsert_reading_progress(
+                &conn,
+                &crate::models::ReadingProgress {
+                    book_id: "cr-shape".to_string(),
+                    chapter_index: 5,
+                    scroll_position: 0.4,
+                    last_read_at: 400,
+                },
+            )
+            .unwrap();
+        }
+
+        let (_state, port, tx) = spawn_progress_test_server(state).await;
+        let client = reqwest::Client::new();
+
+        let resp = client
+            .get(format!(
+                "http://127.0.0.1:{port}/api/books/continue-reading"
+            ))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+        let body: serde_json::Value = resp.json().await.unwrap();
+        let arr = body.as_array().unwrap();
+        assert_eq!(arr.len(), 1, "route returns the JSON array shape over HTTP");
+        assert_eq!(arr[0]["id"], "cr-shape");
+        assert_eq!(arr[0]["chapter_index"], 5);
+        assert_eq!(arr[0]["total_chapters"], 10);
+
+        let _ = tx.send(());
+    }
+
+    #[tokio::test]
+    async fn continue_reading_respects_limit_param() {
+        let state = test_state();
+        {
+            let conn = state.conn().unwrap();
+            for i in 0..5 {
+                let id = format!("cr-limit-{i}");
+                crate::db::insert_book(&conn, &cr_test_book(&id, 10)).unwrap();
+                crate::db::upsert_reading_progress(
+                    &conn,
+                    &crate::models::ReadingProgress {
+                        book_id: id,
+                        chapter_index: 3,
+                        scroll_position: 0.2,
+                        last_read_at: 1000 + i,
+                    },
+                )
+                .unwrap();
+            }
+        }
+
+        let (_state, port, tx) = spawn_progress_test_server(state).await;
+        let client = reqwest::Client::new();
+
+        let resp = client
+            .get(format!(
+                "http://127.0.0.1:{port}/api/books/continue-reading?limit=2"
+            ))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+        let body: serde_json::Value = resp.json().await.unwrap();
+        let arr = body.as_array().unwrap();
+        assert_eq!(arr.len(), 2, "limit param must cap the result count");
+
+        let _ = tx.send(());
+    }
+
+    #[tokio::test]
+    async fn continue_reading_limit_param_caps_at_50() {
+        let state = test_state();
+        {
+            let conn = state.conn().unwrap();
+            for i in 0..55 {
+                let id = format!("cr-cap-{i}");
+                crate::db::insert_book(&conn, &cr_test_book(&id, 10)).unwrap();
+                crate::db::upsert_reading_progress(
+                    &conn,
+                    &crate::models::ReadingProgress {
+                        book_id: id,
+                        chapter_index: 3,
+                        scroll_position: 0.1,
+                        last_read_at: 1000 + i,
+                    },
+                )
+                .unwrap();
+            }
+        }
+
+        let (_state, port, tx) = spawn_progress_test_server(state).await;
+        let client = reqwest::Client::new();
+
+        let resp = client
+            .get(format!(
+                "http://127.0.0.1:{port}/api/books/continue-reading?limit=1000"
+            ))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+        let body: serde_json::Value = resp.json().await.unwrap();
+        assert_eq!(
+            body.as_array().unwrap().len(),
+            50,
+            "limit param must be capped at 50 regardless of the requested value"
+        );
+
+        let _ = tx.send(());
+    }
+
+    #[tokio::test]
+    async fn continue_reading_requires_auth_when_pin_configured() {
+        let state = test_state();
+        *state.pin_hash.lock().unwrap() = Some(auth::hash_pin("9999"));
+
+        let (_state, port, tx) = spawn_progress_test_server(state).await;
+        let client = reqwest::Client::new();
+
+        let resp = client
+            .get(format!(
+                "http://127.0.0.1:{port}/api/books/continue-reading"
+            ))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 401);
+
+        let _ = tx.send(());
+    }
+
+    // ── Item 8: richer book detail (file_size) ──────────────────────────────
+
+    #[tokio::test]
+    async fn get_book_detail_includes_file_size() {
+        let state = test_state();
+        let dir = tempfile::tempdir().unwrap();
+        let file_path = dir.path().join("detail-test.cbz");
+        std::fs::write(&file_path, b"0123456789").unwrap(); // 10 bytes
+        {
+            let conn = state.conn().unwrap();
+            let mut book = progress_test_book("detail-1", 10);
+            book.file_path = file_path.to_string_lossy().to_string();
+            crate::db::insert_book(&conn, &book).unwrap();
+        }
+
+        let (_state, port, tx) = spawn_progress_test_server(state).await;
+        let client = reqwest::Client::new();
+
+        let resp = client
+            .get(format!("http://127.0.0.1:{port}/api/books/detail-1"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+        let body: serde_json::Value = resp.json().await.unwrap();
+        assert_eq!(body["file_size"], 10);
+        assert_eq!(body["id"], "detail-1");
+        // The rest of the `Book` shape must still be present alongside it.
+        assert_eq!(body["total_chapters"], 10);
+
+        let _ = tx.send(());
+    }
 }

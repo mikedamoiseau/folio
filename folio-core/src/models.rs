@@ -232,6 +232,22 @@ pub struct SeriesInfo {
     pub count: i64,
 }
 
+/// A book with in-progress reading state, for the web UI's "Continue
+/// Reading" shelf (Item 5) — a lighter projection than `Book` carrying just
+/// what the shelf card needs plus the saved position.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContinueReadingItem {
+    pub id: String,
+    pub title: String,
+    pub author: String,
+    pub cover_path: Option<String>,
+    pub format: BookFormat,
+    pub total_chapters: u32,
+    pub chapter_index: u32,
+    pub scroll_position: f64,
+    pub last_read_at: i64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CleanupResult {

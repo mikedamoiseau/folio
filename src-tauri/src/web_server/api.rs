@@ -137,6 +137,7 @@ pub fn routes(state: WebState) -> Router<WebState> {
         .route("/health", get(health))
         .route("/auth", axum::routing::post(login))
         .route("/books", get(list_books))
+        .route("/books/continue-reading", get(continue_reading))
         .route("/books/{id}", get(get_book))
         .route("/books/{id}/cover", get(get_cover))
         .route("/books/{id}/chapters", get(get_chapters))
@@ -356,15 +357,62 @@ async fn list_books(
     Ok(Json(books))
 }
 
+// Item 5: "Continue Reading" shelf on the home screen — books with progress
+// that is neither zero nor "finished", most recently read first.
+#[derive(serde::Deserialize)]
+struct ContinueReadingQuery {
+    limit: Option<u32>,
+}
+
+async fn continue_reading(
+    State(state): State<WebState>,
+    Query(params): Query<ContinueReadingQuery>,
+) -> Result<Json<Vec<crate::models::ContinueReadingItem>>, (StatusCode, String)> {
+    let conn = state.conn().map_err(folio_status)?;
+    let limit = params.limit.unwrap_or(12).min(50);
+    let books = db::get_continue_reading_books(&conn, limit).map_err(folio_status)?;
+    Ok(Json(books))
+}
+
+/// Item 8: the book-detail response is the shared `Book` model plus
+/// `file_size`, which isn't a DB column — it's stat'd from the resolved
+/// book file on disk (same path `download_book` reads) so no schema change
+/// is needed. `None` when the file can't be stat'd (e.g. missing/unlinked).
+#[derive(serde::Serialize)]
+struct BookDetail {
+    #[serde(flatten)]
+    book: crate::models::Book,
+    file_size: Option<u64>,
+}
+
 async fn get_book(
     State(state): State<WebState>,
     Path(id): Path<String>,
-) -> Result<Json<crate::models::Book>, (StatusCode, String)> {
-    let conn = state.conn().map_err(folio_status)?;
-    let book = db::get_book(&conn, &id)
-        .map_err(folio_status)?
-        .ok_or_else(|| (StatusCode::NOT_FOUND, "Book not found".to_string()))?;
-    Ok(Json(book))
+) -> Result<Json<BookDetail>, (StatusCode, String)> {
+    // Finding E: fetch the book and drop the connection before resolving its
+    // path — `resolve_book_path` acquires its own connection internally for
+    // imported books with a relative path, so holding this one across that
+    // call meant two connections held from the pool (max 5) at once,
+    // stalling concurrent detail requests under load.
+    let book = {
+        let conn = state.conn().map_err(folio_status)?;
+        db::get_book(&conn, &id)
+            .map_err(folio_status)?
+            .ok_or_else(|| (StatusCode::NOT_FOUND, "Book not found".to_string()))?
+    };
+    // The filesystem stat is best-effort (`file_size` stays `None` on any
+    // error) and run on a blocking thread — `std::fs::metadata` on a
+    // network-mounted library folder can stall for seconds, which would
+    // otherwise block a tokio worker thread directly in this async handler.
+    let file_size = match state.resolve_book_path(&book) {
+        Ok(path) => {
+            tokio::task::spawn_blocking(move || std::fs::metadata(path).ok().map(|m| m.len()))
+                .await
+                .unwrap_or(None)
+        }
+        Err(_) => None,
+    };
+    Ok(Json(BookDetail { book, file_size }))
 }
 
 // ── Covers ───────────────────────────────────────────────────────────────────

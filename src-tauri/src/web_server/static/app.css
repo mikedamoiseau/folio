@@ -114,6 +114,18 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .card .author { font-size: 0.75rem; color: var(--ink-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 2px; }
 .card .format { font-size: 0.65rem; color: var(--accent); text-transform: uppercase; margin-top: 4px; font-weight: 600; letter-spacing: 0.03em; }
 
+/* ── Shelves (Item 5) ──────────────────────────── */
+.shelf-section { margin-bottom: 8px; }
+.shelf-heading { font-size: 0.7rem; font-weight: 600; color: var(--ink-muted); text-transform: uppercase; letter-spacing: 0.05em; margin: 0 0 10px; padding: 0 var(--gap); }
+.shelf-heading.all-books-heading { margin-top: var(--gap); }
+.shelf-row { display: flex; gap: 12px; overflow-x: auto; padding: 0 var(--gap) 10px; scroll-snap-type: x mandatory; -webkit-overflow-scrolling: touch; }
+.shelf-card { flex: 0 0 130px; scroll-snap-align: start; background: var(--surface); border: 1px solid var(--warm-border); border-radius: 10px; overflow: hidden; cursor: pointer; transition: transform 0.2s ease, box-shadow 0.2s ease; }
+.shelf-card:hover { transform: translateY(-2px); box-shadow: 0 8px 24px -4px var(--shadow); }
+.shelf-card img { width: 100%; aspect-ratio: 2/3; object-fit: cover; background: var(--warm-subtle); display: block; }
+.shelf-title { font-size: 0.78rem; font-weight: 600; padding: 8px 8px 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.shelf-progress { height: 3px; background: var(--warm-subtle); margin: 0 8px 8px; border-radius: 2px; overflow: hidden; }
+.shelf-progress-fill { height: 100%; background: var(--accent); }
+
 /* ── Book Detail ───────────────────────────────── */
 .detail { max-width: 700px; margin: 0 auto; padding: var(--gap); }
 .detail .meta { display: flex; gap: var(--gap); margin-bottom: var(--gap); }
@@ -121,6 +133,22 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .detail .cover img { width: 100%; border-radius: var(--radius); border: 1px solid var(--warm-border); background: var(--warm-subtle); }
 .detail .info h2 { margin-bottom: 8px; }
 .detail .info p { color: var(--ink-muted); margin-bottom: 4px; font-size: 0.9rem; }
+.detail-author { font-size: 1rem !important; }
+.detail-badges { display: flex; align-items: center; gap: 10px; margin: 6px 0; }
+.format-badge { display: inline-block; background: var(--accent-light); color: var(--accent); font-size: 0.7rem; font-weight: 600; letter-spacing: 0.04em; padding: 3px 9px; border-radius: 10px; }
+.detail-rating { color: var(--accent); letter-spacing: 1px; }
+.detail-facts { font-size: 0.8rem !important; }
+.detail-description { line-height: 1.5; margin-top: 8px; white-space: pre-line; }
+.detail-series { margin-bottom: 6px; }
+.detail-series-line { font-size: 0.9rem; }
+.series-link { color: var(--accent); text-decoration: none; font-size: 0.9rem; font-weight: 600; }
+.series-link:hover { color: var(--accent-hover); text-decoration: underline; }
+.series-nav-buttons { display: flex; gap: 8px; margin-top: 8px; }
+.series-nav-buttons button { padding: 6px 14px !important; font-size: 0.8rem !important; }
+.detail-progress { margin: 14px 0; }
+.detail-progress-bar { height: 6px; background: var(--warm-subtle); border-radius: 3px; overflow: hidden; }
+.detail-progress-fill { height: 100%; background: var(--accent); }
+.detail-progress-label { font-size: 0.8rem; color: var(--ink-muted); margin-top: 6px; }
 .detail .actions { display: flex; gap: 8px; margin-top: 12px; }
 .detail .actions a, .detail .actions button { padding: 10px 20px; border-radius: var(--radius); text-decoration: none; font-weight: 600; font-size: 0.9rem; cursor: pointer; border: none; }
 .btn-primary { background: var(--accent-hover); color: var(--on-accent); }
@@ -235,4 +263,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .collections { padding: 12px; }
   .reader-toolbar { flex-wrap: wrap; padding: 8px 12px; }
   .reader-toolbar input[type="range"] { order: 1; flex-basis: 100%; }
+  .shelf-card { flex-basis: 100px; }
+  .detail-badges { justify-content: center; }
+  .series-nav-buttons { justify-content: center; }
 }
