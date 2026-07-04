@@ -13,6 +13,7 @@
   --on-accent:    #fff;
   --error:        #b3362a;
   --shadow:       rgba(44, 34, 24, 0.18);
+  --chip-hover:   rgba(0, 0, 0, 0.08);
   --radius: 8px; --gap: 16px;
 }
 
@@ -30,6 +31,7 @@
     --on-accent:    #1a1614;
     --error:        #e08074;
     --shadow:       rgba(0, 0, 0, 0.5);
+    --chip-hover:   rgba(255, 255, 255, 0.12);
   }
 }
 
@@ -46,6 +48,7 @@
   --on-accent:    #1a1614;
   --error:        #e08074;
   --shadow:       rgba(0, 0, 0, 0.5);
+  --chip-hover:   rgba(255, 255, 255, 0.12);
 }
 
 :root[data-theme="light"] {
@@ -61,6 +64,7 @@
   --on-accent:    #fff;
   --error:        #b3362a;
   --shadow:       rgba(44, 34, 24, 0.18);
+  --chip-hover:   rgba(0, 0, 0, 0.08);
 }
 
 body {
@@ -93,15 +97,26 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .header .back-btn:hover { background: var(--warm-subtle); }
 .header select { padding: 6px 10px; background: var(--surface); border: 1px solid var(--warm-border); border-radius: var(--radius); color: var(--ink); font-size: 0.85rem; cursor: pointer; }
 
-/* ── Filter Bar ───────────────────────────────── */
-#filter-bar { padding: 8px var(--gap); border-bottom: 1px solid var(--warm-border); overflow-x: auto; -webkit-overflow-scrolling: touch; }
-.filter-pills { display: flex; gap: 6px; align-items: center; white-space: nowrap; }
-.pill { padding: 5px 12px; background: var(--surface); border: 1px solid var(--warm-border); border-radius: 20px; color: var(--ink-muted); font-size: 0.78rem; cursor: pointer; transition: all 0.15s; }
-.pill:hover { color: var(--ink); border-color: var(--accent); }
-.pill.active { background: var(--accent-hover); color: var(--on-accent); border-color: var(--accent-hover); font-weight: 600; }
-.pill-count { font-size: 0.65rem; opacity: 0.75; margin-left: 2px; }
-.pill.active .pill-count { opacity: 1; }
-.filter-sep { color: var(--ink-muted); font-size: 0.7rem; user-select: none; }
+/* ── Filter Bar (Item 7) ────────────────────────── */
+/* Replaces the old horizontal pill strip (unusable past ~25 series) with
+   two searchable dropdown panels + removable chips. */
+.filter-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 8px var(--gap); border-bottom: 1px solid var(--warm-border); }
+.filter-reset, .filter-dropdown-btn { padding: 6px 14px; background: var(--surface); border: 1px solid var(--warm-border); border-radius: 20px; color: var(--ink-muted); font-size: 0.8rem; cursor: pointer; white-space: nowrap; }
+.filter-reset:hover, .filter-dropdown-btn:hover { color: var(--ink); border-color: var(--accent); }
+.filter-dropdown-btn.active { background: var(--accent-hover); color: var(--on-accent); border-color: var(--accent-hover); font-weight: 600; }
+.filter-dropdown { position: relative; }
+.filter-panel { position: absolute; top: calc(100% + 6px); left: 0; z-index: 30; width: 260px; max-width: 80vw; background: var(--surface); border: 1px solid var(--warm-border); border-radius: var(--radius); box-shadow: 0 12px 32px var(--shadow); padding: 10px; }
+.filter-panel-search { width: 100%; padding: 8px 10px; margin-bottom: 8px; background: var(--paper); border: 1px solid var(--warm-border); border-radius: 6px; color: var(--ink); font-size: 0.85rem; }
+.filter-panel-list { max-height: 260px; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
+.filter-panel-item { display: flex; width: 100%; justify-content: space-between; align-items: center; gap: 8px; padding: 7px 8px; background: none; border: none; border-radius: 6px; color: var(--ink); font-size: 0.85rem; text-align: left; cursor: pointer; }
+.filter-panel-item:hover { background: var(--warm-subtle); }
+.filter-panel-item-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.filter-panel-item-count { color: var(--ink-muted); font-size: 0.75rem; flex-shrink: 0; }
+.filter-panel-empty { padding: 10px 8px; color: var(--ink-muted); font-size: 0.85rem; }
+.filter-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { display: inline-flex; align-items: center; gap: 4px; padding: 5px 6px 5px 12px; background: var(--accent-light); color: var(--accent); border-radius: 20px; font-size: 0.78rem; font-weight: 600; white-space: nowrap; }
+.chip-remove { background: none; border: none; color: inherit; cursor: pointer; font-size: 1rem; line-height: 1; padding: 2px 5px; border-radius: 50%; }
+.chip-remove:hover { background: var(--chip-hover); }
 
 /* ── Book Grid ─────────────────────────────────── */
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: var(--gap); padding: var(--gap); }
@@ -263,7 +278,21 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .collections { padding: 12px; }
   .reader-toolbar { flex-wrap: wrap; padding: 8px 12px; }
   .reader-toolbar input[type="range"] { order: 1; flex-basis: 100%; }
+  /* Item 6/7: the header row (title + search + sort + nav icons, now one
+     icon wider with the theme toggle) is too tight to fit on one line at
+     narrow widths — wrap the search input onto its own line rather than
+     letting the row overflow the body horizontally. */
+  .header { flex-wrap: wrap; }
+  .header input[type="search"] { order: 1; flex-basis: 100%; }
   .shelf-card { flex-basis: 100px; }
   .detail-badges { justify-content: center; }
   .series-nav-buttons { justify-content: center; }
+  /* Item 7: a panel positioned relative to its (narrow) dropdown button can
+     overflow off-screen at narrow widths. Make .filter-bar itself the
+     containing block instead (drop .filter-dropdown's own positioning
+     context) so the panel centers under the full-width bar and stays
+     within the viewport regardless of which button opened it. */
+  .filter-bar { position: relative; }
+  .filter-dropdown { position: static; }
+  .filter-panel { left: 50%; transform: translateX(-50%); width: min(320px, calc(100vw - 24px)); max-width: none; }
 }

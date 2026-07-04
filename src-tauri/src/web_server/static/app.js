@@ -7,10 +7,91 @@
   // R3-4: Use httpOnly cookies only — no localStorage token storage
   let authenticated = false;
 
-  // Active filter state
+  // Item 7: URL (location.hash) is the source of truth for library state —
+  // these are a parse cache of the current hash, refreshed by route() on
+  // every navigation (see parseLibraryParams/showLibrary). Code that wants to
+  // change the filter/search/sort must build a new hash (libraryHash()) and
+  // navigate()/history.replaceState to it; never mutate these directly and
+  // expect the view to follow.
+  const DEFAULT_SORT = "date_added";
   let activeCollectionId = null;
   let activeSeries = null;
-  let activeSort = "date_added";
+  let activeQuery = "";
+  let activeSort = DEFAULT_SORT;
+
+  // Item 6: theme mode is "light" | "dark" | "system", persisted to
+  // localStorage. "system" means no data-theme attribute is set at all —
+  // the CSS `@media (prefers-color-scheme: dark)` block then governs the
+  // palette and updates live on its own when the OS preference changes, no
+  // JS re-render needed. The index.html bootstrap script applies the same
+  // stored value before first paint to avoid a flash of the wrong theme.
+  const THEME_STORAGE_KEY = "folio_theme";
+
+  // Finding 1: a bare localStorage.getItem/setItem call can throw
+  // (SecurityError) under some browser configurations (e.g. Chrome "block
+  // all cookies") — unguarded, that would abort this whole IIFE and
+  // permanently blank the page. Mirrors the try/catch already used by
+  // index.html's bootstrap script; every localStorage call site in this file
+  // goes through these two helpers.
+  function safeStorageGet(key) {
+    try { return localStorage.getItem(key); } catch (e) { return null; }
+  }
+  function safeStorageSet(key, value) {
+    try { localStorage.setItem(key, value); } catch (e) { /* best-effort */ }
+  }
+
+  // Finding 11: a hand-edited or corrupted stored value must never flow
+  // straight into data-theme/aria-label — coerce anything outside the known
+  // set to "system".
+  const VALID_THEME_MODES = ["light", "dark", "system"];
+  function readStoredThemeMode() {
+    const stored = safeStorageGet(THEME_STORAGE_KEY);
+    return VALID_THEME_MODES.includes(stored) ? stored : "system";
+  }
+  let themeMode = readStoredThemeMode();
+
+  function systemPrefersDark() {
+    return !!(window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches);
+  }
+
+  function applyTheme() {
+    if (themeMode === "system") {
+      document.documentElement.removeAttribute("data-theme");
+    } else {
+      document.documentElement.setAttribute("data-theme", themeMode);
+    }
+  }
+
+  function themeAriaLabel() {
+    if (themeMode === "system") return `Theme: system (${systemPrefersDark() ? "dark" : "light"})`;
+    return `Theme: ${themeMode}`;
+  }
+
+  function updateThemeButtonLabel() {
+    const btn = $("#theme-toggle-btn");
+    if (!btn) return;
+    const label = themeAriaLabel();
+    btn.title = label;
+    btn.setAttribute("aria-label", label);
+  }
+
+  // Applied immediately (idempotent with the index.html bootstrap script,
+  // which already set data-theme for an explicit light/dark choice before
+  // first paint) so "system" mode is also correctly reflected even if the
+  // bootstrap script ever gets out of sync.
+  applyTheme();
+
+  // Item 6: "system" mode has no data-theme attribute at all, so the CSS
+  // `@media (prefers-color-scheme: dark)` block already swaps the palette
+  // live with no JS involvement. This listener only keeps the toggle
+  // button's aria-label/title (which names the resolved scheme while in
+  // system mode) in sync with that live change.
+  if (window.matchMedia) {
+    const schemeQuery = window.matchMedia("(prefers-color-scheme: dark)");
+    const onSchemeChange = () => { if (themeMode === "system") updateThemeButtonLabel(); };
+    if (schemeQuery.addEventListener) schemeQuery.addEventListener("change", onSchemeChange);
+    else if (schemeQuery.addListener) schemeQuery.addListener(onSchemeChange); // Safari <14
+  }
 
   // Item 5: bumped on every loadBooks() call; a response is only rendered if
   // it still matches the counter captured at call time — guards against a
@@ -18,6 +99,13 @@
   // clobbering a faster, later one (e.g. rapid search typing / filter
   // clicks).
   let libraryRenderGen = 0;
+
+  // Finding 3: module-scoped (not a closure local inside showLibrary) so it
+  // can be cancelled from setSearchQuery and from showLibrary's own re-entry
+  // path — a closure-local timer survives navigations that happen before its
+  // 300ms elapses (filter click, Esc-clear, view switch), letting a stale
+  // typed value fire afterward and clobber whatever was just navigated to.
+  let searchDebounceTimer = null;
 
   // R2-3/R3-1: current view + reader state, used by the global keyboard
   // shortcut dispatcher and by the reader's own nav handlers.
@@ -61,6 +149,52 @@
     window.location.hash = hash;
   }
 
+  // Finding 2: Firefox percent-decodes the `location.hash` property itself
+  // (Chromium does not) — reading it directly can silently corrupt a
+  // URLSearchParams parse of a value containing %/&/=/+ (e.g. a series name).
+  // `location.href`'s fragment isn't affected by that quirk, so every read of
+  // the current hash for parsing purposes goes through this instead.
+  function rawHash() {
+    const href = window.location.href;
+    const i = href.indexOf("#");
+    return i >= 0 ? href.slice(i) : "#";
+  }
+
+  // Item 7: parse `#/library?q=...&series=...&collection=...&sort=...` (also
+  // used for the bare `#`/`#/` home route, which parses to all defaults).
+  function parseLibraryParams(hash) {
+    const qIndex = hash.indexOf("?");
+    const params = new URLSearchParams(qIndex >= 0 ? hash.slice(qIndex + 1) : "");
+    return {
+      q: params.get("q") || "",
+      series: params.get("series") || null,
+      collection: params.get("collection") || null,
+      sort: params.get("sort") || DEFAULT_SORT,
+    };
+  }
+
+  // Item 7: the inverse of parseLibraryParams — the single place that turns
+  // a desired library state into a hash string. Collapses to the bare "#"
+  // home route when every param is at its default, so "no filters" always
+  // has one canonical URL (goHome() and "All Books" both rely on this).
+  function libraryHash(state) {
+    const params = new URLSearchParams();
+    if (state.q) params.set("q", state.q);
+    if (state.series) params.set("series", state.series);
+    if (state.collection) params.set("collection", state.collection);
+    if (state.sort && state.sort !== DEFAULT_SORT) params.set("sort", state.sort);
+    const qs = params.toString();
+    return qs ? "#/library?" + qs : "#";
+  }
+
+  // Finding 10: the `{ q, series, collection, sort }` library-state object is
+  // hand-copied at every filter-mutating call site — this is the one source
+  // of "current state", spread and overridden by callers that only change
+  // one or two fields.
+  function currentLibraryState() {
+    return { q: activeQuery, series: activeSeries, collection: activeCollectionId, sort: activeSort };
+  }
+
   // Finding C: every explicit "go back to the home screen" action (header
   // back buttons, Esc/Backspace from detail) must clear any active
   // collection/series filter — otherwise a filter set on a previous library
@@ -70,10 +204,12 @@
   // set a filter on purpose right before going home (showDetail's series
   // link, showCollections' collection/series rows) — those must keep working
   // and do NOT go through this helper.
+  // Finding 4: this must NOT also wipe the active query/sort — "leave this
+  // view" only means dropping the collection/series filter, not resetting
+  // the rest of the library state. libraryHash() collapses back to the bare
+  // "#" on its own when query/sort are also at their defaults.
   function goHome() {
-    activeCollectionId = null;
-    activeSeries = null;
-    navigate("#");
+    navigate(libraryHash({ ...currentLibraryState(), series: null, collection: null }));
   }
 
   function route() {
@@ -81,8 +217,10 @@
     // survive a navigation — it would block the next view and swallow
     // shortcuts on it.
     closeShortcutsOverlay();
-    const hash = window.location.hash || "#";
-    if (hash === "#" || hash === "#/") return showLibrary();
+    const hash = rawHash();
+    if (hash === "#" || hash === "#/" || hash.startsWith("#/library")) {
+      return showLibrary(parseLibraryParams(hash));
+    }
     if (hash === "#/stats") return showStats();
     if (hash === "#/collections") return showCollections();
     if (hash.startsWith("#/book/") && hash.includes("/read")) {
@@ -90,7 +228,7 @@
       return showReader(parts[0], parseInt(parts[1] || "0"));
     }
     if (hash.startsWith("#/book/")) return showDetail(hash.replace("#/book/", ""));
-    showLibrary();
+    showLibrary(parseLibraryParams(hash));
   }
 
   window.addEventListener("hashchange", route);
@@ -167,11 +305,20 @@
       return;
     }
 
+    // Item 7: Esc closes an open filter dropdown panel first, even when
+    // focus is inside its type-to-filter input (which is otherwise a
+    // "typing target" the dispatcher ignores below).
+    if (e.key === "Escape" && $(".filter-panel:not([hidden])")) {
+      e.preventDefault();
+      closeAllFilterPanels();
+      return;
+    }
+
     if (e.key === "Escape" && currentView === "library" && e.target && e.target.id === "search") {
       e.preventDefault();
       e.target.value = "";
       e.target.blur();
-      refreshLibrary("");
+      setSearchQuery("");
       return;
     }
 
@@ -276,6 +423,144 @@
   }
 
   // ── Filter Bar (collections + series) ────────
+  // Item 7: replaces the old horizontal pill strip (unusable past ~25
+  // series) with two searchable dropdown panels + removable chips. Selecting
+  // an entry (or removing a chip) always goes through libraryHash()+navigate
+  // — a real hash push, since these are "filter clicks" per the Item 7 spec,
+  // not keystrokes.
+  let cachedCollections = [];
+  let cachedSeries = [];
+
+  function filterDropdownHtml(key, label) {
+    return `
+      <div class="filter-dropdown">
+        <button class="filter-dropdown-btn" id="${key}-dropdown-btn" aria-haspopup="true" aria-expanded="false">${label} &#9662;</button>
+        <div class="filter-panel" id="${key}-panel" hidden>
+          <input type="text" class="filter-panel-search" id="${key}-panel-input" placeholder="Filter ${label.toLowerCase()}..." aria-label="Filter ${label.toLowerCase()}">
+          <div class="filter-panel-list" id="${key}-panel-list"></div>
+        </div>
+      </div>`;
+  }
+
+  function closeAllFilterPanels() {
+    $$(".filter-panel").forEach(p => { p.hidden = true; });
+    $$(".filter-dropdown-btn").forEach(b => b.setAttribute("aria-expanded", "false"));
+  }
+
+  // A single document-level listener (bound once, not per render) closes any
+  // open panel when the click lands outside it.
+  document.addEventListener("click", (e) => {
+    if (!e.target.closest(".filter-dropdown")) closeAllFilterPanels();
+  });
+
+  function selectFilter(key, value) {
+    const next = { ...currentLibraryState(), series: null, collection: null };
+    next[key] = value;
+    const hash = libraryHash(next);
+    // Finding 5: re-selecting the already-active filter produces the exact
+    // same hash, so no `hashchange` fires and the grid would silently go
+    // stale — refetch directly instead of navigating in that case.
+    if (hash === rawHash()) {
+      refreshLibrary(activeQuery);
+    } else {
+      navigate(hash);
+    }
+  }
+
+  function bindFilterDropdown(key, items, mapItem) {
+    const btn = $(`#${key}-dropdown-btn`);
+    const panel = $(`#${key}-panel`);
+    const input = $(`#${key}-panel-input`);
+    const list = $(`#${key}-panel-list`);
+    if (!btn || !panel || !input || !list) return;
+
+    const mapped = items.map(mapItem);
+
+    function renderList(filterText) {
+      const q = filterText.toLowerCase();
+      const filtered = mapped.filter(it => !q || it.label.toLowerCase().includes(q));
+      if (filtered.length === 0) {
+        list.innerHTML = '<div class="filter-panel-empty">No matches</div>';
+        return;
+      }
+      list.innerHTML = filtered.map(it => `
+        <button type="button" class="filter-panel-item" data-index="${filtered.indexOf(it)}">
+          <span class="filter-panel-item-name">${esc(it.label)}</span>
+          <span class="filter-panel-item-count">${it.count != null ? it.count : ""}</span>
+        </button>`).join("");
+      list.querySelectorAll("[data-index]").forEach(el => {
+        el.onclick = () => {
+          selectFilter(key, filtered[parseInt(el.dataset.index, 10)].value);
+          closeAllFilterPanels();
+        };
+      });
+    }
+
+    btn.onclick = (e) => {
+      e.stopPropagation();
+      const wasOpen = !panel.hidden;
+      closeAllFilterPanels();
+      if (!wasOpen) {
+        panel.hidden = false;
+        btn.setAttribute("aria-expanded", "true");
+        input.value = "";
+        renderList("");
+        input.focus();
+      }
+    };
+    panel.addEventListener("click", (e) => e.stopPropagation());
+    input.oninput = () => renderList(input.value);
+  }
+
+  function chipHtml(key, label) {
+    return `<span class="chip">${esc(label)}<button type="button" class="chip-remove" data-remove="${key}" aria-label="Remove ${esc(label)} filter">&times;</button></span>`;
+  }
+
+  // Renders the removable chips + the dropdown buttons' "active" styling
+  // from the current activeCollectionId/activeSeries — called both after a
+  // full filter-bar render and whenever the URL changes without a DOM
+  // rebuild (e.g. back/forward while still viewing the library).
+  // Finding 8: guards renderFilterBar() (triggered below when the chip can't
+  // resolve activeCollectionId against the cache) against refetching forever
+  // if the collection is genuinely gone — only one refresh is attempted per
+  // distinct activeCollectionId value.
+  let chipRefreshAttemptedForCollectionId = null;
+
+  function renderFilterChips() {
+    const chips = $("#filter-chips");
+    if (chips) {
+      let html = "";
+      if (activeCollectionId) {
+        const c = cachedCollections.find(c => c.id === activeCollectionId);
+        if (c) {
+          html += chipHtml("collection", c.name);
+        } else {
+          // Finding 8: never show the raw UUID — the cache may simply be
+          // stale (the collection was deleted/renamed elsewhere since the
+          // filter bar was last rendered). Refresh once and re-render.
+          html += chipHtml("collection", "Collection");
+          if (chipRefreshAttemptedForCollectionId !== activeCollectionId) {
+            chipRefreshAttemptedForCollectionId = activeCollectionId;
+            renderFilterBar();
+          }
+        }
+      }
+      if (activeSeries) html += chipHtml("series", activeSeries);
+      chips.innerHTML = html;
+      chips.querySelectorAll("[data-remove]").forEach(btn => {
+        btn.onclick = () => {
+          const next = currentLibraryState();
+          next[btn.dataset.remove] = null;
+          navigate(libraryHash(next));
+        };
+      });
+    }
+    const collBtn = $("#collection-dropdown-btn");
+    if (collBtn) collBtn.classList.toggle("active", !!activeCollectionId);
+    const seriesBtn = $("#series-dropdown-btn");
+    if (seriesBtn) seriesBtn.classList.toggle("active", !!activeSeries);
+  }
+
   async function renderFilterBar() {
     const bar = $("#filter-bar");
     if (!bar) return;
@@ -285,91 +570,66 @@
       api("/api/series"),
     ]);
 
-    const collections = collectionsResp ? await collectionsResp.json() : [];
-    const series = seriesResp ? await seriesResp.json() : [];
+    cachedCollections = collectionsResp ? await collectionsResp.json() : [];
+    cachedSeries = seriesResp ? await seriesResp.json() : [];
 
     // Don't show bar if nothing to filter
-    if (collections.length === 0 && series.length === 0) {
+    if (cachedCollections.length === 0 && cachedSeries.length === 0) {
       bar.innerHTML = "";
       return;
     }
 
-    let html = '<div class="filter-pills">';
-    html += `<button class="pill ${!activeCollectionId && !activeSeries ? "active" : ""}" data-filter="all">All Books</button>`;
+    bar.innerHTML = `
+      <button type="button" class="filter-reset" id="filter-reset-btn">All Books</button>
+      ${cachedCollections.length > 0 ? filterDropdownHtml("collection", "Collections") : ""}
+      ${cachedSeries.length > 0 ? filterDropdownHtml("series", "Series") : ""}
+      <div class="filter-chips" id="filter-chips"></div>`;
 
-    if (collections.length > 0) {
-      html += '<span class="filter-sep">|</span>';
-      for (const c of collections) {
-        const active = activeCollectionId === c.id ? "active" : "";
-        html += `<button class="pill ${active}" data-collection="${c.id}">${esc(c.name)}</button>`;
-      }
+    // Finding 4: "All Books" clears the collection/series filter ONLY —
+    // it must preserve the active query/sort, not reset the whole library
+    // state. libraryHash() collapses back to the bare "#" on its own when
+    // query/sort are also at their defaults.
+    $("#filter-reset-btn").onclick = () => navigate(libraryHash({ ...currentLibraryState(), series: null, collection: null }));
+
+    if (cachedCollections.length > 0) {
+      bindFilterDropdown("collection", cachedCollections, (c) => ({ value: c.id, label: c.name, count: c.bookCount }));
+    }
+    if (cachedSeries.length > 0) {
+      bindFilterDropdown("series", cachedSeries, (s) => ({ value: s.name, label: s.name, count: s.count }));
     }
 
-    if (series.length > 0) {
-      html += '<span class="filter-sep">|</span>';
-      for (const s of series) {
-        const active = activeSeries === s.name ? "active" : "";
-        html += `<button class="pill ${active}" data-series="${esc(s.name)}">${esc(s.name)} <span class="pill-count">${s.count}</span></button>`;
-      }
-    }
-
-    html += "</div>";
-    bar.innerHTML = html;
-
-    // Bind click handlers
-    bar.querySelectorAll("[data-filter='all']").forEach(btn => {
-      btn.onclick = () => { activeCollectionId = null; activeSeries = null; refreshLibrary(); };
-    });
-    bar.querySelectorAll("[data-collection]").forEach(btn => {
-      btn.onclick = () => {
-        activeCollectionId = btn.dataset.collection;
-        activeSeries = null;
-        refreshLibrary();
-      };
-    });
-    bar.querySelectorAll("[data-series]").forEach(btn => {
-      btn.onclick = () => {
-        activeSeries = btn.dataset.series;
-        activeCollectionId = null;
-        refreshLibrary();
-      };
-    });
-  }
-
-  function updateFilterBarActive() {
-    const bar = $("#filter-bar");
-    if (!bar) return;
-    bar.querySelectorAll(".pill").forEach(btn => {
-      btn.classList.remove("active");
-      if (btn.dataset.filter === "all" && !activeCollectionId && !activeSeries) btn.classList.add("active");
-      if (btn.dataset.collection && btn.dataset.collection === activeCollectionId) btn.classList.add("active");
-      if (btn.dataset.series && btn.dataset.series === activeSeries) btn.classList.add("active");
-    });
+    renderFilterChips();
   }
 
   // ── Library ───────────────────────────────────
-  async function showLibrary(query) {
+  // Item 7: `params` is the already-parsed URL state (see
+  // parseLibraryParams/route()) — the single source of truth. It's copied
+  // into the active* module vars (a parse cache other code reads to build
+  // the *next* hash) on every call, whether the DOM is being built fresh or
+  // just synced to a new hash while already in the library view.
+  async function showLibrary(params) {
     currentView = "library";
     flushProgressSave();
     readerState = null;
     resumePromptActive = false;
+    // Finding 3: cancel any pending debounced search — every re-entry into
+    // the library view (filter click, sort change, back/forward, self-heal)
+    // is a point where an abandoned keystroke's stale value must not be
+    // allowed to fire later and clobber what the user just navigated to.
+    clearTimeout(searchDebounceTimer);
+
+    params = params || {};
+    activeQuery = params.q || "";
+    activeSeries = params.series || null;
+    activeCollectionId = params.collection || null;
+    activeSort = params.sort || DEFAULT_SORT;
+
     const existing = $("#search");
     if (!existing) {
-      // Pre-existing bug fix (found while wiring Item 8's series link):
-      // this used to unconditionally null out both filters whenever the
-      // library DOM is rebuilt from scratch — which is every time you
-      // arrive here from a fully different view (detail, reader,
-      // collections), since none of those share the #search element. That
-      // silently discarded a filter a caller had just set on purpose right
-      // before navigating here, e.g. showCollections()'s series-row click
-      // and showDetail()'s new "Series: NAME" link both set `activeSeries`
-      // then `navigate("#/")` — only to have it wiped before the library
-      // ever rendered. Full URL-driven filter state is Item 7's job; this
-      // is just no longer actively destroying it in the meantime.
       app().innerHTML = `
         <div class="header">
           <h1>Folio</h1>
-          <input type="search" id="search" placeholder="Search books..." value="${esc(query || "")}">
+          <input type="search" id="search" placeholder="Search books..." aria-label="Search books" value="${esc(activeQuery)}">
           <select id="sort-select" aria-label="Sort by">
             <option value="date_added">Recent</option>
             <option value="title">Title</option>
@@ -379,38 +639,64 @@
           </select>
           ${navIconsHtml("")}
         </div>
-        <div id="filter-bar"></div>
+        <div class="filter-bar" id="filter-bar"></div>
         <div id="library-content"><div class="loading">Loading...</div></div>`;
 
       const sortSelect = $("#sort-select");
       sortSelect.value = activeSort;
-      sortSelect.onchange = () => { activeSort = sortSelect.value; refreshLibrary(); };
+      sortSelect.onchange = () => {
+        // Item 7: a sort change is a "filter change", not a keystroke — a
+        // real hash push, so back can step back to the previous sort.
+        navigate(libraryHash({ ...currentLibraryState(), sort: sortSelect.value }));
+      };
 
-      let timer;
       $("#search").oninput = (e) => {
-        clearTimeout(timer);
-        timer = setTimeout(() => refreshLibrary(e.target.value), 300);
+        // Finding 3: searchDebounceTimer is module-scoped (not a closure
+        // local) so it can be cancelled from setSearchQuery/showLibrary too —
+        // see their comments for why a closure-local timer here missed the
+        // navigate-away-before-300ms case.
+        clearTimeout(searchDebounceTimer);
+        const value = e.target.value;
+        searchDebounceTimer = setTimeout(() => setSearchQuery(value), 300);
       };
 
       bindNavIcons();
-
-      // Load filter bar (collections + series)
       renderFilterBar();
     } else {
+      // Item 7: DOM already exists — this is a hash change while still
+      // viewing the library (back/forward, a filter click, a sort change,
+      // or the self-heal path in loadBooks). Sync every control to the
+      // newly-parsed state instead of rebuilding.
+      if (existing.value !== activeQuery) existing.value = activeQuery;
+      const sortSelect = $("#sort-select");
+      if (sortSelect && sortSelect.value !== activeSort) sortSelect.value = activeSort;
+      renderFilterChips();
       const contentEl = $("#library-content");
       if (contentEl) contentEl.innerHTML = '<div class="loading">Loading...</div>';
     }
 
-    await loadBooks(query);
+    await loadBooks(activeQuery);
+  }
+
+  // Item 7: keystroke search updates use history.replaceState (not a real
+  // hash push) so the back button doesn't step through every character
+  // typed — only the state from before the user started typing is a
+  // back-stop. Shared by the debounced search input and the Esc-to-clear
+  // shortcut.
+  function setSearchQuery(value) {
+    // Finding 3: covers the Esc-to-clear shortcut, which calls this directly
+    // — the pending debounced call (if any) is now moot.
+    clearTimeout(searchDebounceTimer);
+    activeQuery = value;
+    const hash = libraryHash(currentLibraryState());
+    if (window.location.hash !== hash) history.replaceState(null, "", hash);
+    refreshLibrary(value);
   }
 
   async function refreshLibrary(query) {
-    const searchEl = $("#search");
-    const q = query !== undefined ? query : (searchEl ? searchEl.value : "");
-    updateFilterBarActive();
     const contentEl = $("#library-content");
     if (contentEl) contentEl.innerHTML = '<div class="loading">Loading...</div>';
-    await loadBooks(q);
+    await loadBooks(query);
   }
 
   // Finding C: best-effort self-heal for a collection/series filter whose
@@ -469,11 +755,17 @@
       const missing = await activeFilterEntityMissing();
       if (gen !== libraryRenderGen) return;
       if (missing) {
-        activeCollectionId = null;
-        activeSeries = null;
-        updateFilterBarActive();
+        // Item 7: URL is the source of truth — heal by navigating to the
+        // hash with the dead filter dropped (a real hashchange re-runs
+        // showLibrary/loadBooks), rather than mutating the parse-cache vars
+        // directly and re-rendering out of step with the address bar.
+        // Finding 6: also refresh the filter bar itself — otherwise the now
+        // -deleted collection/series would linger in the dropdown lists
+        // (built from the stale cachedCollections/cachedSeries) until some
+        // unrelated full re-render.
         renderFilterBar();
-        return loadBooks(query);
+        navigate(libraryHash({ ...currentLibraryState(), series: null, collection: null }));
+        return;
       }
     }
 
@@ -866,9 +1158,9 @@
     const seriesLink = $("#series-link");
     if (seriesLink) seriesLink.addEventListener("click", (e) => {
       e.preventDefault();
-      activeSeries = book.series;
-      activeCollectionId = null;
-      navigate("#/");
+      // Item 7: the URL carries the filter directly — no pending-intent
+      // variable needed between this click and the library rendering it.
+      navigate(libraryHash({ ...currentLibraryState(), q: "", series: book.series, collection: null }));
     });
     const seriesPrevBtn = $("#series-prev-btn");
     if (seriesPrevBtn && seriesNav && seriesNav.prevId) {
@@ -1024,7 +1316,7 @@
       index,
       count,
       chromeHidden: false,
-      fitMode: localStorage.getItem("folio_reader_fit_mode") || "fit-height",
+      fitMode: safeStorageGet("folio_reader_fit_mode") || "fit-height",
       handlers: null,
       renderGen: 0,
       scrollPosition: mode === "chapter" ? (scrollPosition || 0) : 0,
@@ -1207,7 +1499,7 @@
       });
       $("#fit-toggle-btn").addEventListener("click", () => {
         readerState.fitMode = readerState.fitMode === "fit-height" ? "fit-width" : "fit-height";
-        localStorage.setItem("folio_reader_fit_mode", readerState.fitMode);
+        safeStorageSet("folio_reader_fit_mode", readerState.fitMode);
         applyFitMode();
       });
     } else {
@@ -1616,16 +1908,12 @@
 
       container.querySelectorAll("[data-collection-id]").forEach(row => {
         row.onclick = () => {
-          activeCollectionId = row.dataset.collectionId;
-          activeSeries = null;
-          navigate("#/");
+          navigate(libraryHash({ q: "", series: null, collection: row.dataset.collectionId, sort: activeSort }));
         };
       });
       container.querySelectorAll("[data-series-name]").forEach(row => {
         row.onclick = () => {
-          activeSeries = row.dataset.seriesName;
-          activeCollectionId = null;
-          navigate("#/");
+          navigate(libraryHash({ q: "", series: row.dataset.seriesName, collection: null, sort: activeSort }));
         };
       });
     }
@@ -1656,10 +1944,39 @@
     return h + "h " + m + "m";
   }
 
+  // Item 6: sun (light) / moon (dark) / half-filled circle (system) — no
+  // icon library, inline SVG only, matching the rest of the nav icons.
+  function themeIconSvg(mode) {
+    if (mode === "light") {
+      return '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>';
+    }
+    if (mode === "dark") {
+      return '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>';
+    }
+    return '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 3a9 9 0 0 1 0 18z" fill="currentColor" stroke="none"/></svg>';
+  }
+
+  function themeToggleHtml() {
+    const label = themeAriaLabel();
+    return `<button class="nav-icon" id="theme-toggle-btn" title="${esc(label)}" aria-label="${esc(label)}">${themeIconSvg(themeMode)}</button>`;
+  }
+
+  // Item 6: light -> dark -> system -> light. "system" removes data-theme
+  // entirely so the CSS prefers-color-scheme block takes back over.
+  function cycleTheme() {
+    themeMode = themeMode === "light" ? "dark" : themeMode === "dark" ? "system" : "light";
+    safeStorageSet(THEME_STORAGE_KEY, themeMode);
+    applyTheme();
+    const btn = $("#theme-toggle-btn");
+    if (btn) btn.innerHTML = themeIconSvg(themeMode);
+    updateThemeButtonLabel();
+  }
+
   function navIconsHtml(activePage) {
     const folderColor = activePage === "collections" ? "active" : "";
     const chartColor = activePage === "stats" ? "active" : "";
     return `<div class="nav-icons">
+      ${themeToggleHtml()}
       <button class="nav-icon ${folderColor}" title="Collections" data-nav="collections">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
       </button>
@@ -1673,6 +1990,8 @@
     $$("[data-nav]").forEach(btn => {
       btn.onclick = () => navigate("#/" + btn.dataset.nav);
     });
+    const themeBtn = $("#theme-toggle-btn");
+    if (themeBtn) themeBtn.onclick = cycleTheme;
   }
 
   // ── Init ──────────────────────────────────────
