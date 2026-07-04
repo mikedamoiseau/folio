@@ -251,7 +251,7 @@
       c.addEventListener("click", () => navigate("#/book/" + c.dataset.id));
     });
     $$(".card img").forEach(img => {
-      img.addEventListener("error", () => { img.style.background = "#333"; img.alt = "No cover"; });
+      img.addEventListener("error", () => { img.classList.add("cover-fallback"); img.alt = "No cover"; });
     });
   }
 
@@ -293,7 +293,7 @@
     $("#back-btn").addEventListener("click", () => navigate("#"));
     bindNavIcons();
     const coverImg = $(".detail .cover img");
-    if (coverImg) coverImg.addEventListener("error", () => { coverImg.style.background = "#333"; });
+    if (coverImg) coverImg.addEventListener("error", () => { coverImg.classList.add("cover-fallback"); });
     const readBtn = $("#read-btn");
     if (readBtn) readBtn.addEventListener("click", () => navigate(readHash));
   }
