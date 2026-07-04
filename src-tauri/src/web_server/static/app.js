@@ -18,6 +18,31 @@
   let readerState = null; // set while currentView === "reader"; see showReader()
   let shortcutsOverlayOpen = false;
 
+  // F10: true while the "You left off at..." resume prompt is on screen.
+  // currentView is "reader" at that point but readerState is still null (the
+  // book hasn't been entered yet), so the normal reader keyboard branch can't
+  // handle Enter/Esc/Backspace — this flag lets the dispatcher special-case it.
+  let resumePromptActive = false;
+  let resumePromptBookId = null;
+
+  // Item 4: set by the detail page's Continue/Start Over buttons just before
+  // navigating to the reader, so showReader() can skip its own resume prompt
+  // — the user already made that choice on the detail page. Consumed once.
+  // scrollPosition carries the saved in-chapter offset for "continue" so the
+  // reader can restore it (F2b) — read AND cleared at the very top of
+  // showReader (F7) so an early return can never leak it.
+  let readerEntryIntent = null; // { id, action: "continue" | "restart", scrollPosition } | null
+
+  // F8: last progress this tab knows about per book, updated optimistically
+  // on every reader navigation/scroll and confirmed on every successful PUT.
+  // showDetail() prefers this over a GET that may have raced an in-flight
+  // save. F9: lastSentIndex is this session's high-water mark per book — a
+  // save carrying a lower index is dropped as out-of-order, except an
+  // explicit "Start Over" (which resets the mark and legitimately writes 0).
+  let lastKnownProgress = {}; // bookId -> { chapterIndex, scrollPosition, ts }
+  let lastSentIndex = {};     // bookId -> last chapter_index confirmed sent this session
+  let saveChains = {};        // bookId -> promise tail; serializes PUTs per book (F9)
+
   async function api(path) {
     const resp = await fetch(path, { credentials: "same-origin" });
     if (resp.status === 401) { authenticated = false; showLogin(); return null; }
@@ -145,6 +170,24 @@
       return;
     }
 
+    // F10: keyboard must keep working while the resume prompt is up
+    // (readerState is still null at that point, so the branch below can't
+    // handle it). Enter accepts (resume), Esc/Backspace decline back to
+    // detail — mirrors the prompt's own buttons.
+    if (currentView === "reader" && resumePromptActive) {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        const btn = $("#resume-btn");
+        if (btn) btn.click();
+      } else if (e.key === "Escape" || e.key === "Backspace") {
+        e.preventDefault();
+        const bookId = resumePromptBookId;
+        resumePromptActive = false;
+        if (bookId) navigate("#/book/" + bookId);
+      }
+      return;
+    }
+
     if (currentView === "reader" && readerState) {
       if (e.key === "ArrowRight") { e.preventDefault(); readerState.handlers.next(); }
       else if (e.key === "ArrowLeft") { e.preventDefault(); readerState.handlers.prev(); }
@@ -175,6 +218,7 @@
   function showLogin() {
     currentView = "login";
     readerState = null;
+    resumePromptActive = false;
     app().innerHTML = `
       <div class="login">
         <h1>Folio</h1>
@@ -284,7 +328,9 @@
   // ── Library ───────────────────────────────────
   async function showLibrary(query) {
     currentView = "library";
+    flushProgressSave();
     readerState = null;
+    resumePromptActive = false;
     const existing = $("#search");
     if (!existing) {
       activeCollectionId = null;
@@ -393,17 +439,73 @@
   }
 
   // ── Detail ────────────────────────────────────
+  // F6: true while `location.hash` still targets this book's detail route.
+  // Re-checked after every await in showDetail so a slow response + Back
+  // doesn't let a stale render clobber whatever the user navigated to.
+  function hashTargetsDetail(id) {
+    return (window.location.hash || "#") === `#/book/${id}`;
+  }
+
+  // F8: prefer this tab's own more-recent record of a book's progress over a
+  // server GET that may have raced an in-flight PUT (e.g. right after
+  // leaving the reader). Falls back to the server value when it's absent or
+  // actually newer (e.g. progress made on another device/the desktop app).
+  function mergeProgress(id, serverProgress) {
+    const known = lastKnownProgress[id];
+    if (!known) return serverProgress;
+    const serverTs = serverProgress ? serverProgress.last_read_at * 1000 : 0;
+    if (known.ts < serverTs) return serverProgress;
+    return {
+      book_id: id,
+      chapter_index: known.chapterIndex,
+      scroll_position: known.scrollPosition,
+      last_read_at: Math.floor(known.ts / 1000),
+    };
+  }
+
   async function showDetail(id) {
     currentView = "detail";
+    flushProgressSave();
     readerState = null;
+    resumePromptActive = false;
     app().innerHTML = '<div class="loading">Loading...</div>';
     const resp = await api("/api/books/" + id);
-    if (!resp) return;
+    if (!resp || !hashTargetsDetail(id)) return;
     const book = await resp.json();
+    if (!hashTargetsDetail(id)) return;
 
     const isHtmlBook = book.format === "epub" || book.format === "mobi";
     const isPageBased = ["pdf", "cbz", "cbr"].includes(book.format);
-    const readHash = isHtmlBook || isPageBased ? `#/book/${id}/0/read` : "";
+    const isReadable = isHtmlBook || isPageBased;
+    const readHash = isReadable ? `#/book/${id}/0/read` : "";
+
+    // Item 4: a book with saved progress > 0 gets Continue (jumps straight to
+    // the saved position) + Start Over instead of a plain Read button. A
+    // progress fetch that 404s/errors is treated the same as "no progress" —
+    // never blocks the detail page from rendering.
+    let progress = null;
+    if (isReadable) {
+      const progResp = await api(`/api/books/${id}/progress`);
+      // F5/F6: a null response means api() already redirected to the login
+      // screen (401) — continuing would render the detail page over it.
+      if (!progResp) return;
+      if (!hashTargetsDetail(id)) return;
+      if (progResp.ok) {
+        try { progress = await progResp.json(); } catch (e) { progress = null; }
+      }
+      progress = mergeProgress(id, progress);
+    }
+    const hasProgress = !!(progress && progress.chapter_index > 0);
+    const continueHash = isReadable ? `#/book/${id}/${progress ? progress.chapter_index : 0}/read` : "";
+
+    let actionsHtml;
+    if (!isReadable) {
+      actionsHtml = "";
+    } else if (hasProgress) {
+      actionsHtml = `<button class="btn-primary" id="continue-btn">Continue</button><button class="btn-secondary" id="restart-btn">Start Over</button>`;
+    } else {
+      actionsHtml = `<button class="btn-primary" id="read-btn">Read</button>`;
+    }
 
     app().innerHTML = `
       <div class="header">
@@ -423,7 +525,7 @@
             <p>Format: ${book.format.toUpperCase()}</p>
             ${book.description ? `<p>${esc(book.description)}</p>` : ""}
             <div class="actions">
-              ${readHash ? `<button class="btn-primary" id="read-btn">Read</button>` : ""}
+              ${actionsHtml}
               <a class="btn-secondary" href="/api/books/${id}/download">Download</a>
             </div>
           </div>
@@ -435,6 +537,22 @@
     if (coverImg) coverImg.addEventListener("error", () => { coverImg.classList.add("cover-fallback"); });
     const readBtn = $("#read-btn");
     if (readBtn) readBtn.addEventListener("click", () => navigate(readHash));
+    const continueBtn = $("#continue-btn");
+    if (continueBtn) continueBtn.addEventListener("click", () => {
+      // F2b: carry the saved in-chapter scroll offset through so the reader
+      // can restore it — the URL only encodes the chapter/page index.
+      const scrollPosition = progress && typeof progress.scroll_position === "number" ? progress.scroll_position : 0;
+      readerEntryIntent = { id, action: "continue", scrollPosition };
+      navigate(continueHash);
+    });
+    const restartBtn = $("#restart-btn");
+    if (restartBtn) restartBtn.addEventListener("click", () => {
+      // F9: an explicit "Start Over" legitimately writes 0 even though it's
+      // lower than anything already sent this session.
+      resetProgress(id);
+      readerEntryIntent = { id, action: "restart" };
+      navigate(readHash);
+    });
   }
 
   // ── Reader ────────────────────────────────────
@@ -461,12 +579,25 @@
 
   async function showReader(id, index) {
     currentView = "reader";
+
+    // F7: read AND clear the entry intent right away, before any await can
+    // early-return — otherwise a failed fetch below would leak it into a
+    // later, unrelated reader entry and wrongly suppress its resume prompt.
+    const rawIntent = readerEntryIntent && readerEntryIntent.id === id ? readerEntryIntent : null;
+    readerEntryIntent = null;
+    const intent = rawIntent ? rawIntent.action : null;
+    const intentScroll = rawIntent && typeof rawIntent.scrollPosition === "number" ? rawIntent.scrollPosition : 0;
+
     const sameBook = readerState && readerState.id === id;
 
     if (!sameBook) {
       // R2: drop any stale state up front so a concurrent load for a
       // different book can't be mistaken for a "same book" fast path.
+      // Item 4: flush first — this book may be a different one than the
+      // pending debounced save belongs to.
+      flushProgressSave();
       readerState = null;
+      resumePromptActive = false;
       app().innerHTML = '<div class="loading">Loading...</div>';
       const resp = await api("/api/books/" + id);
       if (!resp || !hashTargetsReader(id)) return;
@@ -487,6 +618,7 @@
       // server-side `/api/books/:id/chapters/:index` route dispatches to
       // the right parser.
       const isHtmlBook = book.format === "epub" || book.format === "mobi";
+      const mode = isHtmlBook ? "chapter" : "page";
 
       let count;
       if (isHtmlBook) {
@@ -503,19 +635,39 @@
       }
 
       const clamped = clampIndex(index, count);
-      readerState = {
-        id,
-        book,
-        mode: isHtmlBook ? "chapter" : "page",
-        index: clamped,
-        count,
-        chromeHidden: false,
-        fitMode: localStorage.getItem("folio_reader_fit_mode") || "fit-height",
-        handlers: null,
-        renderGen: 0,
-      };
-      readerState.handlers = makeReaderHandlers(id);
-      renderReaderChrome();
+
+      // Item 4: offer to resume at the saved position — but only on the
+      // canonical "default open" entry point (index 0, what the detail
+      // page's plain Read button always requests). A bookmarked/typed URL
+      // with a specific (even out-of-range/malformed) index is an explicit
+      // request for that position and must just clamp+load like before —
+      // not get reinterpreted as "the user wants to resume". Also skipped
+      // when the detail page's Continue/Start Over buttons already made
+      // this call for this book (readerEntryIntent).
+      let savedIndex = null;
+      let savedScroll = 0;
+      if (!intent && index === 0) {
+        const progResp = await api(`/api/books/${id}/progress`);
+        // F5: a null response means api() already redirected to the login
+        // screen (401) — continuing would render the reader over it.
+        if (!progResp || !hashTargetsReader(id)) return;
+        if (progResp.ok) {
+          let progress = null;
+          try { progress = await progResp.json(); } catch (e) { progress = null; }
+          if (progress && progress.chapter_index > 0) {
+            savedIndex = clampIndex(progress.chapter_index, count);
+            savedScroll = typeof progress.scroll_position === "number" ? progress.scroll_position : 0;
+          }
+        }
+        if (!hashTargetsReader(id)) return;
+      }
+
+      if (savedIndex !== null && savedIndex !== clamped) {
+        showResumePrompt(id, book, mode, count, savedIndex, clamped, savedScroll);
+        return;
+      }
+
+      enterReaderAt(id, book, mode, count, clamped, intent === "continue" ? intentScroll : 0);
       if (clamped !== index) {
         // Normalize the URL; the resulting hashchange re-enters this
         // function on the "same book" fast path below to actually render.
@@ -531,6 +683,69 @@
       }
     }
 
+    await renderReaderContent();
+  }
+
+  // F2/F2b: `scrollPosition` (0..1, only meaningful in chapter mode) is the
+  // saved in-chapter offset to restore on this specific entry — 0 for a
+  // normal fresh open. `suppressNextSave` and `pendingScrollRestore` make
+  // sure the very first render of this entry (the "mere open") never itself
+  // schedules a progress save; see renderReaderContent().
+  function enterReaderAt(id, book, mode, count, index, scrollPosition) {
+    readerState = {
+      id,
+      book,
+      mode,
+      index,
+      count,
+      chromeHidden: false,
+      fitMode: localStorage.getItem("folio_reader_fit_mode") || "fit-height",
+      handlers: null,
+      renderGen: 0,
+      scrollPosition: mode === "chapter" ? (scrollPosition || 0) : 0,
+      pendingScrollRestore: mode === "chapter" ? (scrollPosition || 0) : 0,
+      suppressNextSave: true,
+    };
+    readerState.handlers = makeReaderHandlers(id);
+    renderReaderChrome();
+  }
+
+  // Item 4: "You left off at page/chapter N" prompt shown on a fresh reader
+  // entry when saved progress differs from the requested (usually 0) index.
+  // F10: sets resumePromptActive/resumePromptBookId so the global keyboard
+  // dispatcher can drive Enter/Esc/Backspace while this is on screen.
+  function showResumePrompt(id, book, mode, count, savedIndex, restartIndex, savedScroll) {
+    resumePromptActive = true;
+    resumePromptBookId = id;
+    const unitLabel = mode === "page" ? "Page" : "Chapter";
+    app().innerHTML = `
+      <div class="resume-prompt">
+        <div class="resume-prompt-panel">
+          <h2>${esc(book.title)}</h2>
+          <p>You left off at ${unitLabel.toLowerCase()} ${savedIndex + 1} of ${count}.</p>
+          <div class="resume-actions">
+            <button class="btn-primary" id="resume-btn">Resume at ${unitLabel} ${savedIndex + 1}</button>
+            <button class="btn-secondary" id="resume-restart-btn">Start Over</button>
+          </div>
+        </div>
+      </div>`;
+    $("#resume-btn").addEventListener("click", () => resolveResumePrompt(id, book, mode, count, savedIndex, savedScroll || 0));
+    $("#resume-restart-btn").addEventListener("click", () => {
+      // F9: an explicit "Start Over" legitimately writes 0 even though it's
+      // lower than anything already sent this session — resetProgress()
+      // clears the monotonic guard for this book before saving.
+      resetProgress(id);
+      resolveResumePrompt(id, book, mode, count, restartIndex, 0);
+    });
+  }
+
+  async function resolveResumePrompt(id, book, mode, count, index, scrollPosition) {
+    resumePromptActive = false;
+    if (!hashTargetsReader(id)) return;
+    // Fix the URL without firing a hashchange (avoids re-fetching book/
+    // page-count/progress a second time just to confirm the same choice).
+    history.replaceState(null, "", `#/book/${id}/${index}/read`);
+    enterReaderAt(id, book, mode, count, index, scrollPosition || 0);
     await renderReaderContent();
   }
 
@@ -670,19 +885,61 @@
         localStorage.setItem("folio_reader_fit_mode", readerState.fitMode);
         applyFitMode();
       });
+    } else {
+      // F2b: the chrome (and its #reader-stage element) is built once per
+      // book, so this listener stays bound across chapter turns — only the
+      // stage's content is swapped by renderReaderContent().
+      bindChapterScrollTracking($("#reader-stage"));
     }
 
     applyChromeVisibility();
   }
 
+  // F2b: track the real in-chapter scroll offset as a 0..1 fraction of the
+  // scrollable range (same scale as the backend's `validate_scroll_position`
+  // clamp), debounced through the same save pipeline as page/chapter turns.
+  function clampScrollRatio(ratio) {
+    if (!Number.isFinite(ratio)) return 0;
+    return Math.min(Math.max(ratio, 0), 1);
+  }
+
+  function bindChapterScrollTracking(stage) {
+    if (!stage) return;
+    stage.addEventListener("scroll", () => {
+      if (!readerState || readerState.mode !== "chapter") return;
+      // Ignore the synthetic scroll event fired by our own programmatic
+      // restore (renderReaderContent) — it reflects data already saved,
+      // not a new user action.
+      if (readerState.suppressScrollSave) { readerState.suppressScrollSave = false; return; }
+      const max = stage.scrollHeight - stage.clientHeight;
+      readerState.scrollPosition = max > 0 ? clampScrollRatio(stage.scrollTop / max) : 0;
+      scheduleProgressSave();
+    }, { passive: true });
+  }
+
   async function renderReaderContent() {
     const { id, mode, index, count } = readerState;
+    // F8: record the navigated-to index immediately, synchronously, before
+    // any await below. Previously this only happened at the tail of this
+    // function (after the chapter-content fetch resolved) or on a confirmed
+    // PUT response — on a slow connection, leaving the reader before either
+    // of those completed left `lastKnownProgress` stale, so a showDetail()
+    // GET that raced an in-flight save would win with old data (the exact
+    // race F8 exists to prevent).
+    recordLocalProgress(id, index, readerState.scrollPosition || 0);
     // R1: monotonic per-book render generation. Captured before each await
     // below; if it no longer matches after the await, a newer render (or a
     // fresh book load) has superseded this one — abandon without touching
     // the DOM.
     readerState.renderGen = (readerState.renderGen || 0) + 1;
     const gen = readerState.renderGen;
+    // F2: consumed synchronously, right here, rather than at the end of this
+    // function — an entry's first render can be abandoned by a rapid second
+    // navigation before it reaches its own tail (see the R1 guards below),
+    // which would otherwise leave the flag set and wrongly suppress the
+    // *next* (real) navigation's save too.
+    const isInitialRender = !!readerState.suppressNextSave;
+    readerState.suppressNextSave = false;
     updateProgressUI();
 
     if (mode === "chapter") {
@@ -705,7 +962,24 @@
       if (contentEl) contentEl.innerHTML = html;
       // K5: native Space/PageDown scrolling needs the scroll container focused.
       const stage = $("#reader-stage");
-      if (stage) stage.focus();
+      if (stage) {
+        stage.focus();
+        // F2b: restore the saved in-chapter offset on this entry only —
+        // `pendingScrollRestore` is consumed once and is 0 for a normal
+        // chapter turn, which just lands at the top like before.
+        const restoreRatio = readerState.pendingScrollRestore || 0;
+        readerState.pendingScrollRestore = 0;
+        requestAnimationFrame(() => {
+          if (!readerState || readerState.renderGen !== gen) return;
+          const max = stage.scrollHeight - stage.clientHeight;
+          if (restoreRatio > 0 && max > 0) {
+            readerState.suppressScrollSave = true;
+            stage.scrollTop = restoreRatio * max;
+          } else {
+            stage.scrollTop = 0;
+          }
+        });
+      }
     } else {
       const img = $("#page-img");
       if (img) {
@@ -716,7 +990,102 @@
       if (index + 1 < count) new Image().src = pageUrl(id, index + 1);
       if (index - 1 >= 0) new Image().src = pageUrl(id, index - 1);
     }
+
+    // F2: a mere open (or resume/restart choice, which is also just an open)
+    // must never itself persist a save — only a real subsequent navigation
+    // or scroll should.
+    if (!isInitialRender) {
+      scheduleProgressSave();
+    }
   }
+
+  // ── Item 4: reading progress sync ──────────────
+  // Debounced save while turning pages/chapters or scrolling within a
+  // chapter, flushed immediately on tab hide / navigation-away so a closed
+  // tab never loses the last position.
+  const PROGRESS_SAVE_DEBOUNCE_MS = 2000;
+  let progressSaveTimer = null;
+
+  // F8: record this tab's most recent progress immediately (before the
+  // network round trip), so showDetail() can prefer it over a GET that may
+  // have raced an in-flight save.
+  function recordLocalProgress(id, chapterIndex, scrollPosition) {
+    lastKnownProgress[id] = { chapterIndex, scrollPosition, ts: Date.now() };
+  }
+
+  // F9: the actual network write, run one-at-a-time per book via
+  // queueProgressSave's promise chain. Drops an out-of-order save that would
+  // regress this session's high-water mark for the book, unless `reset` is
+  // set (an explicit "Start Over").
+  async function sendProgress(id, chapterIndex, scrollPosition, opts) {
+    opts = opts || {};
+    if (!opts.reset && lastSentIndex[id] !== undefined && chapterIndex < lastSentIndex[id]) {
+      return;
+    }
+    try {
+      const resp = await fetch(`/api/books/${id}/progress`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ chapter_index: chapterIndex, scroll_position: scrollPosition }),
+        credentials: "same-origin",
+        keepalive: true,
+      });
+      // F3: a debounced/flushed save (unlike the pagehide teardown flush)
+      // can and should react to an expired session — route to the same
+      // login redirect the rest of the app uses.
+      if (resp.status === 401) {
+        authenticated = false;
+        showLogin();
+        return;
+      }
+      if (resp.ok) {
+        lastSentIndex[id] = chapterIndex;
+        recordLocalProgress(id, chapterIndex, scrollPosition);
+      }
+    } catch (e) {
+      // Network error: best-effort save, nothing more to do.
+    }
+  }
+
+  // F9: serializes saves per book so a debounced save and a later flush can
+  // never commit out of order — the next save always waits for the previous
+  // one's response before firing.
+  function queueProgressSave(id, chapterIndex, scrollPosition, opts) {
+    const prev = saveChains[id] || Promise.resolve();
+    const next = prev.then(() => sendProgress(id, chapterIndex, scrollPosition, opts));
+    saveChains[id] = next.catch(() => {});
+    return next;
+  }
+
+  // F9: explicit "Start Over" — legitimately writes 0 even though it's lower
+  // than anything already sent this session, so it resets the guard first.
+  function resetProgress(id) {
+    delete lastSentIndex[id];
+    recordLocalProgress(id, 0, 0);
+    return queueProgressSave(id, 0, 0, { reset: true });
+  }
+
+  function scheduleProgressSave() {
+    if (!readerState) return;
+    recordLocalProgress(readerState.id, readerState.index, readerState.scrollPosition || 0);
+    clearTimeout(progressSaveTimer);
+    progressSaveTimer = setTimeout(flushProgressSave, PROGRESS_SAVE_DEBOUNCE_MS);
+  }
+
+  function flushProgressSave() {
+    clearTimeout(progressSaveTimer);
+    progressSaveTimer = null;
+    if (!readerState) return;
+    const { id, index, scrollPosition } = readerState;
+    return queueProgressSave(id, index, scrollPosition || 0);
+  }
+
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") flushProgressSave();
+  });
+  // F3: the pagehide teardown flush stays fire-and-forget — the page may be
+  // gone before a 401 check could do anything useful with it anyway.
+  window.addEventListener("pagehide", flushProgressSave);
 
   // R4: page-mode turns only ever set img.src, so a 401 on session expiry
   // fails silently (broken image, no redirect to login). Probe a cheap
@@ -758,7 +1127,9 @@
   // ── Stats ──────────────────────────────────────
   async function showStats() {
     currentView = "stats";
+    flushProgressSave();
     readerState = null;
+    resumePromptActive = false;
     app().innerHTML = `
       <div class="header">
         <button class="back-btn" id="back-btn">&larr;</button>
@@ -813,7 +1184,9 @@
   // ── Collections ────────────────────────────────
   async function showCollections() {
     currentView = "collections";
+    flushProgressSave();
     readerState = null;
+    resumePromptActive = false;
     app().innerHTML = `
       <div class="header">
         <button class="back-btn" id="back-btn">&larr;</button>

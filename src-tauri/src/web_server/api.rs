@@ -1,4 +1,5 @@
 use axum::{
+    body::Bytes,
     extract::{Path, Query, State},
     http::{header, StatusCode},
     response::{IntoResponse, Response},
@@ -146,6 +147,7 @@ pub fn routes(state: WebState) -> Router<WebState> {
         )
         .route("/books/{id}/pages/{index}", get(get_page_image))
         .route("/books/{id}/page-count", get(get_page_count))
+        .route("/books/{id}/progress", get(get_progress).put(put_progress))
         .route("/books/{id}/download", get(download_book))
         // OPDS feeds emit `/download/{book_id}.{ext}` so clients using URL-
         // based extension detection can disambiguate AZW vs AZW3 (both share
@@ -730,6 +732,78 @@ async fn get_page_count(
         Json(serde_json::json!({ "count": count })),
     )
         .into_response())
+}
+
+// ── Reading progress ─────────────────────────────────────────────────────────
+
+/// PUT body for saving reading progress. Field names mirror
+/// `folio_core::models::ReadingProgress` exactly (and thus the shape the
+/// desktop app already persists via `save_reading_progress`): `chapter_index`
+/// doubles as the page index for PDF/CBZ/CBR books, `scroll_position` is the
+/// 0..1 scroll fraction used by EPUB/MOBI.
+#[derive(serde::Deserialize)]
+struct ProgressUpdate {
+    chapter_index: u32,
+    scroll_position: f64,
+}
+
+async fn get_progress(
+    State(state): State<WebState>,
+    Path(id): Path<String>,
+) -> Result<Json<Option<crate::models::ReadingProgress>>, (StatusCode, String)> {
+    let conn = state.conn().map_err(folio_status)?;
+    db::get_book(&conn, &id)
+        .map_err(folio_status)?
+        .ok_or_else(|| (StatusCode::NOT_FOUND, "Book not found".to_string()))?;
+
+    let progress = db::get_reading_progress(&conn, &id).map_err(folio_status)?;
+    Ok(Json(progress))
+}
+
+async fn put_progress(
+    State(state): State<WebState>,
+    Path(id): Path<String>,
+    body: Bytes,
+) -> Result<Json<crate::models::ReadingProgress>, (StatusCode, String)> {
+    // Parsed manually (rather than via the `Json<T>` extractor) so malformed
+    // bodies map to 400 like the rest of this API's validation errors —
+    // axum's built-in JSON rejection uses 422.
+    let body: ProgressUpdate = serde_json::from_slice(&body).map_err(|e| {
+        (
+            StatusCode::BAD_REQUEST,
+            format!("Invalid request body: {e}"),
+        )
+    })?;
+
+    let conn = state.conn().map_err(folio_status)?;
+    let book = db::get_book(&conn, &id)
+        .map_err(folio_status)?
+        .ok_or_else(|| (StatusCode::NOT_FOUND, "Book not found".to_string()))?;
+
+    // F4: intentionally NOT bounds-checked against `book.total_chapters`
+    // here. The reader paginates against a live `/page-count`, which can
+    // exceed a stale `total_chapters` (e.g. after re-pagination) — rejecting
+    // those saves made progress beyond the stale bound silently fail. The
+    // client clamps the index when it reads progress back.
+    let scroll_position =
+        crate::commands::validate_scroll_position(body.scroll_position).map_err(folio_status)?;
+
+    // F1: goes through the same completion-detection path as the desktop
+    // `save_reading_progress` command (`apply_reading_progress`) so a
+    // web-driven completion logs the same activity entry and bus event.
+    // `None` here means no desktop window-toast event is emitted for a
+    // web-only completion — see `apply_reading_progress`'s doc comment.
+    let progress = crate::commands::apply_reading_progress(
+        &conn,
+        &book,
+        &id,
+        body.chapter_index,
+        scroll_position,
+        None,
+    )
+    .map_err(folio_status)?;
+
+    Ok(Json(progress))
 }
 
 // ── Download ─────────────────────────────────────────────────────────────────

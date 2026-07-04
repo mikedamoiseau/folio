@@ -128,6 +128,14 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .btn-secondary { background: var(--surface); color: var(--ink); border: 1px solid var(--warm-border) !important; }
 .btn-secondary:hover { background: var(--warm-subtle); }
 
+/* ── Resume Prompt (Item 4) ────────────────────── */
+.resume-prompt { display: flex; align-items: center; justify-content: center; min-height: 100vh; padding: var(--gap); }
+.resume-prompt-panel { background: var(--surface); border: 1px solid var(--warm-border); border-radius: 12px; padding: 28px 32px; max-width: 360px; width: 100%; text-align: center; box-shadow: 0 12px 32px var(--shadow); }
+.resume-prompt-panel h2 { font-size: 1.1rem; margin-bottom: 8px; color: var(--ink); }
+.resume-prompt-panel p { color: var(--ink-muted); font-size: 0.9rem; margin-bottom: 20px; }
+.resume-actions { display: flex; flex-direction: column; gap: 10px; }
+.resume-actions button { width: 100%; padding: 10px 20px; border-radius: var(--radius); font-weight: 600; font-size: 0.9rem; cursor: pointer; border: none; }
+
 /* ── Reader ────────────────────────────────────── */
 /* Shared chrome: a top header + bottom toolbar, both hidden together via
    .chrome-hidden (middle-click / chrome-toggle-fab). The stage fills the

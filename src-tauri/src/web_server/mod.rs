@@ -1218,4 +1218,323 @@ mod tests {
 
         let _ = tx.send(());
     }
+
+    // ── Item 4: Two-way reading progress sync ───────────────────────────────
+
+    fn progress_test_book(id: &str, total_chapters: u32) -> crate::models::Book {
+        crate::models::Book {
+            id: id.to_string(),
+            title: "Progress Test".to_string(),
+            author: "Author".to_string(),
+            file_path: "/nonexistent/progress-test.cbz".to_string(),
+            cover_path: None,
+            total_chapters,
+            added_at: 0,
+            format: crate::models::BookFormat::Cbz,
+            file_hash: None,
+            description: None,
+            genres: None,
+            rating: None,
+            isbn: None,
+            openlibrary_key: None,
+            enrichment_status: None,
+            series: None,
+            volume: None,
+            language: None,
+            publisher: None,
+            publish_year: None,
+            is_imported: false,
+        }
+    }
+
+    /// Spins up a real server on a random port for a progress-sync test.
+    /// Returns the (moved-back) state for direct DB assertions, the port,
+    /// and the shutdown sender the caller must fire when done.
+    async fn spawn_progress_test_server(state: WebState) -> (WebState, u16, oneshot::Sender<()>) {
+        let router = build_router(
+            state.clone(),
+            ServerModes {
+                web_ui: true,
+                opds: true,
+            },
+        );
+        let listener = tokio::net::TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], 0)))
+            .await
+            .unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (tx, rx) = oneshot::channel::<()>();
+        tokio::spawn(async move {
+            axum::serve(
+                listener,
+                router.into_make_service_with_connect_info::<SocketAddr>(),
+            )
+            .with_graceful_shutdown(async {
+                let _ = rx.await;
+            })
+            .await
+            .ok();
+        });
+        (state, port, tx)
+    }
+
+    #[tokio::test]
+    async fn progress_put_then_get_roundtrip() {
+        let state = test_state();
+        {
+            let conn = state.conn().unwrap();
+            crate::db::insert_book(&conn, &progress_test_book("prog-1", 50)).unwrap();
+        }
+        let (state, port, tx) = spawn_progress_test_server(state).await;
+        let client = reqwest::Client::new();
+
+        let put_resp = client
+            .put(format!("http://127.0.0.1:{port}/api/books/prog-1/progress"))
+            .json(&serde_json::json!({"chapter_index": 5, "scroll_position": 0.0}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(put_resp.status(), 200);
+
+        let get_resp = client
+            .get(format!("http://127.0.0.1:{port}/api/books/prog-1/progress"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(get_resp.status(), 200);
+        let body: serde_json::Value = get_resp.json().await.unwrap();
+        assert_eq!(body["chapter_index"], 5);
+        assert_eq!(body["book_id"], "prog-1");
+
+        // The same row must be readable through the desktop app's own db
+        // function — the web write path must not diverge from the shape
+        // the desktop persists.
+        let conn = state.conn().unwrap();
+        let progress = crate::db::get_reading_progress(&conn, "prog-1")
+            .unwrap()
+            .expect("progress should exist");
+        assert_eq!(progress.chapter_index, 5);
+        assert_eq!(progress.scroll_position, 0.0);
+
+        let _ = tx.send(());
+    }
+
+    #[tokio::test]
+    async fn progress_get_with_no_progress_returns_null() {
+        let state = test_state();
+        {
+            let conn = state.conn().unwrap();
+            crate::db::insert_book(&conn, &progress_test_book("prog-2", 50)).unwrap();
+        }
+        let (_state, port, tx) = spawn_progress_test_server(state).await;
+        let client = reqwest::Client::new();
+
+        let resp = client
+            .get(format!("http://127.0.0.1:{port}/api/books/prog-2/progress"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+        let body: serde_json::Value = resp.json().await.unwrap();
+        assert!(body.is_null(), "expected null progress, got {body:?}");
+
+        let _ = tx.send(());
+    }
+
+    #[tokio::test]
+    async fn progress_unknown_book_returns_404() {
+        let state = test_state();
+        let (_state, port, tx) = spawn_progress_test_server(state).await;
+        let client = reqwest::Client::new();
+
+        let resp = client
+            .put(format!(
+                "http://127.0.0.1:{port}/api/books/does-not-exist/progress"
+            ))
+            .json(&serde_json::json!({"chapter_index": 0, "scroll_position": 0.0}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 404);
+
+        let resp = client
+            .get(format!(
+                "http://127.0.0.1:{port}/api/books/does-not-exist/progress"
+            ))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 404);
+
+        let _ = tx.send(());
+    }
+
+    #[tokio::test]
+    async fn progress_put_malformed_body_returns_400() {
+        let state = test_state();
+        {
+            let conn = state.conn().unwrap();
+            crate::db::insert_book(&conn, &progress_test_book("prog-3", 50)).unwrap();
+        }
+        let (_state, port, tx) = spawn_progress_test_server(state).await;
+        let client = reqwest::Client::new();
+
+        // Negative index doesn't fit the u32 field — rejected at deserialization.
+        let resp = client
+            .put(format!("http://127.0.0.1:{port}/api/books/prog-3/progress"))
+            .json(&serde_json::json!({"chapter_index": -1, "scroll_position": 0.0}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 400);
+
+        // Garbage body.
+        let resp = client
+            .put(format!("http://127.0.0.1:{port}/api/books/prog-3/progress"))
+            .header("content-type", "application/json")
+            .body("not json")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 400);
+
+        let _ = tx.send(());
+    }
+
+    // F4: `total_chapters` can be stale relative to the reader's live
+    // /page-count (e.g. re-paginated PDF/CBZ). Rejecting indices beyond the
+    // stored total made saves beyond that stale bound silently fail. The web
+    // PUT now accepts any non-negative index and stores it as-is; the client
+    // clamps when reading progress back.
+    #[tokio::test]
+    async fn progress_put_chapter_index_beyond_total_is_accepted() {
+        let state = test_state();
+        {
+            let conn = state.conn().unwrap();
+            crate::db::insert_book(&conn, &progress_test_book("prog-4", 10)).unwrap();
+        }
+        let (state, port, tx) = spawn_progress_test_server(state).await;
+        let client = reqwest::Client::new();
+
+        let resp = client
+            .put(format!("http://127.0.0.1:{port}/api/books/prog-4/progress"))
+            .json(&serde_json::json!({"chapter_index": 10, "scroll_position": 0.0}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+
+        let conn = state.conn().unwrap();
+        let progress = crate::db::get_reading_progress(&conn, "prog-4")
+            .unwrap()
+            .expect("progress should be stored even though it exceeds total_chapters");
+        assert_eq!(progress.chapter_index, 10);
+
+        let _ = tx.send(());
+    }
+
+    // F1: a web-driven completion (PUT landing on the last chapter) must
+    // perform the same activity-log side effect the desktop
+    // `save_reading_progress` command performs, and must not fire twice.
+    #[tokio::test]
+    async fn progress_put_last_chapter_logs_completion_activity() {
+        let state = test_state();
+        {
+            let conn = state.conn().unwrap();
+            crate::db::insert_book(&conn, &progress_test_book("prog-6", 5)).unwrap();
+        }
+        let (state, port, tx) = spawn_progress_test_server(state).await;
+        let client = reqwest::Client::new();
+
+        // Land on the last chapter (index 4 of 5).
+        let resp = client
+            .put(format!("http://127.0.0.1:{port}/api/books/prog-6/progress"))
+            .json(&serde_json::json!({"chapter_index": 4, "scroll_position": 0.5}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+
+        {
+            let conn = state.conn().unwrap();
+            let activity = crate::db::get_all_activity(&conn).unwrap();
+            let completions: Vec<_> = activity
+                .iter()
+                .filter(|a| {
+                    a.action == "book_completed" && a.entity_id.as_deref() == Some("prog-6")
+                })
+                .collect();
+            assert_eq!(
+                completions.len(),
+                1,
+                "expected exactly one completion activity entry, got {activity:?}"
+            );
+        }
+
+        // A second save that stays on the last chapter (e.g. a scroll-only
+        // update) must not log a second completion.
+        let resp = client
+            .put(format!("http://127.0.0.1:{port}/api/books/prog-6/progress"))
+            .json(&serde_json::json!({"chapter_index": 4, "scroll_position": 0.9}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+
+        let conn = state.conn().unwrap();
+        let activity = crate::db::get_all_activity(&conn).unwrap();
+        let completions: Vec<_> = activity
+            .iter()
+            .filter(|a| a.action == "book_completed" && a.entity_id.as_deref() == Some("prog-6"))
+            .collect();
+        assert_eq!(
+            completions.len(),
+            1,
+            "completion must not be logged twice for repeat saves on the last chapter"
+        );
+
+        let _ = tx.send(());
+    }
+
+    #[tokio::test]
+    async fn progress_put_requires_auth_when_pin_configured() {
+        let state = test_state();
+        *state.pin_hash.lock().unwrap() = Some(auth::hash_pin("4321"));
+        {
+            let conn = state.conn().unwrap();
+            crate::db::insert_book(&conn, &progress_test_book("prog-5", 50)).unwrap();
+        }
+        let (_state, port, tx) = spawn_progress_test_server(state).await;
+        let client = reqwest::Client::new();
+
+        // Unauthenticated PUT is rejected.
+        let resp = client
+            .put(format!("http://127.0.0.1:{port}/api/books/prog-5/progress"))
+            .json(&serde_json::json!({"chapter_index": 3, "scroll_position": 0.0}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 401);
+
+        // Log in, then retry authenticated (bearer token — validated by the
+        // same `validate_session` path as the cookie the browser sends).
+        let login_resp = client
+            .post(format!("http://127.0.0.1:{port}/api/auth"))
+            .json(&serde_json::json!({"pin": "4321"}))
+            .send()
+            .await
+            .unwrap();
+        let login_body: serde_json::Value = login_resp.json().await.unwrap();
+        let token = login_body["token"].as_str().unwrap();
+
+        let resp = client
+            .put(format!("http://127.0.0.1:{port}/api/books/prog-5/progress"))
+            .header("Authorization", format!("Bearer {token}"))
+            .json(&serde_json::json!({"chapter_index": 3, "scroll_position": 0.0}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+
+        let _ = tx.send(());
+    }
 }
