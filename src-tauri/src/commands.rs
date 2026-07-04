@@ -263,9 +263,15 @@ pub fn cover_storage_key(book_id: &str, ext: &str) -> String {
 /// cover on every scroll-mounted row.
 pub const THUMB_WIDTH: u32 = 320;
 
+/// Filename of a book's grid thumbnail, sibling to its `cover.{ext}`. Shared
+/// so every site that needs to name or locate that sibling file — this
+/// module's storage key, the GDPR/backup export, and the web server's
+/// `?size=thumb` cache — agrees on the exact name.
+pub(crate) const THUMB_FILENAME: &str = "thumb.jpg";
+
 /// Storage key for a book's grid thumbnail, sibling to its `cover.{ext}`.
 pub fn thumb_storage_key(book_id: &str) -> String {
-    format!("{book_id}/thumb.jpg")
+    format!("{book_id}/{THUMB_FILENAME}")
 }
 
 /// One-time backfill of grid thumbnails for covers imported before the
@@ -384,7 +390,16 @@ fn save_cover_via_storage(
                 log::warn!("thumbnail write failed for book {book_id}: {e}");
             }
         }
-        Ok(None) => {}
+        Ok(None) => {
+            // The new cover is already small enough to serve directly, but a
+            // *previous* (larger) cover at this book_id may have left a
+            // thumb.jpg behind. Clean it up so nothing keeps serving stale
+            // art for the new cover — best-effort, missing keys are a no-op.
+            let tkey = thumb_storage_key(book_id);
+            if let Err(e) = storage.delete(&tkey) {
+                log::warn!("stale thumbnail cleanup failed for book {book_id}: {e}");
+            }
+        }
         Err(e) => log::warn!("thumbnail generation failed for book {book_id}: {e}"),
     }
     match storage.local_path(&key) {
@@ -3987,7 +4002,7 @@ pub async fn export_library(
                     // the thumbnail is what the library grid displays. Falls
                     // back to the full cover when no thumbnail exists (the
                     // cover was already small enough at import time).
-                    let thumb = std::path::Path::new(cover_path).with_file_name("thumb.jpg");
+                    let thumb = std::path::Path::new(cover_path).with_file_name(THUMB_FILENAME);
                     let (src, archive_name) = if thumb.exists() {
                         (thumb, format!("covers/{}/cover.jpg", book.id))
                     } else {
