@@ -345,6 +345,44 @@ Install prompts and service workers require a secure context: `localhost` works 
 
 ---
 
+## Item 11 — Serve cover thumbnails in library/shelf grids
+
+**Priority: medium-high (performance). Added 2026-07-04 after the initial audit. Independent of other items.**
+
+### Current behavior
+`GET /api/books/{id}/cover` (api.rs `get_cover`, ~line 420) reads `book.cover_path` — the **full-size** `cover.jpg` — and the web UI uses that one endpoint everywhere: library grid, shelf cards, and detail page. With a ~2000-book library the grid downloads thousands of full-resolution covers to render ~160-200px cards.
+
+The infrastructure for the fix already exists and is unused by the web server:
+- `folio-core/src/image_util.rs::make_thumbnail(bytes, target_width)` — produces a q80 JPEG clamped to a target width; returns `Ok(None)` when the source is already at/below the target ("use the original").
+- The desktop app already persists `thumb.jpg` next to `cover.jpg` in `{app_data}/covers/{book_id}/` — verified ~2347 `thumb.jpg` files on disk on this machine. Find the desktop write path (grep `make_thumbnail` / `thumb.jpg` consumers in commands.rs / import pipeline) and mirror its exact naming + target width.
+
+### Scope
+1. **API:** extend `GET /api/books/{id}/cover` with `?size=thumb` (default `full` keeps current behavior — OPDS and detail page stay untouched). `size=thumb` resolution order:
+   - serve `thumb.jpg` from the cover directory if present;
+   - else generate it once via `image_util::make_thumbnail` from the full cover (same target width the desktop uses), persist it as `thumb.jpg` (best-effort — serve from memory even if the disk write fails), and serve it;
+   - `make_thumbnail` → `Ok(None)` (cover already small) or any generation error → fall back to the full cover bytes.
+   Follow the established cache-header scheme: `no-store` when a PIN is configured, `private, max-age=3600` otherwise (thumbnails are immutable per cover).
+   Generation is CPU+IO work — run it in `tokio::task::spawn_blocking` and do not hold a DB pool connection across it (same pattern as the `file_size` stat fix in Item 8's review round).
+2. **Frontend:** grid cards and shelf cards request `/cover?size=thumb`; detail page keeps the full cover. The existing `onerror` → styled placeholder path must keep working.
+3. **No schema change.** No new endpoint — a query param on the existing route keeps the auth/public-carve-out story unchanged.
+
+### TDD
+Integration tests in mod.rs first (red→green), with a synthetic large cover fixture:
+- `?size=thumb` returns 200 image/jpeg, and the returned image is at most the desktop thumbnail width (decode dimensions in the test with the `image` crate — already a workspace dependency).
+- After the first thumb request, `thumb.jpg` exists in the cover dir; a second request serves it (no regeneration — assert e.g. via mtime stability or a cheap marker).
+- Small-cover book: `?size=thumb` returns the original bytes unchanged.
+- No `size` param → byte-identical to previous behavior.
+- Book without a cover → 404 both sizes.
+- Cache headers follow the PIN/no-PIN scheme.
+
+### Acceptance criteria
+- Library grid network transfer for covers drops by roughly an order of magnitude on a large library (spot-check via Playwright request sizes: grid cover responses each well under ~50 KB vs the full-size baseline).
+- Grid/shelf visual quality unchanged at card size (screenshot review light+dark).
+- Detail page still shows the full-resolution cover.
+- All existing regression scripts stay green.
+
+---
+
 ## Suggested delegation batches
 
 | Batch | Items | Rationale |
@@ -355,5 +393,6 @@ Install prompts and service workers require a secure context: `localhost` works 
 | 4 | **5 + 8** (shelves + detail page) | Both consume Item 4's progress endpoint |
 | 5 | **6 + 7** (theme toggle + navigation) | Toggle is trivial after Item 1; navigation rewrite is the big frontend chunk |
 | 6 | **9 + 10** (PWA + polish) | Final pass over stabilized UI |
+| 7 | **11** (cover thumbnails) | Added later; independent perf item, safe to run after the UI stabilizes |
 
 Each batch: feature branch, run full CI suite locally before push (see Shared Context rule 5), PR to main.
