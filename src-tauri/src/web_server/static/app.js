@@ -18,6 +18,11 @@
   let readerState = null; // set while currentView === "reader"; see showReader()
   let shortcutsOverlayOpen = false;
 
+  // Item 4: set by the detail page's Continue/Start Over buttons just before
+  // navigating to the reader, so showReader() can skip its own resume prompt
+  // — the user already made that choice on the detail page. Consumed once.
+  let readerEntryIntent = null; // { id, action: "continue" | "restart" } | null
+
   async function api(path) {
     const resp = await fetch(path, { credentials: "same-origin" });
     if (resp.status === 401) { authenticated = false; showLogin(); return null; }
@@ -284,6 +289,7 @@
   // ── Library ───────────────────────────────────
   async function showLibrary(query) {
     currentView = "library";
+    flushProgressSave();
     readerState = null;
     const existing = $("#search");
     if (!existing) {
@@ -395,6 +401,7 @@
   // ── Detail ────────────────────────────────────
   async function showDetail(id) {
     currentView = "detail";
+    flushProgressSave();
     readerState = null;
     app().innerHTML = '<div class="loading">Loading...</div>';
     const resp = await api("/api/books/" + id);
@@ -403,7 +410,31 @@
 
     const isHtmlBook = book.format === "epub" || book.format === "mobi";
     const isPageBased = ["pdf", "cbz", "cbr"].includes(book.format);
-    const readHash = isHtmlBook || isPageBased ? `#/book/${id}/0/read` : "";
+    const isReadable = isHtmlBook || isPageBased;
+    const readHash = isReadable ? `#/book/${id}/0/read` : "";
+
+    // Item 4: a book with saved progress > 0 gets Continue (jumps straight to
+    // the saved position) + Start Over instead of a plain Read button. A
+    // progress fetch that 404s/errors is treated the same as "no progress" —
+    // never blocks the detail page from rendering.
+    let progress = null;
+    if (isReadable) {
+      const progResp = await api(`/api/books/${id}/progress`);
+      if (progResp && progResp.ok) {
+        try { progress = await progResp.json(); } catch (e) { progress = null; }
+      }
+    }
+    const hasProgress = !!(progress && progress.chapter_index > 0);
+    const continueHash = isReadable ? `#/book/${id}/${progress ? progress.chapter_index : 0}/read` : "";
+
+    let actionsHtml;
+    if (!isReadable) {
+      actionsHtml = "";
+    } else if (hasProgress) {
+      actionsHtml = `<button class="btn-primary" id="continue-btn">Continue</button><button class="btn-secondary" id="restart-btn">Start Over</button>`;
+    } else {
+      actionsHtml = `<button class="btn-primary" id="read-btn">Read</button>`;
+    }
 
     app().innerHTML = `
       <div class="header">
@@ -423,7 +454,7 @@
             <p>Format: ${book.format.toUpperCase()}</p>
             ${book.description ? `<p>${esc(book.description)}</p>` : ""}
             <div class="actions">
-              ${readHash ? `<button class="btn-primary" id="read-btn">Read</button>` : ""}
+              ${actionsHtml}
               <a class="btn-secondary" href="/api/books/${id}/download">Download</a>
             </div>
           </div>
@@ -435,6 +466,16 @@
     if (coverImg) coverImg.addEventListener("error", () => { coverImg.classList.add("cover-fallback"); });
     const readBtn = $("#read-btn");
     if (readBtn) readBtn.addEventListener("click", () => navigate(readHash));
+    const continueBtn = $("#continue-btn");
+    if (continueBtn) continueBtn.addEventListener("click", () => {
+      readerEntryIntent = { id, action: "continue" };
+      navigate(continueHash);
+    });
+    const restartBtn = $("#restart-btn");
+    if (restartBtn) restartBtn.addEventListener("click", () => {
+      readerEntryIntent = { id, action: "restart" };
+      navigate(readHash);
+    });
   }
 
   // ── Reader ────────────────────────────────────
@@ -466,6 +507,9 @@
     if (!sameBook) {
       // R2: drop any stale state up front so a concurrent load for a
       // different book can't be mistaken for a "same book" fast path.
+      // Item 4: flush first — this book may be a different one than the
+      // pending debounced save belongs to.
+      flushProgressSave();
       readerState = null;
       app().innerHTML = '<div class="loading">Loading...</div>';
       const resp = await api("/api/books/" + id);
@@ -487,6 +531,7 @@
       // server-side `/api/books/:id/chapters/:index` route dispatches to
       // the right parser.
       const isHtmlBook = book.format === "epub" || book.format === "mobi";
+      const mode = isHtmlBook ? "chapter" : "page";
 
       let count;
       if (isHtmlBook) {
@@ -503,19 +548,36 @@
       }
 
       const clamped = clampIndex(index, count);
-      readerState = {
-        id,
-        book,
-        mode: isHtmlBook ? "chapter" : "page",
-        index: clamped,
-        count,
-        chromeHidden: false,
-        fitMode: localStorage.getItem("folio_reader_fit_mode") || "fit-height",
-        handlers: null,
-        renderGen: 0,
-      };
-      readerState.handlers = makeReaderHandlers(id);
-      renderReaderChrome();
+
+      // Item 4: offer to resume at the saved position — but only on the
+      // canonical "default open" entry point (index 0, what the detail
+      // page's plain Read button always requests). A bookmarked/typed URL
+      // with a specific (even out-of-range/malformed) index is an explicit
+      // request for that position and must just clamp+load like before —
+      // not get reinterpreted as "the user wants to resume". Also skipped
+      // when the detail page's Continue/Start Over buttons already made
+      // this call for this book (readerEntryIntent).
+      const intent = readerEntryIntent && readerEntryIntent.id === id ? readerEntryIntent.action : null;
+      readerEntryIntent = null;
+
+      let savedIndex = null;
+      if (!intent && index === 0) {
+        const progResp = await api(`/api/books/${id}/progress`);
+        if (!hashTargetsReader(id)) return;
+        if (progResp && progResp.ok) {
+          let progress = null;
+          try { progress = await progResp.json(); } catch (e) { progress = null; }
+          if (progress && progress.chapter_index > 0) savedIndex = clampIndex(progress.chapter_index, count);
+        }
+        if (!hashTargetsReader(id)) return;
+      }
+
+      if (savedIndex !== null && savedIndex !== clamped) {
+        showResumePrompt(id, book, mode, count, savedIndex, clamped);
+        return;
+      }
+
+      enterReaderAt(id, book, mode, count, clamped);
       if (clamped !== index) {
         // Normalize the URL; the resulting hashchange re-enters this
         // function on the "same book" fast path below to actually render.
@@ -531,6 +593,50 @@
       }
     }
 
+    await renderReaderContent();
+  }
+
+  function enterReaderAt(id, book, mode, count, index) {
+    readerState = {
+      id,
+      book,
+      mode,
+      index,
+      count,
+      chromeHidden: false,
+      fitMode: localStorage.getItem("folio_reader_fit_mode") || "fit-height",
+      handlers: null,
+      renderGen: 0,
+    };
+    readerState.handlers = makeReaderHandlers(id);
+    renderReaderChrome();
+  }
+
+  // Item 4: "You left off at page/chapter N" prompt shown on a fresh reader
+  // entry when saved progress differs from the requested (usually 0) index.
+  function showResumePrompt(id, book, mode, count, savedIndex, restartIndex) {
+    const unitLabel = mode === "page" ? "Page" : "Chapter";
+    app().innerHTML = `
+      <div class="resume-prompt">
+        <div class="resume-prompt-panel">
+          <h2>${esc(book.title)}</h2>
+          <p>You left off at ${unitLabel.toLowerCase()} ${savedIndex + 1} of ${count}.</p>
+          <div class="resume-actions">
+            <button class="btn-primary" id="resume-btn">Resume at ${unitLabel} ${savedIndex + 1}</button>
+            <button class="btn-secondary" id="resume-restart-btn">Start Over</button>
+          </div>
+        </div>
+      </div>`;
+    $("#resume-btn").addEventListener("click", () => resolveResumePrompt(id, book, mode, count, savedIndex));
+    $("#resume-restart-btn").addEventListener("click", () => resolveResumePrompt(id, book, mode, count, restartIndex));
+  }
+
+  async function resolveResumePrompt(id, book, mode, count, index) {
+    if (!hashTargetsReader(id)) return;
+    // Fix the URL without firing a hashchange (avoids re-fetching book/
+    // page-count/progress a second time just to confirm the same choice).
+    history.replaceState(null, "", `#/book/${id}/${index}/read`);
+    enterReaderAt(id, book, mode, count, index);
     await renderReaderContent();
   }
 
@@ -716,7 +822,43 @@
       if (index + 1 < count) new Image().src = pageUrl(id, index + 1);
       if (index - 1 >= 0) new Image().src = pageUrl(id, index - 1);
     }
+
+    scheduleProgressSave();
   }
+
+  // ── Item 4: reading progress sync ──────────────
+  // Debounced save while turning pages/chapters, flushed immediately on tab
+  // hide / navigation-away so a closed tab never loses the last position.
+  const PROGRESS_SAVE_DEBOUNCE_MS = 2000;
+  let progressSaveTimer = null;
+
+  function scheduleProgressSave() {
+    if (!readerState) return;
+    clearTimeout(progressSaveTimer);
+    progressSaveTimer = setTimeout(flushProgressSave, PROGRESS_SAVE_DEBOUNCE_MS);
+  }
+
+  function flushProgressSave() {
+    clearTimeout(progressSaveTimer);
+    progressSaveTimer = null;
+    if (!readerState) return;
+    const { id, index } = readerState;
+    // The web reader doesn't track in-chapter scroll offset yet (unlike the
+    // desktop app) — persist 0 for scroll_position; chapter_index/page index
+    // is the sync-relevant field for both page- and chapter-mode books.
+    fetch(`/api/books/${id}/progress`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chapter_index: index, scroll_position: 0 }),
+      credentials: "same-origin",
+      keepalive: true,
+    }).catch(() => {});
+  }
+
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") flushProgressSave();
+  });
+  window.addEventListener("pagehide", flushProgressSave);
 
   // R4: page-mode turns only ever set img.src, so a 401 on session expiry
   // fails silently (broken image, no redirect to login). Probe a cheap
@@ -758,6 +900,7 @@
   // ── Stats ──────────────────────────────────────
   async function showStats() {
     currentView = "stats";
+    flushProgressSave();
     readerState = null;
     app().innerHTML = `
       <div class="header">
@@ -813,6 +956,7 @@
   // ── Collections ────────────────────────────────
   async function showCollections() {
     currentView = "collections";
+    flushProgressSave();
     readerState = null;
     app().innerHTML = `
       <div class="header">

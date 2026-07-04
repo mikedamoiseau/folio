@@ -2008,7 +2008,7 @@ fn validate_path_within(path: &str, parent: &str) -> FolioResult<std::path::Path
     Ok(canonical)
 }
 
-fn validate_scroll_position(pos: f64) -> FolioResult<f64> {
+pub(crate) fn validate_scroll_position(pos: f64) -> FolioResult<f64> {
     if pos.is_nan() || pos.is_infinite() {
         return Err(FolioError::invalid(
             "scroll_position must be a finite number",
