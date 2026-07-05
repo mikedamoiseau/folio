@@ -6,8 +6,10 @@ import type { Book } from "../types";
 interface BookDetailModalProps {
   book: Book;
   onClose: () => void;
-  onOpen: (id: string) => void;
-  onEdit: (id: string) => void;
+  // Action handlers are optional: when none are provided (e.g. the reader's
+  // read-only "book details" popup) the action footer is omitted entirely.
+  onOpen?: (id: string) => void;
+  onEdit?: (id: string) => void;
   onScan?: (id: string) => Promise<void>;
 }
 
@@ -148,24 +150,30 @@ export default function BookDetailModal({ book, onClose, onOpen, onEdit, onScan 
           </div>
         )}
 
-        {/* Actions */}
-        <div className="flex gap-3 px-5 py-4 border-t border-warm-border">
-          <button
-            type="button"
-            onClick={() => onOpen(book.id)}
-            className="flex-1 px-4 py-2 rounded-xl bg-accent text-white text-sm font-medium hover:bg-accent/90 transition-colors focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2"
-          >
-            {t("common.open")}
-          </button>
-          <button
-            type="button"
-            onClick={() => onEdit(book.id)}
-            className="flex-1 px-4 py-2 rounded-xl bg-warm-subtle text-ink text-sm font-medium hover:bg-warm-border transition-colors focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2"
-          >
-            {t("common.edit")}
-          </button>
-          {onScan && <ScanButton bookId={book.id} onScan={onScan} />}
-        </div>
+        {/* Actions — omitted entirely for the read-only (reader) variant */}
+        {(onOpen || onEdit || onScan) && (
+          <div className="flex gap-3 px-5 py-4 border-t border-warm-border">
+            {onOpen && (
+              <button
+                type="button"
+                onClick={() => onOpen(book.id)}
+                className="flex-1 px-4 py-2 rounded-xl bg-accent text-white text-sm font-medium hover:bg-accent/90 transition-colors focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2"
+              >
+                {t("common.open")}
+              </button>
+            )}
+            {onEdit && (
+              <button
+                type="button"
+                onClick={() => onEdit(book.id)}
+                className="flex-1 px-4 py-2 rounded-xl bg-warm-subtle text-ink text-sm font-medium hover:bg-warm-border transition-colors focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2"
+              >
+                {t("common.edit")}
+              </button>
+            )}
+            {onScan && <ScanButton bookId={book.id} onScan={onScan} />}
+          </div>
+        )}
       </div>
     </div>
   );
