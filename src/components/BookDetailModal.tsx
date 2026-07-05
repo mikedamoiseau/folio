@@ -141,7 +141,7 @@ export default function BookDetailModal({ book, onClose, onOpen, onEdit, onScan 
         {book.description && (
           <div className="px-5 pb-3">
             <div className="border-t border-warm-border pt-3">
-              <p className="text-sm text-ink-muted leading-relaxed max-h-40 overflow-y-auto">
+              <p className="text-sm text-ink-muted leading-relaxed max-h-40 overflow-y-auto whitespace-pre-line">
                 {book.description}
               </p>
             </div>
