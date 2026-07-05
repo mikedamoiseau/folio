@@ -41,6 +41,10 @@ function ScanButton({ bookId, onScan }: { bookId: string; onScan: (id: string) =
 export default function BookDetailModal({ book, onClose, onOpen, onEdit, onScan }: BookDetailModalProps) {
   const { t } = useTranslation();
   const dialogRef = useRef<HTMLDivElement>(null);
+  // Read-only variant (e.g. the reader's info popup) has no action footer, so
+  // it would otherwise contain zero focusable elements — breaking the focus
+  // trap and leaving nothing to auto-focus. Give it an explicit close button.
+  const readOnly = !onOpen && !onEdit && !onScan;
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -66,17 +70,20 @@ export default function BookDetailModal({ book, onClose, onOpen, onEdit, onScan 
       }
     };
     document.addEventListener("keydown", handleKeyDown);
-    // Auto-focus first button
-    const firstBtn = dialogRef.current?.querySelector<HTMLElement>("button");
-    firstBtn?.focus();
+    // Auto-focus. The read-only variant's only control is the corner X;
+    // focusing it would flash a focus ring the instant the (mouse-opened)
+    // popup appears, so focus the dialog container instead — Tab still reaches
+    // the X (and shows its ring for keyboard users), it just isn't pre-focused.
+    if (readOnly) {
+      dialogRef.current?.focus();
+    } else {
+      const firstBtn = dialogRef.current?.querySelector<HTMLElement>("button");
+      firstBtn?.focus();
+    }
     return () => document.removeEventListener("keydown", handleKeyDown);
-  }, [onClose]);
+  }, [onClose, readOnly]);
 
   const coverSrc = book.cover_path ? convertFileSrc(book.cover_path) : null;
-  // Read-only variant (e.g. the reader's info popup) has no action footer, so
-  // it would otherwise contain zero focusable elements — breaking the focus
-  // trap and leaving nothing to auto-focus. Give it an explicit close button.
-  const readOnly = !onOpen && !onEdit && !onScan;
 
   const metadataRows: { label: string; value: string }[] = [];
   if (book.series) {
@@ -97,7 +104,8 @@ export default function BookDetailModal({ book, onClose, onOpen, onEdit, onScan 
         role="dialog"
         aria-modal="true"
         aria-label={t("detail.detailsFor", { title: book.title })}
-        className="relative bg-surface border border-warm-border rounded-2xl shadow-xl max-w-md w-full mx-4 overflow-hidden"
+        tabIndex={-1}
+        className="relative bg-surface border border-warm-border rounded-2xl shadow-xl max-w-md w-full mx-4 overflow-hidden focus:outline-none"
         onClick={(e) => e.stopPropagation()}
       >
         {readOnly && (
