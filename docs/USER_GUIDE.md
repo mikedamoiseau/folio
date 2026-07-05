@@ -248,6 +248,7 @@ Folio offers two reading modes for EPUBs, selectable in **Settings > Page Layout
   ![Reader with Table of Contents open](../screenshots/11-reader-toc.png)
 
 - **Focus mode:** Press `D` to hide all UI and read distraction-free. Move the mouse to the top or bottom edge to temporarily reveal controls.
+- **Book details:** Click the **(i)** icon in the reader header to open a read-only popup with the book's title, author, format, series, publisher, year, language, and full description — handy for checking a synopsis without leaving the page. Press `Escape` or click the **✕** (or outside the popup) to close it.
 - **Progress tracking:** Your reading position is saved automatically and restored when you reopen the book, regardless of which mode you use.
 
 ### PDF and comic book reading (PDF, CBZ, CBR)
