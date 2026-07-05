@@ -332,15 +332,34 @@ async fn list_books(
     };
 
     // Sort
+    // Fix D: every branch falls back to `id` on equality — ties (identical
+    // title/author/rating/last-read, or no reading progress at all) would
+    // otherwise sort in whatever order the underlying Vec happened to be in,
+    // which isn't stable across requests. That breaks offset pagination:
+    // the same book could land on two pages or be skipped depending on how
+    // ties resolved between two calls. `id` is unique, so this gives every
+    // sort a total, deterministic order (mirrors resolveSeriesNav in
+    // app.js, which needed the same fix for the same reason).
     let mut books = books;
     match params.sort.as_deref() {
-        Some("title") => books.sort_by_key(|a| a.title.to_lowercase()),
-        Some("author") => books.sort_by_key(|a| a.author.to_lowercase()),
+        Some("title") => books.sort_by(|a, b| {
+            a.title
+                .to_lowercase()
+                .cmp(&b.title.to_lowercase())
+                .then_with(|| a.id.cmp(&b.id))
+        }),
+        Some("author") => books.sort_by(|a, b| {
+            a.author
+                .to_lowercase()
+                .cmp(&b.author.to_lowercase())
+                .then_with(|| a.id.cmp(&b.id))
+        }),
         Some("rating") => books.sort_by(|a, b| {
             b.rating
                 .unwrap_or(0.0)
                 .partial_cmp(&a.rating.unwrap_or(0.0))
                 .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a.id.cmp(&b.id))
         }),
         Some("last_read") => {
             // Need reading progress for last_read sort
@@ -353,10 +372,10 @@ async fn list_books(
             books.sort_by(|a, b| {
                 let la = progress_map.get(&a.id).copied().unwrap_or(0);
                 let lb = progress_map.get(&b.id).copied().unwrap_or(0);
-                lb.cmp(&la)
+                lb.cmp(&la).then_with(|| a.id.cmp(&b.id))
             });
         }
-        _ => {} // default: date_added DESC from SQL
+        _ => {} // default: date_added DESC, id from SQL
     }
 
     // Item 14: pagination is applied strictly after filter+sort, so it's

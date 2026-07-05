@@ -858,7 +858,12 @@
     // isn't a concern (sessionStorage, one small key per distinct hash,
     // forgotten at the end of the tab's session).
     let y = null;
-    let pages = 1;
+    // Fix C: `pages` stays `null` for a legacy plain-number save (from
+    // before Item 14) — there's no way to know how many pages produced that
+    // `y`, so it must NOT default to 1 (which silently clamped a deep legacy
+    // offset to the 60-item first page). The legacy branch below instead
+    // grows the replay range until it covers `y`.
+    let pages = null;
     try {
       const parsed = JSON.parse(saved);
       if (parsed && typeof parsed === "object") {
@@ -872,15 +877,32 @@
       if (Number.isFinite(legacy)) y = legacy;
     }
 
-    // Item 14: replay pages loaded before the user left, so there's actually
-    // something to scroll into. Bounded by `pages`; if the library has since
-    // shrunk, loadNextPage() runs out and this loop just stops short — the
+    // Item 14 / Fix C: replay pages loaded before the user left, so there's
+    // actually something to scroll into — as a SINGLE bounded fetch instead
+    // of N serial round trips. If the library has since shrunk,
+    // replayLibraryPages() just returns fewer books than asked for — the
     // scrollTo below clamps to whatever height resulted.
     const gen = libraryRenderGen;
-    while (libraryTotal !== null && libraryPagesLoaded < pages) {
-      const loaded = await loadNextPage(gen);
+    if (libraryTotal !== null) {
+      if (pages !== null) {
+        if (libraryPagesLoaded < pages) await replayLibraryPages(gen, pages);
+      } else if (Number.isFinite(y)) {
+        // Legacy save with no known page count: grow the replay range
+        // (doubling — still one request per attempt) until the document is
+        // tall enough to contain `y`, or the library runs out. Never runs at
+        // all if what's already rendered (page 0) is already tall enough.
+        let pagesToTry = Math.max(libraryPagesLoaded, 1);
+        while (true) {
+          const tallEnough = document.documentElement.scrollHeight - window.innerHeight >= y;
+          const exhausted = libraryPageOffset >= libraryTotal;
+          if (tallEnough || exhausted) break;
+          pagesToTry *= 2;
+          const ok = await replayLibraryPages(gen, pagesToTry);
+          if (gen !== libraryRenderGen) return;
+          if (!ok) break;
+        }
+      }
       if (gen !== libraryRenderGen) return;
-      if (!loaded) break;
     }
 
     if (Number.isFinite(y)) {
@@ -944,15 +966,16 @@
   }
 
   // Item 14: builds the `/api/books` query string shared by the first page
-  // (offset 0, called from loadBooks) and every subsequent page
-  // (loadNextPage) — series/q/sort must stay identical across pages or the
-  // slice boundaries wouldn't line up.
-  function booksPageParams(query, offset) {
+  // (offset 0, called from loadBooks), every subsequent page (loadNextPage),
+  // and Fix C's bounded scroll-restore replay (a caller-supplied `limit`
+  // wider than one page) — series/q/sort must stay identical across pages or
+  // the slice boundaries wouldn't line up.
+  function booksPageParams(query, offset, limit) {
     const params = new URLSearchParams();
     if (activeSeries) params.set("series", activeSeries);
     if (query) params.set("q", query);
     if (activeSort && activeSort !== "date_added") params.set("sort", activeSort);
-    params.set("limit", String(LIBRARY_PAGE_SIZE));
+    params.set("limit", String(limit || LIBRARY_PAGE_SIZE));
     params.set("offset", String(offset));
     return params;
   }
@@ -1002,8 +1025,54 @@
       }
       return true;
     } finally {
-      libraryLoadingPage = false;
+      // Fix A: an abandoned old-generation fetch resolving after a filter
+      // change must not clear the NEW generation's in-flight guard — a
+      // fresh loadNextPage() for the new gen may already be running, and
+      // clearing the flag out from under it lets a second sentinel fire
+      // start a duplicate concurrent fetch (same page appended twice).
+      if (gen === libraryRenderGen) libraryLoadingPage = false;
     }
+  }
+
+  // Fix C: single-request replacement for the old "replay one page at a
+  // time" loop in restoreLibraryScrollPosition — fetches the whole replay
+  // range in one round trip (offset 0, limit = pagesToReplay * page size)
+  // and replaces the grid content with it, instead of N serial
+  // loadNextPage() calls. Updates the same pagination bookkeeping loadBooks/
+  // loadNextPage rely on so setupInfiniteScroll() picks up from the right
+  // offset afterward. Returns `true` on success, `false` on any reason to
+  // stop (superseded gen, network/HTTP/parse failure) — the caller then
+  // falls back to whatever was already rendered.
+  async function replayLibraryPages(gen, pagesToReplay) {
+    if (gen !== libraryRenderGen) return false;
+    const limit = pagesToReplay * LIBRARY_PAGE_SIZE;
+    let resp;
+    try {
+      resp = await api("/api/books?" + booksPageParams(activeQuery, 0, limit).toString());
+    } catch (e) {
+      return false;
+    }
+    if (gen !== libraryRenderGen) return false;
+    if (!resp || !resp.ok) return false;
+    const totalHeader = resp.headers.get("X-Total-Count");
+    let pageBooks;
+    try {
+      pageBooks = await resp.json();
+    } catch (e) {
+      return false;
+    }
+    if (gen !== libraryRenderGen) return false;
+
+    const contentEl = $("#library-content");
+    const grid = contentEl && contentEl.querySelector(".grid");
+    if (grid) {
+      grid.innerHTML = pageBooks.map(bookCardHtml).join("");
+      bindCardHandlersOn(Array.from(grid.children));
+    }
+    if (totalHeader !== null) libraryTotal = parseInt(totalHeader, 10);
+    libraryPageOffset = pageBooks.length;
+    libraryPagesLoaded = Math.max(1, Math.ceil(pageBooks.length / LIBRARY_PAGE_SIZE));
+    return true;
   }
 
   // Item 14: appends a page of cards as raw DOM nodes into the existing
@@ -1156,24 +1225,34 @@
       return;
     }
 
-    try {
-      // Item 14: `books` is now only page 0 of the "All Books" grid (up to
-      // 60 items), not the full library — "Recently Added" can no longer be
-      // derived client-side (Finding H's premise no longer holds) and gets
-      // its own bounded, date_added-sorted fetch instead.
-      const [continueResp, recentResp] = await Promise.all([
-        api("/api/books/continue-reading?limit=12"),
-        api("/api/books?sort=date_added&limit=12&offset=0"),
-      ]);
-      if (gen !== libraryRenderGen) return;
-      const continueBooks = continueResp && continueResp.ok ? await continueResp.json() : [];
-      const recentBooks = recentResp && recentResp.ok ? await recentResp.json() : [];
-      if (gen !== libraryRenderGen) return;
-
-      renderLibraryWithShelves(books, continueBooks, recentBooks);
-    } catch (e) {
-      // Best-effort: the plain grid rendered above stays intact.
+    // Fix B: each shelf fetch is independent — never lets one shelf's
+    // failure (network error, non-OK response, bad JSON) suppress the
+    // other. A `Promise.all` of two bare api() calls would reject (and
+    // abort both shelves) if either one rejected; this never rejects, so a
+    // failed shelf just renders empty while the other still shows.
+    async function fetchShelfBooks(url) {
+      try {
+        const resp = await api(url);
+        return resp && resp.ok ? await resp.json() : [];
+      } catch (e) {
+        return []; // best-effort — this shelf just doesn't render
+      }
     }
+
+    // Item 14: `books` is now only page 0 of the "All Books" grid (up to 60
+    // items), not the full library. Fix E: on the default date_added sort,
+    // page 0 is already the most-recently-added books in date order, so
+    // "Recently Added" is just the first 12 of it — only fall back to the
+    // dedicated date_added-sorted fetch when a different sort is active.
+    const [continueBooks, recentBooks] = await Promise.all([
+      fetchShelfBooks("/api/books/continue-reading?limit=12"),
+      activeSort === "date_added"
+        ? Promise.resolve(books.slice(0, 12))
+        : fetchShelfBooks("/api/books?sort=date_added&limit=12&offset=0"),
+    ]);
+    if (gen !== libraryRenderGen) return;
+
+    renderLibraryWithShelves(books, continueBooks, recentBooks);
     // Finding 5: restore once the layout has settled into its final shape
     // (grid-only or grid+shelves) — restoring earlier, right after the plain
     // grid render, would be undone by the shelves rendering on top of it.

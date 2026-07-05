@@ -706,7 +706,15 @@ fn row_to_grid_item(row: &rusqlite::Row) -> rusqlite::Result<BookGridItem> {
 }
 
 pub fn list_books_grid(conn: &Connection) -> Result<Vec<BookGridItem>> {
-    let sql = format!("SELECT {} FROM books ORDER BY added_at DESC", GRID_COLUMNS);
+    // Fix D: `added_at` has second-granularity ties (concurrent/batch
+    // imports) — without a unique tiebreaker, offset pagination can slice a
+    // book onto two pages or skip it entirely when rows with the same
+    // timestamp sort differently between two requests. `id` is unique, so
+    // appending it makes this order total and deterministic.
+    let sql = format!(
+        "SELECT {} FROM books ORDER BY added_at DESC, id",
+        GRID_COLUMNS
+    );
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt.query_map([], row_to_grid_item)?;
     rows.collect()

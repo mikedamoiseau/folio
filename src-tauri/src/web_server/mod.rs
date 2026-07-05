@@ -2518,6 +2518,49 @@ mod tests {
         let _ = tx.send(());
     }
 
+    // Fix D: `added_at` only has second-granularity, so concurrent/batch
+    // imports can tie — without a unique tiebreaker (`id`) in the SQL
+    // ORDER BY, offset pagination isn't guaranteed stable across requests
+    // and a tied book could land on two pages or be skipped entirely.
+    #[tokio::test]
+    async fn list_books_tied_added_at_paginates_without_dup_or_skip() {
+        let state = test_state();
+        {
+            let conn = state.conn().unwrap();
+            for id in ["tie-c", "tie-a", "tie-b"] {
+                crate::db::insert_book(&conn, &pagination_test_book(id, id, 5000)).unwrap();
+            }
+        }
+
+        let (_state, port, tx) = spawn_progress_test_server(state).await;
+        let client = reqwest::Client::new();
+
+        let mut seen = Vec::new();
+        for offset in 0..3 {
+            let resp = client
+                .get(format!(
+                    "http://127.0.0.1:{port}/api/books?limit=1&offset={offset}"
+                ))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), 200);
+            let page: Vec<serde_json::Value> = resp.json().await.unwrap();
+            assert_eq!(page.len(), 1);
+            seen.push(page[0]["id"].as_str().unwrap().to_string());
+        }
+
+        seen.sort();
+        assert_eq!(
+            seen,
+            vec!["tie-a", "tie-b", "tie-c"],
+            "tied added_at must still paginate deterministically — no book \
+             duplicated across pages or skipped entirely"
+        );
+
+        let _ = tx.send(());
+    }
+
     // ── Item 8: richer book detail (file_size) ──────────────────────────────
 
     #[tokio::test]
