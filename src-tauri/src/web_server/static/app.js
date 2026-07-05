@@ -1650,8 +1650,9 @@
       preloadCache: {},
       lastRenderedPageIndex: undefined,
       lastRenderedChapterIndex: undefined,
-      chapterAnimToken: 0,
+      chapterAnimCleanup: null,
       turnAnimCleanup: null,
+      snapBackCleanup: null,
       pendingInstantTurn: false,
     };
     readerState.handlers = makeReaderHandlers(id);
@@ -1770,19 +1771,50 @@
     img.style.willChange = "";
   }
 
+  // F6: cancels any in-flight snap-back on `img` — removes its
+  // transitionend listener and its fallback timeout, then resets the drag
+  // styles immediately. Called both when a new drag starts (so it doesn't
+  // inherit the snap-back's transition, which would make the page lag the
+  // finger) and when a drag is aborted outright (F1/F2).
+  function cancelSnapBack(img) {
+    if (!readerState || !readerState.snapBackCleanup) return;
+    const cleanup = readerState.snapBackCleanup;
+    readerState.snapBackCleanup = null;
+    cleanup();
+  }
+
   // Item 12: below-threshold release — animate the dragged image back to
   // translateX(0) with the same timing as a committed turn, then clean up.
+  // F6: cleanup runs off transitionend OR a timeout fallback, whichever
+  // fires first — dx===0 leaves img.style.transform already at
+  // "translateX(0)" (no-op transition, transitionend never fires), so the
+  // timeout is the only thing that ever cleans that case up. A new drag
+  // (touchstart) or an abort (touchcancel/multi-touch) cancels this via
+  // cancelSnapBack before either fires.
   function snapBackDrag(img) {
     if (!img || !img.style.transform) {
       resetDragStyles(img);
       return;
     }
     img.style.transition = "transform var(--dur-page-turn) var(--ease-page-turn)";
-    requestAnimationFrame(() => { img.style.transform = "translateX(0)"; });
-    img.addEventListener("transitionend", function onEnd() {
+    const rafId = requestAnimationFrame(() => { img.style.transform = "translateX(0)"; });
+
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      cancelAnimationFrame(rafId); // in case cancelled before the rAF ran
       img.removeEventListener("transitionend", onEnd);
+      clearTimeout(timer);
+      if (readerState && readerState.snapBackCleanup === finish) readerState.snapBackCleanup = null;
       resetDragStyles(img);
-    });
+    };
+    const onEnd = () => finish();
+    img.addEventListener("transitionend", onEnd);
+    // Slightly longer than --dur-page-turn (0.22s) so it never races a
+    // normal transitionend completion.
+    const timer = setTimeout(finish, 280);
+    if (readerState) readerState.snapBackCleanup = finish;
   }
 
   // Item 3/12: horizontal swipe (~50px threshold) = prev/next on touch
@@ -1798,8 +1830,27 @@
   function bindSwipe(el) {
     let startX = 0, startY = 0, tracking = false, axisLock = null;
 
+    // F1/F2: shared abort path — stops tracking so a stray touchend (from
+    // whichever finger lifts) can't commit a bogus swipe, and immediately
+    // clears any drag-follow transform/will-change plus any in-flight
+    // snap-back so nothing is left stuck mid-gesture.
+    function abortDrag() {
+      tracking = false;
+      axisLock = null;
+      const img = $("#page-img");
+      cancelSnapBack(img);
+      resetDragStyles(img);
+    }
+
     el.addEventListener("touchstart", (e) => {
-      if (e.touches.length !== 1) return;
+      if (e.touches.length !== 1) {
+        // F2: a second finger present at touchstart (e.g. joining mid-drag,
+        // since touchstart re-fires with the full active touch list) — never
+        // (re)start tracking on multi-touch.
+        abortDrag();
+        return;
+      }
+      cancelSnapBack($("#page-img")); // F6: a new drag interrupts any snap-back in flight
       startX = e.touches[0].clientX;
       startY = e.touches[0].clientY;
       tracking = true;
@@ -1811,7 +1862,13 @@
     // but that call only happens once locked horizontal; a vertical drag
     // returns immediately and never blocks the native scroll gesture.
     el.addEventListener("touchmove", (e) => {
-      if (!tracking || e.touches.length !== 1) return;
+      if (!tracking) return;
+      if (e.touches.length !== 1) {
+        // F2: a second finger joined mid-drag — abort so a later touchend
+        // (computed from whichever finger lifts) can't commit a bogus turn.
+        abortDrag();
+        return;
+      }
       const dx = e.touches[0].clientX - startX;
       const dy = e.touches[0].clientY - startY;
       if (axisLock === null) {
@@ -1829,7 +1886,7 @@
     }, { passive: false });
 
     el.addEventListener("touchend", (e) => {
-      if (!tracking) return;
+      if (!tracking) return; // only a clean single-touch drag reaches here
       tracking = false;
       const t = e.changedTouches[0];
       const dx = t.clientX - startX;
@@ -1853,6 +1910,15 @@
         }
       }
       axisLock = null;
+    }, { passive: true });
+
+    // F1: a system-cancelled gesture (incoming call, notification shade,
+    // browser edge-gesture) fires touchcancel instead of touchend — without
+    // this, the drag-follow transform/will-change stays on #page-img
+    // indefinitely (only recovered by the next *committed* turn).
+    el.addEventListener("touchcancel", () => {
+      if (!tracking) return;
+      abortDrag();
     }, { passive: true });
   }
 
@@ -2110,22 +2176,48 @@
     const cached = !forceInstant && direction && !reducedMotionEnabled() ? getPreloadedImage(index) : null;
 
     if (cached && incoming) {
+      // F5: the overlay is position:absolute anchored to the stage's
+      // *unscrolled* origin. In fit-width mode the stage can be scrolled
+      // (overflow:auto on a tall page) — if it is, that anchor point is
+      // scrolled out of view, so the slide plays off-screen (a dead delay,
+      // then a hard cut once img.src swaps on completion). Resetting to the
+      // top before playing keeps the whole animation on-screen; in
+      // fit-height (never scrollable) this is always a no-op.
+      const stage = $("#reader-stage");
+      if (stage && stage.scrollTop > 0) stage.scrollTop = 0;
+
       incoming.src = url; // already loaded — paints immediately, no flash
       incoming.alt = alt;
       incoming.hidden = false;
       incoming.classList.remove("slide-in-left", "slide-in-right");
       void incoming.offsetWidth; // force reflow so re-adding the class restarts the animation
       incoming.classList.add(direction === "next" ? "slide-in-right" : "slide-in-left");
+
+      // F3: promotion must happen exactly once, driven by whichever of
+      // animationend/animationcancel/the fallback timeout fires first — a
+      // backgrounded tab can throttle or drop the animation event entirely,
+      // which would otherwise leave the incoming overlay stuck visible over
+      // a stale #page-img forever.
+      let done = false;
       const finish = () => {
+        if (done) return;
+        done = true;
+        incoming.removeEventListener("animationend", onAnimEnd);
+        incoming.removeEventListener("animationcancel", onAnimEnd);
+        clearTimeout(timer);
         img.src = url;
         img.alt = alt;
         incoming.hidden = true;
         incoming.classList.remove("slide-in-left", "slide-in-right");
         incoming.style.willChange = "";
-        incoming.removeEventListener("animationend", finish);
-        readerState.turnAnimCleanup = null;
+        if (readerState.turnAnimCleanup === finish) readerState.turnAnimCleanup = null;
       };
-      incoming.addEventListener("animationend", finish);
+      const onAnimEnd = () => finish();
+      incoming.addEventListener("animationend", onAnimEnd);
+      incoming.addEventListener("animationcancel", onAnimEnd);
+      // Slightly longer than --dur-page-turn (0.22s) so it never races a
+      // normal completion.
+      const timer = setTimeout(finish, 280);
       readerState.turnAnimCleanup = finish;
     } else {
       img.src = url;
@@ -2142,11 +2234,26 @@
 
   // Chapter mode has no "unloaded" concern (the full HTML is already in
   // hand by the time this runs) — just slide the freshly-rendered content
-  // in from the appropriate side. `token` guards against a rapid second
+  // in from the appropriate side. `readerState.chapterAnimCleanup` (same
+  // pattern as `turnAnimCleanup` above) guards against a rapid second
   // chapter render's cleanup firing after a third one has already restarted
   // the animation on the same (reused) `.content` element.
   function renderChapterTurnAnimation(contentEl, index, isInitialRender) {
     if (!contentEl || !readerState) return;
+    // F4: run any in-flight prior turn's cleanup — or, if none is pending,
+    // strip a leftover slide-in-* class directly — BEFORE any early return
+    // below. #reader-content's `.content` element is reused across chapter
+    // turns; without this, an instant render (slider jump, reduced-motion,
+    // or the initial open) landing while a previous animation is still
+    // running would keep that stale class and render mid-slide.
+    if (readerState.chapterAnimCleanup) {
+      const cleanup = readerState.chapterAnimCleanup;
+      readerState.chapterAnimCleanup = null;
+      cleanup();
+    } else {
+      contentEl.classList.remove("slide-in-left", "slide-in-right");
+    }
+
     const prevIndex = readerState.lastRenderedChapterIndex;
     readerState.lastRenderedChapterIndex = index;
     const forceInstant = !!readerState.pendingInstantTurn;
@@ -2155,15 +2262,28 @@
     if (typeof prevIndex !== "number" || index === prevIndex) return;
 
     const direction = index > prevIndex ? "next" : "prev";
-    contentEl.classList.remove("slide-in-left", "slide-in-right");
     void contentEl.offsetWidth; // force reflow so re-adding the class restarts the animation
     contentEl.classList.add(direction === "next" ? "slide-in-right" : "slide-in-left");
-    const token = (readerState.chapterAnimToken = (readerState.chapterAnimToken || 0) + 1);
-    contentEl.addEventListener("animationend", function onEnd() {
+
+    // F3-parity fallback: promotion (here, just the class removal) must run
+    // exactly once off animationend/animationcancel/timeout, whichever
+    // fires first, so a throttled/dropped event in a backgrounded tab
+    // doesn't leave the class (and its will-change) applied forever.
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true;
       contentEl.removeEventListener("animationend", onEnd);
-      if (!readerState || readerState.chapterAnimToken !== token) return;
+      contentEl.removeEventListener("animationcancel", onEnd);
+      clearTimeout(timer);
+      if (readerState.chapterAnimCleanup === finish) readerState.chapterAnimCleanup = null;
       contentEl.classList.remove("slide-in-left", "slide-in-right");
-    });
+    };
+    const onEnd = () => finish();
+    contentEl.addEventListener("animationend", onEnd);
+    contentEl.addEventListener("animationcancel", onEnd);
+    const timer = setTimeout(finish, 280);
+    readerState.chapterAnimCleanup = finish;
   }
 
   // ── Item 4: reading progress sync ──────────────
