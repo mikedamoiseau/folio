@@ -10,7 +10,8 @@
     "tauri": "tauri",
     "type-check": "tsc --noEmit",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "test:e2e": "playwright test -c e2e/playwright.config.ts"
   },
   "dependencies": {
     "@fontsource-variable/dm-sans": "^5.2.8",

@@ -70,6 +70,8 @@ docs/superpowers/
 
 # Vitest/Playwright output
 test-results/
+e2e/playwright-report/
+e2e/.cache/
 
 # Antigravity CLI session state
 .antigravitycli/
