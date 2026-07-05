@@ -3,6 +3,24 @@
 All notable changes to this project will be documented in this file.
 This project adheres to [Semantic Versioning](https://semver.org/).
 
+## [2.6.0] - 2026-07-05
+
+A web-UI release: the built-in browser reader (the LAN/remote surface on
+`:7788`) was rebuilt to match the desktop app, plus reader and metadata
+polish on the desktop side. See `docs/web-ui-improvements.md` for the full
+per-item breakdown and decision log.
+
+### Added
+- **Web UI overhaul.** The embedded web reader now matches the desktop app's design (warm paper/terracotta palette, serif/sans type) with a **light/dark/system theme toggle**, **keyboard shortcuts** (`/` to search, reader arrow navigation, a shortcuts overlay), a **paginated infinite-scroll library** with server-side search, series/collection filters, and sort, **home shelves** ("Continue Reading" + "Recently Added"), **reading-progress sync** with **progress badges** on grid and shelf cards, a richer book detail page (progress bar, Continue / Start-over), an **animated swipe page-turn** in the page-image reader on touch devices, **cover thumbnails** for faster grids, and loading skeletons / friendly empty states / broken-cover placeholders.
+- **Installable web app (PWA).** The web UI ships a manifest + service worker (app-shell caching) and supports **iOS "Add to Home Screen"** for an app-like launch. (Service-worker offline caching only activates on a secure context; Add-to-Home-Screen still works over the plain-HTTP LAN URL.)
+- **Reader "book details" popup (desktop).** An **(i)** button in the reader toolbar opens a read-only popup with the book's title, author, format, series, publisher, year, language, and full description — without leaving the page.
+- **Committed end-to-end tests.** A Playwright web-UI suite (`e2e/`) runs against a seeded harness (`src-tauri/examples/web_e2e_server.rs`) as a new CI job.
+- **New web API endpoints.** `GET /api/reading-progress`, `GET /api/books/continue-reading`, `GET`/`PUT /api/books/:id/progress`; `/api/books` gained `?series=`, `?sort=`, `?limit=&offset=` (with an `X-Total-Count` header); `/api/books/:id/cover?size=thumb` serves a downscaled thumbnail.
+
+### Fixed
+- **HTML entities in book metadata.** ComicInfo `<Summary>` and EPUB `<dc:*>` values are now entity-decoded on import, so descriptions/titles/series no longer render literal `&gt;`, `&lt;`, `&amp;`. (Numeric/identifier fields are left as-is; decoding falls back to the raw value on malformed input.)
+- **Book description newlines.** The desktop book-detail description now preserves paragraph breaks instead of collapsing them into a run-on block.
+
 ## [2.5.0] - 2026-07-02
 
 A trust-and-feedback release driven by a full UX audit of the first-run →
