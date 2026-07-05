@@ -1,4 +1,5 @@
 use axum::{
+    body::Bytes,
     extract::{Path, Query, State},
     http::{header, StatusCode},
     response::{IntoResponse, Response},
@@ -136,6 +137,7 @@ pub fn routes(state: WebState) -> Router<WebState> {
         .route("/health", get(health))
         .route("/auth", axum::routing::post(login))
         .route("/books", get(list_books))
+        .route("/books/continue-reading", get(continue_reading))
         .route("/books/{id}", get(get_book))
         .route("/books/{id}/cover", get(get_cover))
         .route("/books/{id}/chapters", get(get_chapters))
@@ -146,6 +148,8 @@ pub fn routes(state: WebState) -> Router<WebState> {
         )
         .route("/books/{id}/pages/{index}", get(get_page_image))
         .route("/books/{id}/page-count", get(get_page_count))
+        .route("/books/{id}/progress", get(get_progress).put(put_progress))
+        .route("/reading-progress", get(get_all_progress))
         .route("/books/{id}/download", get(download_book))
         // OPDS feeds emit `/download/{book_id}.{ext}` so clients using URL-
         // based extension detection can disambiguate AZW vs AZW3 (both share
@@ -292,12 +296,17 @@ struct BookQuery {
     q: Option<String>,
     series: Option<String>,
     sort: Option<String>, // title, author, last_read, rating (default: date_added)
+    // Item 14: both optional and backward-compatible — when `limit` is
+    // absent the response is the full filtered+sorted list exactly as
+    // before (OPDS/desktop and any other caller never sends it).
+    limit: Option<usize>,
+    offset: Option<usize>,
 }
 
 async fn list_books(
     State(state): State<WebState>,
     Query(params): Query<BookQuery>,
-) -> Result<Json<Vec<crate::models::BookGridItem>>, (StatusCode, String)> {
+) -> Result<Response, (StatusCode, String)> {
     let conn = state.conn().map_err(folio_status)?;
     let books = db::list_books_grid(&conn).map_err(folio_status)?;
 
@@ -324,15 +333,34 @@ async fn list_books(
     };
 
     // Sort
+    // Fix D: every branch falls back to `id` on equality — ties (identical
+    // title/author/rating/last-read, or no reading progress at all) would
+    // otherwise sort in whatever order the underlying Vec happened to be in,
+    // which isn't stable across requests. That breaks offset pagination:
+    // the same book could land on two pages or be skipped depending on how
+    // ties resolved between two calls. `id` is unique, so this gives every
+    // sort a total, deterministic order (mirrors resolveSeriesNav in
+    // app.js, which needed the same fix for the same reason).
     let mut books = books;
     match params.sort.as_deref() {
-        Some("title") => books.sort_by_key(|a| a.title.to_lowercase()),
-        Some("author") => books.sort_by_key(|a| a.author.to_lowercase()),
+        Some("title") => books.sort_by(|a, b| {
+            a.title
+                .to_lowercase()
+                .cmp(&b.title.to_lowercase())
+                .then_with(|| a.id.cmp(&b.id))
+        }),
+        Some("author") => books.sort_by(|a, b| {
+            a.author
+                .to_lowercase()
+                .cmp(&b.author.to_lowercase())
+                .then_with(|| a.id.cmp(&b.id))
+        }),
         Some("rating") => books.sort_by(|a, b| {
             b.rating
                 .unwrap_or(0.0)
                 .partial_cmp(&a.rating.unwrap_or(0.0))
                 .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a.id.cmp(&b.id))
         }),
         Some("last_read") => {
             // Need reading progress for last_read sort
@@ -345,51 +373,282 @@ async fn list_books(
             books.sort_by(|a, b| {
                 let la = progress_map.get(&a.id).copied().unwrap_or(0);
                 let lb = progress_map.get(&b.id).copied().unwrap_or(0);
-                lb.cmp(&la)
+                lb.cmp(&la).then_with(|| a.id.cmp(&b.id))
             });
         }
-        _ => {} // default: date_added DESC from SQL
+        _ => {} // default: date_added DESC, id from SQL
     }
 
+    // Item 14: pagination is applied strictly after filter+sort, so it's
+    // purely a slice of the same result the pre-pagination endpoint would
+    // have returned — no `limit` means no behavior change at all.
+    match params.limit {
+        Some(limit) => {
+            let total = books.len();
+            let offset = params.offset.unwrap_or(0).min(total);
+            let end = offset.saturating_add(limit).min(total);
+            let page = books[offset..end].to_vec();
+            Ok((
+                [(
+                    axum::http::HeaderName::from_static("x-total-count"),
+                    total.to_string(),
+                )],
+                Json(page),
+            )
+                .into_response())
+        }
+        None => Ok(Json(books).into_response()),
+    }
+}
+
+// Item 5: "Continue Reading" shelf on the home screen — books with progress
+// that is neither zero nor "finished", most recently read first.
+#[derive(serde::Deserialize)]
+struct ContinueReadingQuery {
+    limit: Option<u32>,
+}
+
+async fn continue_reading(
+    State(state): State<WebState>,
+    Query(params): Query<ContinueReadingQuery>,
+) -> Result<Json<Vec<crate::models::ContinueReadingItem>>, (StatusCode, String)> {
+    let conn = state.conn().map_err(folio_status)?;
+    let limit = params.limit.unwrap_or(12).min(50);
+    let books = db::get_continue_reading_books(&conn, limit).map_err(folio_status)?;
     Ok(Json(books))
+}
+
+/// Item 8: the book-detail response is the shared `Book` model plus
+/// `file_size`, which isn't a DB column — it's stat'd from the resolved
+/// book file on disk (same path `download_book` reads) so no schema change
+/// is needed. `None` when the file can't be stat'd (e.g. missing/unlinked).
+#[derive(serde::Serialize)]
+struct BookDetail {
+    #[serde(flatten)]
+    book: crate::models::Book,
+    file_size: Option<u64>,
 }
 
 async fn get_book(
     State(state): State<WebState>,
     Path(id): Path<String>,
-) -> Result<Json<crate::models::Book>, (StatusCode, String)> {
-    let conn = state.conn().map_err(folio_status)?;
-    let book = db::get_book(&conn, &id)
-        .map_err(folio_status)?
-        .ok_or_else(|| (StatusCode::NOT_FOUND, "Book not found".to_string()))?;
-    Ok(Json(book))
+) -> Result<Json<BookDetail>, (StatusCode, String)> {
+    // Finding E: fetch the book and drop the connection before resolving its
+    // path — `resolve_book_path` acquires its own connection internally for
+    // imported books with a relative path, so holding this one across that
+    // call meant two connections held from the pool (max 5) at once,
+    // stalling concurrent detail requests under load.
+    let book = {
+        let conn = state.conn().map_err(folio_status)?;
+        db::get_book(&conn, &id)
+            .map_err(folio_status)?
+            .ok_or_else(|| (StatusCode::NOT_FOUND, "Book not found".to_string()))?
+    };
+    // The filesystem stat is best-effort (`file_size` stays `None` on any
+    // error) and run on a blocking thread — `std::fs::metadata` on a
+    // network-mounted library folder can stall for seconds, which would
+    // otherwise block a tokio worker thread directly in this async handler.
+    let file_size = match state.resolve_book_path(&book) {
+        Ok(path) => {
+            tokio::task::spawn_blocking(move || std::fs::metadata(path).ok().map(|m| m.len()))
+                .await
+                .unwrap_or(None)
+        }
+        Err(_) => None,
+    };
+    Ok(Json(BookDetail { book, file_size }))
 }
 
 // ── Covers ───────────────────────────────────────────────────────────────────
 
+/// Finding 8: covers are decorative artwork, not book content — far less
+/// sensitive than page images/chapter text, and OPDS e-reader clients
+/// re-fetch full covers constantly under per-request Basic Auth (no
+/// cookie/session reuse to worry about). A blanket `no-store` whenever a PIN
+/// is configured regressed those clients for little real security benefit,
+/// so covers (both the full image and `?size=thumb`) always get a cacheable
+/// response regardless of PIN — unlike `session_cache_control`'s policy for
+/// page images/page-count, which must stay PIN-aware since those requests
+/// never pass through `auth_middleware` once a cached response exists.
+const COVER_CACHE_CONTROL: &str = "private, max-age=86400";
+
+/// Finding 5: `Query<CoverQuery>` (axum's `serde_urlencoded`-backed
+/// extractor) hard-rejects request shapes real clients send in practice — a
+/// duplicate `size` key, or a `%` sequence that isn't valid percent-encoding
+/// — turning what used to serve fine into a 400. Parse the query string
+/// ourselves instead: take the *last* `size=` occurrence (mirrors how most
+/// frameworks resolve duplicate keys) and never fail the request over
+/// anything else — an unparseable or unrecognized value already falls
+/// through to the "serve full cover" branch below, same as `size=banana`
+/// always has.
+fn parse_cover_size(query: Option<&str>) -> Option<String> {
+    let mut size = None;
+    for pair in query?.split('&') {
+        let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
+        if key == "size" {
+            size = Some(urlencoding::decode(value).unwrap_or_default().into_owned());
+        }
+    }
+    size
+}
+
+/// Finding 1: true only when `cover_path`'s parent directory canonicalizes
+/// to somewhere inside `covers_root`. `cover_path` is a DB-backed value that
+/// predates this hardening pass — reading it (here and in the full-cover
+/// route) stays unguarded — but the disk write the thumbnail cache
+/// introduces below must never be steered outside the app-managed covers
+/// directory by a malformed or adversarial row.
+fn cover_write_path_is_safe(covers_root: &std::path::Path, cover_path: &std::path::Path) -> bool {
+    let (Some(parent), Ok(canon_root)) = (cover_path.parent(), covers_root.canonicalize()) else {
+        return false;
+    };
+    parent
+        .canonicalize()
+        .map(|canon_parent| canon_parent.starts_with(&canon_root))
+        .unwrap_or(false)
+}
+
+/// Item 11 cover-thumbnail resolution, hardened per code review (findings
+/// 1-4, 7): serves the persisted `thumb.jpg` sibling only when it is at
+/// least as fresh as the cover it was made from (finding 2a — otherwise a
+/// replaced cover serves stale art forever), regenerates and atomically
+/// persists a new one otherwise (finding 3), and only ever writes inside the
+/// app's covers root (finding 1). Generation/persist failures are logged and
+/// fall back to serving whatever bytes are already in hand (finding 7)
+/// rather than 500ing. Synchronous — the caller runs this inside a single
+/// `spawn_blocking` (finding 6).
+fn resolve_cover_thumb(
+    covers_root: &std::path::Path,
+    cover_path: &std::path::Path,
+) -> std::io::Result<(Vec<u8>, String)> {
+    use std::io::Write;
+
+    let thumb_path = cover_path.with_file_name(crate::commands::THUMB_FILENAME);
+
+    let cover_mtime = std::fs::metadata(cover_path)?.modified()?;
+
+    // A stat/read failure here is an ordinary cache miss (no thumb yet, or a
+    // race with a concurrent writer) — not something worth logging. Fall
+    // through and regenerate.
+    let cached = std::fs::metadata(&thumb_path)
+        .and_then(|m| m.modified())
+        .ok()
+        .filter(|&thumb_mtime| thumb_mtime >= cover_mtime)
+        .and_then(|_| std::fs::read(&thumb_path).ok());
+    if let Some(bytes) = cached {
+        return Ok((bytes, "image/jpeg".to_string()));
+    }
+
+    let full_bytes = std::fs::read(cover_path)?;
+
+    let generated =
+        folio_core::image_util::make_thumbnail(&full_bytes, crate::commands::THUMB_WIDTH)
+            .unwrap_or_else(|e| {
+                log::warn!(
+                    "cover thumbnail generation failed for '{}': {e}",
+                    cover_path.display()
+                );
+                None
+            });
+
+    let Some(thumb_bytes) = generated else {
+        let mime = mime_guess::from_path(cover_path)
+            .first_or_octet_stream()
+            .to_string();
+        return Ok((full_bytes, mime));
+    };
+
+    if cover_write_path_is_safe(covers_root, cover_path) {
+        // Finding 4 (TOCTOU): re-stat the cover right before persisting. If
+        // it changed since `cover_mtime` was captured above (the desktop app
+        // replaced cover+thumb concurrently), skip the write — persisting
+        // now would clobber the fresh thumb with stale art, and the stale
+        // write's own mtime would still pass future freshness checks.
+        let still_current = std::fs::metadata(cover_path)
+            .and_then(|m| m.modified())
+            .map(|m| m == cover_mtime)
+            .unwrap_or(false);
+
+        if still_current {
+            if let Err(e) =
+                folio_core::storage::write_atomic(&thumb_path, |f| f.write_all(&thumb_bytes))
+            {
+                log::warn!(
+                    "cover thumbnail persist failed for '{}': {e}",
+                    thumb_path.display()
+                );
+            }
+        } else {
+            log::warn!(
+                "skipping thumbnail persist for '{}': cover changed during generation",
+                cover_path.display()
+            );
+        }
+    } else {
+        log::warn!(
+            "skipping thumbnail persist for '{}': cover path resolves outside the covers root",
+            cover_path.display()
+        );
+    }
+
+    Ok((thumb_bytes, "image/jpeg".to_string()))
+}
+
+/// Async wrapper: runs [`resolve_cover_thumb`] in a single `spawn_blocking`
+/// (finding 6 — decode/resize/persist is all CPU- and I/O-bound). A panic
+/// inside that closure (finding 7) must not 500 the request when the cover
+/// itself is perfectly readable, so it falls back to serving the full cover
+/// via `tokio::fs` instead.
+async fn get_cover_thumb_bytes(
+    covers_root: std::path::PathBuf,
+    cover_path: String,
+) -> Result<(Vec<u8>, String), (StatusCode, String)> {
+    let cover_path_buf = std::path::PathBuf::from(&cover_path);
+    match tokio::task::spawn_blocking(move || resolve_cover_thumb(&covers_root, &cover_path_buf))
+        .await
+    {
+        Ok(Ok(result)) => Ok(result),
+        Ok(Err(e)) => Err(folio_status(e)),
+        Err(join_err) => {
+            log::warn!("cover thumbnail worker panicked for '{cover_path}': {join_err}");
+            let bytes = tokio::fs::read(&cover_path).await.map_err(folio_status)?;
+            let mime = mime_guess::from_path(&cover_path)
+                .first_or_octet_stream()
+                .to_string();
+            Ok((bytes, mime))
+        }
+    }
+}
+
 async fn get_cover(
     State(state): State<WebState>,
     Path(id): Path<String>,
+    uri: axum::http::Uri,
 ) -> Result<Response, (StatusCode, String)> {
-    let conn = state.conn().map_err(folio_status)?;
-    let book = db::get_book(&conn, &id)
-        .map_err(folio_status)?
-        .ok_or_else(|| (StatusCode::NOT_FOUND, "Book not found".to_string()))?;
+    let cover_path = {
+        let conn = state.conn().map_err(folio_status)?;
+        let book = db::get_book(&conn, &id)
+            .map_err(folio_status)?
+            .ok_or_else(|| (StatusCode::NOT_FOUND, "Book not found".to_string()))?;
+        book.cover_path
+            .ok_or_else(|| (StatusCode::NOT_FOUND, "No cover available".to_string()))?
+    };
 
-    let cover_path = book
-        .cover_path
-        .ok_or_else(|| (StatusCode::NOT_FOUND, "No cover available".to_string()))?;
-
-    let bytes = std::fs::read(&cover_path).map_err(folio_status)?;
-
-    let mime = mime_guess::from_path(&cover_path)
-        .first_or_octet_stream()
-        .to_string();
+    let size = parse_cover_size(uri.query());
+    let (bytes, mime) = if size.as_deref() == Some("thumb") {
+        get_cover_thumb_bytes(state.covers_root(), cover_path).await?
+    } else {
+        let bytes = std::fs::read(&cover_path).map_err(folio_status)?;
+        let mime = mime_guess::from_path(&cover_path)
+            .first_or_octet_stream()
+            .to_string();
+        (bytes, mime)
+    };
 
     Ok((
         [
             (header::CONTENT_TYPE, mime),
-            (header::CACHE_CONTROL, "public, max-age=86400".to_string()),
+            (header::CACHE_CONTROL, COVER_CACHE_CONTROL.to_string()),
         ],
         bytes,
     )
@@ -628,6 +887,22 @@ async fn get_epub_image(
 
 // ── PDF / Comic Pages ────────────────────────────────────────────────────────
 
+/// Cache-control for content that must respect session expiry: PDF/CBZ/CBR
+/// page images and page counts are rasterized from the book file itself, so
+/// they're safe to cache in the browser when the server is unauthenticated
+/// (no PIN, no session gate). Once a PIN is configured, a cached response
+/// would let the same browser keep serving protected pages for up to an hour
+/// after the session expires — those requests never reach `auth_middleware`
+/// at all. `no-store` closes that gap. Contrast `COVER_CACHE_CONTROL`, which
+/// doesn't need this treatment (finding 8).
+fn session_cache_control(state: &WebState) -> &'static str {
+    if state.has_pin() {
+        "no-store"
+    } else {
+        "private, max-age=3600"
+    }
+}
+
 async fn get_page_image(
     State(state): State<WebState>,
     Path((id, index)): Path<(String, u32)>,
@@ -638,22 +913,44 @@ async fn get_page_image(
         .ok_or_else(|| (StatusCode::NOT_FOUND, "Book not found".to_string()))?;
 
     let file_path = state.resolve_book_path(&book).map_err(folio_status)?;
+    let page_cache_control = session_cache_control(&state);
 
     match book.format {
         BookFormat::Pdf => {
             let (bytes, mime) =
                 crate::pdf::get_page_image_bytes(&file_path, index, None).map_err(folio_status)?;
-            Ok(([(header::CONTENT_TYPE, mime.to_string())], bytes).into_response())
+            Ok((
+                [
+                    (header::CONTENT_TYPE, mime.to_string()),
+                    (header::CACHE_CONTROL, page_cache_control.to_string()),
+                ],
+                bytes,
+            )
+                .into_response())
         }
         BookFormat::Cbz => {
             let (bytes, mime) =
                 crate::cbz::get_page_image_bytes(&file_path, index, None).map_err(folio_status)?;
-            Ok(([(header::CONTENT_TYPE, mime)], bytes).into_response())
+            Ok((
+                [
+                    (header::CONTENT_TYPE, mime),
+                    (header::CACHE_CONTROL, page_cache_control.to_string()),
+                ],
+                bytes,
+            )
+                .into_response())
         }
         BookFormat::Cbr => {
             let (bytes, mime) =
                 crate::cbr::get_page_image_bytes(&file_path, index, None).map_err(folio_status)?;
-            Ok(([(header::CONTENT_TYPE, mime)], bytes).into_response())
+            Ok((
+                [
+                    (header::CONTENT_TYPE, mime),
+                    (header::CACHE_CONTROL, page_cache_control.to_string()),
+                ],
+                bytes,
+            )
+                .into_response())
         }
         _ => Err((
             StatusCode::BAD_REQUEST,
@@ -665,7 +962,7 @@ async fn get_page_image(
 async fn get_page_count(
     State(state): State<WebState>,
     Path(id): Path<String>,
-) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+) -> Result<Response, (StatusCode, String)> {
     let conn = state.conn().map_err(folio_status)?;
     let book = db::get_book(&conn, &id)
         .map_err(folio_status)?
@@ -685,7 +982,98 @@ async fn get_page_count(
         }
     };
 
-    Ok(Json(serde_json::json!({ "count": count })))
+    let page_cache_control = session_cache_control(&state);
+
+    Ok((
+        [(header::CACHE_CONTROL, page_cache_control)],
+        Json(serde_json::json!({ "count": count })),
+    )
+        .into_response())
+}
+
+// ── Reading progress ─────────────────────────────────────────────────────────
+
+/// PUT body for saving reading progress. Field names mirror
+/// `folio_core::models::ReadingProgress` exactly (and thus the shape the
+/// desktop app already persists via `save_reading_progress`): `chapter_index`
+/// doubles as the page index for PDF/CBZ/CBR books, `scroll_position` is the
+/// 0..1 scroll fraction used by EPUB/MOBI.
+#[derive(serde::Deserialize)]
+struct ProgressUpdate {
+    chapter_index: u32,
+    scroll_position: f64,
+}
+
+async fn get_progress(
+    State(state): State<WebState>,
+    Path(id): Path<String>,
+) -> Result<Json<Option<crate::models::ReadingProgress>>, (StatusCode, String)> {
+    let conn = state.conn().map_err(folio_status)?;
+    db::get_book(&conn, &id)
+        .map_err(folio_status)?
+        .ok_or_else(|| (StatusCode::NOT_FOUND, "Book not found".to_string()))?;
+
+    let progress = db::get_reading_progress(&conn, &id).map_err(folio_status)?;
+    Ok(Json(progress))
+}
+
+async fn put_progress(
+    State(state): State<WebState>,
+    Path(id): Path<String>,
+    body: Bytes,
+) -> Result<Json<crate::models::ReadingProgress>, (StatusCode, String)> {
+    // Parsed manually (rather than via the `Json<T>` extractor) so malformed
+    // bodies map to 400 like the rest of this API's validation errors —
+    // axum's built-in JSON rejection uses 422.
+    let body: ProgressUpdate = serde_json::from_slice(&body).map_err(|e| {
+        (
+            StatusCode::BAD_REQUEST,
+            format!("Invalid request body: {e}"),
+        )
+    })?;
+
+    let conn = state.conn().map_err(folio_status)?;
+    let book = db::get_book(&conn, &id)
+        .map_err(folio_status)?
+        .ok_or_else(|| (StatusCode::NOT_FOUND, "Book not found".to_string()))?;
+
+    // F4: intentionally NOT bounds-checked against `book.total_chapters`
+    // here. The reader paginates against a live `/page-count`, which can
+    // exceed a stale `total_chapters` (e.g. after re-pagination) — rejecting
+    // those saves made progress beyond the stale bound silently fail. The
+    // client clamps the index when it reads progress back.
+    let scroll_position =
+        crate::commands::validate_scroll_position(body.scroll_position).map_err(folio_status)?;
+
+    // F1: goes through the same completion-detection path as the desktop
+    // `save_reading_progress` command (`apply_reading_progress`) so a
+    // web-driven completion logs the same activity entry and bus event.
+    // `None` here means no desktop window-toast event is emitted for a
+    // web-only completion — see `apply_reading_progress`'s doc comment.
+    let progress = crate::commands::apply_reading_progress(
+        &conn,
+        &book,
+        &id,
+        body.chapter_index,
+        scroll_position,
+        None,
+    )
+    .map_err(folio_status)?;
+
+    Ok(Json(progress))
+}
+
+/// Item 15: bulk progress rows for the library grid's progress badges.
+/// Reuses `db::get_all_reading_progress` verbatim (already used internally
+/// for the `last_read` sort above) — no new query, no `BookGridItem` model
+/// change. Only books with a progress row are included; the frontend treats
+/// absence as "no badge".
+async fn get_all_progress(
+    State(state): State<WebState>,
+) -> Result<Json<Vec<crate::models::ReadingProgress>>, (StatusCode, String)> {
+    let conn = state.conn().map_err(folio_status)?;
+    let progress = db::get_all_reading_progress(&conn).map_err(folio_status)?;
+    Ok(Json(progress))
 }
 
 // ── Download ─────────────────────────────────────────────────────────────────

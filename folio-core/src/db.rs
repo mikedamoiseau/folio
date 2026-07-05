@@ -6,8 +6,8 @@ use std::time::Duration;
 
 use crate::models::{
     ActivityEntry, Book, BookGridItem, Bookmark, Collection, CollectionRule, CollectionSuggestion,
-    CollectionType, CustomFont, FeatureFlag, HighlightSearchResult, NewRuleInput, ReadingProgress,
-    SeriesInfo, WebSessionEntry,
+    CollectionType, ContinueReadingItem, CustomFont, FeatureFlag, HighlightSearchResult,
+    NewRuleInput, ReadingProgress, SeriesInfo, WebSessionEntry,
 };
 
 pub type DbPool = Pool<SqliteConnectionManager>;
@@ -706,7 +706,15 @@ fn row_to_grid_item(row: &rusqlite::Row) -> rusqlite::Result<BookGridItem> {
 }
 
 pub fn list_books_grid(conn: &Connection) -> Result<Vec<BookGridItem>> {
-    let sql = format!("SELECT {} FROM books ORDER BY added_at DESC", GRID_COLUMNS);
+    // Fix D: `added_at` has second-granularity ties (concurrent/batch
+    // imports) — without a unique tiebreaker, offset pagination can slice a
+    // book onto two pages or skip it entirely when rows with the same
+    // timestamp sort differently between two requests. `id` is unique, so
+    // appending it makes this order total and deterministic.
+    let sql = format!(
+        "SELECT {} FROM books ORDER BY added_at DESC, id",
+        GRID_COLUMNS
+    );
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt.query_map([], row_to_grid_item)?;
     rows.collect()
@@ -1100,6 +1108,51 @@ pub fn get_recently_read_books(conn: &Connection, limit: u32) -> Result<Vec<Book
     );
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt.query_map(params![limit], row_to_book)?;
+    rows.collect()
+}
+
+/// Books with progress that is neither zero nor "finished", most recently
+/// read first — powers the web UI's "Continue Reading" shelf (Item 5).
+/// "Finished" mirrors the predicate `get_reading_stats` uses for
+/// `books_finished` (on or past the last chapter: `chapter_index >=
+/// total_chapters - 1`, unguarded against `total_chapters = 0`), so a book
+/// counted as finished there never shows up here as still in progress.
+/// `total_chapters = 0` (not yet known) is excluded outright rather than
+/// treated as "never finished" — `books_finished`'s unguarded predicate
+/// already counts any progress on such a book as finished, so keeping it
+/// here as well would show it as both finished and in-progress at once. A
+/// book with an unknown page count can't show meaningful progress anyway.
+pub fn get_continue_reading_books(
+    conn: &Connection,
+    limit: u32,
+) -> Result<Vec<ContinueReadingItem>> {
+    let mut stmt = conn.prepare(
+        "SELECT b.id, b.title, b.author, b.cover_path, b.format, b.total_chapters,
+                rp.chapter_index, rp.scroll_position, rp.last_read_at
+         FROM books b
+         JOIN reading_progress rp ON rp.book_id = b.id
+         WHERE rp.chapter_index > 0
+           AND b.total_chapters > 0
+           AND rp.chapter_index < b.total_chapters - 1
+         ORDER BY rp.last_read_at DESC, b.id
+         LIMIT ?1",
+    )?;
+    let rows = stmt.query_map(params![limit], |row| {
+        let format_str: String = row.get(4)?;
+        Ok(ContinueReadingItem {
+            id: row.get(0)?,
+            title: row.get(1)?,
+            author: row.get(2)?,
+            cover_path: row.get(3)?,
+            format: format_str
+                .parse()
+                .map_err(|e: String| rusqlite::Error::InvalidParameterName(e))?,
+            total_chapters: row.get(5)?,
+            chapter_index: row.get(6)?,
+            scroll_position: row.get(7)?,
+            last_read_at: row.get(8)?,
+        })
+    })?;
     rows.collect()
 }
 
@@ -2543,6 +2596,160 @@ mod tests {
         upsert_reading_progress(&conn, &updated).unwrap();
         let fetched2 = get_reading_progress(&conn, "book-2").unwrap().unwrap();
         assert_eq!(fetched2.chapter_index, 5);
+    }
+
+    // Item 5: "Continue Reading" shelf query — excludes never-started and
+    // finished books, orders most-recently-read first, respects the limit.
+    #[test]
+    fn test_get_continue_reading_books_filters_and_orders() {
+        let (_dir, conn) = setup();
+
+        // Never started (chapter_index 0) — must be excluded even though it
+        // has a reading_progress row.
+        let unread = Book {
+            file_path: "/tmp/cr-unread.epub".to_string(),
+            ..sample_book("cr-unread")
+        };
+        insert_book(&conn, &unread).unwrap();
+        upsert_reading_progress(
+            &conn,
+            &ReadingProgress {
+                book_id: "cr-unread".to_string(),
+                chapter_index: 0,
+                scroll_position: 0.0,
+                last_read_at: 1_000,
+            },
+        )
+        .unwrap();
+
+        // Finished (on the last chapter of 10) — must be excluded.
+        let finished = Book {
+            file_path: "/tmp/cr-finished.epub".to_string(),
+            total_chapters: 10,
+            ..sample_book("cr-finished")
+        };
+        insert_book(&conn, &finished).unwrap();
+        upsert_reading_progress(
+            &conn,
+            &ReadingProgress {
+                book_id: "cr-finished".to_string(),
+                chapter_index: 9,
+                scroll_position: 1.0,
+                last_read_at: 2_000,
+            },
+        )
+        .unwrap();
+
+        // In progress, read longer ago — included, ranked second.
+        let older = Book {
+            file_path: "/tmp/cr-older.epub".to_string(),
+            total_chapters: 10,
+            ..sample_book("cr-older")
+        };
+        insert_book(&conn, &older).unwrap();
+        upsert_reading_progress(
+            &conn,
+            &ReadingProgress {
+                book_id: "cr-older".to_string(),
+                chapter_index: 2,
+                scroll_position: 0.1,
+                last_read_at: 3_000,
+            },
+        )
+        .unwrap();
+
+        // In progress, read most recently — included, ranked first.
+        let newer = Book {
+            file_path: "/tmp/cr-newer.epub".to_string(),
+            total_chapters: 10,
+            ..sample_book("cr-newer")
+        };
+        insert_book(&conn, &newer).unwrap();
+        upsert_reading_progress(
+            &conn,
+            &ReadingProgress {
+                book_id: "cr-newer".to_string(),
+                chapter_index: 5,
+                scroll_position: 0.4,
+                last_read_at: 4_000,
+            },
+        )
+        .unwrap();
+
+        let shelf = get_continue_reading_books(&conn, 12).unwrap();
+        let ids: Vec<&str> = shelf.iter().map(|b| b.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            vec!["cr-newer", "cr-older"],
+            "expected only the two in-progress, unfinished books, newest read first"
+        );
+        assert_eq!(shelf[0].chapter_index, 5);
+        assert_eq!(shelf[0].total_chapters, 10);
+    }
+
+    #[test]
+    fn test_get_continue_reading_books_respects_limit() {
+        let (_dir, conn) = setup();
+        for i in 0..5 {
+            let id = format!("cr-limit-{i}");
+            let book = Book {
+                file_path: format!("/tmp/{id}.epub"),
+                total_chapters: 10,
+                ..sample_book(&id)
+            };
+            insert_book(&conn, &book).unwrap();
+            upsert_reading_progress(
+                &conn,
+                &ReadingProgress {
+                    book_id: id,
+                    chapter_index: 3,
+                    scroll_position: 0.2,
+                    last_read_at: 1_000 + i,
+                },
+            )
+            .unwrap();
+        }
+
+        let shelf = get_continue_reading_books(&conn, 2).unwrap();
+        assert_eq!(shelf.len(), 2, "limit must cap the result count");
+        // Most recently read (highest last_read_at) first.
+        assert_eq!(shelf[0].id, "cr-limit-4");
+        assert_eq!(shelf[1].id, "cr-limit-3");
+    }
+
+    // Finding D: total_chapters=0 (unknown) must be excluded from the shelf
+    // entirely. get_reading_stats' books_finished predicate
+    // (`chapter_index >= total_chapters - 1`, unguarded against
+    // total_chapters=0) already counts ANY progress on such a book as
+    // "finished" — treating it as "still in progress" here contradicted that
+    // and showed the same book as both finished (stats) and in-progress
+    // (this shelf) at once.
+    #[test]
+    fn test_get_continue_reading_books_excludes_unknown_total_chapters() {
+        let (_dir, conn) = setup();
+
+        let unknown_total = Book {
+            file_path: "/tmp/cr-unknown-total.epub".to_string(),
+            total_chapters: 0,
+            ..sample_book("cr-unknown-total")
+        };
+        insert_book(&conn, &unknown_total).unwrap();
+        upsert_reading_progress(
+            &conn,
+            &ReadingProgress {
+                book_id: "cr-unknown-total".to_string(),
+                chapter_index: 3,
+                scroll_position: 0.2,
+                last_read_at: 5_000,
+            },
+        )
+        .unwrap();
+
+        let shelf = get_continue_reading_books(&conn, 12).unwrap();
+        assert!(
+            shelf.iter().all(|b| b.id != "cr-unknown-total"),
+            "a book with total_chapters=0 must be excluded from the shelf"
+        );
     }
 
     #[test]

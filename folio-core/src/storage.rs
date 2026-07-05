@@ -248,7 +248,12 @@ impl Storage for LocalStorage {
 /// in the same parent directory, the file is flushed to disk, and only on
 /// success is it renamed over `dest`. A failure partway through leaves the
 /// existing destination untouched, and the temp file is cleaned up.
-fn write_atomic<F>(dest: &Path, write: F) -> FolioResult<()>
+///
+/// Public so callers outside this module with their own already-resolved
+/// absolute paths (e.g. the web server's cover-thumbnail cache in
+/// `folio::web_server::api`) can reuse the same atomicity guarantee instead
+/// of duplicating the temp-file-plus-rename dance.
+pub fn write_atomic<F>(dest: &Path, write: F) -> FolioResult<()>
 where
     F: FnOnce(&mut fs::File) -> std::io::Result<()>,
 {

@@ -283,14 +283,14 @@ pub async fn auth_middleware(
 ) -> Response {
     let path = req.uri().path();
 
-    // Allow unauthenticated access to login-related routes, health check, and static assets
+    // Allow unauthenticated access to login-related routes, health check, and
+    // static shell assets (Item 9: manifest/sw/icons must also be public — a
+    // PIN-protected setup would otherwise 401 the PWA shell before the user
+    // ever logs in). Finding 11: the shell-asset paths are shared with
+    // web_ui::routes() via PUBLIC_SHELL_ASSETS rather than duplicated here.
     if path == "/api/auth"
         || path == "/api/health"
-        || path == "/"
-        || path == "/app.js"
-        || path == "/app.css"
-        || path == "/favicon.ico"
-        || path == "/favicon.png"
+        || super::web_ui::PUBLIC_SHELL_ASSETS.contains(&path)
     {
         return next.run(req).await;
     }

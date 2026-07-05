@@ -52,10 +52,12 @@ If no PIN is configured, all endpoints are accessible without authentication.
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/api/books` | List all books. Supports `?q=` search filter. |
+| GET | `/api/books` | List books. Supports `?q=` search, `?series=` filter, `?sort=` (`date_added` \| `title` \| `author` \| `last_read` \| `rating`), and pagination via `?limit=&offset=` — the response carries an `X-Total-Count` header with the post-filter total. Omitting `limit` returns the full filtered/sorted list unchanged (backward-compatible). |
 | GET | `/api/books/:id` | Get a single book by ID |
-| GET | `/api/books/:id/cover` | Cover image (binary) |
+| GET | `/api/books/:id/cover` | Cover image (binary). Add `?size=thumb` for a downscaled thumbnail (falls back to the full cover if a thumbnail can't be generated). |
 | GET | `/api/books/:id/download` | Download the original file |
+| GET | `/api/books/continue-reading` | Most-recently-read, in-progress books for the home "Continue Reading" shelf. Supports `?limit=` (default 12, max 50). |
+| GET | `/api/series` | List of series (name + book count) |
 
 ### EPUB Content
 
@@ -71,6 +73,14 @@ If no PIN is configured, all endpoints are accessible without authentication.
 |--------|----------|-------------|
 | GET | `/api/books/:id/pages/:index` | Page image (JPEG for PDF, original format for comics) |
 | GET | `/api/books/:id/page-count` | Returns `{ "count": N }` |
+
+### Reading Progress
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/books/:id/progress` | Current reading progress for a book (`null` if none saved) |
+| PUT | `/api/books/:id/progress` | Save reading progress. Body: `{ "chapter_index": N, "scroll_position": 0..1 }` (`chapter_index` doubles as the page index for PDF/CBZ/CBR) |
+| GET | `/api/reading-progress` | All reading-progress rows, keyed by book ID — used to render progress badges on library grid cards |
 
 ### Collections
 
@@ -110,15 +120,18 @@ OPDS feeds use Atom XML. Pagination uses `rel="next"` links.
 
 ## Web UI
 
-Open `http://<your-ip>:7788/` in a browser for a built-in reading interface.
+Open `http://<your-ip>:7788/` in a browser for a built-in reading interface. It matches the desktop app's design (warm paper/terracotta palette, serif/sans type) and behavior:
 
-- PIN login screen
-- Responsive book grid with covers and search
-- Book detail with Read/Download buttons
-- EPUB reader with chapter navigation
-- PDF/comic page viewer with prev/next
+- PIN login screen, light/dark/system theme toggle, and keyboard shortcuts (`/` to focus search, grid/reader navigation, a shortcuts overlay)
+- Paginated, infinite-scroll book grid with server-side search, series/collection filters, and sort — fast even on large libraries
+- Home shelves for "Continue Reading" and "Recently Added", with reading-progress badges on grid and shelf cards
+- Book detail page with a progress bar and Continue / Start-over
+- EPUB reader with chapter navigation; PDF/CBZ/CBR page-image reader with animated swipe page-turns on touch devices (reduced-motion aware)
+- Reading progress syncs back to the library, so a book picks up where a desktop or other device session left off
+- Installable as a PWA (web app manifest, service worker) and supports iOS "Add to Home Screen". The service worker only registers on a secure context (`https` or `localhost`), so offline shell caching does not activate over a plain-HTTP LAN URL — Add-to-Home-Screen and the manifest still work there
+- Loading skeletons, friendly empty states, and broken-cover placeholders
 
-All assets are embedded in the app (no CDN dependencies). Works fully offline on LAN.
+All assets are embedded in the app (no CDN dependencies). The app shell can work offline once cached by the service worker; reading content and the API are never cached and always require a live connection to the server.
 
 ---
 

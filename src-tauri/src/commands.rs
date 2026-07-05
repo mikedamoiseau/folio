@@ -263,9 +263,15 @@ pub fn cover_storage_key(book_id: &str, ext: &str) -> String {
 /// cover on every scroll-mounted row.
 pub const THUMB_WIDTH: u32 = 320;
 
+/// Filename of a book's grid thumbnail, sibling to its `cover.{ext}`. Shared
+/// so every site that needs to name or locate that sibling file — this
+/// module's storage key, the GDPR/backup export, and the web server's
+/// `?size=thumb` cache — agrees on the exact name.
+pub(crate) const THUMB_FILENAME: &str = "thumb.jpg";
+
 /// Storage key for a book's grid thumbnail, sibling to its `cover.{ext}`.
 pub fn thumb_storage_key(book_id: &str) -> String {
-    format!("{book_id}/thumb.jpg")
+    format!("{book_id}/{THUMB_FILENAME}")
 }
 
 /// One-time backfill of grid thumbnails for covers imported before the
@@ -384,7 +390,16 @@ fn save_cover_via_storage(
                 log::warn!("thumbnail write failed for book {book_id}: {e}");
             }
         }
-        Ok(None) => {}
+        Ok(None) => {
+            // The new cover is already small enough to serve directly, but a
+            // *previous* (larger) cover at this book_id may have left a
+            // thumb.jpg behind. Clean it up so nothing keeps serving stale
+            // art for the new cover — best-effort, missing keys are a no-op.
+            let tkey = thumb_storage_key(book_id);
+            if let Err(e) = storage.delete(&tkey) {
+                log::warn!("stale thumbnail cleanup failed for book {book_id}: {e}");
+            }
+        }
         Err(e) => log::warn!("thumbnail generation failed for book {book_id}: {e}"),
     }
     match storage.local_path(&key) {
@@ -2008,13 +2023,89 @@ fn validate_path_within(path: &str, parent: &str) -> FolioResult<std::path::Path
     Ok(canonical)
 }
 
-fn validate_scroll_position(pos: f64) -> FolioResult<f64> {
+pub(crate) fn validate_scroll_position(pos: f64) -> FolioResult<f64> {
     if pos.is_nan() || pos.is_infinite() {
         return Err(FolioError::invalid(
             "scroll_position must be a finite number",
         ));
     }
     Ok(pos.clamp(0.0, 1.0))
+}
+
+/// Shared reading-progress write path for both the desktop
+/// `save_reading_progress` command and the web PUT handler
+/// (`web_server::api::put_progress`). Detects a completion transition
+/// (crossing onto the last chapter for the first time — by comparing the
+/// *prior* stored progress against the new one) and performs the same side
+/// effects regardless of caller: an activity-log entry and a
+/// `FolioEvent::BookFinished` bus emission (consumed by hooks/plugins,
+/// independent of any `AppHandle`). The desktop-only `book-completed` window
+/// event is additionally emitted when an `AppHandle` is supplied — the web
+/// path passes `None` since there's no window to notify. This is the fix for
+/// review finding F1 (#71 web-ui/04-progress-sync): previously the web PUT
+/// wrote the row directly, silently dropping completion side effects and
+/// permanently suppressing a later desktop-side emission (because the row
+/// already looked "completed" by the time desktop saved).
+///
+/// Callers are responsible for their own `chapter_index` bounds policy
+/// *before* calling this (desktop rejects indices `>= total_chapters`; the
+/// web PUT intentionally does not — see review finding F4, since the reader
+/// paginates against a live page-count that can exceed a stale
+/// `total_chapters`).
+pub(crate) fn apply_reading_progress(
+    conn: &rusqlite::Connection,
+    book: &Book,
+    book_id: &str,
+    chapter_index: u32,
+    scroll_position: f64,
+    app: Option<&AppHandle>,
+) -> FolioResult<ReadingProgress> {
+    let is_on_last_chapter =
+        book.total_chapters > 0 && chapter_index >= book.total_chapters.saturating_sub(1);
+
+    let was_completed_before = is_on_last_chapter
+        && db::get_reading_progress(conn, book_id)?
+            .map(|p| p.chapter_index >= book.total_chapters.saturating_sub(1))
+            .unwrap_or(false);
+
+    let progress = ReadingProgress {
+        book_id: book_id.to_string(),
+        chapter_index,
+        scroll_position,
+        last_read_at: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64,
+    };
+
+    db::upsert_reading_progress(conn, &progress)?;
+
+    if is_on_last_chapter && !was_completed_before {
+        events::bus().emit(FolioEvent::BookFinished {
+            book_id: book_id.to_string(),
+        });
+        log_event(
+            conn,
+            ActivityEvent::BookCompleted {
+                id: book_id.to_string(),
+                title: book.title.clone(),
+            },
+        );
+        if let Some(app) = app {
+            let _ = app.emit(
+                "book-completed",
+                serde_json::json!({
+                    "bookId": book_id,
+                    "title": book.title,
+                    "author": book.author,
+                    "coverPath": book.cover_path,
+                    "totalChapters": book.total_chapters,
+                }),
+            );
+        }
+    }
+
+    Ok(progress)
 }
 
 #[tauri::command]
@@ -2040,48 +2131,14 @@ pub async fn save_reading_progress(
         )));
     }
 
-    let is_on_last_chapter =
-        book.total_chapters > 0 && chapter_index >= book.total_chapters.saturating_sub(1);
-
-    let was_completed_before = is_on_last_chapter
-        && db::get_reading_progress(&conn, &book_id)?
-            .map(|p| p.chapter_index >= book.total_chapters.saturating_sub(1))
-            .unwrap_or(false);
-
-    let progress = ReadingProgress {
-        book_id: book_id.clone(),
+    apply_reading_progress(
+        &conn,
+        &book,
+        &book_id,
         chapter_index,
         scroll_position,
-        last_read_at: std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs() as i64,
-    };
-
-    db::upsert_reading_progress(&conn, &progress)?;
-
-    if is_on_last_chapter && !was_completed_before {
-        events::bus().emit(FolioEvent::BookFinished {
-            book_id: book_id.clone(),
-        });
-        log_event(
-            &conn,
-            ActivityEvent::BookCompleted {
-                id: book_id.clone(),
-                title: book.title.clone(),
-            },
-        );
-        let _ = app.emit(
-            "book-completed",
-            serde_json::json!({
-                "bookId": book_id,
-                "title": book.title,
-                "author": book.author,
-                "coverPath": book.cover_path,
-                "totalChapters": book.total_chapters,
-            }),
-        );
-    }
+        Some(&app),
+    )?;
 
     Ok(())
 }
@@ -3945,7 +4002,7 @@ pub async fn export_library(
                     // the thumbnail is what the library grid displays. Falls
                     // back to the full cover when no thumbnail exists (the
                     // cover was already small enough at import time).
-                    let thumb = std::path::Path::new(cover_path).with_file_name("thumb.jpg");
+                    let thumb = std::path::Path::new(cover_path).with_file_name(THUMB_FILENAME);
                     let (src, archive_name) = if thumb.exists() {
                         (thumb, format!("covers/{}/cover.jpg", book.id))
                     } else {
@@ -6311,6 +6368,83 @@ pub async fn get_ipc_metrics(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn progress_test_book(id: &str, total_chapters: u32) -> Book {
+        Book {
+            id: id.to_string(),
+            title: "Progress Test".to_string(),
+            author: "Author".to_string(),
+            file_path: "/nonexistent/progress-test.epub".to_string(),
+            cover_path: None,
+            total_chapters,
+            added_at: 0,
+            format: BookFormat::Epub,
+            file_hash: None,
+            description: None,
+            genres: None,
+            rating: None,
+            isbn: None,
+            openlibrary_key: None,
+            enrichment_status: None,
+            series: None,
+            volume: None,
+            language: None,
+            publisher: None,
+            publish_year: None,
+            is_imported: false,
+        }
+    }
+
+    // F1: `apply_reading_progress` is the shared completion path used by
+    // both `save_reading_progress` (desktop, AppHandle: Some) and the web
+    // PUT handler (AppHandle: None). Exercise the completion-detection logic
+    // directly with `None` — this is exactly what the web path invokes.
+    #[test]
+    fn apply_reading_progress_logs_completion_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let conn = db::init_db(&dir.path().join("t.db")).unwrap();
+        let book = progress_test_book("book-1", 5);
+        db::insert_book(&conn, &book).unwrap();
+
+        // Landing on the last chapter (index 4 of 5) for the first time
+        // fires the completion side effects exactly once.
+        apply_reading_progress(&conn, &book, "book-1", 4, 0.5, None).unwrap();
+        let activity = db::get_all_activity(&conn).unwrap();
+        assert_eq!(
+            activity
+                .iter()
+                .filter(|a| a.action == "book_completed")
+                .count(),
+            1
+        );
+
+        // A repeat save that stays on the last chapter must not log again —
+        // this is the desktop-after-web dedup scenario from F1: whichever
+        // path crosses onto the last chapter first fires the event, and
+        // later saves (from either path) must see `was_completed_before`.
+        apply_reading_progress(&conn, &book, "book-1", 4, 0.9, None).unwrap();
+        let activity = db::get_all_activity(&conn).unwrap();
+        assert_eq!(
+            activity
+                .iter()
+                .filter(|a| a.action == "book_completed")
+                .count(),
+            1,
+            "completion must not be logged twice"
+        );
+    }
+
+    #[test]
+    fn apply_reading_progress_no_completion_before_last_chapter() {
+        let dir = tempfile::tempdir().unwrap();
+        let conn = db::init_db(&dir.path().join("t.db")).unwrap();
+        let book = progress_test_book("book-2", 5);
+        db::insert_book(&conn, &book).unwrap();
+
+        apply_reading_progress(&conn, &book, "book-2", 2, 0.5, None).unwrap();
+        let activity = db::get_all_activity(&conn).unwrap();
+        assert!(activity.iter().all(|a| a.action != "book_completed"));
+    }
 
     #[test]
     fn probe_dir_writable_true_for_writable_dir() {

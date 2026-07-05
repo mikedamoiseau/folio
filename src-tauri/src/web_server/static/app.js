@@ -7,15 +7,291 @@
   // R3-4: Use httpOnly cookies only — no localStorage token storage
   let authenticated = false;
 
-  // Active filter state
+  // Item 7: URL (location.hash) is the source of truth for library state —
+  // these are a parse cache of the current hash, refreshed by route() on
+  // every navigation (see parseLibraryParams/showLibrary). Code that wants to
+  // change the filter/search/sort must build a new hash (libraryHash()) and
+  // navigate()/history.replaceState to it; never mutate these directly and
+  // expect the view to follow.
+  const DEFAULT_SORT = "date_added";
   let activeCollectionId = null;
   let activeSeries = null;
-  let activeSort = "date_added";
+  let activeQuery = "";
+  let activeSort = DEFAULT_SORT;
+
+  // Item 6: theme mode is "light" | "dark" | "system", persisted to
+  // localStorage. "system" means no data-theme attribute is set at all —
+  // the CSS `@media (prefers-color-scheme: dark)` block then governs the
+  // palette and updates live on its own when the OS preference changes, no
+  // JS re-render needed. The index.html bootstrap script applies the same
+  // stored value before first paint to avoid a flash of the wrong theme.
+  const THEME_STORAGE_KEY = "folio_theme";
+
+  // Finding 1: a bare localStorage.getItem/setItem call can throw
+  // (SecurityError) under some browser configurations (e.g. Chrome "block
+  // all cookies") — unguarded, that would abort this whole IIFE and
+  // permanently blank the page. Mirrors the try/catch already used by
+  // index.html's bootstrap script; every localStorage call site in this file
+  // goes through these two helpers.
+  function safeStorageGet(key) {
+    try { return localStorage.getItem(key); } catch (e) { return null; }
+  }
+  function safeStorageSet(key, value) {
+    try { localStorage.setItem(key, value); } catch (e) { /* best-effort */ }
+  }
+
+  // Item 10: same guarded pattern as safeStorageGet/Set, but backed by
+  // sessionStorage — used for the per-hash library scroll-position memory
+  // (tab-scoped, meant to be forgotten across sessions).
+  function safeSessionGet(key) {
+    try { return sessionStorage.getItem(key); } catch (e) { return null; }
+  }
+  function safeSessionSet(key, value) {
+    try { sessionStorage.setItem(key, value); } catch (e) { /* best-effort */ }
+  }
+
+  // Finding 11: a hand-edited or corrupted stored value must never flow
+  // straight into data-theme/aria-label — coerce anything outside the known
+  // set to "system".
+  const VALID_THEME_MODES = ["light", "dark", "system"];
+  function readStoredThemeMode() {
+    const stored = safeStorageGet(THEME_STORAGE_KEY);
+    return VALID_THEME_MODES.includes(stored) ? stored : "system";
+  }
+  let themeMode = readStoredThemeMode();
+
+  function systemPrefersDark() {
+    return !!(window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches);
+  }
+
+  function applyTheme() {
+    if (themeMode === "system") {
+      document.documentElement.removeAttribute("data-theme");
+    } else {
+      document.documentElement.setAttribute("data-theme", themeMode);
+    }
+  }
+
+  function themeAriaLabel() {
+    if (themeMode === "system") return `Theme: system (${systemPrefersDark() ? "dark" : "light"})`;
+    return `Theme: ${themeMode}`;
+  }
+
+  function updateThemeButtonLabel() {
+    const btn = $("#theme-toggle-btn");
+    if (!btn) return;
+    const label = themeAriaLabel();
+    btn.title = label;
+    btn.setAttribute("aria-label", label);
+  }
+
+  // Applied immediately (idempotent with the index.html bootstrap script,
+  // which already set data-theme for an explicit light/dark choice before
+  // first paint) so "system" mode is also correctly reflected even if the
+  // bootstrap script ever gets out of sync.
+  applyTheme();
+
+  // Item 6: "system" mode has no data-theme attribute at all, so the CSS
+  // `@media (prefers-color-scheme: dark)` block already swaps the palette
+  // live with no JS involvement. This listener only keeps the toggle
+  // button's aria-label/title (which names the resolved scheme while in
+  // system mode) in sync with that live change.
+  if (window.matchMedia) {
+    const schemeQuery = window.matchMedia("(prefers-color-scheme: dark)");
+    const onSchemeChange = () => { if (themeMode === "system") updateThemeButtonLabel(); };
+    if (schemeQuery.addEventListener) schemeQuery.addEventListener("change", onSchemeChange);
+    else if (schemeQuery.addListener) schemeQuery.addListener(onSchemeChange); // Safari <14
+  }
+
+  // Item 5: bumped on every loadBooks() call; a response is only rendered if
+  // it still matches the counter captured at call time — guards against a
+  // slow request (now with more awaits, thanks to the shelf fetches)
+  // clobbering a faster, later one (e.g. rapid search typing / filter
+  // clicks).
+  let libraryRenderGen = 0;
+
+  // Item 14: infinite-scroll pagination state for the "All Books" grid.
+  // `libraryTotal` is `null` whenever the current grid isn't paginated at all
+  // (the collections endpoint, or a legacy server response with no
+  // `X-Total-Count` header) — every pagination code path treats `null` as
+  // "nothing more to load, don't set up a sentinel". `libraryPageOffset` also
+  // doubles as "how many books are rendered so far" since pages are always
+  // fetched contiguously from 0. Reset to page 0 on every `loadBooks()` call
+  // (i.e. every showLibrary re-entry: filter/sort/search change, back/
+  // forward) via `resetLibraryPagination()`.
+  const LIBRARY_PAGE_SIZE = 60;
+  let libraryPageOffset = 0;
+  let libraryTotal = null;
+  let libraryPagesLoaded = 0;
+  let libraryLoadingPage = false;
+  let libraryScrollObserver = null;
+
+  function resetLibraryPagination() {
+    if (libraryScrollObserver) { libraryScrollObserver.disconnect(); libraryScrollObserver = null; }
+    libraryPageOffset = 0;
+    libraryTotal = null;
+    libraryPagesLoaded = 0;
+    libraryLoadingPage = false;
+  }
+
+  // Finding 3: module-scoped (not a closure local inside showLibrary) so it
+  // can be cancelled from setSearchQuery and from showLibrary's own re-entry
+  // path — a closure-local timer survives navigations that happen before its
+  // 300ms elapses (filter click, Esc-clear, view switch), letting a stale
+  // typed value fire afterward and clobber whatever was just navigated to.
+  let searchDebounceTimer = null;
+
+  // R2-3/R3-1: current view + reader state, used by the global keyboard
+  // shortcut dispatcher and by the reader's own nav handlers.
+  let currentView = null; // "login" | "library" | "detail" | "reader" | "stats" | "collections"
+  let readerState = null; // set while currentView === "reader"; see showReader()
+  let shortcutsOverlayOpen = false;
+
+  // F10: true while the "You left off at..." resume prompt is on screen.
+  // currentView is "reader" at that point but readerState is still null (the
+  // book hasn't been entered yet), so the normal reader keyboard branch can't
+  // handle Enter/Esc/Backspace — this flag lets the dispatcher special-case it.
+  let resumePromptActive = false;
+  let resumePromptBookId = null;
+
+  // Item 4: set by the detail page's Continue/Start Over buttons just before
+  // navigating to the reader, so showReader() can skip its own resume prompt
+  // — the user already made that choice on the detail page. Consumed once.
+  // scrollPosition carries the saved in-chapter offset for "continue" so the
+  // reader can restore it (F2b) — read AND cleared at the very top of
+  // showReader (F7) so an early return can never leak it.
+  let readerEntryIntent = null; // { id, action: "continue" | "restart", scrollPosition } | null
+
+  // F8: last progress this tab knows about per book, updated optimistically
+  // on every reader navigation/scroll and confirmed on every successful PUT.
+  // showDetail() prefers this over a GET that may have raced an in-flight
+  // save. F9: lastSentIndex is this session's high-water mark per book — a
+  // save carrying a lower index is dropped as out-of-order, except an
+  // explicit "Start Over" (which resets the mark and legitimately writes 0).
+  let lastKnownProgress = {}; // bookId -> { chapterIndex, scrollPosition, ts }
+  let lastSentIndex = {};     // bookId -> last chapter_index confirmed sent this session
+  let saveChains = {};        // bookId -> promise tail; serializes PUTs per book (F9)
+
+  // Item 15: bookId -> chapter_index for every book with a saved progress
+  // row, populated once per library entry (loadBooks) from the bulk
+  // `/api/reading-progress` endpoint and reused across infinite-scroll pages
+  // — bookCardHtml reads it directly, so appended pages get badges for free.
+  let progressByBook = new Map();
+
+  // Item 10 / Finding 7: dismissible, aria-live toast for surfacing fetch
+  // failures that would otherwise render as a silent empty view. A single
+  // shared container stacks multiple toasts; each auto-dismisses after 6s or
+  // on click of its own close button. The container is created once, up
+  // front (see the `ensureToastContainer()` call near the bottom of this
+  // file) rather than lazily inside the first showToast() call — a screen
+  // reader needs the aria-live region already present in the DOM before the
+  // announcement lands, or the very first toast can go unannounced.
+  function ensureToastContainer() {
+    let container = $("#toast-container");
+    if (!container) {
+      container = document.createElement("div");
+      container.id = "toast-container";
+      container.className = "toast-container";
+      container.setAttribute("role", "status");
+      container.setAttribute("aria-live", "polite");
+      document.body.appendChild(container);
+    }
+    return container;
+  }
+
+  function showToast(msg) {
+    const container = ensureToastContainer();
+    const toast = document.createElement("div");
+    toast.className = "toast";
+    toast.innerHTML = `<span>${esc(msg)}</span><button type="button" class="toast-close" aria-label="Dismiss">&times;</button>`;
+    container.appendChild(toast);
+    const remove = () => toast.remove();
+    toast.querySelector(".toast-close").onclick = remove;
+    setTimeout(remove, 6000);
+  }
+
+  // Finding 1: api() must let its many callers distinguish a *handled* 401
+  // (showLogin() already ran — every caller just returns, nothing to show)
+  // from a genuine failure that must be surfaced instead of leaving a
+  // skeleton/spinner running forever. A `fetch()` throw (offline, the server
+  // process died, DNS hiccup on a LAN) is rethrown as ApiNetworkError rather
+  // than collapsing to the same `null` a handled 401 returns — every caller
+  // below is wrapped in a try/catch that either renders a visible error (the
+  // library, detail, reader, stats, collections views) or, for genuinely
+  // best-effort call sites (shelves, filter bar, the resume-position check),
+  // swallows it and degrades gracefully, exactly as it already does for a
+  // 404/500 on the same endpoint. A non-network HTTP failure (4xx/5xx other
+  // than 401) is NOT thrown here — it comes back as a normal, non-ok
+  // Response so callers that render a primary view can show the status code.
+  class ApiNetworkError extends Error {}
 
   async function api(path) {
-    const resp = await fetch(path, { credentials: "same-origin" });
+    let resp;
+    try {
+      resp = await fetch(path, { credentials: "same-origin" });
+    } catch (e) {
+      throw new ApiNetworkError(e && e.message ? e.message : String(e));
+    }
     if (resp.status === 401) { authenticated = false; showLogin(); return null; }
     return resp;
+  }
+
+  // Finding 4: short, differentiated failure text depending on *why* a fetch
+  // failed, instead of one blanket "Couldn't reach Folio server" message for
+  // network errors, HTTP errors, and bad JSON alike.
+  function apiFailureToastMessage(e) {
+    return e instanceof ApiNetworkError ? "Couldn't reach Folio server" : "Unexpected response";
+  }
+  function httpErrorToastMessage(status) {
+    return `Server error (${status}) — check the Folio app`;
+  }
+
+  // Finding 1: shared "this whole view failed to load" fallback for views
+  // that render into the full #app container (detail, reader) rather than a
+  // sub-container that already has its own empty/error styling (library,
+  // stats, collections use `.empty` on their existing content element
+  // instead — see showLibraryLoadError/showStats/showCollections). Reuses
+  // the reader loader's pre-existing bare `class="error"` convention.
+  function renderViewError(message) {
+    app().innerHTML = `<div class="error">${esc(message)}</div>`;
+  }
+
+  // ── Loading Skeletons (Item 10) ────────────────
+  // CSS-shimmer placeholders (mirrors the desktop app's `animate-shimmer`
+  // keyframe in src/index.css) shown while the library grid, detail page, or
+  // reader are loading, instead of a bare "Loading..." string.
+  function skeletonCardHtml() {
+    return `
+      <div class="skeleton-card">
+        <div class="skeleton-cover"></div>
+        <div class="skeleton-line"></div>
+        <div class="skeleton-line short"></div>
+      </div>`;
+  }
+
+  function skeletonGridHtml(count) {
+    let html = "";
+    for (let i = 0; i < (count || 12); i++) html += skeletonCardHtml();
+    return `<div class="skeleton-grid">${html}</div>`;
+  }
+
+  function detailSkeletonHtml() {
+    return `
+      <div class="detail">
+        <div class="meta">
+          <div class="cover"><div class="skeleton-cover" style="border-radius:var(--radius)"></div></div>
+          <div class="info" style="flex:1">
+            <div class="skeleton-line" style="width:70%;height:22px;margin-bottom:14px"></div>
+            <div class="skeleton-line" style="width:40%"></div>
+            <div class="skeleton-line" style="width:90%;margin-top:16px"></div>
+            <div class="skeleton-line" style="width:80%"></div>
+          </div>
+        </div>
+      </div>`;
+  }
+
+  function readerSkeletonHtml() {
+    return `<div class="reader-skeleton"><div class="skeleton-cover"></div></div>`;
   }
 
   // ── Router ────────────────────────────────────
@@ -23,9 +299,78 @@
     window.location.hash = hash;
   }
 
+  // Finding 2: Firefox percent-decodes the `location.hash` property itself
+  // (Chromium does not) — reading it directly can silently corrupt a
+  // URLSearchParams parse of a value containing %/&/=/+ (e.g. a series name).
+  // `location.href`'s fragment isn't affected by that quirk, so every read of
+  // the current hash for parsing purposes goes through this instead.
+  function rawHash() {
+    const href = window.location.href;
+    const i = href.indexOf("#");
+    return i >= 0 ? href.slice(i) : "#";
+  }
+
+  // Item 7: parse `#/library?q=...&series=...&collection=...&sort=...` (also
+  // used for the bare `#`/`#/` home route, which parses to all defaults).
+  function parseLibraryParams(hash) {
+    const qIndex = hash.indexOf("?");
+    const params = new URLSearchParams(qIndex >= 0 ? hash.slice(qIndex + 1) : "");
+    return {
+      q: params.get("q") || "",
+      series: params.get("series") || null,
+      collection: params.get("collection") || null,
+      sort: params.get("sort") || DEFAULT_SORT,
+    };
+  }
+
+  // Item 7: the inverse of parseLibraryParams — the single place that turns
+  // a desired library state into a hash string. Collapses to the bare "#"
+  // home route when every param is at its default, so "no filters" always
+  // has one canonical URL (goHome() and "All Books" both rely on this).
+  function libraryHash(state) {
+    const params = new URLSearchParams();
+    if (state.q) params.set("q", state.q);
+    if (state.series) params.set("series", state.series);
+    if (state.collection) params.set("collection", state.collection);
+    if (state.sort && state.sort !== DEFAULT_SORT) params.set("sort", state.sort);
+    const qs = params.toString();
+    return qs ? "#/library?" + qs : "#";
+  }
+
+  // Finding 10: the `{ q, series, collection, sort }` library-state object is
+  // hand-copied at every filter-mutating call site — this is the one source
+  // of "current state", spread and overridden by callers that only change
+  // one or two fields.
+  function currentLibraryState() {
+    return { q: activeQuery, series: activeSeries, collection: activeCollectionId, sort: activeSort };
+  }
+
+  // Finding C: every explicit "go back to the home screen" action (header
+  // back buttons, Esc/Backspace from detail) must clear any active
+  // collection/series filter — otherwise a filter set on a previous library
+  // visit silently survives into an unrelated round trip through
+  // detail/stats/collections, landing back on a filtered grid with the
+  // shelves suppressed. This is deliberately distinct from navigations that
+  // set a filter on purpose right before going home (showDetail's series
+  // link, showCollections' collection/series rows) — those must keep working
+  // and do NOT go through this helper.
+  // Finding 4: this must NOT also wipe the active query/sort — "leave this
+  // view" only means dropping the collection/series filter, not resetting
+  // the rest of the library state. libraryHash() collapses back to the bare
+  // "#" on its own when query/sort are also at their defaults.
+  function goHome() {
+    navigate(libraryHash({ ...currentLibraryState(), series: null, collection: null }));
+  }
+
   function route() {
-    const hash = window.location.hash || "#";
-    if (hash === "#" || hash === "#/") return showLibrary();
+    // K4: the shortcuts overlay is appended to document.body and must not
+    // survive a navigation — it would block the next view and swallow
+    // shortcuts on it.
+    closeShortcutsOverlay();
+    const hash = rawHash();
+    if (hash === "#" || hash === "#/" || hash.startsWith("#/library")) {
+      return showLibrary(parseLibraryParams(hash));
+    }
     if (hash === "#/stats") return showStats();
     if (hash === "#/collections") return showCollections();
     if (hash.startsWith("#/book/") && hash.includes("/read")) {
@@ -33,13 +378,166 @@
       return showReader(parts[0], parseInt(parts[1] || "0"));
     }
     if (hash.startsWith("#/book/")) return showDetail(hash.replace("#/book/", ""));
-    showLibrary();
+    showLibrary(parseLibraryParams(hash));
   }
 
   window.addEventListener("hashchange", route);
 
+  // ── Keyboard Shortcuts ────────────────────────
+  // Single listener, dispatches on `currentView`. See docs/web-ui-improvements.md
+  // Item 2 for the key map.
+  function isTypingTarget(el) {
+    if (!el) return false;
+    const tag = el.tagName;
+    // K2: the range slider is an <input> but isn't a "typing" surface — treat
+    // it separately so shortcuts like Escape/Backspace/f still work after
+    // interacting with it (native Arrow/Home/End stepping is handled before
+    // this check runs; see the keydown listener below).
+    if (tag === "INPUT" && el.type === "range") return false;
+    return tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA";
+  }
+
+  function isRangeInput(el) {
+    return !!el && el.tagName === "INPUT" && el.type === "range";
+  }
+
+  function toggleFullscreen() {
+    if (!document.fullscreenElement) {
+      document.documentElement.requestFullscreen().catch(() => {});
+    } else {
+      document.exitFullscreen().catch(() => {});
+    }
+  }
+
+  function openShortcutsOverlay() {
+    if (shortcutsOverlayOpen) return;
+    shortcutsOverlayOpen = true;
+    const div = document.createElement("div");
+    div.className = "shortcuts-overlay";
+    div.id = "shortcuts-overlay";
+    div.innerHTML = `
+      <div class="shortcuts-panel">
+        <h2>Keyboard Shortcuts</h2>
+        <dl>
+          <dt>&larr; / &rarr;</dt><dd>Prev / next page or chapter</dd>
+          <dt>Home / End</dt><dd>First / last page or chapter</dd>
+          <dt>f</dt><dd>Toggle fullscreen</dd>
+          <dt>Esc / Backspace</dt><dd>Back</dd>
+          <dt>/</dt><dd>Focus search</dd>
+          <dt>?</dt><dd>Show this overlay</dd>
+        </dl>
+        <button id="shortcuts-close">Close</button>
+      </div>`;
+    document.body.appendChild(div);
+    $("#shortcuts-close").addEventListener("click", closeShortcutsOverlay);
+    div.addEventListener("click", (e) => { if (e.target === div) closeShortcutsOverlay(); });
+  }
+
+  function closeShortcutsOverlay() {
+    shortcutsOverlayOpen = false;
+    const div = $("#shortcuts-overlay");
+    if (div) div.remove();
+  }
+
+  document.addEventListener("keydown", (e) => {
+    // K3: never hijack modified shortcuts (Cmd/Ctrl+F find, Cmd+ArrowLeft
+    // history back, etc.) — bail before any preventDefault.
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+
+    if (e.key === "?" && !isTypingTarget(e.target)) {
+      e.preventDefault();
+      openShortcutsOverlay();
+      return;
+    }
+
+    if (shortcutsOverlayOpen) {
+      if (e.key === "Escape") { e.preventDefault(); closeShortcutsOverlay(); }
+      return;
+    }
+
+    // Item 7: Esc closes an open filter dropdown panel first, even when
+    // focus is inside its type-to-filter input (which is otherwise a
+    // "typing target" the dispatcher ignores below).
+    if (e.key === "Escape" && $(".filter-panel:not([hidden])")) {
+      e.preventDefault();
+      closeAllFilterPanels();
+      return;
+    }
+
+    if (e.key === "Escape" && currentView === "library" && e.target && e.target.id === "search") {
+      e.preventDefault();
+      e.target.value = "";
+      e.target.blur();
+      setSearchQuery("");
+      return;
+    }
+
+    // K2: the range slider keeps native Arrow/Home/End stepping; every other
+    // shortcut key falls through to the normal handling below.
+    if (isRangeInput(e.target) && ["ArrowLeft", "ArrowRight", "Home", "End"].includes(e.key)) {
+      return;
+    }
+
+    if (isTypingTarget(e.target)) return;
+
+    if (currentView === "library") {
+      if (e.key === "/") {
+        e.preventDefault();
+        const s = $("#search");
+        if (s) s.focus();
+      }
+      return;
+    }
+
+    // F10: keyboard must keep working while the resume prompt is up
+    // (readerState is still null at that point, so the branch below can't
+    // handle it). Enter accepts (resume), Esc/Backspace decline back to
+    // detail — mirrors the prompt's own buttons.
+    if (currentView === "reader" && resumePromptActive) {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        const btn = $("#resume-btn");
+        if (btn) btn.click();
+      } else if (e.key === "Escape" || e.key === "Backspace") {
+        e.preventDefault();
+        const bookId = resumePromptBookId;
+        resumePromptActive = false;
+        if (bookId) navigate("#/book/" + bookId);
+      }
+      return;
+    }
+
+    if (currentView === "reader" && readerState) {
+      if (e.key === "ArrowRight") { e.preventDefault(); readerState.handlers.next(); }
+      else if (e.key === "ArrowLeft") { e.preventDefault(); readerState.handlers.prev(); }
+      else if (e.key === "Home") { e.preventDefault(); readerState.handlers.first(); }
+      else if (e.key === "End") { e.preventDefault(); readerState.handlers.last(); }
+      else if (e.key === "f" || e.key === "F") { e.preventDefault(); toggleFullscreen(); }
+      else if (e.key === " " || e.key === "Spacebar") {
+        // K5: fallback scroll in case the stage doesn't have native focus.
+        e.preventDefault();
+        scrollReaderStage(e.shiftKey ? -1 : 1);
+      }
+      else if (e.key === "Escape" || e.key === "Backspace") {
+        // K1: let the browser exit fullscreen natively; don't also navigate
+        // back and lose the reading position.
+        if (e.key === "Escape" && document.fullscreenElement) return;
+        e.preventDefault();
+        readerState.handlers.goBack();
+      }
+      return;
+    }
+
+    if (currentView === "detail") {
+      if (e.key === "Escape" || e.key === "Backspace") { e.preventDefault(); goHome(); }
+    }
+  });
+
   // ── Login ─────────────────────────────────────
   function showLogin() {
+    currentView = "login";
+    readerState = null;
+    resumePromptActive = false;
     app().innerHTML = `
       <div class="login">
         <h1>Folio</h1>
@@ -75,87 +573,222 @@
   }
 
   // ── Filter Bar (collections + series) ────────
+  // Item 7: replaces the old horizontal pill strip (unusable past ~25
+  // series) with two searchable dropdown panels + removable chips. Selecting
+  // an entry (or removing a chip) always goes through libraryHash()+navigate
+  // — a real hash push, since these are "filter clicks" per the Item 7 spec,
+  // not keystrokes.
+  let cachedCollections = [];
+  let cachedSeries = [];
+
+  function filterDropdownHtml(key, label) {
+    return `
+      <div class="filter-dropdown">
+        <button class="filter-dropdown-btn" id="${key}-dropdown-btn" aria-haspopup="true" aria-expanded="false">${label} &#9662;</button>
+        <div class="filter-panel" id="${key}-panel" hidden>
+          <input type="text" class="filter-panel-search" id="${key}-panel-input" placeholder="Filter ${label.toLowerCase()}..." aria-label="Filter ${label.toLowerCase()}">
+          <div class="filter-panel-list" id="${key}-panel-list"></div>
+        </div>
+      </div>`;
+  }
+
+  function closeAllFilterPanels() {
+    $$(".filter-panel").forEach(p => { p.hidden = true; });
+    $$(".filter-dropdown-btn").forEach(b => b.setAttribute("aria-expanded", "false"));
+  }
+
+  // A single document-level listener (bound once, not per render) closes any
+  // open panel when the click lands outside it.
+  document.addEventListener("click", (e) => {
+    if (!e.target.closest(".filter-dropdown")) closeAllFilterPanels();
+  });
+
+  function selectFilter(key, value) {
+    const next = { ...currentLibraryState(), series: null, collection: null };
+    next[key] = value;
+    const hash = libraryHash(next);
+    // Finding 5: re-selecting the already-active filter produces the exact
+    // same hash, so no `hashchange` fires and the grid would silently go
+    // stale — refetch directly instead of navigating in that case.
+    if (hash === rawHash()) {
+      refreshLibrary(activeQuery);
+    } else {
+      navigate(hash);
+    }
+  }
+
+  function bindFilterDropdown(key, items, mapItem) {
+    const btn = $(`#${key}-dropdown-btn`);
+    const panel = $(`#${key}-panel`);
+    const input = $(`#${key}-panel-input`);
+    const list = $(`#${key}-panel-list`);
+    if (!btn || !panel || !input || !list) return;
+
+    const mapped = items.map(mapItem);
+
+    function renderList(filterText) {
+      const q = filterText.toLowerCase();
+      const filtered = mapped.filter(it => !q || it.label.toLowerCase().includes(q));
+      if (filtered.length === 0) {
+        list.innerHTML = '<div class="filter-panel-empty">No matches</div>';
+        return;
+      }
+      list.innerHTML = filtered.map(it => `
+        <button type="button" class="filter-panel-item" data-index="${filtered.indexOf(it)}">
+          <span class="filter-panel-item-name">${esc(it.label)}</span>
+          <span class="filter-panel-item-count">${it.count != null ? it.count : ""}</span>
+        </button>`).join("");
+      list.querySelectorAll("[data-index]").forEach(el => {
+        el.onclick = () => {
+          selectFilter(key, filtered[parseInt(el.dataset.index, 10)].value);
+          closeAllFilterPanels();
+        };
+      });
+    }
+
+    btn.onclick = (e) => {
+      e.stopPropagation();
+      const wasOpen = !panel.hidden;
+      closeAllFilterPanels();
+      if (!wasOpen) {
+        panel.hidden = false;
+        btn.setAttribute("aria-expanded", "true");
+        input.value = "";
+        renderList("");
+        input.focus();
+      }
+    };
+    panel.addEventListener("click", (e) => e.stopPropagation());
+    input.oninput = () => renderList(input.value);
+  }
+
+  function chipHtml(key, label) {
+    return `<span class="chip">${esc(label)}<button type="button" class="chip-remove" data-remove="${key}" aria-label="Remove ${esc(label)} filter">&times;</button></span>`;
+  }
+
+  // Renders the removable chips + the dropdown buttons' "active" styling
+  // from the current activeCollectionId/activeSeries — called both after a
+  // full filter-bar render and whenever the URL changes without a DOM
+  // rebuild (e.g. back/forward while still viewing the library).
+  // Finding 8: guards renderFilterBar() (triggered below when the chip can't
+  // resolve activeCollectionId against the cache) against refetching forever
+  // if the collection is genuinely gone — only one refresh is attempted per
+  // distinct activeCollectionId value.
+  let chipRefreshAttemptedForCollectionId = null;
+
+  function renderFilterChips() {
+    const chips = $("#filter-chips");
+    if (chips) {
+      let html = "";
+      if (activeCollectionId) {
+        const c = cachedCollections.find(c => c.id === activeCollectionId);
+        if (c) {
+          html += chipHtml("collection", c.name);
+        } else {
+          // Finding 8: never show the raw UUID — the cache may simply be
+          // stale (the collection was deleted/renamed elsewhere since the
+          // filter bar was last rendered). Refresh once and re-render.
+          html += chipHtml("collection", "Collection");
+          if (chipRefreshAttemptedForCollectionId !== activeCollectionId) {
+            chipRefreshAttemptedForCollectionId = activeCollectionId;
+            renderFilterBar();
+          }
+        }
+      }
+      if (activeSeries) html += chipHtml("series", activeSeries);
+      chips.innerHTML = html;
+      chips.querySelectorAll("[data-remove]").forEach(btn => {
+        btn.onclick = () => {
+          const next = currentLibraryState();
+          next[btn.dataset.remove] = null;
+          navigate(libraryHash(next));
+        };
+      });
+    }
+    const collBtn = $("#collection-dropdown-btn");
+    if (collBtn) collBtn.classList.toggle("active", !!activeCollectionId);
+    const seriesBtn = $("#series-dropdown-btn");
+    if (seriesBtn) seriesBtn.classList.toggle("active", !!activeSeries);
+  }
+
   async function renderFilterBar() {
     const bar = $("#filter-bar");
     if (!bar) return;
 
+    // Best-effort: the filter bar simply doesn't render if these fail (same
+    // as an empty collections/series result) — never throws.
     const [collectionsResp, seriesResp] = await Promise.all([
-      api("/api/collections"),
-      api("/api/series"),
+      api("/api/collections").catch(() => undefined),
+      api("/api/series").catch(() => undefined),
     ]);
 
-    const collections = collectionsResp ? await collectionsResp.json() : [];
-    const series = seriesResp ? await seriesResp.json() : [];
+    cachedCollections = collectionsResp && collectionsResp.ok ? await collectionsResp.json() : [];
+    cachedSeries = seriesResp && seriesResp.ok ? await seriesResp.json() : [];
 
     // Don't show bar if nothing to filter
-    if (collections.length === 0 && series.length === 0) {
+    if (cachedCollections.length === 0 && cachedSeries.length === 0) {
       bar.innerHTML = "";
       return;
     }
 
-    let html = '<div class="filter-pills">';
-    html += `<button class="pill ${!activeCollectionId && !activeSeries ? "active" : ""}" data-filter="all">All Books</button>`;
+    bar.innerHTML = `
+      <button type="button" class="filter-reset" id="filter-reset-btn">All Books</button>
+      ${cachedCollections.length > 0 ? filterDropdownHtml("collection", "Collections") : ""}
+      ${cachedSeries.length > 0 ? filterDropdownHtml("series", "Series") : ""}
+      <div class="filter-chips" id="filter-chips"></div>`;
 
-    if (collections.length > 0) {
-      html += '<span class="filter-sep">|</span>';
-      for (const c of collections) {
-        const active = activeCollectionId === c.id ? "active" : "";
-        html += `<button class="pill ${active}" data-collection="${c.id}">${esc(c.name)}</button>`;
-      }
+    // Finding 4: "All Books" clears the collection/series filter ONLY —
+    // it must preserve the active query/sort, not reset the whole library
+    // state. libraryHash() collapses back to the bare "#" on its own when
+    // query/sort are also at their defaults.
+    $("#filter-reset-btn").onclick = () => navigate(libraryHash({ ...currentLibraryState(), series: null, collection: null }));
+
+    if (cachedCollections.length > 0) {
+      bindFilterDropdown("collection", cachedCollections, (c) => ({ value: c.id, label: c.name, count: c.bookCount }));
+    }
+    if (cachedSeries.length > 0) {
+      bindFilterDropdown("series", cachedSeries, (s) => ({ value: s.name, label: s.name, count: s.count }));
     }
 
-    if (series.length > 0) {
-      html += '<span class="filter-sep">|</span>';
-      for (const s of series) {
-        const active = activeSeries === s.name ? "active" : "";
-        html += `<button class="pill ${active}" data-series="${esc(s.name)}">${esc(s.name)} <span class="pill-count">${s.count}</span></button>`;
-      }
-    }
-
-    html += "</div>";
-    bar.innerHTML = html;
-
-    // Bind click handlers
-    bar.querySelectorAll("[data-filter='all']").forEach(btn => {
-      btn.onclick = () => { activeCollectionId = null; activeSeries = null; refreshLibrary(); };
-    });
-    bar.querySelectorAll("[data-collection]").forEach(btn => {
-      btn.onclick = () => {
-        activeCollectionId = btn.dataset.collection;
-        activeSeries = null;
-        refreshLibrary();
-      };
-    });
-    bar.querySelectorAll("[data-series]").forEach(btn => {
-      btn.onclick = () => {
-        activeSeries = btn.dataset.series;
-        activeCollectionId = null;
-        refreshLibrary();
-      };
-    });
-  }
-
-  function updateFilterBarActive() {
-    const bar = $("#filter-bar");
-    if (!bar) return;
-    bar.querySelectorAll(".pill").forEach(btn => {
-      btn.classList.remove("active");
-      if (btn.dataset.filter === "all" && !activeCollectionId && !activeSeries) btn.classList.add("active");
-      if (btn.dataset.collection && btn.dataset.collection === activeCollectionId) btn.classList.add("active");
-      if (btn.dataset.series && btn.dataset.series === activeSeries) btn.classList.add("active");
-    });
+    renderFilterChips();
   }
 
   // ── Library ───────────────────────────────────
-  async function showLibrary(query) {
+  // Item 7: `params` is the already-parsed URL state (see
+  // parseLibraryParams/route()) — the single source of truth. It's copied
+  // into the active* module vars (a parse cache other code reads to build
+  // the *next* hash) on every call, whether the DOM is being built fresh or
+  // just synced to a new hash while already in the library view.
+  async function showLibrary(params) {
+    currentView = "library";
+    document.title = "Folio";
+    flushProgressSave();
+    readerState = null;
+    resumePromptActive = false;
+    // Finding 3: cancel any pending debounced search — every re-entry into
+    // the library view (filter click, sort change, back/forward, self-heal)
+    // is a point where an abandoned keystroke's stale value must not be
+    // allowed to fire later and clobber what the user just navigated to.
+    clearTimeout(searchDebounceTimer);
+
+    params = params || {};
+    activeQuery = params.q || "";
+    activeSeries = params.series || null;
+    activeCollectionId = params.collection || null;
+    activeSort = params.sort || DEFAULT_SORT;
+
     const existing = $("#search");
+    // Fix 6: only a fresh entry into the library (from detail/reader/stats/
+    // collections, or the very first load — #app was just replaced, so
+    // #search doesn't exist yet) re-fetches the bulk progress table. A hash
+    // change while #search already exists is a filter/sort/search re-render,
+    // which reuses the cached progressByBook (see loadBooks).
+    const enteringLibraryFresh = !existing;
     if (!existing) {
-      activeCollectionId = null;
-      activeSeries = null;
       app().innerHTML = `
         <div class="header">
           <h1>Folio</h1>
-          <input type="search" id="search" placeholder="Search books..." value="${esc(query || "")}">
+          <input type="search" id="search" placeholder="Search books..." aria-label="Search books" value="${esc(activeQuery)}">
           <select id="sort-select" aria-label="Sort by">
             <option value="date_added">Recent</option>
             <option value="title">Title</option>
@@ -165,56 +798,505 @@
           </select>
           ${navIconsHtml("")}
         </div>
-        <div id="filter-bar"></div>
-        <div id="library-content"><div class="loading">Loading...</div></div>`;
+        <div class="filter-bar" id="filter-bar"></div>
+        <div id="library-content">${skeletonGridHtml()}</div>`;
 
       const sortSelect = $("#sort-select");
       sortSelect.value = activeSort;
-      sortSelect.onchange = () => { activeSort = sortSelect.value; refreshLibrary(); };
+      sortSelect.onchange = () => {
+        // Item 7: a sort change is a "filter change", not a keystroke — a
+        // real hash push, so back can step back to the previous sort.
+        navigate(libraryHash({ ...currentLibraryState(), sort: sortSelect.value }));
+      };
 
-      let timer;
       $("#search").oninput = (e) => {
-        clearTimeout(timer);
-        timer = setTimeout(() => refreshLibrary(e.target.value), 300);
+        // Finding 3: searchDebounceTimer is module-scoped (not a closure
+        // local) so it can be cancelled from setSearchQuery/showLibrary too —
+        // see their comments for why a closure-local timer here missed the
+        // navigate-away-before-300ms case.
+        clearTimeout(searchDebounceTimer);
+        const value = e.target.value;
+        searchDebounceTimer = setTimeout(() => setSearchQuery(value), 300);
       };
 
       bindNavIcons();
-
-      // Load filter bar (collections + series)
       renderFilterBar();
     } else {
+      // Item 7: DOM already exists — this is a hash change while still
+      // viewing the library (back/forward, a filter click, a sort change,
+      // or the self-heal path in loadBooks). Sync every control to the
+      // newly-parsed state instead of rebuilding.
+      if (existing.value !== activeQuery) existing.value = activeQuery;
+      const sortSelect = $("#sort-select");
+      if (sortSelect && sortSelect.value !== activeSort) sortSelect.value = activeSort;
+      renderFilterChips();
       const contentEl = $("#library-content");
-      if (contentEl) contentEl.innerHTML = '<div class="loading">Loading...</div>';
+      if (contentEl) contentEl.innerHTML = skeletonGridHtml();
     }
 
-    await loadBooks(query);
+    // Finding 5: scroll restore now happens inside loadBooks() itself, only
+    // after a real successful render — never unconditionally here, which
+    // would also fire on a 401/failed load and scroll the wrong view.
+    await loadBooks(activeQuery, enteringLibraryFresh);
+  }
+
+  // Item 10: preserves the library's scroll position across a detail/reader
+  // round trip. Saved keyed by the exact hash being left (so a different
+  // filter/search/sort state never restores the wrong scroll offset).
+  function libraryScrollKey(hash) {
+    return "folio_scroll_" + hash;
+  }
+  // Item 14: persists the page count alongside the scroll offset — with
+  // infinite scroll, a deep `scrollY` is only meaningful once the pages that
+  // produced it are loaded again. `pages` defaults to 1 (a single, unpaginated
+  // grid, e.g. a collection) whenever pagination isn't active.
+  function saveLibraryScrollPosition() {
+    if (currentView !== "library") return;
+    const payload = JSON.stringify({ y: window.scrollY, pages: Math.max(libraryPagesLoaded, 1) });
+    safeSessionSet(libraryScrollKey(rawHash()), payload);
+  }
+  async function restoreLibraryScrollPosition() {
+    // Finding 5: guard against restoring onto a view the user has since
+    // navigated away from (e.g. a slow load that resolves after they already
+    // opened a book) — only ever scroll while still on the library.
+    if (currentView !== "library") return;
+    const key = libraryScrollKey(rawHash());
+    const saved = safeSessionGet(key);
+    if (saved == null) return;
+    // Finding 6 (codex): don't consume the key on restore — a Forward
+    // navigation after a Back would otherwise find it already gone and lose
+    // the saved position a second time. saveLibraryScrollPosition()
+    // overwrites this same key on every departure instead; unbounded growth
+    // isn't a concern (sessionStorage, one small key per distinct hash,
+    // forgotten at the end of the tab's session).
+    let y = null;
+    // Fix C: `pages` stays `null` for a legacy plain-number save (from
+    // before Item 14) — there's no way to know how many pages produced that
+    // `y`, so it must NOT default to 1 (which silently clamped a deep legacy
+    // offset to the 60-item first page). The legacy branch below instead
+    // grows the replay range until it covers `y`.
+    let pages = null;
+    try {
+      const parsed = JSON.parse(saved);
+      if (parsed && typeof parsed === "object") {
+        y = parsed.y;
+        pages = parsed.pages || 1;
+      } else if (typeof parsed === "number") {
+        y = parsed; // legacy shape from before Item 14, pre-pagination
+      }
+    } catch (e) {
+      const legacy = parseInt(saved, 10); // legacy plain-number shape
+      if (Number.isFinite(legacy)) y = legacy;
+    }
+
+    // Item 14 / Fix C: replay pages loaded before the user left, so there's
+    // actually something to scroll into — as a SINGLE bounded fetch instead
+    // of N serial round trips. If the library has since shrunk,
+    // replayLibraryPages() just returns fewer books than asked for — the
+    // scrollTo below clamps to whatever height resulted.
+    const gen = libraryRenderGen;
+    if (libraryTotal !== null) {
+      if (pages !== null) {
+        if (libraryPagesLoaded < pages) await replayLibraryPages(gen, pages);
+      } else if (Number.isFinite(y)) {
+        // Legacy save with no known page count: grow the replay range
+        // (doubling — still one request per attempt) until the document is
+        // tall enough to contain `y`, or the library runs out. Never runs at
+        // all if what's already rendered (page 0) is already tall enough.
+        let pagesToTry = Math.max(libraryPagesLoaded, 1);
+        while (true) {
+          const tallEnough = document.documentElement.scrollHeight - window.innerHeight >= y;
+          const exhausted = libraryPageOffset >= libraryTotal;
+          if (tallEnough || exhausted) break;
+          pagesToTry *= 2;
+          const ok = await replayLibraryPages(gen, pagesToTry);
+          if (gen !== libraryRenderGen) return;
+          if (!ok) break;
+        }
+      }
+      if (gen !== libraryRenderGen) return;
+    }
+
+    if (Number.isFinite(y)) {
+      const maxY = Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
+      window.scrollTo(0, Math.min(y, maxY));
+    }
+  }
+
+  // Item 7: keystroke search updates use history.replaceState (not a real
+  // hash push) so the back button doesn't step through every character
+  // typed — only the state from before the user started typing is a
+  // back-stop. Shared by the debounced search input and the Esc-to-clear
+  // shortcut.
+  function setSearchQuery(value) {
+    // Finding 3: covers the Esc-to-clear shortcut, which calls this directly
+    // — the pending debounced call (if any) is now moot.
+    clearTimeout(searchDebounceTimer);
+    activeQuery = value;
+    const hash = libraryHash(currentLibraryState());
+    if (window.location.hash !== hash) history.replaceState(null, "", hash);
+    refreshLibrary(value);
   }
 
   async function refreshLibrary(query) {
-    const searchEl = $("#search");
-    const q = query !== undefined ? query : (searchEl ? searchEl.value : "");
-    updateFilterBarActive();
     const contentEl = $("#library-content");
-    if (contentEl) contentEl.innerHTML = '<div class="loading">Loading...</div>';
-    await loadBooks(q);
+    if (contentEl) contentEl.innerHTML = skeletonGridHtml();
+    await loadBooks(query);
   }
 
-  async function loadBooks(query) {
+  // Finding C: best-effort self-heal for a collection/series filter whose
+  // underlying entity was deleted elsewhere (e.g. the desktop app) since the
+  // filter bar was last rendered — without this, the active filter's fetch
+  // legitimately returns zero books and the library gets stuck empty with no
+  // "All Books" pill visible to escape it. Re-fetches the current
+  // collections/series lists (they may have changed since the filter bar was
+  // built) and reports whether the active filter's id/name is still present.
+  // Never throws: an inconclusive check (network error, non-OK response)
+  // reports "not missing" so a merely-empty-but-still-valid filter is left
+  // alone.
+  async function activeFilterEntityMissing() {
+    // Finding 1: api() now throws (ApiNetworkError) instead of returning
+    // null for a network failure — this check's doc comment above already
+    // promises to never throw, so that must be caught here too.
+    try {
+      if (activeCollectionId) {
+        const resp = await api("/api/collections");
+        if (!resp || !resp.ok) return false;
+        const collections = await resp.json();
+        return !collections.some(c => c.id === activeCollectionId);
+      }
+      if (activeSeries) {
+        const resp = await api("/api/series");
+        if (!resp || !resp.ok) return false;
+        const series = await resp.json();
+        return !series.some(s => s.name === activeSeries);
+      }
+      return false;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  // Item 14: builds the `/api/books` query string shared by the first page
+  // (offset 0, called from loadBooks), every subsequent page (loadNextPage),
+  // and Fix C's bounded scroll-restore replay (a caller-supplied `limit`
+  // wider than one page) — series/q/sort must stay identical across pages or
+  // the slice boundaries wouldn't line up.
+  function booksPageParams(query, offset, limit) {
+    const params = new URLSearchParams();
+    if (activeSeries) params.set("series", activeSeries);
+    if (query) params.set("q", query);
+    if (activeSort && activeSort !== "date_added") params.set("sort", activeSort);
+    params.set("limit", String(limit || LIBRARY_PAGE_SIZE));
+    params.set("offset", String(offset));
+    return params;
+  }
+
+  // Item 14: fetches and appends the next 60 books to the currently-rendered
+  // grid. Shared by the IntersectionObserver sentinel (real scrolling) and by
+  // restoreLibraryScrollPosition's page-replay. Returns `true` if a
+  // non-empty page was appended, `false` on any reason to stop (already
+  // loading, nothing left, a superseded/failed/network-errored request) —
+  // callers use this to decide whether to keep going.
+  async function loadNextPage(gen) {
+    if (libraryLoadingPage) return false;
+    if (libraryTotal === null || libraryPageOffset >= libraryTotal) return false;
+    if (gen !== libraryRenderGen) return false;
+    libraryLoadingPage = true;
+    try {
+      const url = "/api/books?" + booksPageParams(activeQuery, libraryPageOffset).toString();
+      let resp;
+      try {
+        resp = await api(url);
+      } catch (e) {
+        return false; // best-effort — a later scroll/replay attempt can retry
+      }
+      if (gen !== libraryRenderGen) return false;
+      if (!resp || !resp.ok) return false;
+      const totalHeader = resp.headers.get("X-Total-Count");
+      let pageBooks;
+      try {
+        pageBooks = await resp.json();
+      } catch (e) {
+        return false;
+      }
+      if (gen !== libraryRenderGen) return false;
+      if (totalHeader !== null) libraryTotal = parseInt(totalHeader, 10);
+      if (pageBooks.length === 0) return false;
+
+      const contentEl = $("#library-content");
+      if (contentEl) appendBooksPage(contentEl, pageBooks);
+      libraryPageOffset += pageBooks.length;
+      libraryPagesLoaded += 1;
+
+      if (libraryScrollObserver && libraryTotal !== null && libraryPageOffset >= libraryTotal) {
+        libraryScrollObserver.disconnect();
+        libraryScrollObserver = null;
+        const sentinel = contentEl && contentEl.querySelector(".library-sentinel");
+        if (sentinel) sentinel.remove();
+      }
+      return true;
+    } finally {
+      // Fix A: an abandoned old-generation fetch resolving after a filter
+      // change must not clear the NEW generation's in-flight guard — a
+      // fresh loadNextPage() for the new gen may already be running, and
+      // clearing the flag out from under it lets a second sentinel fire
+      // start a duplicate concurrent fetch (same page appended twice).
+      if (gen === libraryRenderGen) libraryLoadingPage = false;
+    }
+  }
+
+  // Fix C: single-request replacement for the old "replay one page at a
+  // time" loop in restoreLibraryScrollPosition — fetches the whole replay
+  // range in one round trip (offset 0, limit = pagesToReplay * page size)
+  // and replaces the grid content with it, instead of N serial
+  // loadNextPage() calls. Updates the same pagination bookkeeping loadBooks/
+  // loadNextPage rely on so setupInfiniteScroll() picks up from the right
+  // offset afterward. Returns `true` on success, `false` on any reason to
+  // stop (superseded gen, network/HTTP/parse failure) — the caller then
+  // falls back to whatever was already rendered.
+  async function replayLibraryPages(gen, pagesToReplay) {
+    if (gen !== libraryRenderGen) return false;
+    const limit = pagesToReplay * LIBRARY_PAGE_SIZE;
+    let resp;
+    try {
+      resp = await api("/api/books?" + booksPageParams(activeQuery, 0, limit).toString());
+    } catch (e) {
+      return false;
+    }
+    if (gen !== libraryRenderGen) return false;
+    if (!resp || !resp.ok) return false;
+    const totalHeader = resp.headers.get("X-Total-Count");
+    let pageBooks;
+    try {
+      pageBooks = await resp.json();
+    } catch (e) {
+      return false;
+    }
+    if (gen !== libraryRenderGen) return false;
+
+    const contentEl = $("#library-content");
+    const grid = contentEl && contentEl.querySelector(".grid");
+    if (grid) {
+      grid.innerHTML = pageBooks.map(bookCardHtml).join("");
+      bindCardHandlersOn(Array.from(grid.children));
+    }
+    if (totalHeader !== null) libraryTotal = parseInt(totalHeader, 10);
+    libraryPageOffset = pageBooks.length;
+    libraryPagesLoaded = Math.max(1, Math.ceil(pageBooks.length / LIBRARY_PAGE_SIZE));
+    return true;
+  }
+
+  // Item 14: appends a page of cards as raw DOM nodes into the existing
+  // `.grid` element and binds handlers on only those new nodes — re-running
+  // bindGridCardHandlers() here would double-bind every already-rendered
+  // card (each call adds a fresh closure-based listener).
+  function appendBooksPage(contentEl, books) {
+    const grid = contentEl.querySelector(".grid");
+    if (!grid) return;
+    const beforeCount = grid.children.length;
+    grid.insertAdjacentHTML("beforeend", books.map(bookCardHtml).join(""));
+    bindCardHandlersOn(Array.from(grid.children).slice(beforeCount));
+  }
+
+  // Item 14: appends the IntersectionObserver sentinel after the grid and
+  // wires it to loadNextPage(). No-op when the current grid isn't paginated
+  // (libraryTotal === null — the collections endpoint, or a legacy server
+  // response with no X-Total-Count header) or already fully loaded.
+  function setupInfiniteScroll(contentEl) {
+    if (!contentEl || libraryTotal === null || libraryPageOffset >= libraryTotal) return;
+    const grid = contentEl.querySelector(".grid");
+    if (!grid) return;
+    const sentinel = document.createElement("div");
+    sentinel.className = "library-sentinel";
+    sentinel.setAttribute("aria-hidden", "true");
+    grid.insertAdjacentElement("afterend", sentinel);
+
+    const gen = libraryRenderGen;
+    libraryScrollObserver = new IntersectionObserver((entries) => {
+      if (entries.some((e) => e.isIntersecting)) loadNextPage(gen);
+    }, { rootMargin: "600px" });
+    libraryScrollObserver.observe(sentinel);
+  }
+
+  // Fix 1 / Item 15: canonical per-book progress resolver, shared by the
+  // grid (bookCardHtml) and the Continue Reading shelf (shelfCardHtml) — one
+  // source of truth for "what should this book's badge show". Mirrors
+  // mergeProgress's "local wins only if newer" rule: `serverRow` is the raw
+  // `/api/reading-progress` row (or undefined if the book has none), and a
+  // book this tab read more recently (lastKnownProgress) only overrides it
+  // when its `.ts` is newer than the server row's `last_read_at` — otherwise
+  // a book finished on another device would keep showing this tab's stale
+  // local value. Also treats chapter_index 0 as "no progress" (same
+  // convention as showDetail's `hasProgress` and get_continue_reading_books'
+  // `chapter_index > 0` filter), so resetProgress's locally-recorded 0
+  // resolves to no badge instead of a near-empty one. Returns undefined when
+  // there's nothing to show.
+  function effectiveProgress(id, serverRow) {
+    const known = lastKnownProgress[id];
+    const serverTs = serverRow ? serverRow.last_read_at * 1000 : 0;
+    const chapterIndex = known && known.ts >= serverTs
+      ? known.chapterIndex
+      : (serverRow ? serverRow.chapter_index : undefined);
+    return typeof chapterIndex === "number" && chapterIndex > 0 ? chapterIndex : undefined;
+  }
+
+  // Item 15: best-effort bulk progress fetch — a failure or slow response
+  // must never block or break the grid, it just renders without badges (same
+  // resilience pattern as the shelves' fetchShelfBooks). Guarded by `gen` so
+  // a slow fetch from a superseded loadBooks() call can't clobber a newer
+  // one's progressByBook map.
+  // Fix 2 / Fix 5: never rejects and never clobbers existing badges with an
+  // empty map on failure — `rows` is only trusted (and progressByBook only
+  // replaced) once it's confirmed to be an array; a network error, a
+  // non-ok response, or a malformed (non-array) body all just leave
+  // progressByBook exactly as it was.
+  async function refreshProgressByBook(gen) {
+    let rows;
+    try {
+      const resp = await api("/api/reading-progress");
+      rows = resp && resp.ok ? await resp.json() : undefined;
+    } catch (e) {
+      rows = undefined; // best-effort — keep whatever's already cached
+    }
+    if (gen !== libraryRenderGen) return;
+    if (!Array.isArray(rows)) return;
+
+    // Fix 2: belt-and-suspenders — a malformed row (e.g. `null` in the
+    // array) must not throw and reject this promise; loadBooks' unguarded
+    // `await progressPromise` must always resolve. Falls back to keeping the
+    // existing map, same as any other best-effort failure above.
+    try {
+      // Fix 1: resolve every book that has either a server row or a local
+      // (F8) record — a book read this tab whose PUT hasn't landed
+      // server-side yet has no server row at all, but still needs to show up.
+      const serverByBook = new Map(rows.map(p => [p.book_id, p]));
+      const ids = new Set([...serverByBook.keys(), ...Object.keys(lastKnownProgress)]);
+      const merged = new Map();
+      for (const id of ids) {
+        const value = effectiveProgress(id, serverByBook.get(id));
+        if (value !== undefined) merged.set(id, value);
+      }
+      progressByBook = merged;
+    } catch (e) {
+      // best-effort — keep whatever's already cached
+    }
+  }
+
+  async function loadBooks(query, refreshProgress) {
+    // Item 5: captured once, checked after every await below — see the
+    // libraryRenderGen declaration for why.
+    const gen = ++libraryRenderGen;
+    // Item 14: every loadBooks() call is a fresh library entry (filter/sort/
+    // search change, or a plain re-render) — always starts back at page 0.
+    resetLibraryPagination();
+
+    // Fix 6: the bulk progress table only needs re-fetching when actually
+    // entering the library fresh (from detail/reader/stats/collections, or
+    // the very first load) — a pure sort/search/filter re-render reuses the
+    // cached progressByBook untouched. A book just read in this tab is still
+    // reflected immediately regardless, via the F8 lastKnownProgress overlay
+    // effectiveProgress() applies whenever progressByBook IS rebuilt.
+    // Item 15: kicked off in parallel with the books fetch below and awaited
+    // just before the first render — skeletons already cover the wait, so
+    // paint once with badges rather than painting bar-less cards and
+    // repainting when progress arrives (avoids a layout shift).
+    const progressPromise = (refreshProgress || progressByBook.size === 0)
+      ? refreshProgressByBook(gen)
+      : Promise.resolve();
+
     let url;
+    let paginated = false;
     if (activeCollectionId) {
+      // Item 14: the collections endpoint stays unpaginated (out of scope —
+      // collections are small; see docs/web-ui-improvements.md Item 14).
       url = "/api/collections/" + encodeURIComponent(activeCollectionId) + "/books";
     } else {
-      const params = new URLSearchParams();
-      if (activeSeries) params.set("series", activeSeries);
-      if (query) params.set("q", query);
-      if (activeSort && activeSort !== "date_added") params.set("sort", activeSort);
-      const qs = params.toString();
-      url = "/api/books" + (qs ? "?" + qs : "");
+      paginated = true;
+      url = "/api/books?" + booksPageParams(query, 0).toString();
     }
 
-    const resp = await api(url);
-    if (!resp) return;
-    const books = await resp.json();
+    // Item 10: the main library grid is the one fetch in this file whose
+    // failure must be loud. Finding 3: a load that resolves after the user
+    // has already navigated away from the library (to detail/reader/stats/
+    // collections) must not toast or error-render over whatever view they're
+    // looking at now — `libraryRenderGen` only catches a *newer library*
+    // request superseding this one, not "left the library entirely", so
+    // every failure branch below also checks `currentView === "library"`.
+    let resp;
+    try {
+      resp = await api(url);
+    } catch (e) {
+      // Finding 1: api() throws ApiNetworkError for a network failure
+      // instead of returning null (that's reserved for an already-handled
+      // 401 — see the plain `if (!resp)` branch below).
+      if (gen !== libraryRenderGen) return;
+      if (currentView === "library") showLibraryLoadError(apiFailureToastMessage(e));
+      return;
+    }
+    if (gen !== libraryRenderGen) return;
+    if (!resp) return; // handled 401 — showLogin() already ran.
+    if (!resp.ok) {
+      // Finding 4: surface the actual status instead of a generic
+      // "couldn't reach the server" — the server IS reachable here.
+      if (currentView === "library") showLibraryLoadError(httpErrorToastMessage(resp.status));
+      return;
+    }
+    // Item 14: read the total before consuming the body. Absent whenever
+    // pagination isn't in play (collections) or the server hasn't been
+    // rebuilt yet with the `limit`/`offset` change (graceful degradation —
+    // treat the returned array as the complete set, no sentinel).
+    const totalHeader = paginated ? resp.headers.get("X-Total-Count") : null;
+    let books;
+    try {
+      books = await resp.json();
+    } catch (e) {
+      if (currentView === "library") showLibraryLoadError("Unexpected response");
+      return;
+    }
+    if (gen !== libraryRenderGen) return;
+    if (paginated && totalHeader !== null) {
+      libraryTotal = parseInt(totalHeader, 10);
+      libraryPageOffset = books.length;
+      libraryPagesLoaded = 1;
+    }
+
+    // Item 15: every render path below (filtered grid, plain grid, shelves)
+    // goes through bookCardHtml, which reads progressByBook — wait for it
+    // here so the very first paint already has badges.
+    // Fix 2: belt-and-suspenders — refreshProgressByBook is guaranteed to
+    // resolve (never reject), but this is the one await in loadBooks NOT
+    // otherwise wrapped in try/catch, so a rejection here would skip the
+    // grid render entirely. Guard it anyway rather than rely solely on that
+    // guarantee holding forever.
+    try {
+      await progressPromise;
+    } catch (e) {
+      // best-effort — render proceeds with whatever progressByBook already has
+    }
+    if (gen !== libraryRenderGen) return;
+
+    // Finding C: an empty result for an active collection/series filter is
+    // ambiguous — genuinely empty, or the filtered entity no longer exists?
+    // Only the latter needs healing; a real empty collection should still
+    // render as "No books found" with its filter pill active.
+    if ((activeCollectionId || activeSeries) && books.length === 0) {
+      const missing = await activeFilterEntityMissing();
+      if (gen !== libraryRenderGen) return;
+      if (missing) {
+        // Item 7: URL is the source of truth — heal by navigating to the
+        // hash with the dead filter dropped (a real hashchange re-runs
+        // showLibrary/loadBooks), rather than mutating the parse-cache vars
+        // directly and re-rendering out of step with the address bar.
+        // Finding 6: also refresh the filter bar itself — otherwise the now
+        // -deleted collection/series would linger in the dropdown lists
+        // (built from the stale cachedCollections/cachedSeries) until some
+        // unrelated full re-render.
+        renderFilterBar();
+        navigate(libraryHash({ ...currentLibraryState(), series: null, collection: null }));
+        return;
+      }
+    }
 
     // If collection is active and search is typed, filter client-side
     if (activeCollectionId && query) {
@@ -223,52 +1305,471 @@
         b.title.toLowerCase().includes(q) || b.author.toLowerCase().includes(q)
       );
       renderBooks(filtered);
-    } else {
-      renderBooks(books);
+      // Finding 5: only restore scroll after a real, successful grid render
+      // — never on a 401/failed load, which would consume the saved offset
+      // and scroll whatever's currently on screen to the wrong spot.
+      // Item 14: this is the collection+search client-filter path — never
+      // paginated, so no setupInfiniteScroll() call here.
+      await restoreLibraryScrollPosition();
+      return;
     }
+
+    // Item 5: shelves only appear on the unfiltered "home" view — any active
+    // search/series/collection filter (or an empty library) falls back to
+    // the plain grid, matching the pre-Item-5 behavior exactly.
+    const showShelves = !query && !activeCollectionId && !activeSeries && books.length > 0;
+
+    // Finding F: render the plain grid as soon as the main books fetch
+    // resolves. The shelves below are strictly best-effort decoration on top
+    // of it — a shelf-fetch failure (network error, non-OK response) must
+    // never leave the page stuck on "Loading".
+    renderBooks(books);
+    if (!showShelves) {
+      await restoreLibraryScrollPosition();
+      if (gen === libraryRenderGen) setupInfiniteScroll($("#library-content"));
+      return;
+    }
+
+    // Fix B: each shelf fetch is independent — never lets one shelf's
+    // failure (network error, non-OK response, bad JSON) suppress the
+    // other. A `Promise.all` of two bare api() calls would reject (and
+    // abort both shelves) if either one rejected; this never rejects, so a
+    // failed shelf just renders empty while the other still shows.
+    async function fetchShelfBooks(url) {
+      try {
+        const resp = await api(url);
+        return resp && resp.ok ? await resp.json() : [];
+      } catch (e) {
+        return []; // best-effort — this shelf just doesn't render
+      }
+    }
+
+    // Item 14: `books` is now only page 0 of the "All Books" grid (up to 60
+    // items), not the full library. Fix E: on the default date_added sort,
+    // page 0 is already the most-recently-added books in date order, so
+    // "Recently Added" is just the first 12 of it — only fall back to the
+    // dedicated date_added-sorted fetch when a different sort is active.
+    const [continueBooks, recentBooks] = await Promise.all([
+      fetchShelfBooks("/api/books/continue-reading?limit=12"),
+      activeSort === "date_added"
+        ? Promise.resolve(books.slice(0, 12))
+        : fetchShelfBooks("/api/books?sort=date_added&limit=12&offset=0"),
+    ]);
+    if (gen !== libraryRenderGen) return;
+
+    renderLibraryWithShelves(books, continueBooks, recentBooks);
+    // Finding 5: restore once the layout has settled into its final shape
+    // (grid-only or grid+shelves) — restoring earlier, right after the plain
+    // grid render, would be undone by the shelves rendering on top of it.
+    await restoreLibraryScrollPosition();
+    if (gen === libraryRenderGen) setupInfiniteScroll($("#library-content"));
+  }
+
+  // Item 10: friendly, context-specific empty states instead of a bare "No
+  // books found" — the message depends on *why* the grid is empty (nothing
+  // imported yet vs. a search/collection/series that matched nothing).
+  function libraryEmptyMessageHtml() {
+    if (activeQuery) return `<div class="empty">No books match "${esc(activeQuery)}"</div>`;
+    if (activeCollectionId) return '<div class="empty">This collection is empty.</div>';
+    if (activeSeries) return '<div class="empty">No books found in this series.</div>';
+    return '<div class="empty">Your library is empty. Import some books to get started.</div>';
+  }
+
+  // Finding 4: `message` is the differentiated toast text (network vs. HTTP
+  // vs. parse failure) chosen by loadBooks' catch/status branches; callers
+  // that don't care (none left) would fall back to the network wording.
+  function showLibraryLoadError(message) {
+    const contentEl = $("#library-content");
+    if (contentEl) contentEl.innerHTML = '<div class="empty">Couldn&rsquo;t load your library.</div>';
+    showToast(message || "Couldn't reach Folio server");
+  }
+
+  // Item 15: same `.shelf-progress`/`.shelf-progress-fill` bar the shelf
+  // cards use — no new visual language. Absent from `progressByBook` means
+  // no effective progress (no row, or resolved to "no progress" — see
+  // effectiveProgress), so no bar at all (not even at 0%). Fix 3: also
+  // requires `total_chapters > 0` — matches get_continue_reading_books'
+  // exclusion, so a book whose chapter count isn't known yet never shows the
+  // otherwise-always-0% bar `progressPercent` would produce for it.
+  function bookCardHtml(b) {
+    const chapterIndex = progressByBook.get(b.id);
+    const bar = progressBarHtml(chapterIndex, b.total_chapters);
+    return `
+      <div class="card" data-id="${b.id}" tabindex="0" role="button" aria-label="${esc(`Open ${b.title}`)}">
+        <img src="/api/books/${b.id}/cover?size=thumb" alt="" loading="lazy" data-cover-title="${esc(b.title)}">
+        <div class="info">
+          <div class="title" title="${esc(b.title)}">${esc(b.title)}</div>
+          <div class="author">${esc(b.author)}</div>
+          <div class="format">${b.format}</div>
+        </div>${bar}
+      </div>`;
+  }
+
+  function gridHtml(books) {
+    if (books.length === 0) return libraryEmptyMessageHtml();
+    return '<div class="grid">' + books.map(bookCardHtml).join("") + '</div>';
+  }
+
+  // Item 10: single onerror mechanism shared by every cover site (grid card,
+  // shelf card, detail cover) — replaces a broken/missing cover `<img>` with
+  // a styled placeholder (surface bg, serif title) instead of leaving a
+  // broken-image icon over a gray box.
+  function bindCoverFallback(img) {
+    img.addEventListener("error", () => {
+      const div = document.createElement("div");
+      div.className = "cover-placeholder";
+      div.innerHTML = `<span>${esc(img.dataset.coverTitle || "")}</span>`;
+      img.replaceWith(div);
+    }, { once: true });
+  }
+
+  function openBookFromCard(id) {
+    saveLibraryScrollPosition();
+    navigate("#/book/" + id);
+  }
+
+  // Item 14: factored out of bindGridCardHandlers so appendBooksPage() can
+  // bind only the newly-inserted cards from an infinite-scroll page load —
+  // re-running the old document-wide `$$(".card")` version on every append
+  // would attach a second set of listeners to every already-bound card.
+  function bindCardHandlersOn(cards) {
+    cards.forEach(c => {
+      c.addEventListener("click", () => openBookFromCard(c.dataset.id));
+      c.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openBookFromCard(c.dataset.id); }
+      });
+      const img = c.querySelector("img");
+      if (img) bindCoverFallback(img);
+    });
+  }
+
+  function bindGridCardHandlers() {
+    bindCardHandlersOn(Array.from($$(".card")));
   }
 
   function renderBooks(books) {
-    let content;
-    if (books.length === 0) {
-      content = '<div class="empty">No books found</div>';
-    } else {
-      content = '<div class="grid">' + books.map(b => `
-        <div class="card" data-id="${b.id}">
-          <img src="/api/books/${b.id}/cover" alt="" loading="lazy">
-          <div class="info">
-            <div class="title">${esc(b.title)}</div>
-            <div class="author">${esc(b.author)}</div>
-            <div class="format">${b.format}</div>
-          </div>
-        </div>`).join("") + '</div>';
-    }
-
     const contentEl = $("#library-content");
-    if (contentEl) contentEl.innerHTML = content;
+    if (contentEl) contentEl.innerHTML = gridHtml(books);
+    bindGridCardHandlers();
+  }
 
-    $$(".card").forEach(c => {
-      c.addEventListener("click", () => navigate("#/book/" + c.dataset.id));
+  // Item 5: percent = (chapter_index+1)/total_chapters — the same math the
+  // detail page (showDetail) and the desktop app use for progress bars.
+  function progressPercent(chapterIndex, totalChapters) {
+    return totalChapters > 0 ? Math.round(((chapterIndex + 1) / totalChapters) * 100) : 0;
+  }
+
+  // Fix 7: single source for the `.shelf-progress`/`.shelf-progress-fill`
+  // bar markup, shared by bookCardHtml and shelfCardHtml (previously
+  // duplicated verbatim in both). Fix 3: no bar at all — not even at 0% —
+  // when there's no effective progress to show or the chapter/page count
+  // isn't known yet (`total_chapters <= 0`, matching
+  // get_continue_reading_books' exclusion).
+  function progressBarHtml(chapterIndex, totalChapters) {
+    if (!(totalChapters > 0) || chapterIndex === undefined || chapterIndex === null) return "";
+    return `<div class="shelf-progress"><div class="shelf-progress-fill" style="width:${progressPercent(chapterIndex, totalChapters)}%"></div></div>`;
+  }
+
+  // `mode: "continue"` cards jump straight into the reader at the saved
+  // position; `mode: "detail"` (Recently Added) cards behave like a normal
+  // grid card and open the detail page.
+  function shelfCardHtml(b, mode) {
+    // Fix 4: consult the same canonical progressByBook map the grid uses —
+    // only fall back to this shelf fetch's own (potentially stale, or from
+    // before an F8 update) `b.chapter_index` when the book isn't in the map
+    // at all, so a book shown in both the shelf and the grid never disagrees.
+    const chapterIndex = mode === "continue"
+      ? (progressByBook.has(b.id) ? progressByBook.get(b.id) : b.chapter_index)
+      : undefined;
+    const bar = mode === "continue" ? progressBarHtml(chapterIndex, b.total_chapters) : "";
+    const posAttrs = mode === "continue"
+      ? ` data-chapter-index="${b.chapter_index}" data-scroll-position="${b.scroll_position || 0}" data-last-read-at="${b.last_read_at || 0}"`
+      : "";
+    return `
+      <div class="shelf-card" data-id="${b.id}" data-mode="${mode}"${posAttrs} tabindex="0" role="button" aria-label="${esc(`Open ${b.title}`)}">
+        <img src="/api/books/${b.id}/cover?size=thumb" alt="" loading="lazy" data-cover-title="${esc(b.title)}">
+        <div class="shelf-title" title="${esc(b.title)}">${esc(b.title)}</div>
+        ${bar}
+      </div>`;
+  }
+
+  function shelfSectionHtml(title, books, mode) {
+    if (books.length === 0) return "";
+    return `
+      <div class="shelf-section">
+        <h2 class="shelf-heading">${esc(title)}</h2>
+        <div class="shelf-row">${books.map(b => shelfCardHtml(b, mode)).join("")}</div>
+      </div>`;
+  }
+
+  function activateShelfCard(c) {
+    saveLibraryScrollPosition();
+    const id = c.dataset.id;
+    if (c.dataset.mode === "continue") {
+      // Finding B: the shelf's position was fetched at page-load time and
+      // may be stale by the time it's clicked (a later save — including
+      // one still in flight via the un-awaited debounced PUT — can have
+      // moved this tab's actual position on). Reconcile with
+      // lastKnownProgress via the same mergeProgress() the detail page's
+      // Continue button uses, instead of trusting the baked-in data
+      // attributes outright — same shared code path, no duplicated logic.
+      const serverProgress = {
+        book_id: id,
+        chapter_index: parseInt(c.dataset.chapterIndex, 10) || 0,
+        scroll_position: parseFloat(c.dataset.scrollPosition) || 0,
+        last_read_at: parseInt(c.dataset.lastReadAt, 10) || 0,
+      };
+      const merged = mergeProgress(id, serverProgress) || serverProgress;
+      const chapterIndex = merged.chapter_index;
+      const scrollPosition = typeof merged.scroll_position === "number" ? merged.scroll_position : 0;
+      readerEntryIntent = { id, action: "continue", scrollPosition };
+      navigate(`#/book/${id}/${chapterIndex}/read`);
+    } else {
+      navigate("#/book/" + id);
+    }
+  }
+
+  function bindShelfCardHandlers() {
+    $$(".shelf-card").forEach(c => {
+      c.addEventListener("click", () => activateShelfCard(c));
+      c.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" || e.key === " ") { e.preventDefault(); activateShelfCard(c); }
+      });
     });
-    $$(".card img").forEach(img => {
-      img.addEventListener("error", () => { img.style.background = "#333"; img.alt = "No cover"; });
-    });
+    $$(".shelf-card img").forEach(bindCoverFallback);
+  }
+
+  function renderLibraryWithShelves(allBooks, continueBooks, recentBooks) {
+    const contentEl = $("#library-content");
+    if (!contentEl) return;
+
+    let html = shelfSectionHtml("Continue Reading", continueBooks, "continue");
+    html += shelfSectionHtml("Recently Added", recentBooks, "detail");
+    html += '<h2 class="shelf-heading all-books-heading">All Books</h2>';
+    html += gridHtml(allBooks);
+
+    contentEl.innerHTML = html;
+    bindShelfCardHandlers();
+    bindGridCardHandlers();
   }
 
   // ── Detail ────────────────────────────────────
+  // F6: true while `location.hash` still targets this book's detail route.
+  // Re-checked after every await in showDetail so a slow response + Back
+  // doesn't let a stale render clobber whatever the user navigated to.
+  function hashTargetsDetail(id) {
+    return (window.location.hash || "#") === `#/book/${id}`;
+  }
+
+  // F8: prefer this tab's own more-recent record of a book's progress over a
+  // server GET that may have raced an in-flight PUT (e.g. right after
+  // leaving the reader). Falls back to the server value when it's absent or
+  // actually newer (e.g. progress made on another device/the desktop app).
+  function mergeProgress(id, serverProgress) {
+    const known = lastKnownProgress[id];
+    if (!known) return serverProgress;
+    const serverTs = serverProgress ? serverProgress.last_read_at * 1000 : 0;
+    if (known.ts < serverTs) return serverProgress;
+    return {
+      book_id: id,
+      chapter_index: known.chapterIndex,
+      scroll_position: known.scrollPosition,
+      last_read_at: Math.floor(known.ts / 1000),
+    };
+  }
+
+  // Item 8 / Finding K: resolves this book's position among its series
+  // siblings. `siblings` is the raw `/api/books?series=X` result
+  // (BookGridItem[]). If ANY sibling is missing a volume number, the whole
+  // series sorts by title instead — a partial volume sort (numbered books
+  // first, nulls tacked on after by title) would misplace an unnumbered book
+  // that actually belongs earlier in reading order. Title (then id) is
+  // always the tie-breaker, so identical/duplicate volume numbers still sort
+  // deterministically instead of depending on the API's row order. Returns
+  // null if `id` isn't found in the list (e.g. a race with metadata edited
+  // elsewhere).
+  function resolveSeriesNav(siblings, id) {
+    if (!siblings || siblings.length === 0) return null;
+    const anyMissingVolume = siblings.some(b => b.volume == null);
+    const sorted = siblings.slice().sort((a, b) => {
+      if (!anyMissingVolume && a.volume !== b.volume) return a.volume - b.volume;
+      return a.title.localeCompare(b.title) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+    });
+    const index = sorted.findIndex(b => b.id === id);
+    if (index === -1) return null;
+    return {
+      position: index + 1,
+      total: sorted.length,
+      prevId: index > 0 ? sorted[index - 1].id : null,
+      nextId: index < sorted.length - 1 ? sorted[index + 1].id : null,
+    };
+  }
+
+  function formatFileSize(bytes) {
+    if (typeof bytes !== "number" || !isFinite(bytes)) return null;
+    const units = ["B", "KB", "MB", "GB", "TB"];
+    let i = 0;
+    let val = bytes;
+    while (val >= 1024 && i < units.length - 1) { val /= 1024; i++; }
+    const precision = i === 0 ? 0 : (val < 10 ? 1 : 0);
+    return val.toFixed(precision) + " " + units[i];
+  }
+
+  function formatAddedDate(unixSeconds) {
+    if (!unixSeconds) return null;
+    try {
+      return new Date(unixSeconds * 1000).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+    } catch (e) { return null; }
+  }
+
+  // Read-only star rating (1-5, rounded) — mirrors the desktop app's
+  // StarRating display scale.
+  function starsHtml(rating) {
+    if (typeof rating !== "number") return "";
+    const rounded = Math.max(0, Math.min(5, Math.round(rating)));
+    let stars = "";
+    for (let i = 1; i <= 5; i++) stars += i <= rounded ? "★" : "☆";
+    return `<span class="detail-rating" title="Rating: ${rounded} of 5" aria-label="Rating: ${rounded} out of 5 stars">${stars}</span>`;
+  }
+
+  function seriesNavHtml(book, nav) {
+    if (!book.series) return "";
+    if (!nav) return `<p class="detail-series-line">Series: ${esc(book.series)}</p>`;
+    const prevBtn = nav.prevId ? `<button class="btn-secondary" id="series-prev-btn">&larr; Prev</button>` : "";
+    const nextBtn = nav.nextId ? `<button class="btn-secondary" id="series-next-btn">Next &rarr;</button>` : "";
+    return `
+      <div class="detail-series">
+        <a href="#" class="series-link" id="series-link">Series: ${esc(book.series)} (${nav.position}/${nav.total})</a>
+        ${(prevBtn || nextBtn) ? `<div class="series-nav-buttons">${prevBtn}${nextBtn}</div>` : ""}
+      </div>`;
+  }
+
+  function progressBlockHtml(book, progress, hasProgress, isPageBased) {
+    if (!hasProgress) return "";
+    const total = book.total_chapters || 0;
+    const current = progress.chapter_index + 1;
+    const unit = isPageBased ? "Page" : "Chapter";
+    // Finding G: total_chapters=0 means the page/chapter count isn't known
+    // (yet) — "Chapter N of 0 · NaN%" is meaningless, so just show the
+    // current position with no total/percent/bar.
+    if (total <= 0) {
+      return `<div class="detail-progress"><div class="detail-progress-label">${esc(`${unit} ${current}`)}</div></div>`;
+    }
+    const pct = progressPercent(progress.chapter_index, total);
+    return `
+      <div class="detail-progress">
+        <div class="detail-progress-bar"><div class="detail-progress-fill" style="width:${pct}%"></div></div>
+        <div class="detail-progress-label">${esc(`${unit} ${current} of ${total} · ${pct}%`)}</div>
+      </div>`;
+  }
+
   async function showDetail(id) {
-    app().innerHTML = '<div class="loading">Loading...</div>';
-    const resp = await api("/api/books/" + id);
-    if (!resp) return;
-    const book = await resp.json();
+    currentView = "detail";
+    flushProgressSave();
+    readerState = null;
+    resumePromptActive = false;
+    app().innerHTML = detailSkeletonHtml();
+
+    // Finding 1: the book fetch is the one thing this page can't render
+    // without — unlike the best-effort progress/series fetches below, its
+    // failure (network error, non-2xx, bad JSON) must replace the skeleton
+    // with a visible message + toast instead of leaving it spinning forever.
+    let resp;
+    try {
+      resp = await api("/api/books/" + id);
+    } catch (e) {
+      if (!hashTargetsDetail(id)) return;
+      renderViewError(apiFailureToastMessage(e));
+      showToast(apiFailureToastMessage(e));
+      return;
+    }
+    if (!resp || !hashTargetsDetail(id)) return;
+    if (!resp.ok) {
+      renderViewError(`Couldn't load this book (HTTP ${resp.status})`);
+      showToast(httpErrorToastMessage(resp.status));
+      return;
+    }
+    let book;
+    try {
+      book = await resp.json();
+    } catch (e) {
+      renderViewError("Couldn't load this book (unexpected response)");
+      showToast("Unexpected response");
+      return;
+    }
+    if (!hashTargetsDetail(id)) return;
 
     const isHtmlBook = book.format === "epub" || book.format === "mobi";
     const isPageBased = ["pdf", "cbz", "cbr"].includes(book.format);
-    const readHash = isHtmlBook || isPageBased ? `#/book/${id}/0/read` : "";
+    const isReadable = isHtmlBook || isPageBased;
+    const readHash = isReadable ? `#/book/${id}/0/read` : "";
 
+    // Item 4: a book with saved progress > 0 gets Continue (jumps straight to
+    // the saved position) + Start Over instead of a plain Read button. A
+    // progress fetch that 404s/errors is treated the same as "no progress" —
+    // never blocks the detail page from rendering.
+    // Item 8: series prev/next, resolved client-side from the series's full
+    // book list. Best-effort — a failed fetch just omits the nav buttons.
+    // Finding I: these two fetches only depend on the book response already
+    // in hand, not on each other — run them concurrently instead of one
+    // after the other.
+    // Finding 1: these two are genuinely best-effort (per the comments
+    // above) — a network failure here must degrade the same way a 404/500
+    // already does (no progress / no series nav), not abort the whole page.
+    // `.catch(() => undefined)` keeps that network-error outcome distinct
+    // from the `null` api() returns for an already-handled 401, which still
+    // must abort (see the F5/F6 check below).
+    const [progResp, seriesResp] = await Promise.all([
+      isReadable ? api(`/api/books/${id}/progress`).catch(() => undefined) : Promise.resolve(null),
+      book.series ? api(`/api/books?series=${encodeURIComponent(book.series)}`).catch(() => undefined) : Promise.resolve(null),
+    ]);
+    // F5/F6: a null response for a fetch that was actually made means api()
+    // already redirected to the login screen (401) — continuing would render
+    // the detail page over it.
+    if (isReadable && progResp === null) return;
+    if (book.series && seriesResp === null) return;
+    if (!hashTargetsDetail(id)) return;
+
+    let progress = null;
+    if (isReadable) {
+      if (progResp && progResp.ok) {
+        try { progress = await progResp.json(); } catch (e) { progress = null; }
+        if (!hashTargetsDetail(id)) return;
+      }
+      progress = mergeProgress(id, progress);
+    }
+    const hasProgress = !!(progress && progress.chapter_index > 0);
+    const continueHash = isReadable ? `#/book/${id}/${progress ? progress.chapter_index : 0}/read` : "";
+
+    let seriesNav = null;
+    if (book.series && seriesResp && seriesResp.ok) {
+      try {
+        seriesNav = resolveSeriesNav(await seriesResp.json(), id);
+      } catch (e) { seriesNav = null; }
+      if (!hashTargetsDetail(id)) return;
+    }
+
+    let actionsHtml;
+    if (!isReadable) {
+      actionsHtml = "";
+    } else if (hasProgress) {
+      actionsHtml = `<button class="btn-primary" id="continue-btn">Continue</button><button class="btn-secondary" id="restart-btn">Start Over</button>`;
+    } else {
+      actionsHtml = `<button class="btn-primary" id="read-btn">Read</button>`;
+    }
+
+    const facts = [];
+    if (book.total_chapters) facts.push(`${book.total_chapters} ${isPageBased ? "pages" : "chapters"}`);
+    const sizeStr = formatFileSize(book.file_size);
+    if (sizeStr) facts.push(sizeStr);
+    const dateStr = formatAddedDate(book.added_at);
+    if (dateStr) facts.push(`Added ${dateStr}`);
+    const factsHtml = facts.length ? `<p class="detail-facts">${esc(facts.join(" · "))}</p>` : "";
+
+    document.title = `${book.title} — Folio`;
     app().innerHTML = `
       <div class="header">
-        <button class="back-btn" id="back-btn">&larr;</button>
+        <button class="back-btn" id="back-btn" aria-label="Back">&larr;</button>
         <h1>${esc(book.title)}</h1>
         <span style="flex:1"></span>
         ${navIconsHtml("")}
@@ -276,112 +1777,1094 @@
       <div class="detail">
         <div class="meta">
           <div class="cover">
-            <img src="/api/books/${id}/cover" alt="">
+            <img src="/api/books/${id}/cover" alt="" data-cover-title="${esc(book.title)}">
           </div>
           <div class="info">
             <h2>${esc(book.title)}</h2>
-            <p>${esc(book.author)}</p>
-            <p>Format: ${book.format.toUpperCase()}</p>
-            ${book.description ? `<p>${esc(book.description)}</p>` : ""}
+            <p class="detail-author">${esc(book.author)}</p>
+            ${seriesNavHtml(book, seriesNav)}
+            <div class="detail-badges">
+              <span class="format-badge">${esc(book.format.toUpperCase())}</span>
+              ${starsHtml(book.rating)}
+            </div>
+            ${factsHtml}
+            ${book.description ? `<p class="detail-description">${esc(book.description)}</p>` : ""}
+            ${progressBlockHtml(book, progress, hasProgress, isPageBased)}
             <div class="actions">
-              ${readHash ? `<button class="btn-primary" id="read-btn">Read</button>` : ""}
+              ${actionsHtml}
               <a class="btn-secondary" href="/api/books/${id}/download">Download</a>
             </div>
           </div>
         </div>
       </div>`;
-    $("#back-btn").addEventListener("click", () => navigate("#"));
+    $("#back-btn").addEventListener("click", goHome);
     bindNavIcons();
     const coverImg = $(".detail .cover img");
-    if (coverImg) coverImg.addEventListener("error", () => { coverImg.style.background = "#333"; });
+    if (coverImg) bindCoverFallback(coverImg);
     const readBtn = $("#read-btn");
     if (readBtn) readBtn.addEventListener("click", () => navigate(readHash));
+    const continueBtn = $("#continue-btn");
+    if (continueBtn) continueBtn.addEventListener("click", () => {
+      // F2b: carry the saved in-chapter scroll offset through so the reader
+      // can restore it — the URL only encodes the chapter/page index.
+      const scrollPosition = progress && typeof progress.scroll_position === "number" ? progress.scroll_position : 0;
+      readerEntryIntent = { id, action: "continue", scrollPosition };
+      navigate(continueHash);
+    });
+    const restartBtn = $("#restart-btn");
+    if (restartBtn) restartBtn.addEventListener("click", () => {
+      // F9: an explicit "Start Over" legitimately writes 0 even though it's
+      // lower than anything already sent this session.
+      resetProgress(id);
+      readerEntryIntent = { id, action: "restart" };
+      navigate(readHash);
+    });
+    const seriesLink = $("#series-link");
+    if (seriesLink) seriesLink.addEventListener("click", (e) => {
+      e.preventDefault();
+      // Item 7: the URL carries the filter directly — no pending-intent
+      // variable needed between this click and the library rendering it.
+      navigate(libraryHash({ ...currentLibraryState(), q: "", series: book.series, collection: null }));
+    });
+    const seriesPrevBtn = $("#series-prev-btn");
+    if (seriesPrevBtn && seriesNav && seriesNav.prevId) {
+      seriesPrevBtn.addEventListener("click", () => navigate("#/book/" + seriesNav.prevId));
+    }
+    const seriesNextBtn = $("#series-next-btn");
+    if (seriesNextBtn && seriesNav && seriesNav.nextId) {
+      seriesNextBtn.addEventListener("click", () => navigate("#/book/" + seriesNav.nextId));
+    }
   }
 
   // ── Reader ────────────────────────────────────
+  // Two modes: "page" (PDF/CBZ/CBR, images) and "chapter" (EPUB/MOBI, HTML).
+  // Chrome (header + bottom toolbar) is built ONCE per book; page/chapter
+  // turns within the same book only swap the stage content (renderReaderContent)
+  // instead of re-fetching the book/page-count and tearing down the DOM.
+  // R2/R3: true while `location.hash` still points at this reader route for
+  // this book. Re-checked after every await in `showReader` so a user who
+  // navigates away mid-load doesn't get a stale render clobbering whatever
+  // they navigated to.
+  function hashTargetsReader(id) {
+    const hash = window.location.hash || "#";
+    return hash.startsWith(`#/book/${id}/`) && hash.includes("/read");
+  }
+
+  // R3: clamp a possibly-malformed page/chapter index (NaN, negative,
+  // out-of-range) into [0, count-1].
+  function clampIndex(index, count) {
+    const max = Math.max(count - 1, 0);
+    if (!Number.isFinite(index)) return 0;
+    return Math.min(Math.max(index, 0), max);
+  }
+
   async function showReader(id, index) {
-    app().innerHTML = '<div class="loading">Loading...</div>';
-    const resp = await api("/api/books/" + id);
-    if (!resp) return;
-    const book = await resp.json();
+    currentView = "reader";
 
-    // MOBI and EPUB both render through the chapter-HTML endpoint; the
-    // server-side `/api/books/:id/chapters/:index` route dispatches to
-    // the right parser.
-    const isHtmlBook = book.format === "epub" || book.format === "mobi";
+    // F7: read AND clear the entry intent right away, before any await can
+    // early-return — otherwise a failed fetch below would leak it into a
+    // later, unrelated reader entry and wrongly suppress its resume prompt.
+    const rawIntent = readerEntryIntent && readerEntryIntent.id === id ? readerEntryIntent : null;
+    readerEntryIntent = null;
+    const intent = rawIntent ? rawIntent.action : null;
+    const intentScroll = rawIntent && typeof rawIntent.scrollPosition === "number" ? rawIntent.scrollPosition : 0;
 
-    if (isHtmlBook) {
-      const chResp = await api(`/api/books/${id}/chapters/${index}`);
-      if (!chResp) return;
-      const html = await chResp.text();
-      const total = book.total_chapters || 1;
+    const sameBook = readerState && readerState.id === id;
 
-      app().innerHTML = `
-        <div class="header">
-          <button class="back-btn" id="back-btn">&larr;</button>
-          <h1>${esc(book.title)}</h1>
-          <span style="flex:1"></span>
-          ${navIconsHtml("")}
-        </div>
-        <div class="reader">
-          <div class="nav">
-            <button id="prev-btn" ${index <= 0 ? "disabled" : ""}>Prev</button>
-            <span>Chapter ${index + 1} / ${total}</span>
-            <button id="next-btn" ${index >= total - 1 ? "disabled" : ""}>Next</button>
-          </div>
-          <div class="content">${html}</div>
-        </div>`;
-      $("#back-btn").addEventListener("click", () => navigate("#/book/" + id));
-      $("#prev-btn").addEventListener("click", () => navigate("#/book/" + id + "/" + (index - 1) + "/read"));
-      $("#next-btn").addEventListener("click", () => navigate("#/book/" + id + "/" + (index + 1) + "/read"));
-      bindNavIcons();
+    if (!sameBook) {
+      // R2: drop any stale state up front so a concurrent load for a
+      // different book can't be mistaken for a "same book" fast path.
+      // Item 4: flush first — this book may be a different one than the
+      // pending debounced save belongs to.
+      flushProgressSave();
+      readerState = null;
+      resumePromptActive = false;
+      app().innerHTML = readerSkeletonHtml();
+
+      // Finding 1: the book fetch is required to render anything at all —
+      // unlike the resume-position check below, its failure (network error,
+      // non-2xx, bad JSON) must replace the skeleton with a visible message
+      // + toast instead of leaving it spinning forever.
+      let resp;
+      try {
+        resp = await api("/api/books/" + id);
+      } catch (e) {
+        if (!hashTargetsReader(id)) return;
+        renderViewError(apiFailureToastMessage(e));
+        showToast(apiFailureToastMessage(e));
+        return;
+      }
+      if (!resp || !hashTargetsReader(id)) return;
+      if (!resp.ok) {
+        renderViewError(`Couldn't load this book (HTTP ${resp.status})`);
+        showToast(httpErrorToastMessage(resp.status));
+        return;
+      }
+      let book;
+      try {
+        book = await resp.json();
+      } catch (e) {
+        renderViewError("Couldn't load this book (unexpected response)");
+        showToast("Unexpected response");
+        return;
+      }
+      if (!hashTargetsReader(id)) return;
+      document.title = `Reading: ${book.title} — Folio`;
+
+      // MOBI and EPUB both render through the chapter-HTML endpoint; the
+      // server-side `/api/books/:id/chapters/:index` route dispatches to
+      // the right parser.
+      const isHtmlBook = book.format === "epub" || book.format === "mobi";
+      const mode = isHtmlBook ? "chapter" : "page";
+
+      let count;
+      if (isHtmlBook) {
+        count = book.total_chapters || 1;
+      } else {
+        let countResp;
+        try {
+          countResp = await api(`/api/books/${id}/page-count`);
+        } catch (e) {
+          if (!hashTargetsReader(id)) return;
+          renderViewError(apiFailureToastMessage(e));
+          showToast(apiFailureToastMessage(e));
+          return;
+        }
+        if (!countResp || !hashTargetsReader(id)) return;
+        if (!countResp.ok) {
+          renderViewError(`Couldn't load page count (HTTP ${countResp.status})`);
+          showToast(httpErrorToastMessage(countResp.status));
+          return;
+        }
+        let countBody;
+        try {
+          countBody = await countResp.json();
+        } catch (e) {
+          renderViewError("Couldn't load page count (unexpected response)");
+          showToast("Unexpected response");
+          return;
+        }
+        count = countBody.count;
+        if (!hashTargetsReader(id)) return;
+      }
+
+      const clamped = clampIndex(index, count);
+
+      // Item 4: offer to resume at the saved position — but only on the
+      // canonical "default open" entry point (index 0, what the detail
+      // page's plain Read button always requests). A bookmarked/typed URL
+      // with a specific (even out-of-range/malformed) index is an explicit
+      // request for that position and must just clamp+load like before —
+      // not get reinterpreted as "the user wants to resume". Also skipped
+      // when the detail page's Continue/Start Over buttons already made
+      // this call for this book (readerEntryIntent).
+      // Finding 1: this check is best-effort (mirrors showDetail's progress
+      // fetch) — a network failure must not block the book from opening, it
+      // should just skip the resume prompt, same as a 404 already does.
+      let savedIndex = null;
+      let savedScroll = 0;
+      if (!intent && index === 0) {
+        let progResp;
+        try {
+          progResp = await api(`/api/books/${id}/progress`);
+        } catch (e) {
+          progResp = undefined;
+        }
+        // F5: a null (not undefined) response means api() already redirected
+        // to the login screen (401) — continuing would render the reader
+        // over it. `undefined` (network error, caught above) falls through
+        // to "no saved progress" instead.
+        if (progResp === null || !hashTargetsReader(id)) return;
+        if (progResp && progResp.ok) {
+          let progress = null;
+          try { progress = await progResp.json(); } catch (e) { progress = null; }
+          if (progress && progress.chapter_index > 0) {
+            savedIndex = clampIndex(progress.chapter_index, count);
+            savedScroll = typeof progress.scroll_position === "number" ? progress.scroll_position : 0;
+          }
+        }
+        if (!hashTargetsReader(id)) return;
+      }
+
+      if (savedIndex !== null && savedIndex !== clamped) {
+        showResumePrompt(id, book, mode, count, savedIndex, clamped, savedScroll);
+        return;
+      }
+
+      enterReaderAt(id, book, mode, count, clamped, intent === "continue" ? intentScroll : 0);
+      if (clamped !== index) {
+        // Normalize the URL; the resulting hashchange re-enters this
+        // function on the "same book" fast path below to actually render.
+        navigate(`#/book/${id}/${clamped}/read`);
+        return;
+      }
     } else {
-      const countResp = await api(`/api/books/${id}/page-count`);
-      if (!countResp) return;
-      const { count } = await countResp.json();
-
-      app().innerHTML = `
-        <div class="header">
-          <button class="back-btn" id="back-btn">&larr;</button>
-          <h1>${esc(book.title)}</h1>
-          <span style="flex:1"></span>
-          ${navIconsHtml("")}
-        </div>
-        <div class="reader">
-          <div class="nav">
-            <button id="prev-btn" ${index <= 0 ? "disabled" : ""}>Prev</button>
-            <span>Page ${index + 1} / ${count}</span>
-            <button id="next-btn" ${index >= count - 1 ? "disabled" : ""}>Next</button>
-          </div>
-          <div class="page-img">
-            <img src="/api/books/${id}/pages/${index}" alt="Page ${index + 1}">
-          </div>
-        </div>`;
-      $("#back-btn").addEventListener("click", () => navigate("#/book/" + id));
-      $("#prev-btn").addEventListener("click", () => navigate("#/book/" + id + "/" + (index - 1) + "/read"));
-      $("#next-btn").addEventListener("click", () => navigate("#/book/" + id + "/" + (index + 1) + "/read"));
-      bindNavIcons();
+      const clamped = clampIndex(index, readerState.count);
+      readerState.index = clamped;
+      if (clamped !== index) {
+        navigate(`#/book/${id}/${clamped}/read`);
+        return;
+      }
     }
+
+    await renderReaderContent();
+  }
+
+  // F2/F2b: `scrollPosition` (0..1, only meaningful in chapter mode) is the
+  // saved in-chapter offset to restore on this specific entry — 0 for a
+  // normal fresh open. `suppressNextSave` and `pendingScrollRestore` make
+  // sure the very first render of this entry (the "mere open") never itself
+  // schedules a progress save; see renderReaderContent().
+  function enterReaderAt(id, book, mode, count, index, scrollPosition) {
+    readerState = {
+      id,
+      book,
+      mode,
+      index,
+      count,
+      chromeHidden: false,
+      fitMode: safeStorageGet("folio_reader_fit_mode") || "fit-height",
+      handlers: null,
+      renderGen: 0,
+      scrollPosition: mode === "chapter" ? (scrollPosition || 0) : 0,
+      pendingScrollRestore: mode === "chapter" ? (scrollPosition || 0) : 0,
+      suppressNextSave: true,
+      // Item 12: page-turn animation bookkeeping. `lastRenderedPageIndex`/
+      // `lastRenderedChapterIndex` start undefined so the very first render
+      // of a fresh entry never animates (no previous page to slide from).
+      // `preloadCache` (page mode only) tracks which neighbor images have
+      // actually finished loading, keyed by index — an animation only ever
+      // plays for an index already in this cache (see getPreloadedImage()).
+      preloadCache: {},
+      lastRenderedPageIndex: undefined,
+      lastRenderedChapterIndex: undefined,
+      chapterAnimCleanup: null,
+      turnAnimCleanup: null,
+      snapBackCleanup: null,
+      pendingInstantTurn: false,
+    };
+    readerState.handlers = makeReaderHandlers(id);
+    renderReaderChrome();
+  }
+
+  // Item 4: "You left off at page/chapter N" prompt shown on a fresh reader
+  // entry when saved progress differs from the requested (usually 0) index.
+  // F10: sets resumePromptActive/resumePromptBookId so the global keyboard
+  // dispatcher can drive Enter/Esc/Backspace while this is on screen.
+  function showResumePrompt(id, book, mode, count, savedIndex, restartIndex, savedScroll) {
+    resumePromptActive = true;
+    resumePromptBookId = id;
+    const unitLabel = mode === "page" ? "Page" : "Chapter";
+    app().innerHTML = `
+      <div class="resume-prompt">
+        <div class="resume-prompt-panel">
+          <h2>${esc(book.title)}</h2>
+          <p>You left off at ${unitLabel.toLowerCase()} ${savedIndex + 1} of ${count}.</p>
+          <div class="resume-actions">
+            <button class="btn-primary" id="resume-btn">Resume at ${unitLabel} ${savedIndex + 1}</button>
+            <button class="btn-secondary" id="resume-restart-btn">Start Over</button>
+          </div>
+        </div>
+      </div>`;
+    $("#resume-btn").addEventListener("click", () => resolveResumePrompt(id, book, mode, count, savedIndex, savedScroll || 0));
+    $("#resume-restart-btn").addEventListener("click", () => {
+      // F9: an explicit "Start Over" legitimately writes 0 even though it's
+      // lower than anything already sent this session — resetProgress()
+      // clears the monotonic guard for this book before saving.
+      resetProgress(id);
+      resolveResumePrompt(id, book, mode, count, restartIndex, 0);
+    });
+  }
+
+  async function resolveResumePrompt(id, book, mode, count, index, scrollPosition) {
+    resumePromptActive = false;
+    if (!hashTargetsReader(id)) return;
+    // Fix the URL without firing a hashchange (avoids re-fetching book/
+    // page-count/progress a second time just to confirm the same choice).
+    history.replaceState(null, "", `#/book/${id}/${index}/read`);
+    enterReaderAt(id, book, mode, count, index, scrollPosition || 0);
+    await renderReaderContent();
+  }
+
+  function pageUrl(id, index) {
+    return `/api/books/${id}/pages/${index}`;
+  }
+
+  function makeReaderHandlers(id) {
+    return {
+      next: () => gotoReaderIndex(readerState.index + 1),
+      prev: () => gotoReaderIndex(readerState.index - 1),
+      first: () => gotoReaderIndex(0),
+      last: () => gotoReaderIndex(readerState.count - 1),
+      goBack: () => navigate("#/book/" + id),
+      toggleChrome: () => {
+        readerState.chromeHidden = !readerState.chromeHidden;
+        applyChromeVisibility();
+      },
+    };
+  }
+
+  // Item 12: `opts.instant` marks this turn as one that must never animate
+  // (the slider) — consumed once by renderPageTurn()/the chapter-mode
+  // animation branch on the render this navigation produces.
+  function gotoReaderIndex(newIndex, opts) {
+    if (!readerState || newIndex < 0 || newIndex >= readerState.count) return;
+    // R1-adjacent: update in-memory state synchronously so rapid successive
+    // calls (e.g. holding/repeating ArrowRight) each see the just-updated
+    // index rather than all reading the same stale value before the
+    // asynchronous `hashchange` round-trip catches up.
+    readerState.index = newIndex;
+    readerState.pendingInstantTurn = !!(opts && opts.instant);
+    navigate("#/book/" + readerState.id + "/" + newIndex + "/read");
+  }
+
+  function applyChromeVisibility() {
+    const root = $("#reader-root");
+    if (root) root.classList.toggle("chrome-hidden", readerState.chromeHidden);
+  }
+
+  function applyFitMode() {
+    const root = $("#reader-root");
+    if (!root) return;
+    root.classList.remove("fit-height", "fit-width");
+    root.classList.add(readerState.fitMode);
+    const btn = $("#fit-toggle-btn");
+    if (btn) btn.textContent = readerState.fitMode === "fit-height" ? "Fit: Height" : "Fit: Width";
+  }
+
+  // Left third = prev, right third = next, middle third = toggle chrome.
+  function bindClickZones(el) {
+    el.addEventListener("click", (e) => {
+      const rect = el.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const third = rect.width / 3;
+      if (x < third) readerState.handlers.prev();
+      else if (x > third * 2) readerState.handlers.next();
+      else readerState.handlers.toggleChrome();
+    });
+  }
+
+  function reducedMotionEnabled() {
+    return !!(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches);
+  }
+
+  // Item 12: clear any drag-follow transform left on the (page-mode)
+  // current image — used both when a drag commits (the incoming overlay's
+  // slide-in animation takes over immediately, so the reset is instant, no
+  // transition) and by finalizeTurnAnimation's cleanup.
+  function resetDragStyles(img) {
+    if (!img) return;
+    img.style.transition = "";
+    img.style.transform = "";
+    img.style.willChange = "";
+  }
+
+  // F6: cancels any in-flight snap-back on `img` — removes its
+  // transitionend listener and its fallback timeout, then resets the drag
+  // styles immediately. Called both when a new drag starts (so it doesn't
+  // inherit the snap-back's transition, which would make the page lag the
+  // finger) and when a drag is aborted outright (F1/F2).
+  function cancelSnapBack(img) {
+    if (!readerState || !readerState.snapBackCleanup) return;
+    const cleanup = readerState.snapBackCleanup;
+    readerState.snapBackCleanup = null;
+    cleanup();
+  }
+
+  // Item 12: below-threshold release — animate the dragged image back to
+  // translateX(0) with the same timing as a committed turn, then clean up.
+  // F6: cleanup runs off transitionend OR a timeout fallback, whichever
+  // fires first — dx===0 leaves img.style.transform already at
+  // "translateX(0)" (no-op transition, transitionend never fires), so the
+  // timeout is the only thing that ever cleans that case up. A new drag
+  // (touchstart) or an abort (touchcancel/multi-touch) cancels this via
+  // cancelSnapBack before either fires.
+  function snapBackDrag(img) {
+    if (!img || !img.style.transform) {
+      resetDragStyles(img);
+      return;
+    }
+    img.style.transition = "transform var(--dur-page-turn) var(--ease-page-turn)";
+    const rafId = requestAnimationFrame(() => { img.style.transform = "translateX(0)"; });
+
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      cancelAnimationFrame(rafId); // in case cancelled before the rAF ran
+      img.removeEventListener("transitionend", onEnd);
+      clearTimeout(timer);
+      if (readerState && readerState.snapBackCleanup === finish) readerState.snapBackCleanup = null;
+      resetDragStyles(img);
+    };
+    const onEnd = () => finish();
+    img.addEventListener("transitionend", onEnd);
+    // Slightly longer than --dur-page-turn (0.22s) so it never races a
+    // normal transitionend completion.
+    const timer = setTimeout(finish, 280);
+    if (readerState) readerState.snapBackCleanup = finish;
+  }
+
+  // Item 3/12: horizontal swipe (~50px threshold) = prev/next on touch
+  // devices. Item 12 adds: axis lock (first ~10px of movement decides
+  // horizontal-vs-vertical, so a fit-width vertical scroll is never
+  // hijacked), drag-follow (the current page translates with the finger
+  // while locked horizontal), and a snap-back animation below the commit
+  // threshold. A bare touchstart+touchend with no intervening touchmove
+  // (older callers/tests) falls through to the original single-shot delta
+  // check unchanged.
+  const SWIPE_COMMIT_PX = 50;
+  const AXIS_LOCK_PX = 10;
+  function bindSwipe(el) {
+    let startX = 0, startY = 0, tracking = false, axisLock = null;
+
+    // F1/F2: shared abort path — stops tracking so a stray touchend (from
+    // whichever finger lifts) can't commit a bogus swipe, and immediately
+    // clears any drag-follow transform/will-change plus any in-flight
+    // snap-back so nothing is left stuck mid-gesture.
+    function abortDrag() {
+      tracking = false;
+      axisLock = null;
+      const img = $("#page-img");
+      cancelSnapBack(img);
+      resetDragStyles(img);
+    }
+
+    el.addEventListener("touchstart", (e) => {
+      if (e.touches.length !== 1) {
+        // F2: a second finger present at touchstart (e.g. joining mid-drag,
+        // since touchstart re-fires with the full active touch list) — never
+        // (re)start tracking on multi-touch.
+        abortDrag();
+        return;
+      }
+      cancelSnapBack($("#page-img")); // F6: a new drag interrupts any snap-back in flight
+      startX = e.touches[0].clientX;
+      startY = e.touches[0].clientY;
+      tracking = true;
+      axisLock = null;
+    }, { passive: true });
+
+    // Registered non-passive so a horizontally-locked drag can
+    // preventDefault() to stop the page from also being scrolled/selected —
+    // but that call only happens once locked horizontal; a vertical drag
+    // returns immediately and never blocks the native scroll gesture.
+    el.addEventListener("touchmove", (e) => {
+      if (!tracking) return;
+      if (e.touches.length !== 1) {
+        // F2: a second finger joined mid-drag — abort so a later touchend
+        // (computed from whichever finger lifts) can't commit a bogus turn.
+        abortDrag();
+        return;
+      }
+      const dx = e.touches[0].clientX - startX;
+      const dy = e.touches[0].clientY - startY;
+      if (axisLock === null) {
+        if (Math.abs(dx) < AXIS_LOCK_PX && Math.abs(dy) < AXIS_LOCK_PX) return;
+        axisLock = Math.abs(dx) > Math.abs(dy) ? "x" : "y";
+      }
+      if (axisLock !== "x") return;
+      e.preventDefault();
+      if (reducedMotionEnabled()) return; // gesture still recognized, no visual feedback
+      const img = $("#page-img");
+      if (img) {
+        img.style.willChange = "transform";
+        img.style.transform = `translateX(${dx}px)`;
+      }
+    }, { passive: false });
+
+    el.addEventListener("touchend", (e) => {
+      if (!tracking) return; // only a clean single-touch drag reaches here
+      tracking = false;
+      const t = e.changedTouches[0];
+      const dx = t.clientX - startX;
+      const dy = t.clientY - startY;
+      const img = $("#page-img");
+
+      if (axisLock === "x") {
+        if (Math.abs(dx) > SWIPE_COMMIT_PX) {
+          resetDragStyles(img); // instant — the commit slide-in covers the reset
+          if (dx < 0) readerState.handlers.next();
+          else readerState.handlers.prev();
+        } else {
+          snapBackDrag(img);
+        }
+      } else if (axisLock === null) {
+        // No touchmove observed (e.g. a synthetic touchstart+touchend with
+        // nothing in between) — same check the pre-Item-12 code always did.
+        if (Math.abs(dx) > SWIPE_COMMIT_PX && Math.abs(dx) > Math.abs(dy)) {
+          if (dx < 0) readerState.handlers.next();
+          else readerState.handlers.prev();
+        }
+      }
+      axisLock = null;
+    }, { passive: true });
+
+    // F1: a system-cancelled gesture (incoming call, notification shade,
+    // browser edge-gesture) fires touchcancel instead of touchend — without
+    // this, the drag-follow transform/will-change stays on #page-img
+    // indefinitely (only recovered by the next *committed* turn).
+    el.addEventListener("touchcancel", () => {
+      if (!tracking) return;
+      abortDrag();
+    }, { passive: true });
+  }
+
+  function renderReaderChrome() {
+    const { book, mode, count, index, fitMode } = readerState;
+    const rootClass = mode === "page" ? `reader-page ${fitMode}` : "reader-chapter";
+    // Item 12: `page-img-incoming` is the animated overlay for a committed
+    // turn — hidden/inert until renderPageTurn() promotes it; see there.
+    const stageInner = mode === "page"
+      ? `<img id="page-img" alt=""><img id="page-img-incoming" class="page-img-incoming" alt="" hidden><div class="reader-page-error" id="page-error" hidden></div>`
+      : `<div class="content" id="reader-content"></div>`;
+    const fitToggleBtn = mode === "page"
+      ? `<button id="fit-toggle-btn">${fitMode === "fit-height" ? "Fit: Height" : "Fit: Width"}</button>`
+      : "";
+
+    app().innerHTML = `
+      <div class="${rootClass}" id="reader-root">
+        <div class="reader-chrome-top">
+          <div class="header">
+            <button class="back-btn" id="back-btn" aria-label="Back">&larr;</button>
+            <h1>${esc(book.title)}</h1>
+            <span style="flex:1"></span>
+            ${navIconsHtml("")}
+          </div>
+        </div>
+        <div class="reader-stage" id="reader-stage" tabindex="-1">${stageInner}</div>
+        <div class="reader-chrome-bottom">
+          <div class="reader-toolbar">
+            <button id="prev-btn">Prev</button>
+            <input type="range" id="page-slider" min="0" max="${count - 1}" value="${index}" aria-label="${mode === "page" ? "Page" : "Chapter"} slider">
+            <span id="page-label"></span>
+            <button id="next-btn">Next</button>
+            ${fitToggleBtn}
+          </div>
+        </div>
+        <button class="chrome-toggle-fab" id="chrome-toggle-btn" title="Toggle toolbar" aria-label="Toggle toolbar">&#8942;</button>
+      </div>`;
+
+    $("#back-btn").addEventListener("click", () => readerState.handlers.goBack());
+    $("#prev-btn").addEventListener("click", () => readerState.handlers.prev());
+    $("#next-btn").addEventListener("click", () => readerState.handlers.next());
+    $("#chrome-toggle-btn").addEventListener("click", () => readerState.handlers.toggleChrome());
+    $("#page-slider").addEventListener("change", (e) => {
+      // K2: return focus to the document so shortcuts work immediately
+      // after a slider drag, without waiting on isTypingTarget special-casing.
+      e.target.blur();
+      // Item 12: a slider jump stays instant — no slide-in.
+      gotoReaderIndex(parseInt(e.target.value, 10), { instant: true });
+    });
+    bindNavIcons();
+
+    if (mode === "page") {
+      const img = $("#page-img");
+      bindClickZones(img);
+      bindSwipe(img);
+      img.addEventListener("error", handlePageImageError);
+      img.addEventListener("load", () => {
+        img.style.display = "";
+        const errEl = $("#page-error");
+        if (errEl) errEl.hidden = true;
+      });
+      $("#fit-toggle-btn").addEventListener("click", () => {
+        readerState.fitMode = readerState.fitMode === "fit-height" ? "fit-width" : "fit-height";
+        safeStorageSet("folio_reader_fit_mode", readerState.fitMode);
+        applyFitMode();
+      });
+    } else {
+      // F2b: the chrome (and its #reader-stage element) is built once per
+      // book, so this listener stays bound across chapter turns — only the
+      // stage's content is swapped by renderReaderContent().
+      bindChapterScrollTracking($("#reader-stage"));
+    }
+
+    applyChromeVisibility();
+  }
+
+  // F2b: track the real in-chapter scroll offset as a 0..1 fraction of the
+  // scrollable range (same scale as the backend's `validate_scroll_position`
+  // clamp), debounced through the same save pipeline as page/chapter turns.
+  function clampScrollRatio(ratio) {
+    if (!Number.isFinite(ratio)) return 0;
+    return Math.min(Math.max(ratio, 0), 1);
+  }
+
+  function bindChapterScrollTracking(stage) {
+    if (!stage) return;
+    stage.addEventListener("scroll", () => {
+      if (!readerState || readerState.mode !== "chapter") return;
+      // Ignore the synthetic scroll event fired by our own programmatic
+      // restore (renderReaderContent) — it reflects data already saved,
+      // not a new user action.
+      if (readerState.suppressScrollSave) { readerState.suppressScrollSave = false; return; }
+      const max = stage.scrollHeight - stage.clientHeight;
+      readerState.scrollPosition = max > 0 ? clampScrollRatio(stage.scrollTop / max) : 0;
+      scheduleProgressSave();
+    }, { passive: true });
+  }
+
+  async function renderReaderContent() {
+    const { id, mode, index, count } = readerState;
+    // F8: record the navigated-to index immediately, synchronously, before
+    // any await below. Previously this only happened at the tail of this
+    // function (after the chapter-content fetch resolved) or on a confirmed
+    // PUT response — on a slow connection, leaving the reader before either
+    // of those completed left `lastKnownProgress` stale, so a showDetail()
+    // GET that raced an in-flight save would win with old data (the exact
+    // race F8 exists to prevent).
+    recordLocalProgress(id, index, readerState.scrollPosition || 0);
+    // R1: monotonic per-book render generation. Captured before each await
+    // below; if it no longer matches after the await, a newer render (or a
+    // fresh book load) has superseded this one — abandon without touching
+    // the DOM.
+    readerState.renderGen = (readerState.renderGen || 0) + 1;
+    const gen = readerState.renderGen;
+    // F2: consumed synchronously, right here, rather than at the end of this
+    // function — an entry's first render can be abandoned by a rapid second
+    // navigation before it reaches its own tail (see the R1 guards below),
+    // which would otherwise leave the flag set and wrongly suppress the
+    // *next* (real) navigation's save too.
+    const isInitialRender = !!readerState.suppressNextSave;
+    readerState.suppressNextSave = false;
+    updateProgressUI();
+
+    if (mode === "chapter") {
+      const contentEl = $("#reader-content");
+      if (contentEl) contentEl.innerHTML = '<div class="loading">Loading...</div>';
+      // Finding 1: a network error here previously propagated as an
+      // unhandled rejection, leaving the "Loading..." text stuck forever —
+      // catch it and show the same escaped reader-error message a non-2xx
+      // response already gets, plus a toast.
+      let chResp;
+      try {
+        chResp = await api(`/api/books/${id}/chapters/${index}`);
+      } catch (e) {
+        if (!readerState || readerState.renderGen !== gen) return;
+        if (contentEl) {
+          contentEl.innerHTML = `<div class="reader-error">${esc(apiFailureToastMessage(e))}</div>`;
+        }
+        showToast(apiFailureToastMessage(e));
+        return;
+      }
+      if (!readerState || readerState.renderGen !== gen) return;
+      if (!chResp) return;
+      // S1: non-2xx bodies are plain-text error strings that may contain
+      // book-derived content (e.g. from a crafted EPUB) — never insert them
+      // as HTML. Render a static, escaped message instead.
+      if (!chResp.ok) {
+        if (contentEl) {
+          contentEl.innerHTML = `<div class="reader-error">${esc(`Couldn't load this chapter (HTTP ${chResp.status})`)}</div>`;
+        }
+        return;
+      }
+      const html = await chResp.text();
+      if (!readerState || readerState.renderGen !== gen) return;
+      if (contentEl) contentEl.innerHTML = html;
+      renderChapterTurnAnimation(contentEl, index, isInitialRender);
+      // K5: native Space/PageDown scrolling needs the scroll container focused.
+      const stage = $("#reader-stage");
+      if (stage) {
+        stage.focus();
+        // F2b: restore the saved in-chapter offset on this entry only —
+        // `pendingScrollRestore` is consumed once and is 0 for a normal
+        // chapter turn, which just lands at the top like before.
+        const restoreRatio = readerState.pendingScrollRestore || 0;
+        readerState.pendingScrollRestore = 0;
+        requestAnimationFrame(() => {
+          if (!readerState || readerState.renderGen !== gen) return;
+          const max = stage.scrollHeight - stage.clientHeight;
+          if (restoreRatio > 0 && max > 0) {
+            readerState.suppressScrollSave = true;
+            stage.scrollTop = restoreRatio * max;
+          } else {
+            stage.scrollTop = 0;
+          }
+        });
+      }
+    } else {
+      renderPageTurn(id, index, count);
+    }
+
+    // F2: a mere open (or resume/restart choice, which is also just an open)
+    // must never itself persist a save — only a real subsequent navigation
+    // or scroll should.
+    if (!isInitialRender) {
+      scheduleProgressSave();
+    }
+  }
+
+  // ── Item 12: page-turn / chapter-turn commit animation ─────────────────
+  // Page-turn semantics (index bookkeeping, saves, preload) are unchanged
+  // from Item 3/4 above — this section is a presentation layer on top: it
+  // decides whether a turn *shows* a slide-in and drives the two-stacked-img
+  // swap for page mode, or a single class toggle on `.content` for chapter
+  // mode.
+
+  // Keeps a handful of already-fetched neighbor images so a turn can tell
+  // "loaded, safe to animate in" from "not ready yet, hard cut" (point 3 of
+  // the spec: never animate an unloaded image). Keyed by index (not URL) so
+  // it can be pruned to a small window around the current page.
+  function preloadPage(id, index, count) {
+    if (index < 0 || index >= count || !readerState) return;
+    const cache = readerState.preloadCache;
+    if (cache[index]) return;
+    const img = new Image();
+    img.src = pageUrl(id, index);
+    cache[index] = img;
+  }
+
+  function getPreloadedImage(index) {
+    const cache = readerState && readerState.preloadCache;
+    const img = cache && cache[index];
+    return img && img.complete && img.naturalWidth > 0 ? img : null;
+  }
+
+  function prunePreloadCache(centerIndex) {
+    const cache = readerState && readerState.preloadCache;
+    if (!cache) return;
+    Object.keys(cache).forEach((k) => {
+      if (Math.abs(Number(k) - centerIndex) > 2) delete cache[k];
+    });
+  }
+
+  // Interrupt-safe: called at the start of every page turn so a rapid
+  // second turn never leaves the previous one's overlay/transform stuck
+  // mid-flight — it jumps straight to that turn's own end state first.
+  function finalizeTurnAnimation(img, incoming) {
+    if (readerState.turnAnimCleanup) {
+      const cleanup = readerState.turnAnimCleanup;
+      readerState.turnAnimCleanup = null;
+      cleanup();
+    } else if (incoming) {
+      incoming.hidden = true;
+      incoming.classList.remove("slide-in-left", "slide-in-right");
+      incoming.style.willChange = "";
+    }
+    resetDragStyles(img); // also clears any leftover drag-follow transform
+  }
+
+  function renderPageTurn(id, index, count) {
+    const img = $("#page-img");
+    const incoming = $("#page-img-incoming");
+    if (!img) return;
+    finalizeTurnAnimation(img, incoming);
+
+    const prevIndex = readerState.lastRenderedPageIndex;
+    const direction = typeof prevIndex === "number" && index !== prevIndex
+      ? (index > prevIndex ? "next" : "prev")
+      : null;
+    const forceInstant = !!readerState.pendingInstantTurn;
+    readerState.pendingInstantTurn = false;
+    readerState.lastRenderedPageIndex = index;
+
+    const url = pageUrl(id, index);
+    const alt = `Page ${index + 1} of ${count}`;
+    const cached = !forceInstant && direction && !reducedMotionEnabled() ? getPreloadedImage(index) : null;
+
+    if (cached && incoming) {
+      // F5: the overlay is position:absolute anchored to the stage's
+      // *unscrolled* origin. In fit-width mode the stage can be scrolled
+      // (overflow:auto on a tall page) — if it is, that anchor point is
+      // scrolled out of view, so the slide plays off-screen (a dead delay,
+      // then a hard cut once img.src swaps on completion). Resetting to the
+      // top before playing keeps the whole animation on-screen; in
+      // fit-height (never scrollable) this is always a no-op.
+      const stage = $("#reader-stage");
+      if (stage && stage.scrollTop > 0) stage.scrollTop = 0;
+
+      incoming.src = url; // already loaded — paints immediately, no flash
+      incoming.alt = alt;
+      incoming.hidden = false;
+      incoming.classList.remove("slide-in-left", "slide-in-right");
+      void incoming.offsetWidth; // force reflow so re-adding the class restarts the animation
+      incoming.classList.add(direction === "next" ? "slide-in-right" : "slide-in-left");
+
+      // F3: promotion must happen exactly once, driven by whichever of
+      // animationend/animationcancel/the fallback timeout fires first — a
+      // backgrounded tab can throttle or drop the animation event entirely,
+      // which would otherwise leave the incoming overlay stuck visible over
+      // a stale #page-img forever.
+      let done = false;
+      const finish = () => {
+        if (done) return;
+        done = true;
+        incoming.removeEventListener("animationend", onAnimEnd);
+        incoming.removeEventListener("animationcancel", onAnimEnd);
+        clearTimeout(timer);
+        img.src = url;
+        img.alt = alt;
+        incoming.hidden = true;
+        incoming.classList.remove("slide-in-left", "slide-in-right");
+        incoming.style.willChange = "";
+        if (readerState.turnAnimCleanup === finish) readerState.turnAnimCleanup = null;
+      };
+      const onAnimEnd = () => finish();
+      incoming.addEventListener("animationend", onAnimEnd);
+      incoming.addEventListener("animationcancel", onAnimEnd);
+      // Slightly longer than --dur-page-turn (0.22s) so it never races a
+      // normal completion.
+      const timer = setTimeout(finish, 280);
+      readerState.turnAnimCleanup = finish;
+    } else {
+      img.src = url;
+      img.alt = alt;
+    }
+
+    // Preload neighbors so turns feel instant; browser HTTP cache does the
+    // rest, and a bounded window keeps this from growing unbounded over a
+    // long reading session in a large book.
+    preloadPage(id, index + 1, count);
+    preloadPage(id, index - 1, count);
+    prunePreloadCache(index);
+  }
+
+  // Chapter mode has no "unloaded" concern (the full HTML is already in
+  // hand by the time this runs) — just slide the freshly-rendered content
+  // in from the appropriate side. `readerState.chapterAnimCleanup` (same
+  // pattern as `turnAnimCleanup` above) guards against a rapid second
+  // chapter render's cleanup firing after a third one has already restarted
+  // the animation on the same (reused) `.content` element.
+  function renderChapterTurnAnimation(contentEl, index, isInitialRender) {
+    if (!contentEl || !readerState) return;
+    // F4: run any in-flight prior turn's cleanup — or, if none is pending,
+    // strip a leftover slide-in-* class directly — BEFORE any early return
+    // below. #reader-content's `.content` element is reused across chapter
+    // turns; without this, an instant render (slider jump, reduced-motion,
+    // or the initial open) landing while a previous animation is still
+    // running would keep that stale class and render mid-slide.
+    if (readerState.chapterAnimCleanup) {
+      const cleanup = readerState.chapterAnimCleanup;
+      readerState.chapterAnimCleanup = null;
+      cleanup();
+    } else {
+      contentEl.classList.remove("slide-in-left", "slide-in-right");
+    }
+
+    const prevIndex = readerState.lastRenderedChapterIndex;
+    readerState.lastRenderedChapterIndex = index;
+    const forceInstant = !!readerState.pendingInstantTurn;
+    readerState.pendingInstantTurn = false;
+    if (isInitialRender || forceInstant || reducedMotionEnabled()) return;
+    if (typeof prevIndex !== "number" || index === prevIndex) return;
+
+    const direction = index > prevIndex ? "next" : "prev";
+    void contentEl.offsetWidth; // force reflow so re-adding the class restarts the animation
+    contentEl.classList.add(direction === "next" ? "slide-in-right" : "slide-in-left");
+
+    // F3-parity fallback: promotion (here, just the class removal) must run
+    // exactly once off animationend/animationcancel/timeout, whichever
+    // fires first, so a throttled/dropped event in a backgrounded tab
+    // doesn't leave the class (and its will-change) applied forever.
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      contentEl.removeEventListener("animationend", onEnd);
+      contentEl.removeEventListener("animationcancel", onEnd);
+      clearTimeout(timer);
+      if (readerState.chapterAnimCleanup === finish) readerState.chapterAnimCleanup = null;
+      contentEl.classList.remove("slide-in-left", "slide-in-right");
+    };
+    const onEnd = () => finish();
+    contentEl.addEventListener("animationend", onEnd);
+    contentEl.addEventListener("animationcancel", onEnd);
+    const timer = setTimeout(finish, 280);
+    readerState.chapterAnimCleanup = finish;
+  }
+
+  // ── Item 4: reading progress sync ──────────────
+  // Debounced save while turning pages/chapters or scrolling within a
+  // chapter, flushed immediately on tab hide / navigation-away so a closed
+  // tab never loses the last position.
+  const PROGRESS_SAVE_DEBOUNCE_MS = 2000;
+  let progressSaveTimer = null;
+
+  // F8: record this tab's most recent progress immediately (before the
+  // network round trip), so showDetail() can prefer it over a GET that may
+  // have raced an in-flight save.
+  function recordLocalProgress(id, chapterIndex, scrollPosition) {
+    lastKnownProgress[id] = { chapterIndex, scrollPosition, ts: Date.now() };
+  }
+
+  // F9: the actual network write, run one-at-a-time per book via
+  // queueProgressSave's promise chain. Drops an out-of-order save that would
+  // regress this session's high-water mark for the book, unless `reset` is
+  // set (an explicit "Start Over").
+  async function sendProgress(id, chapterIndex, scrollPosition, opts) {
+    opts = opts || {};
+    if (!opts.reset && lastSentIndex[id] !== undefined && chapterIndex < lastSentIndex[id]) {
+      return;
+    }
+    try {
+      const resp = await fetch(`/api/books/${id}/progress`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ chapter_index: chapterIndex, scroll_position: scrollPosition }),
+        credentials: "same-origin",
+        keepalive: true,
+      });
+      // F3: a debounced/flushed save (unlike the pagehide teardown flush)
+      // can and should react to an expired session — route to the same
+      // login redirect the rest of the app uses.
+      if (resp.status === 401) {
+        authenticated = false;
+        showLogin();
+        return;
+      }
+      if (resp.ok) {
+        lastSentIndex[id] = chapterIndex;
+        recordLocalProgress(id, chapterIndex, scrollPosition);
+      }
+    } catch (e) {
+      // Network error: best-effort save, nothing more to do.
+    }
+  }
+
+  // F9: serializes saves per book so a debounced save and a later flush can
+  // never commit out of order — the next save always waits for the previous
+  // one's response before firing.
+  function queueProgressSave(id, chapterIndex, scrollPosition, opts) {
+    const prev = saveChains[id] || Promise.resolve();
+    const next = prev.then(() => sendProgress(id, chapterIndex, scrollPosition, opts));
+    saveChains[id] = next.catch(() => {});
+    return next;
+  }
+
+  // F9: explicit "Start Over" — legitimately writes 0 even though it's lower
+  // than anything already sent this session, so it resets the guard first.
+  function resetProgress(id) {
+    delete lastSentIndex[id];
+    recordLocalProgress(id, 0, 0);
+    return queueProgressSave(id, 0, 0, { reset: true });
+  }
+
+  function scheduleProgressSave() {
+    if (!readerState) return;
+    recordLocalProgress(readerState.id, readerState.index, readerState.scrollPosition || 0);
+    clearTimeout(progressSaveTimer);
+    progressSaveTimer = setTimeout(flushProgressSave, PROGRESS_SAVE_DEBOUNCE_MS);
+  }
+
+  function flushProgressSave() {
+    clearTimeout(progressSaveTimer);
+    progressSaveTimer = null;
+    if (!readerState) return;
+    const { id, index, scrollPosition } = readerState;
+    return queueProgressSave(id, index, scrollPosition || 0);
+  }
+
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") flushProgressSave();
+  });
+  // F3: the pagehide teardown flush stays fire-and-forget — the page may be
+  // gone before a 401 check could do anything useful with it anyway.
+  window.addEventListener("pagehide", flushProgressSave);
+
+  // R4: page-mode turns only ever set img.src, so a 401 on session expiry
+  // fails silently (broken image, no redirect to login). Probe a cheap
+  // authenticated endpoint — api() already redirects to login on 401 — to
+  // distinguish "session expired" from a genuine image failure.
+  async function handlePageImageError() {
+    if (!readerState) return;
+    // Finding 1: a network error here means the probe itself couldn't run —
+    // that's just as much "can't load this page" as any other outcome, so
+    // fall through to the same error box instead of the 401 early return.
+    let check;
+    try {
+      check = await api(`/api/books/${readerState.id}`);
+    } catch (e) {
+      check = undefined;
+    }
+    if (check === null) return; // 401 — api() already redirected to the login screen
+    const img = $("#page-img");
+    const errEl = $("#page-error");
+    if (img) img.style.display = "none";
+    if (errEl) {
+      errEl.hidden = false;
+      errEl.innerHTML = esc("Couldn't load this page.");
+    }
+  }
+
+  // K5: fallback for Space/Shift+Space when the stage doesn't have native
+  // focus. Scrolls by ~90% of the visible stage height.
+  function scrollReaderStage(direction) {
+    const stage = $("#reader-stage");
+    if (!stage) return;
+    stage.scrollBy({ top: stage.clientHeight * 0.9 * direction, behavior: "auto" });
+  }
+
+  function updateProgressUI() {
+    const { mode, index, count } = readerState;
+    const unit = mode === "page" ? "Page" : "Chapter";
+    const label = $("#page-label");
+    if (label) label.textContent = `${unit} ${index + 1} / ${count}`;
+    const slider = $("#page-slider");
+    if (slider) {
+      slider.value = index;
+      // Item 10: screen readers announce this instead of the raw numeric
+      // value while dragging/stepping the slider.
+      slider.setAttribute("aria-valuetext", `${unit} ${index + 1} of ${count}`);
+    }
+    const prevBtn = $("#prev-btn");
+    const nextBtn = $("#next-btn");
+    if (prevBtn) prevBtn.disabled = index <= 0;
+    if (nextBtn) nextBtn.disabled = index >= count - 1;
   }
 
   // ── Stats ──────────────────────────────────────
   async function showStats() {
+    currentView = "stats";
+    document.title = "Folio";
+    flushProgressSave();
+    readerState = null;
+    resumePromptActive = false;
     app().innerHTML = `
       <div class="header">
-        <button class="back-btn" id="back-btn">&larr;</button>
+        <button class="back-btn" id="back-btn" aria-label="Back">&larr;</button>
         <h1>Reading Stats</h1>
         <span style="flex:1"></span>
         ${navIconsHtml("stats")}
       </div>
       <div class="stats"><div class="loading">Loading...</div></div>`;
-    $("#back-btn").addEventListener("click", () => navigate("#"));
+    $("#back-btn").addEventListener("click", goHome);
     bindNavIcons();
 
-    const resp = await api("/api/stats");
-    if (!resp) return;
-    const s = await resp.json();
+    // Finding 1: stats previously had no failure handling at all beyond a
+    // 401 — a network error, non-2xx response, or bad JSON left "Loading..."
+    // on screen forever. `currentView !== "stats"` guards every branch below
+    // against rendering over a view the user has since navigated to.
+    let resp;
+    try {
+      resp = await api("/api/stats");
+    } catch (e) {
+      if (currentView !== "stats") return;
+      const container = $(".stats");
+      if (container) container.innerHTML = `<div class="empty">${esc(apiFailureToastMessage(e))}</div>`;
+      showToast(apiFailureToastMessage(e));
+      return;
+    }
+    if (!resp || currentView !== "stats") return;
+    if (!resp.ok) {
+      const container = $(".stats");
+      if (container) container.innerHTML = `<div class="empty">${esc(`Couldn't load stats (HTTP ${resp.status})`)}</div>`;
+      showToast(httpErrorToastMessage(resp.status));
+      return;
+    }
+    let s;
+    try {
+      s = await resp.json();
+    } catch (e) {
+      const container = $(".stats");
+      if (container) container.innerHTML = `<div class="empty">${esc("Unexpected response")}</div>`;
+      showToast("Unexpected response");
+      return;
+    }
+    if (currentView !== "stats") return;
 
     const container = $(".stats");
+    if (!container) return;
     if (!s || (s.totalSessions === 0 && s.totalReadingTimeSecs === 0)) {
       container.innerHTML = '<div class="empty">No reading stats yet. Start reading on the desktop app to see your progress here.</div>';
       return;
@@ -419,26 +2902,64 @@
 
   // ── Collections ────────────────────────────────
   async function showCollections() {
+    currentView = "collections";
+    document.title = "Folio";
+    flushProgressSave();
+    readerState = null;
+    resumePromptActive = false;
     app().innerHTML = `
       <div class="header">
-        <button class="back-btn" id="back-btn">&larr;</button>
+        <button class="back-btn" id="back-btn" aria-label="Back">&larr;</button>
         <h1>Collections</h1>
         <span style="flex:1"></span>
         ${navIconsHtml("collections")}
       </div>
       <div class="collections"><div class="loading">Loading...</div></div>`;
-    $("#back-btn").addEventListener("click", () => navigate("#"));
+    $("#back-btn").addEventListener("click", goHome);
     bindNavIcons();
 
-    const [collectionsResp, seriesResp] = await Promise.all([
-      api("/api/collections"),
-      api("/api/series"),
-    ]);
-
-    const collections = collectionsResp ? await collectionsResp.json() : [];
-    const series = seriesResp ? await seriesResp.json() : [];
+    // Finding 1: this previously had no failure handling at all — a network
+    // error, non-2xx response, or bad JSON left "Loading..." on screen
+    // forever (or, on a 401, could throw trying to use `.collections` after
+    // showLogin() had already replaced it). `currentView !== "collections"`
+    // guards every branch below against rendering over a view the user has
+    // since navigated to.
+    let collectionsResp, seriesResp;
+    try {
+      [collectionsResp, seriesResp] = await Promise.all([
+        api("/api/collections"),
+        api("/api/series"),
+      ]);
+    } catch (e) {
+      if (currentView !== "collections") return;
+      const container = $(".collections");
+      if (container) container.innerHTML = `<div class="empty">${esc(apiFailureToastMessage(e))}</div>`;
+      showToast(apiFailureToastMessage(e));
+      return;
+    }
+    if (currentView !== "collections") return;
+    // A 401 on either fetch already redirected to the login screen.
+    if (collectionsResp === null || seriesResp === null) return;
+    const badResp = !collectionsResp.ok ? collectionsResp : !seriesResp.ok ? seriesResp : null;
+    if (badResp) {
+      const container = $(".collections");
+      if (container) container.innerHTML = `<div class="empty">${esc(`Couldn't load collections (HTTP ${badResp.status})`)}</div>`;
+      showToast(httpErrorToastMessage(badResp.status));
+      return;
+    }
+    let collections, series;
+    try {
+      collections = await collectionsResp.json();
+      series = await seriesResp.json();
+    } catch (e) {
+      const container = $(".collections");
+      if (container) container.innerHTML = `<div class="empty">${esc("Unexpected response")}</div>`;
+      showToast("Unexpected response");
+      return;
+    }
 
     const container = $(".collections");
+    if (!container) return;
     if (collections.length === 0 && series.length === 0) {
       container.innerHTML = '<div class="empty">No collections yet. Create collections in the desktop app.</div>';
       return;
@@ -523,16 +3044,12 @@
 
       container.querySelectorAll("[data-collection-id]").forEach(row => {
         row.onclick = () => {
-          activeCollectionId = row.dataset.collectionId;
-          activeSeries = null;
-          navigate("#/");
+          navigate(libraryHash({ q: "", series: null, collection: row.dataset.collectionId, sort: activeSort }));
         };
       });
       container.querySelectorAll("[data-series-name]").forEach(row => {
         row.onclick = () => {
-          activeSeries = row.dataset.seriesName;
-          activeCollectionId = null;
-          navigate("#/");
+          navigate(libraryHash({ q: "", series: row.dataset.seriesName, collection: null, sort: activeSort }));
         };
       });
     }
@@ -541,11 +3058,18 @@
   }
 
   // ── Helpers ───────────────────────────────────
+  // Security (finding A): textContent -> innerHTML only escapes text-node
+  // metacharacters (&, <, >) — it leaves " and ' untouched, since those are
+  // only special in attribute context. Every caller of esc() in this file
+  // interpolates its result into either a text node OR a quoted HTML
+  // attribute (e.g. `title="${esc(b.title)}"`), so the escaping must be safe
+  // for both: without this, a title/author/series/collection name containing
+  // `"` could break out of an attribute and inject arbitrary markup/handlers.
   function esc(s) {
     if (!s) return "";
     const d = document.createElement("div");
     d.textContent = s;
-    return d.innerHTML;
+    return d.innerHTML.replace(/"/g, "&quot;").replace(/'/g, "&#39;");
   }
 
   function formatDuration(secs) {
@@ -556,14 +3080,43 @@
     return h + "h " + m + "m";
   }
 
+  // Item 6: sun (light) / moon (dark) / half-filled circle (system) — no
+  // icon library, inline SVG only, matching the rest of the nav icons.
+  function themeIconSvg(mode) {
+    if (mode === "light") {
+      return '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>';
+    }
+    if (mode === "dark") {
+      return '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>';
+    }
+    return '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 3a9 9 0 0 1 0 18z" fill="currentColor" stroke="none"/></svg>';
+  }
+
+  function themeToggleHtml() {
+    const label = themeAriaLabel();
+    return `<button class="nav-icon" id="theme-toggle-btn" title="${esc(label)}" aria-label="${esc(label)}">${themeIconSvg(themeMode)}</button>`;
+  }
+
+  // Item 6: light -> dark -> system -> light. "system" removes data-theme
+  // entirely so the CSS prefers-color-scheme block takes back over.
+  function cycleTheme() {
+    themeMode = themeMode === "light" ? "dark" : themeMode === "dark" ? "system" : "light";
+    safeStorageSet(THEME_STORAGE_KEY, themeMode);
+    applyTheme();
+    const btn = $("#theme-toggle-btn");
+    if (btn) btn.innerHTML = themeIconSvg(themeMode);
+    updateThemeButtonLabel();
+  }
+
   function navIconsHtml(activePage) {
     const folderColor = activePage === "collections" ? "active" : "";
     const chartColor = activePage === "stats" ? "active" : "";
     return `<div class="nav-icons">
-      <button class="nav-icon ${folderColor}" title="Collections" data-nav="collections">
+      ${themeToggleHtml()}
+      <button class="nav-icon ${folderColor}" title="Collections" aria-label="Collections" data-nav="collections">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
       </button>
-      <button class="nav-icon ${chartColor}" title="Reading Stats" data-nav="stats">
+      <button class="nav-icon ${chartColor}" title="Reading Stats" aria-label="Reading Stats" data-nav="stats">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 20V10M12 20V4M6 20v-6"/></svg>
       </button>
     </div>`;
@@ -573,11 +3126,59 @@
     $$("[data-nav]").forEach(btn => {
       btn.onclick = () => navigate("#/" + btn.dataset.nav);
     });
+    const themeBtn = $("#theme-toggle-btn");
+    if (themeBtn) themeBtn.onclick = cycleTheme;
+  }
+
+  // Item 9 (PWA): feature-detected registration — service workers only
+  // register on a secure context (https, or http://localhost). Folio's main
+  // LAN use case (a phone hitting http://192.168.x.x:7788) is plain HTTP and
+  // NOT a secure context, so `serviceWorker` won't even exist in `navigator`
+  // there and this silently no-ops. The manifest + icons still work for iOS
+  // Safari's "Add to Home Screen" over plain HTTP.
+  if ("serviceWorker" in navigator) {
+    try {
+      navigator.serviceWorker.register("/sw.js").catch(() => {});
+    } catch (e) { /* best-effort */ }
+  }
+
+  // Finding 7: create the toast live region immediately, before anything
+  // else has a chance to need it — see ensureToastContainer()'s comment.
+  ensureToastContainer();
+
+  // Finding 2: an offline/unreachable-server launch (the whole point of the
+  // service worker caching the shell above) with no friendly fallback here
+  // — reuses the resume-prompt's centered-panel markup/classes rather than
+  // introducing new CSS for a one-off screen.
+  function renderOfflineState() {
+    app().innerHTML = `
+      <div class="resume-prompt">
+        <div class="resume-prompt-panel">
+          <h2>Folio</h2>
+          <p>Couldn&rsquo;t reach the Folio server. Check your connection and try again.</p>
+          <div class="resume-actions">
+            <button class="btn-primary" id="retry-init-btn">Retry</button>
+          </div>
+        </div>
+      </div>`;
+    const btn = $("#retry-init-btn");
+    if (btn) btn.onclick = init;
   }
 
   // ── Init ──────────────────────────────────────
   async function init() {
-    const test = await fetch("/api/books", { credentials: "same-origin" });
+    // Finding 2: this initial probe is a raw fetch (not api(), which would
+    // itself call showLogin() on 401 before `authenticated` is known here)
+    // — but it needs the same guard: an unhandled rejection (offline PWA
+    // launch, server not up yet) would otherwise abort this whole IIFE and
+    // leave #app permanently blank, since nothing else initializes the page.
+    let test;
+    try {
+      test = await fetch("/api/books", { credentials: "same-origin" });
+    } catch (e) {
+      renderOfflineState();
+      return;
+    }
     if (test.status === 401) { showLogin(); return; }
     authenticated = true;
     route();
