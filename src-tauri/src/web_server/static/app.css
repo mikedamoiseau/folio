@@ -15,6 +15,10 @@
   --shadow:       rgba(44, 34, 24, 0.18);
   --chip-hover:   rgba(0, 0, 0, 0.08);
   --radius: 8px; --gap: 16px;
+  /* Item 12: page-turn motion, mirrors the desktop app's slide-in timing
+     (src/index.css --animate-slide-in-left/right). */
+  --ease-page-turn: cubic-bezier(0.22, 1, 0.36, 1);
+  --dur-page-turn: 0.22s;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -198,7 +202,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .reader-chapter.chrome-hidden .reader-chrome-bottom { display: none; }
 .reader-chrome-top, .reader-chrome-bottom { flex-shrink: 0; }
 
-.reader-stage { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; overflow: hidden; background: var(--warm-subtle); }
+.reader-stage { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; overflow: hidden; background: var(--warm-subtle); position: relative; }
 /* K5: the stage is focused after each chapter render so native Space/
    PageDown scrolling works; suppress the focus ring on this container
    (its content remains keyboard-navigable on its own merits). */
@@ -208,9 +212,50 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .reader-page.fit-width .reader-stage img#page-img { width: 100%; max-width: 100%; height: auto; max-height: none; }
 .reader-page-error, .reader-error { color: var(--error); text-align: center; padding: 24px; }
 
+/* Item 12: the incoming page for an animated commit — an absolutely
+   positioned overlay so the outgoing (still visible, static) page stays put
+   underneath while this one slides over it. Hidden/inert outside a commit. */
+.reader-stage img.page-img-incoming {
+  position: absolute;
+  top: 0; left: 0;
+  width: 100%; height: 100%;
+  object-fit: contain;
+  pointer-events: none;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+.reader-page.fit-width .reader-stage img.page-img-incoming { height: auto; max-height: none; object-fit: fill; }
+.reader-stage img.page-img-incoming[hidden] { display: none; }
+
 .reader-chapter .reader-stage { display: block; overflow-y: auto; padding: var(--gap); }
 .reader-chapter .content { max-width: 700px; margin: 0 auto; font-family: "Lora", Georgia, serif; line-height: 1.7; }
 .reader-chapter .content img { max-width: 100%; height: auto; }
+
+/* Item 12: page-turn / chapter-turn commit animation — same element (or its
+   incoming overlay) also gets will-change while the class is applied; both
+   are removed together at animationend so nothing lingers for memory. */
+@keyframes slide-in-left {
+  from { transform: translateX(-100%); opacity: 0; }
+  to   { transform: translateX(0);     opacity: 1; }
+}
+@keyframes slide-in-right {
+  from { transform: translateX(100%); opacity: 0; }
+  to   { transform: translateX(0);    opacity: 1; }
+}
+.page-img-incoming.slide-in-left,
+.page-img-incoming.slide-in-right,
+.reader-chapter .content.slide-in-left,
+.reader-chapter .content.slide-in-right {
+  will-change: transform;
+}
+.page-img-incoming.slide-in-left,
+.reader-chapter .content.slide-in-left {
+  animation: slide-in-left var(--dur-page-turn) var(--ease-page-turn) both;
+}
+.page-img-incoming.slide-in-right,
+.reader-chapter .content.slide-in-right {
+  animation: slide-in-right var(--dur-page-turn) var(--ease-page-turn) both;
+}
 
 .reader-toolbar { display: flex; align-items: center; gap: 10px; padding: 10px var(--gap); border-top: 1px solid var(--warm-border); background: var(--paper); }
 .reader-toolbar button { padding: 6px 16px; background: var(--surface); border: 1px solid var(--warm-border); border-radius: var(--radius); color: var(--ink); cursor: pointer; white-space: nowrap; }
@@ -335,6 +380,16 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
      restarting forever — just very fast flickering, not actually stopped.
      Turn the shimmer off outright and keep the static skeleton background. */
   .skeleton-cover, .skeleton-line {
+    animation: none;
+  }
+  /* Item 12: belt-and-suspenders — app.js already checks matchMedia before
+     ever applying these classes (so no animationstart fires, no drag-follow
+     transform is applied), but drop the animation outright here too rather
+     than let it run as an imperceptible 0.01ms blip. */
+  .page-img-incoming.slide-in-left,
+  .page-img-incoming.slide-in-right,
+  .reader-chapter .content.slide-in-left,
+  .reader-chapter .content.slide-in-right {
     animation: none;
   }
 }
