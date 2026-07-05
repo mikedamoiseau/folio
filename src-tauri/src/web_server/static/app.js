@@ -110,6 +110,30 @@
   // clicks).
   let libraryRenderGen = 0;
 
+  // Item 14: infinite-scroll pagination state for the "All Books" grid.
+  // `libraryTotal` is `null` whenever the current grid isn't paginated at all
+  // (the collections endpoint, or a legacy server response with no
+  // `X-Total-Count` header) — every pagination code path treats `null` as
+  // "nothing more to load, don't set up a sentinel". `libraryPageOffset` also
+  // doubles as "how many books are rendered so far" since pages are always
+  // fetched contiguously from 0. Reset to page 0 on every `loadBooks()` call
+  // (i.e. every showLibrary re-entry: filter/sort/search change, back/
+  // forward) via `resetLibraryPagination()`.
+  const LIBRARY_PAGE_SIZE = 60;
+  let libraryPageOffset = 0;
+  let libraryTotal = null;
+  let libraryPagesLoaded = 0;
+  let libraryLoadingPage = false;
+  let libraryScrollObserver = null;
+
+  function resetLibraryPagination() {
+    if (libraryScrollObserver) { libraryScrollObserver.disconnect(); libraryScrollObserver = null; }
+    libraryPageOffset = 0;
+    libraryTotal = null;
+    libraryPagesLoaded = 0;
+    libraryLoadingPage = false;
+  }
+
   // Finding 3: module-scoped (not a closure local inside showLibrary) so it
   // can be cancelled from setSearchQuery and from showLibrary's own re-entry
   // path — a closure-local timer survives navigations that happen before its
@@ -810,11 +834,16 @@
   function libraryScrollKey(hash) {
     return "folio_scroll_" + hash;
   }
+  // Item 14: persists the page count alongside the scroll offset — with
+  // infinite scroll, a deep `scrollY` is only meaningful once the pages that
+  // produced it are loaded again. `pages` defaults to 1 (a single, unpaginated
+  // grid, e.g. a collection) whenever pagination isn't active.
   function saveLibraryScrollPosition() {
     if (currentView !== "library") return;
-    safeSessionSet(libraryScrollKey(rawHash()), String(window.scrollY));
+    const payload = JSON.stringify({ y: window.scrollY, pages: Math.max(libraryPagesLoaded, 1) });
+    safeSessionSet(libraryScrollKey(rawHash()), payload);
   }
-  function restoreLibraryScrollPosition() {
+  async function restoreLibraryScrollPosition() {
     // Finding 5: guard against restoring onto a view the user has since
     // navigated away from (e.g. a slow load that resolves after they already
     // opened a book) — only ever scroll while still on the library.
@@ -828,8 +857,36 @@
     // overwrites this same key on every departure instead; unbounded growth
     // isn't a concern (sessionStorage, one small key per distinct hash,
     // forgotten at the end of the tab's session).
-    const y = parseInt(saved, 10);
-    if (Number.isFinite(y)) window.scrollTo(0, y);
+    let y = null;
+    let pages = 1;
+    try {
+      const parsed = JSON.parse(saved);
+      if (parsed && typeof parsed === "object") {
+        y = parsed.y;
+        pages = parsed.pages || 1;
+      } else if (typeof parsed === "number") {
+        y = parsed; // legacy shape from before Item 14, pre-pagination
+      }
+    } catch (e) {
+      const legacy = parseInt(saved, 10); // legacy plain-number shape
+      if (Number.isFinite(legacy)) y = legacy;
+    }
+
+    // Item 14: replay pages loaded before the user left, so there's actually
+    // something to scroll into. Bounded by `pages`; if the library has since
+    // shrunk, loadNextPage() runs out and this loop just stops short — the
+    // scrollTo below clamps to whatever height resulted.
+    const gen = libraryRenderGen;
+    while (libraryTotal !== null && libraryPagesLoaded < pages) {
+      const loaded = await loadNextPage(gen);
+      if (gen !== libraryRenderGen) return;
+      if (!loaded) break;
+    }
+
+    if (Number.isFinite(y)) {
+      const maxY = Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
+      window.scrollTo(0, Math.min(y, maxY));
+    }
   }
 
   // Item 7: keystroke search updates use history.replaceState (not a real
@@ -886,21 +943,118 @@
     }
   }
 
+  // Item 14: builds the `/api/books` query string shared by the first page
+  // (offset 0, called from loadBooks) and every subsequent page
+  // (loadNextPage) — series/q/sort must stay identical across pages or the
+  // slice boundaries wouldn't line up.
+  function booksPageParams(query, offset) {
+    const params = new URLSearchParams();
+    if (activeSeries) params.set("series", activeSeries);
+    if (query) params.set("q", query);
+    if (activeSort && activeSort !== "date_added") params.set("sort", activeSort);
+    params.set("limit", String(LIBRARY_PAGE_SIZE));
+    params.set("offset", String(offset));
+    return params;
+  }
+
+  // Item 14: fetches and appends the next 60 books to the currently-rendered
+  // grid. Shared by the IntersectionObserver sentinel (real scrolling) and by
+  // restoreLibraryScrollPosition's page-replay. Returns `true` if a
+  // non-empty page was appended, `false` on any reason to stop (already
+  // loading, nothing left, a superseded/failed/network-errored request) —
+  // callers use this to decide whether to keep going.
+  async function loadNextPage(gen) {
+    if (libraryLoadingPage) return false;
+    if (libraryTotal === null || libraryPageOffset >= libraryTotal) return false;
+    if (gen !== libraryRenderGen) return false;
+    libraryLoadingPage = true;
+    try {
+      const url = "/api/books?" + booksPageParams(activeQuery, libraryPageOffset).toString();
+      let resp;
+      try {
+        resp = await api(url);
+      } catch (e) {
+        return false; // best-effort — a later scroll/replay attempt can retry
+      }
+      if (gen !== libraryRenderGen) return false;
+      if (!resp || !resp.ok) return false;
+      const totalHeader = resp.headers.get("X-Total-Count");
+      let pageBooks;
+      try {
+        pageBooks = await resp.json();
+      } catch (e) {
+        return false;
+      }
+      if (gen !== libraryRenderGen) return false;
+      if (totalHeader !== null) libraryTotal = parseInt(totalHeader, 10);
+      if (pageBooks.length === 0) return false;
+
+      const contentEl = $("#library-content");
+      if (contentEl) appendBooksPage(contentEl, pageBooks);
+      libraryPageOffset += pageBooks.length;
+      libraryPagesLoaded += 1;
+
+      if (libraryScrollObserver && libraryTotal !== null && libraryPageOffset >= libraryTotal) {
+        libraryScrollObserver.disconnect();
+        libraryScrollObserver = null;
+        const sentinel = contentEl && contentEl.querySelector(".library-sentinel");
+        if (sentinel) sentinel.remove();
+      }
+      return true;
+    } finally {
+      libraryLoadingPage = false;
+    }
+  }
+
+  // Item 14: appends a page of cards as raw DOM nodes into the existing
+  // `.grid` element and binds handlers on only those new nodes — re-running
+  // bindGridCardHandlers() here would double-bind every already-rendered
+  // card (each call adds a fresh closure-based listener).
+  function appendBooksPage(contentEl, books) {
+    const grid = contentEl.querySelector(".grid");
+    if (!grid) return;
+    const beforeCount = grid.children.length;
+    grid.insertAdjacentHTML("beforeend", books.map(bookCardHtml).join(""));
+    bindCardHandlersOn(Array.from(grid.children).slice(beforeCount));
+  }
+
+  // Item 14: appends the IntersectionObserver sentinel after the grid and
+  // wires it to loadNextPage(). No-op when the current grid isn't paginated
+  // (libraryTotal === null — the collections endpoint, or a legacy server
+  // response with no X-Total-Count header) or already fully loaded.
+  function setupInfiniteScroll(contentEl) {
+    if (!contentEl || libraryTotal === null || libraryPageOffset >= libraryTotal) return;
+    const grid = contentEl.querySelector(".grid");
+    if (!grid) return;
+    const sentinel = document.createElement("div");
+    sentinel.className = "library-sentinel";
+    sentinel.setAttribute("aria-hidden", "true");
+    grid.insertAdjacentElement("afterend", sentinel);
+
+    const gen = libraryRenderGen;
+    libraryScrollObserver = new IntersectionObserver((entries) => {
+      if (entries.some((e) => e.isIntersecting)) loadNextPage(gen);
+    }, { rootMargin: "600px" });
+    libraryScrollObserver.observe(sentinel);
+  }
+
   async function loadBooks(query) {
     // Item 5: captured once, checked after every await below — see the
     // libraryRenderGen declaration for why.
     const gen = ++libraryRenderGen;
+    // Item 14: every loadBooks() call is a fresh library entry (filter/sort/
+    // search change, or a plain re-render) — always starts back at page 0.
+    resetLibraryPagination();
 
     let url;
+    let paginated = false;
     if (activeCollectionId) {
+      // Item 14: the collections endpoint stays unpaginated (out of scope —
+      // collections are small; see docs/web-ui-improvements.md Item 14).
       url = "/api/collections/" + encodeURIComponent(activeCollectionId) + "/books";
     } else {
-      const params = new URLSearchParams();
-      if (activeSeries) params.set("series", activeSeries);
-      if (query) params.set("q", query);
-      if (activeSort && activeSort !== "date_added") params.set("sort", activeSort);
-      const qs = params.toString();
-      url = "/api/books" + (qs ? "?" + qs : "");
+      paginated = true;
+      url = "/api/books?" + booksPageParams(query, 0).toString();
     }
 
     // Item 10: the main library grid is the one fetch in this file whose
@@ -929,6 +1083,11 @@
       if (currentView === "library") showLibraryLoadError(httpErrorToastMessage(resp.status));
       return;
     }
+    // Item 14: read the total before consuming the body. Absent whenever
+    // pagination isn't in play (collections) or the server hasn't been
+    // rebuilt yet with the `limit`/`offset` change (graceful degradation —
+    // treat the returned array as the complete set, no sentinel).
+    const totalHeader = paginated ? resp.headers.get("X-Total-Count") : null;
     let books;
     try {
       books = await resp.json();
@@ -937,6 +1096,11 @@
       return;
     }
     if (gen !== libraryRenderGen) return;
+    if (paginated && totalHeader !== null) {
+      libraryTotal = parseInt(totalHeader, 10);
+      libraryPageOffset = books.length;
+      libraryPagesLoaded = 1;
+    }
 
     // Finding C: an empty result for an active collection/series filter is
     // ambiguous — genuinely empty, or the filtered entity no longer exists?
@@ -970,7 +1134,9 @@
       // Finding 5: only restore scroll after a real, successful grid render
       // — never on a 401/failed load, which would consume the saved offset
       // and scroll whatever's currently on screen to the wrong spot.
-      restoreLibraryScrollPosition();
+      // Item 14: this is the collection+search client-filter path — never
+      // paginated, so no setupInfiniteScroll() call here.
+      await restoreLibraryScrollPosition();
       return;
     }
 
@@ -985,21 +1151,24 @@
     // never leave the page stuck on "Loading".
     renderBooks(books);
     if (!showShelves) {
-      restoreLibraryScrollPosition();
+      await restoreLibraryScrollPosition();
+      if (gen === libraryRenderGen) setupInfiniteScroll($("#library-content"));
       return;
     }
 
     try {
-      const continueResp = await api("/api/books/continue-reading?limit=12");
+      // Item 14: `books` is now only page 0 of the "All Books" grid (up to
+      // 60 items), not the full library — "Recently Added" can no longer be
+      // derived client-side (Finding H's premise no longer holds) and gets
+      // its own bounded, date_added-sorted fetch instead.
+      const [continueResp, recentResp] = await Promise.all([
+        api("/api/books/continue-reading?limit=12"),
+        api("/api/books?sort=date_added&limit=12&offset=0"),
+      ]);
       if (gen !== libraryRenderGen) return;
       const continueBooks = continueResp && continueResp.ok ? await continueResp.json() : [];
+      const recentBooks = recentResp && recentResp.ok ? await recentResp.json() : [];
       if (gen !== libraryRenderGen) return;
-
-      // Finding H: `books` already contains `added_at` for every item, so
-      // "Recently Added" can be derived client-side regardless of the active
-      // sort — no need to re-fetch the whole library a second time just to
-      // get it back in date-added order.
-      const recentBooks = books.slice().sort((a, b) => (b.added_at || 0) - (a.added_at || 0)).slice(0, 12);
 
       renderLibraryWithShelves(books, continueBooks, recentBooks);
     } catch (e) {
@@ -1008,7 +1177,8 @@
     // Finding 5: restore once the layout has settled into its final shape
     // (grid-only or grid+shelves) — restoring earlier, right after the plain
     // grid render, would be undone by the shelves rendering on top of it.
-    restoreLibraryScrollPosition();
+    await restoreLibraryScrollPosition();
+    if (gen === libraryRenderGen) setupInfiniteScroll($("#library-content"));
   }
 
   // Item 10: friendly, context-specific empty states instead of a bare "No
@@ -1065,14 +1235,23 @@
     navigate("#/book/" + id);
   }
 
-  function bindGridCardHandlers() {
-    $$(".card").forEach(c => {
+  // Item 14: factored out of bindGridCardHandlers so appendBooksPage() can
+  // bind only the newly-inserted cards from an infinite-scroll page load —
+  // re-running the old document-wide `$$(".card")` version on every append
+  // would attach a second set of listeners to every already-bound card.
+  function bindCardHandlersOn(cards) {
+    cards.forEach(c => {
       c.addEventListener("click", () => openBookFromCard(c.dataset.id));
       c.addEventListener("keydown", (e) => {
         if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openBookFromCard(c.dataset.id); }
       });
+      const img = c.querySelector("img");
+      if (img) bindCoverFallback(img);
     });
-    $$(".card img").forEach(bindCoverFallback);
+  }
+
+  function bindGridCardHandlers() {
+    bindCardHandlersOn(Array.from($$(".card")));
   }
 
   function renderBooks(books) {

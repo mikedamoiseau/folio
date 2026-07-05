@@ -295,12 +295,17 @@ struct BookQuery {
     q: Option<String>,
     series: Option<String>,
     sort: Option<String>, // title, author, last_read, rating (default: date_added)
+    // Item 14: both optional and backward-compatible — when `limit` is
+    // absent the response is the full filtered+sorted list exactly as
+    // before (OPDS/desktop and any other caller never sends it).
+    limit: Option<usize>,
+    offset: Option<usize>,
 }
 
 async fn list_books(
     State(state): State<WebState>,
     Query(params): Query<BookQuery>,
-) -> Result<Json<Vec<crate::models::BookGridItem>>, (StatusCode, String)> {
+) -> Result<Response, (StatusCode, String)> {
     let conn = state.conn().map_err(folio_status)?;
     let books = db::list_books_grid(&conn).map_err(folio_status)?;
 
@@ -354,7 +359,26 @@ async fn list_books(
         _ => {} // default: date_added DESC from SQL
     }
 
-    Ok(Json(books))
+    // Item 14: pagination is applied strictly after filter+sort, so it's
+    // purely a slice of the same result the pre-pagination endpoint would
+    // have returned — no `limit` means no behavior change at all.
+    match params.limit {
+        Some(limit) => {
+            let total = books.len();
+            let offset = params.offset.unwrap_or(0).min(total);
+            let end = offset.saturating_add(limit).min(total);
+            let page = books[offset..end].to_vec();
+            Ok((
+                [(
+                    axum::http::HeaderName::from_static("x-total-count"),
+                    total.to_string(),
+                )],
+                Json(page),
+            )
+                .into_response())
+        }
+        None => Ok(Json(books).into_response()),
+    }
 }
 
 // Item 5: "Continue Reading" shelf on the home screen — books with progress
