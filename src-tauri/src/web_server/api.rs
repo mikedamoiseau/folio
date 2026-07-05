@@ -295,12 +295,17 @@ struct BookQuery {
     q: Option<String>,
     series: Option<String>,
     sort: Option<String>, // title, author, last_read, rating (default: date_added)
+    // Item 14: both optional and backward-compatible — when `limit` is
+    // absent the response is the full filtered+sorted list exactly as
+    // before (OPDS/desktop and any other caller never sends it).
+    limit: Option<usize>,
+    offset: Option<usize>,
 }
 
 async fn list_books(
     State(state): State<WebState>,
     Query(params): Query<BookQuery>,
-) -> Result<Json<Vec<crate::models::BookGridItem>>, (StatusCode, String)> {
+) -> Result<Response, (StatusCode, String)> {
     let conn = state.conn().map_err(folio_status)?;
     let books = db::list_books_grid(&conn).map_err(folio_status)?;
 
@@ -327,15 +332,34 @@ async fn list_books(
     };
 
     // Sort
+    // Fix D: every branch falls back to `id` on equality — ties (identical
+    // title/author/rating/last-read, or no reading progress at all) would
+    // otherwise sort in whatever order the underlying Vec happened to be in,
+    // which isn't stable across requests. That breaks offset pagination:
+    // the same book could land on two pages or be skipped depending on how
+    // ties resolved between two calls. `id` is unique, so this gives every
+    // sort a total, deterministic order (mirrors resolveSeriesNav in
+    // app.js, which needed the same fix for the same reason).
     let mut books = books;
     match params.sort.as_deref() {
-        Some("title") => books.sort_by_key(|a| a.title.to_lowercase()),
-        Some("author") => books.sort_by_key(|a| a.author.to_lowercase()),
+        Some("title") => books.sort_by(|a, b| {
+            a.title
+                .to_lowercase()
+                .cmp(&b.title.to_lowercase())
+                .then_with(|| a.id.cmp(&b.id))
+        }),
+        Some("author") => books.sort_by(|a, b| {
+            a.author
+                .to_lowercase()
+                .cmp(&b.author.to_lowercase())
+                .then_with(|| a.id.cmp(&b.id))
+        }),
         Some("rating") => books.sort_by(|a, b| {
             b.rating
                 .unwrap_or(0.0)
                 .partial_cmp(&a.rating.unwrap_or(0.0))
                 .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a.id.cmp(&b.id))
         }),
         Some("last_read") => {
             // Need reading progress for last_read sort
@@ -348,13 +372,32 @@ async fn list_books(
             books.sort_by(|a, b| {
                 let la = progress_map.get(&a.id).copied().unwrap_or(0);
                 let lb = progress_map.get(&b.id).copied().unwrap_or(0);
-                lb.cmp(&la)
+                lb.cmp(&la).then_with(|| a.id.cmp(&b.id))
             });
         }
-        _ => {} // default: date_added DESC from SQL
+        _ => {} // default: date_added DESC, id from SQL
     }
 
-    Ok(Json(books))
+    // Item 14: pagination is applied strictly after filter+sort, so it's
+    // purely a slice of the same result the pre-pagination endpoint would
+    // have returned — no `limit` means no behavior change at all.
+    match params.limit {
+        Some(limit) => {
+            let total = books.len();
+            let offset = params.offset.unwrap_or(0).min(total);
+            let end = offset.saturating_add(limit).min(total);
+            let page = books[offset..end].to_vec();
+            Ok((
+                [(
+                    axum::http::HeaderName::from_static("x-total-count"),
+                    total.to_string(),
+                )],
+                Json(page),
+            )
+                .into_response())
+        }
+        None => Ok(Json(books).into_response()),
+    }
 }
 
 // Item 5: "Continue Reading" shelf on the home screen — books with progress

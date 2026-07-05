@@ -2313,6 +2313,254 @@ mod tests {
         let _ = tx.send(());
     }
 
+    // ── Item 14: paginate the library grid (infinite scroll) ────────────────
+    //
+    // `list_books` stays backward-compatible: `limit`/`offset` are optional
+    // and only change behavior when `limit` is present. Pagination is applied
+    // strictly after the existing in-memory filter+sort pipeline, so a slice
+    // is the only difference from the pre-pagination response — total via the
+    // `X-Total-Count` header, body stays a bare array (Decisions locked in
+    // docs/web-ui-improvements.md Item 14).
+
+    fn pagination_test_book(id: &str, title: &str, added_at: i64) -> crate::models::Book {
+        crate::models::Book {
+            title: title.to_string(),
+            added_at,
+            ..cr_test_book(id, 10)
+        }
+    }
+
+    #[tokio::test]
+    async fn list_books_limit_and_offset_returns_slice_and_total_count_header() {
+        let state = test_state();
+        {
+            let conn = state.conn().unwrap();
+            for i in 0..5 {
+                crate::db::insert_book(
+                    &conn,
+                    &pagination_test_book(&format!("pg-{i}"), &format!("Book {i}"), 1000 + i),
+                )
+                .unwrap();
+            }
+        }
+
+        let (_state, port, tx) = spawn_progress_test_server(state).await;
+        let client = reqwest::Client::new();
+
+        // Default sort is date_added DESC, so page 0 is the two most-recently
+        // added books (pg-4, pg-3), page 1 the next two (pg-2, pg-1) — no
+        // overlap and no gap across the boundary.
+        let resp = client
+            .get(format!(
+                "http://127.0.0.1:{port}/api/books?limit=2&offset=0"
+            ))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+        assert_eq!(
+            resp.headers()
+                .get("x-total-count")
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            "5"
+        );
+        let page0: Vec<serde_json::Value> = resp.json().await.unwrap();
+        assert_eq!(page0.len(), 2);
+        assert_eq!(page0[0]["id"], "pg-4");
+        assert_eq!(page0[1]["id"], "pg-3");
+
+        let resp = client
+            .get(format!(
+                "http://127.0.0.1:{port}/api/books?limit=2&offset=2"
+            ))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+        assert_eq!(
+            resp.headers()
+                .get("x-total-count")
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            "5"
+        );
+        let page1: Vec<serde_json::Value> = resp.json().await.unwrap();
+        assert_eq!(page1.len(), 2);
+        assert_eq!(page1[0]["id"], "pg-2");
+        assert_eq!(page1[1]["id"], "pg-1");
+
+        let _ = tx.send(());
+    }
+
+    #[tokio::test]
+    async fn list_books_offset_past_end_returns_empty_with_correct_total() {
+        let state = test_state();
+        {
+            let conn = state.conn().unwrap();
+            for i in 0..3 {
+                crate::db::insert_book(
+                    &conn,
+                    &pagination_test_book(&format!("pgpe-{i}"), &format!("Book {i}"), 1000 + i),
+                )
+                .unwrap();
+            }
+        }
+
+        let (_state, port, tx) = spawn_progress_test_server(state).await;
+        let client = reqwest::Client::new();
+
+        let resp = client
+            .get(format!(
+                "http://127.0.0.1:{port}/api/books?limit=10&offset=100"
+            ))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200, "offset past the end must not 500");
+        assert_eq!(
+            resp.headers()
+                .get("x-total-count")
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            "3"
+        );
+        let body: Vec<serde_json::Value> = resp.json().await.unwrap();
+        assert!(body.is_empty());
+
+        let _ = tx.send(());
+    }
+
+    #[tokio::test]
+    async fn list_books_without_limit_returns_full_list_unchanged() {
+        let state = test_state();
+        {
+            let conn = state.conn().unwrap();
+            for i in 0..7 {
+                crate::db::insert_book(
+                    &conn,
+                    &pagination_test_book(&format!("pgfull-{i}"), &format!("Book {i}"), 1000 + i),
+                )
+                .unwrap();
+            }
+        }
+
+        let (_state, port, tx) = spawn_progress_test_server(state).await;
+        let client = reqwest::Client::new();
+
+        // Backward-compat guard: omitting `limit` must return every book,
+        // exactly as it did before pagination existed — OPDS/desktop and any
+        // other caller of this endpoint never send `limit`.
+        let resp = client
+            .get(format!("http://127.0.0.1:{port}/api/books"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+        let body: Vec<serde_json::Value> = resp.json().await.unwrap();
+        assert_eq!(body.len(), 7);
+
+        let _ = tx.send(());
+    }
+
+    #[tokio::test]
+    async fn list_books_limit_composes_with_filter_and_sort() {
+        let state = test_state();
+        {
+            let conn = state.conn().unwrap();
+            let mut charlie = pagination_test_book("pgfs-1", "Charlie", 1001);
+            charlie.series = Some("Wanted".to_string());
+            crate::db::insert_book(&conn, &charlie).unwrap();
+            let mut alpha = pagination_test_book("pgfs-2", "Alpha", 1002);
+            alpha.series = Some("Wanted".to_string());
+            crate::db::insert_book(&conn, &alpha).unwrap();
+            let mut bravo = pagination_test_book("pgfs-3", "Bravo", 1003);
+            bravo.series = Some("Wanted".to_string());
+            crate::db::insert_book(&conn, &bravo).unwrap();
+            // A fourth book in a different series must be excluded from both
+            // the slice and the total.
+            let mut other = pagination_test_book("pgfs-4", "Zulu", 1004);
+            other.series = Some("Other".to_string());
+            crate::db::insert_book(&conn, &other).unwrap();
+        }
+
+        let (_state, port, tx) = spawn_progress_test_server(state).await;
+        let client = reqwest::Client::new();
+
+        let resp = client
+            .get(format!(
+                "http://127.0.0.1:{port}/api/books?series=Wanted&sort=title&limit=1&offset=0"
+            ))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+        assert_eq!(
+            resp.headers()
+                .get("x-total-count")
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            "3",
+            "total must reflect the filtered set, not the whole table"
+        );
+        let page: Vec<serde_json::Value> = resp.json().await.unwrap();
+        assert_eq!(page.len(), 1);
+        assert_eq!(
+            page[0]["id"], "pgfs-2",
+            "page 0 of sort=title must start at the alphabetically-first title \
+             within the filtered series — slice is taken after sort"
+        );
+
+        let _ = tx.send(());
+    }
+
+    // Fix D: `added_at` only has second-granularity, so concurrent/batch
+    // imports can tie — without a unique tiebreaker (`id`) in the SQL
+    // ORDER BY, offset pagination isn't guaranteed stable across requests
+    // and a tied book could land on two pages or be skipped entirely.
+    #[tokio::test]
+    async fn list_books_tied_added_at_paginates_without_dup_or_skip() {
+        let state = test_state();
+        {
+            let conn = state.conn().unwrap();
+            for id in ["tie-c", "tie-a", "tie-b"] {
+                crate::db::insert_book(&conn, &pagination_test_book(id, id, 5000)).unwrap();
+            }
+        }
+
+        let (_state, port, tx) = spawn_progress_test_server(state).await;
+        let client = reqwest::Client::new();
+
+        let mut seen = Vec::new();
+        for offset in 0..3 {
+            let resp = client
+                .get(format!(
+                    "http://127.0.0.1:{port}/api/books?limit=1&offset={offset}"
+                ))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), 200);
+            let page: Vec<serde_json::Value> = resp.json().await.unwrap();
+            assert_eq!(page.len(), 1);
+            seen.push(page[0]["id"].as_str().unwrap().to_string());
+        }
+
+        seen.sort();
+        assert_eq!(
+            seen,
+            vec!["tie-a", "tie-b", "tie-c"],
+            "tied added_at must still paginate deterministically — no book \
+             duplicated across pages or skipped entirely"
+        );
+
+        let _ = tx.send(());
+    }
+
     // ── Item 8: richer book detail (file_size) ──────────────────────────────
 
     #[tokio::test]

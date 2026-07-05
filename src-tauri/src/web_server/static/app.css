@@ -124,6 +124,10 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 
 /* ── Book Grid ─────────────────────────────────── */
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: var(--gap); padding: var(--gap); }
+/* Item 14: invisible IntersectionObserver target appended after the grid —
+   loadNextPage() fires once it scrolls near the viewport (see
+   setupInfiniteScroll() in app.js). No visual footprint of its own. */
+.library-sentinel { height: 1px; }
 .card { background: var(--surface); border: 1px solid var(--warm-border); border-radius: 12px; overflow: hidden; cursor: pointer; transition: transform 0.2s ease, box-shadow 0.2s ease; }
 .card:hover { transform: translateY(-2px); box-shadow: 0 8px 24px -4px var(--shadow); }
 .card img { width: 100%; aspect-ratio: 2/3; object-fit: cover; background: var(--warm-subtle); display: block; }
