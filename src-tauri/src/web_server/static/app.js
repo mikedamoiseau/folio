@@ -172,6 +172,12 @@
   let lastSentIndex = {};     // bookId -> last chapter_index confirmed sent this session
   let saveChains = {};        // bookId -> promise tail; serializes PUTs per book (F9)
 
+  // Item 15: bookId -> chapter_index for every book with a saved progress
+  // row, populated once per library entry (loadBooks) from the bulk
+  // `/api/reading-progress` endpoint and reused across infinite-scroll pages
+  // — bookCardHtml reads it directly, so appended pages get badges for free.
+  let progressByBook = new Map();
+
   // Item 10 / Finding 7: dismissible, aria-live toast for surfacing fetch
   // failures that would otherwise render as a silent empty view. A single
   // shared container stacks multiple toasts; each auto-dismisses after 6s or
@@ -772,6 +778,12 @@
     activeSort = params.sort || DEFAULT_SORT;
 
     const existing = $("#search");
+    // Fix 6: only a fresh entry into the library (from detail/reader/stats/
+    // collections, or the very first load — #app was just replaced, so
+    // #search doesn't exist yet) re-fetches the bulk progress table. A hash
+    // change while #search already exists is a filter/sort/search re-render,
+    // which reuses the cached progressByBook (see loadBooks).
+    const enteringLibraryFresh = !existing;
     if (!existing) {
       app().innerHTML = `
         <div class="header">
@@ -825,7 +837,7 @@
     // Finding 5: scroll restore now happens inside loadBooks() itself, only
     // after a real successful render — never unconditionally here, which
     // would also fire on a 401/failed load and scroll the wrong view.
-    await loadBooks(activeQuery);
+    await loadBooks(activeQuery, enteringLibraryFresh);
   }
 
   // Item 10: preserves the library's scroll position across a detail/reader
@@ -1107,13 +1119,91 @@
     libraryScrollObserver.observe(sentinel);
   }
 
-  async function loadBooks(query) {
+  // Fix 1 / Item 15: canonical per-book progress resolver, shared by the
+  // grid (bookCardHtml) and the Continue Reading shelf (shelfCardHtml) — one
+  // source of truth for "what should this book's badge show". Mirrors
+  // mergeProgress's "local wins only if newer" rule: `serverRow` is the raw
+  // `/api/reading-progress` row (or undefined if the book has none), and a
+  // book this tab read more recently (lastKnownProgress) only overrides it
+  // when its `.ts` is newer than the server row's `last_read_at` — otherwise
+  // a book finished on another device would keep showing this tab's stale
+  // local value. Also treats chapter_index 0 as "no progress" (same
+  // convention as showDetail's `hasProgress` and get_continue_reading_books'
+  // `chapter_index > 0` filter), so resetProgress's locally-recorded 0
+  // resolves to no badge instead of a near-empty one. Returns undefined when
+  // there's nothing to show.
+  function effectiveProgress(id, serverRow) {
+    const known = lastKnownProgress[id];
+    const serverTs = serverRow ? serverRow.last_read_at * 1000 : 0;
+    const chapterIndex = known && known.ts >= serverTs
+      ? known.chapterIndex
+      : (serverRow ? serverRow.chapter_index : undefined);
+    return typeof chapterIndex === "number" && chapterIndex > 0 ? chapterIndex : undefined;
+  }
+
+  // Item 15: best-effort bulk progress fetch — a failure or slow response
+  // must never block or break the grid, it just renders without badges (same
+  // resilience pattern as the shelves' fetchShelfBooks). Guarded by `gen` so
+  // a slow fetch from a superseded loadBooks() call can't clobber a newer
+  // one's progressByBook map.
+  // Fix 2 / Fix 5: never rejects and never clobbers existing badges with an
+  // empty map on failure — `rows` is only trusted (and progressByBook only
+  // replaced) once it's confirmed to be an array; a network error, a
+  // non-ok response, or a malformed (non-array) body all just leave
+  // progressByBook exactly as it was.
+  async function refreshProgressByBook(gen) {
+    let rows;
+    try {
+      const resp = await api("/api/reading-progress");
+      rows = resp && resp.ok ? await resp.json() : undefined;
+    } catch (e) {
+      rows = undefined; // best-effort — keep whatever's already cached
+    }
+    if (gen !== libraryRenderGen) return;
+    if (!Array.isArray(rows)) return;
+
+    // Fix 2: belt-and-suspenders — a malformed row (e.g. `null` in the
+    // array) must not throw and reject this promise; loadBooks' unguarded
+    // `await progressPromise` must always resolve. Falls back to keeping the
+    // existing map, same as any other best-effort failure above.
+    try {
+      // Fix 1: resolve every book that has either a server row or a local
+      // (F8) record — a book read this tab whose PUT hasn't landed
+      // server-side yet has no server row at all, but still needs to show up.
+      const serverByBook = new Map(rows.map(p => [p.book_id, p]));
+      const ids = new Set([...serverByBook.keys(), ...Object.keys(lastKnownProgress)]);
+      const merged = new Map();
+      for (const id of ids) {
+        const value = effectiveProgress(id, serverByBook.get(id));
+        if (value !== undefined) merged.set(id, value);
+      }
+      progressByBook = merged;
+    } catch (e) {
+      // best-effort — keep whatever's already cached
+    }
+  }
+
+  async function loadBooks(query, refreshProgress) {
     // Item 5: captured once, checked after every await below — see the
     // libraryRenderGen declaration for why.
     const gen = ++libraryRenderGen;
     // Item 14: every loadBooks() call is a fresh library entry (filter/sort/
     // search change, or a plain re-render) — always starts back at page 0.
     resetLibraryPagination();
+
+    // Fix 6: the bulk progress table only needs re-fetching when actually
+    // entering the library fresh (from detail/reader/stats/collections, or
+    // the very first load) — a pure sort/search/filter re-render reuses the
+    // cached progressByBook untouched. A book just read in this tab is still
+    // reflected immediately regardless, via the F8 lastKnownProgress overlay
+    // effectiveProgress() applies whenever progressByBook IS rebuilt.
+    // Item 15: kicked off in parallel with the books fetch below and awaited
+    // just before the first render — skeletons already cover the wait, so
+    // paint once with badges rather than painting bar-less cards and
+    // repainting when progress arrives (avoids a layout shift).
+    const progressPromise = (refreshProgress || progressByBook.size === 0)
+      ? refreshProgressByBook(gen)
+      : Promise.resolve();
 
     let url;
     let paginated = false;
@@ -1170,6 +1260,21 @@
       libraryPageOffset = books.length;
       libraryPagesLoaded = 1;
     }
+
+    // Item 15: every render path below (filtered grid, plain grid, shelves)
+    // goes through bookCardHtml, which reads progressByBook — wait for it
+    // here so the very first paint already has badges.
+    // Fix 2: belt-and-suspenders — refreshProgressByBook is guaranteed to
+    // resolve (never reject), but this is the one await in loadBooks NOT
+    // otherwise wrapped in try/catch, so a rejection here would skip the
+    // grid render entirely. Guard it anyway rather than rely solely on that
+    // guarantee holding forever.
+    try {
+      await progressPromise;
+    } catch (e) {
+      // best-effort — render proceeds with whatever progressByBook already has
+    }
+    if (gen !== libraryRenderGen) return;
 
     // Finding C: an empty result for an active collection/series filter is
     // ambiguous — genuinely empty, or the filtered entity no longer exists?
@@ -1279,7 +1384,16 @@
     showToast(message || "Couldn't reach Folio server");
   }
 
+  // Item 15: same `.shelf-progress`/`.shelf-progress-fill` bar the shelf
+  // cards use — no new visual language. Absent from `progressByBook` means
+  // no effective progress (no row, or resolved to "no progress" — see
+  // effectiveProgress), so no bar at all (not even at 0%). Fix 3: also
+  // requires `total_chapters > 0` — matches get_continue_reading_books'
+  // exclusion, so a book whose chapter count isn't known yet never shows the
+  // otherwise-always-0% bar `progressPercent` would produce for it.
   function bookCardHtml(b) {
+    const chapterIndex = progressByBook.get(b.id);
+    const bar = progressBarHtml(chapterIndex, b.total_chapters);
     return `
       <div class="card" data-id="${b.id}" tabindex="0" role="button" aria-label="${esc(`Open ${b.title}`)}">
         <img src="/api/books/${b.id}/cover?size=thumb" alt="" loading="lazy" data-cover-title="${esc(b.title)}">
@@ -1287,7 +1401,7 @@
           <div class="title" title="${esc(b.title)}">${esc(b.title)}</div>
           <div class="author">${esc(b.author)}</div>
           <div class="format">${b.format}</div>
-        </div>
+        </div>${bar}
       </div>`;
   }
 
@@ -1345,13 +1459,29 @@
     return totalChapters > 0 ? Math.round(((chapterIndex + 1) / totalChapters) * 100) : 0;
   }
 
+  // Fix 7: single source for the `.shelf-progress`/`.shelf-progress-fill`
+  // bar markup, shared by bookCardHtml and shelfCardHtml (previously
+  // duplicated verbatim in both). Fix 3: no bar at all — not even at 0% —
+  // when there's no effective progress to show or the chapter/page count
+  // isn't known yet (`total_chapters <= 0`, matching
+  // get_continue_reading_books' exclusion).
+  function progressBarHtml(chapterIndex, totalChapters) {
+    if (!(totalChapters > 0) || chapterIndex === undefined || chapterIndex === null) return "";
+    return `<div class="shelf-progress"><div class="shelf-progress-fill" style="width:${progressPercent(chapterIndex, totalChapters)}%"></div></div>`;
+  }
+
   // `mode: "continue"` cards jump straight into the reader at the saved
   // position; `mode: "detail"` (Recently Added) cards behave like a normal
   // grid card and open the detail page.
   function shelfCardHtml(b, mode) {
-    const bar = mode === "continue"
-      ? `<div class="shelf-progress"><div class="shelf-progress-fill" style="width:${progressPercent(b.chapter_index, b.total_chapters)}%"></div></div>`
-      : "";
+    // Fix 4: consult the same canonical progressByBook map the grid uses —
+    // only fall back to this shelf fetch's own (potentially stale, or from
+    // before an F8 update) `b.chapter_index` when the book isn't in the map
+    // at all, so a book shown in both the shelf and the grid never disagrees.
+    const chapterIndex = mode === "continue"
+      ? (progressByBook.has(b.id) ? progressByBook.get(b.id) : b.chapter_index)
+      : undefined;
+    const bar = mode === "continue" ? progressBarHtml(chapterIndex, b.total_chapters) : "";
     const posAttrs = mode === "continue"
       ? ` data-chapter-index="${b.chapter_index}" data-scroll-position="${b.scroll_position || 0}" data-last-read-at="${b.last_read_at || 0}"`
       : "";
