@@ -141,21 +141,21 @@ pub fn import_cbr(path: &str) -> FolioResult<CbrMeta> {
     let mut genre = None;
 
     if let Some(xml) = extract_comic_info(path) {
-        if let Some(writer) = crate::epub::extract_tag_text(&xml, "Writer") {
-            author = Some(writer.to_string());
+        if let Some(writer) = crate::epub::extract_tag_text_decoded(&xml, "Writer") {
+            author = Some(writer);
         }
-        if let Some(t) = crate::epub::extract_tag_text(&xml, "Title") {
-            comic_title = Some(t.to_string());
+        if let Some(t) = crate::epub::extract_tag_text_decoded(&xml, "Title") {
+            comic_title = Some(t);
         }
         if let Some(y) = crate::epub::extract_tag_text(&xml, "Year") {
             year = y.parse::<u16>().ok();
         }
-        series = crate::epub::extract_tag_text(&xml, "Series").map(|s| s.to_string());
+        series = crate::epub::extract_tag_text_decoded(&xml, "Series");
         volume = crate::epub::extract_tag_text(&xml, "Volume").and_then(|v| v.parse::<u32>().ok());
         language = crate::epub::extract_tag_text(&xml, "LanguageISO").map(|s| s.to_string());
-        publisher = crate::epub::extract_tag_text(&xml, "Publisher").map(|s| s.to_string());
-        summary = crate::epub::extract_tag_text(&xml, "Summary").map(|s| s.to_string());
-        genre = crate::epub::extract_tag_text(&xml, "Genre").map(|s| s.to_string());
+        publisher = crate::epub::extract_tag_text_decoded(&xml, "Publisher");
+        summary = crate::epub::extract_tag_text_decoded(&xml, "Summary");
+        genre = crate::epub::extract_tag_text_decoded(&xml, "Genre");
     }
 
     Ok(CbrMeta {
