@@ -6,8 +6,10 @@ import type { Book } from "../types";
 interface BookDetailModalProps {
   book: Book;
   onClose: () => void;
-  onOpen: (id: string) => void;
-  onEdit: (id: string) => void;
+  // Action handlers are optional: when none are provided (e.g. the reader's
+  // read-only "book details" popup) the action footer is omitted entirely.
+  onOpen?: (id: string) => void;
+  onEdit?: (id: string) => void;
   onScan?: (id: string) => Promise<void>;
 }
 
@@ -39,6 +41,10 @@ function ScanButton({ bookId, onScan }: { bookId: string; onScan: (id: string) =
 export default function BookDetailModal({ book, onClose, onOpen, onEdit, onScan }: BookDetailModalProps) {
   const { t } = useTranslation();
   const dialogRef = useRef<HTMLDivElement>(null);
+  // Read-only variant (e.g. the reader's info popup) has no action footer, so
+  // it would otherwise contain zero focusable elements — breaking the focus
+  // trap and leaving nothing to auto-focus. Give it an explicit close button.
+  const readOnly = !onOpen && !onEdit && !onScan;
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -64,11 +70,18 @@ export default function BookDetailModal({ book, onClose, onOpen, onEdit, onScan 
       }
     };
     document.addEventListener("keydown", handleKeyDown);
-    // Auto-focus first button
-    const firstBtn = dialogRef.current?.querySelector<HTMLElement>("button");
-    firstBtn?.focus();
+    // Auto-focus. The read-only variant's only control is the corner X;
+    // focusing it would flash a focus ring the instant the (mouse-opened)
+    // popup appears, so focus the dialog container instead — Tab still reaches
+    // the X (and shows its ring for keyboard users), it just isn't pre-focused.
+    if (readOnly) {
+      dialogRef.current?.focus();
+    } else {
+      const firstBtn = dialogRef.current?.querySelector<HTMLElement>("button");
+      firstBtn?.focus();
+    }
     return () => document.removeEventListener("keydown", handleKeyDown);
-  }, [onClose]);
+  }, [onClose, readOnly]);
 
   const coverSrc = book.cover_path ? convertFileSrc(book.cover_path) : null;
 
@@ -91,9 +104,24 @@ export default function BookDetailModal({ book, onClose, onOpen, onEdit, onScan 
         role="dialog"
         aria-modal="true"
         aria-label={t("detail.detailsFor", { title: book.title })}
-        className="bg-surface border border-warm-border rounded-2xl shadow-xl max-w-md w-full mx-4 overflow-hidden"
+        tabIndex={-1}
+        className="relative bg-surface border border-warm-border rounded-2xl shadow-xl max-w-md w-full mx-4 overflow-hidden focus:outline-none"
         onClick={(e) => e.stopPropagation()}
       >
+        {readOnly && (
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label={t("common.close")}
+            title={t("common.close")}
+            className="absolute top-3 right-3 z-10 p-1.5 rounded-lg text-ink-muted hover:text-ink hover:bg-warm-subtle transition-colors focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2"
+          >
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M18 6L6 18M6 6l12 12" />
+            </svg>
+          </button>
+        )}
+
         {/* Header: cover + title */}
         <div className="flex gap-4 p-5">
           {coverSrc ? (
@@ -148,24 +176,30 @@ export default function BookDetailModal({ book, onClose, onOpen, onEdit, onScan 
           </div>
         )}
 
-        {/* Actions */}
-        <div className="flex gap-3 px-5 py-4 border-t border-warm-border">
-          <button
-            type="button"
-            onClick={() => onOpen(book.id)}
-            className="flex-1 px-4 py-2 rounded-xl bg-accent text-white text-sm font-medium hover:bg-accent/90 transition-colors focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2"
-          >
-            {t("common.open")}
-          </button>
-          <button
-            type="button"
-            onClick={() => onEdit(book.id)}
-            className="flex-1 px-4 py-2 rounded-xl bg-warm-subtle text-ink text-sm font-medium hover:bg-warm-border transition-colors focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2"
-          >
-            {t("common.edit")}
-          </button>
-          {onScan && <ScanButton bookId={book.id} onScan={onScan} />}
-        </div>
+        {/* Actions — omitted entirely for the read-only (reader) variant */}
+        {(onOpen || onEdit || onScan) && (
+          <div className="flex gap-3 px-5 py-4 border-t border-warm-border">
+            {onOpen && (
+              <button
+                type="button"
+                onClick={() => onOpen(book.id)}
+                className="flex-1 px-4 py-2 rounded-xl bg-accent text-white text-sm font-medium hover:bg-accent/90 transition-colors focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2"
+              >
+                {t("common.open")}
+              </button>
+            )}
+            {onEdit && (
+              <button
+                type="button"
+                onClick={() => onEdit(book.id)}
+                className="flex-1 px-4 py-2 rounded-xl bg-warm-subtle text-ink text-sm font-medium hover:bg-warm-border transition-colors focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2"
+              >
+                {t("common.edit")}
+              </button>
+            )}
+            {onScan && <ScanButton bookId={book.id} onScan={onScan} />}
+          </div>
+        )}
       </div>
     </div>
   );

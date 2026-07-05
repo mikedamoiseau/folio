@@ -12,6 +12,8 @@ import KeyboardShortcutsHelp from "./KeyboardShortcutsHelp";
 import HighlightsPanel, { HIGHLIGHT_COLORS } from "./HighlightsPanel";
 import BookmarksPanel from "./BookmarksPanel";
 import BookmarkToast from "./BookmarkToast";
+import BookDetailModal from "./BookDetailModal";
+import type { Book } from "../types";
 import BookCompletionModal from "./BookCompletionModal";
 import MissingFileDialog from "./MissingFileDialog";
 import { useBookCompletion } from "../hooks/useBookCompletion";
@@ -48,17 +50,6 @@ interface ReadingProgress {
   chapter_index: number;
   scroll_position: number;
   last_read_at: number;
-}
-
-interface BookInfo {
-  id: string;
-  title: string;
-  author: string;
-  file_path: string;
-  cover_path: string | null;
-  total_chapters: number;
-  added_at: number;
-  format: "epub" | "cbz" | "cbr" | "pdf" | "mobi";
 }
 
 // ---- Component ----
@@ -167,6 +158,8 @@ export default function ReaderPane({
   const [showShortcuts, setShowShortcuts] = useState(false);
   const [highlightsOpen, setHighlightsOpen] = useState(false);
   const [bookmarksOpen, setBookmarksOpen] = useState(false);
+  const [infoOpen, setInfoOpen] = useState(false);
+  const [bookDetail, setBookDetail] = useState<Book | null>(null);
   const [toastBookmarkId, setToastBookmarkId] = useState<string | null>(null);
   const [bookmarkRefreshKey, setBookmarkRefreshKey] = useState(0);
   const [saveIndicator, setSaveIndicator] = useState(false);
@@ -288,6 +281,10 @@ export default function ReaderPane({
     historyInitialized.current = false;
     pendingSearchHistory.current = null;
     targetMatchOffset.current = null;
+    // Close the details popup and drop the previous book's record so it can't
+    // flash stale content over the newly-switched book before get_book resolves.
+    setInfoOpen(false);
+    setBookDetail(null);
   }, [bookId]);
 
   // ---- Load book info, TOC, and saved progress on mount ----
@@ -303,13 +300,15 @@ export default function ReaderPane({
 
     async function init() {
       try {
-        const bookInfo = await invoke<BookInfo>("get_book", { bookId });
+        const bookInfo = await invoke<Book>("get_book", { bookId });
 
         if (cancelled) return;
 
         setBookTitle(bookInfo.title);
         setBookFormat(bookInfo.format);
         setTotalChapters(bookInfo.total_chapters);
+        // Full record kept for the read-only "book details" popup (i button).
+        setBookDetail(bookInfo);
 
         // `isHtmlBook` is derived from React state (`bookFormat`), which still
         // holds the previous render's value here — `setBookFormat` above is
@@ -1342,6 +1341,13 @@ export default function ReaderPane({
       const tag = (e.target as HTMLElement)?.tagName;
       if (tag === "INPUT" || tag === "TEXTAREA") return;
 
+      // The read-only book-details popup (BookDetailModal) is modal: while it
+      // is open no reader shortcut or navigation key should fire. The modal
+      // owns its own Escape/Tab handling; swallow everything else here so a
+      // stray 'b'/'d'/'t' can't mutate bookmarks / toggle chrome behind it.
+      // (PageViewer's own key listener is separately gated via keyboardEnabled.)
+      if (infoOpen) return;
+
       // Let SettingsPanel handle Escape and Tab when it is open
       if (settingsOpen && (e.key === "Escape" || e.key === "Tab")) return;
 
@@ -1394,7 +1400,7 @@ export default function ReaderPane({
     if (!effectiveActive) return;
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [prevChapter, nextChapter, goHistoryBack, goHistoryForward, addBookmarkAtCurrentPosition, showShortcuts, tocOpen, bookmarksOpen, dndMode, settingsOpen, navigate, bookFormat, isHtmlBook, searchOpen, toggleThumbStrip, onToggleSplit, effectiveActive]);
+  }, [prevChapter, nextChapter, goHistoryBack, goHistoryForward, addBookmarkAtCurrentPosition, showShortcuts, tocOpen, bookmarksOpen, infoOpen, dndMode, settingsOpen, navigate, bookFormat, isHtmlBook, searchOpen, toggleThumbStrip, onToggleSplit, effectiveActive]);
 
   // ---- TOC focus trap ----
 
@@ -1649,6 +1655,11 @@ export default function ReaderPane({
         />
       )}
 
+      {/* Book details (read-only) popup */}
+      {infoOpen && bookDetail && (
+        <BookDetailModal book={bookDetail} onClose={() => setInfoOpen(false)} />
+      )}
+
       {/* Bookmark toast */}
       {toastBookmarkId && (
         <BookmarkToast
@@ -1819,6 +1830,20 @@ export default function ReaderPane({
           >
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
               <path d="M19 21l-7-3.5L5 21V5a2 2 0 012-2h10a2 2 0 012 2z" />
+            </svg>
+          </button>
+
+          {/* Book details (info) button */}
+          <button
+            onClick={() => setInfoOpen(true)}
+            disabled={!bookDetail}
+            className={`p-1.5 transition-colors rounded-lg focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 disabled:opacity-40 ${infoOpen ? "text-accent bg-accent-light" : "text-ink-muted hover:text-ink hover:bg-warm-subtle"}`}
+            aria-label={t("reader.bookInfo")}
+            title={t("reader.bookInfo")}
+          >
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="12" cy="12" r="9" />
+              <path d="M12 16v-4M12 8h.01" />
             </svg>
           </button>
 
@@ -2143,7 +2168,7 @@ export default function ReaderPane({
                 dualPage={dualPage}
                 mangaMode={mangaMode}
                 pageAnimation={pageAnimation}
-                keyboardEnabled={effectiveActive}
+                keyboardEnabled={effectiveActive && !infoOpen}
               />
               {thumbStripOpen && (bookFormat === "cbz" || bookFormat === "cbr" || bookFormat === "pdf") && (
                 <PageThumbnailStrip

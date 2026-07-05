@@ -150,6 +150,7 @@
     "timeLeftTitle": "{{chapter}} left in chapter, {{book}} left in book",
     "focusMode": "Focus mode (d)",
     "moreActions": "More actions",
+    "bookInfo": "Book details",
     "dualPageSpread": "Dual-page spread",
     "mangaMode": "Manga mode (RTL)",
     "searchShortcut": "Search (\u2318F)",
