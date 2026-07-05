@@ -727,16 +727,35 @@ The server runs on port 7788 by default. The port input is editable while the se
 
 ### Using the web interface
 
-When **Web UI** is enabled, open the URL in a browser. You'll see:
+When **Web UI** is enabled, open the URL in a browser. It looks and behaves like the desktop app — same warm color palette, light/dark/system theme, and typography — not a stripped-down mobile page. You'll see:
 
 - **Login screen** — enter the PIN you set in the desktop app
-- **Library** — a grid of book covers with a search bar and sort dropdown. Tap any book to see its details.
-- **Book detail** — shows cover, title, author, and format. Tap **Read** to open the book or **Download** to save it to your device.
-- **Reader** — EPUBs show chapter content with prev/next navigation. PDFs and comics show page images with prev/next buttons.
+- **Home** — "Continue Reading" and "Recently Added" shelves for quick access to what you're currently in the middle of
+- **Library** — a grid of book covers with search, series/collection filters, and a sort dropdown (date added, title, author, last read, rating). The grid loads more books automatically as you scroll, so it stays fast even on large libraries. Books you've started show a small progress badge on the cover. Tap any book to see its details.
+- **Book detail** — shows cover, title, author, format, and a progress bar. Tap **Continue** to pick up where you left off (or **Start Over** to read from the beginning), or **Download** to save the file to your device.
+- **Reader** — EPUBs show chapter content with prev/next navigation. PDFs and comics show page images with prev/next buttons, and swiping left/right on a touch screen turns the page with a short animation. Your reading position is saved as you go, so opening the same book later — on this device or another — resumes where you stopped.
 - **Reading Stats** — tap the bar chart icon in the header to view your reading stats: total books, time read, sessions, pages, books finished, current and longest streaks, and a 30-day daily reading chart.
 - **Collections** — tap the folder icon in the header to browse your collections and series. Filter by name, sort alphabetically, and tap any collection or series to jump to a filtered library view.
 
 The web interface works entirely on your local network. No internet connection needed, no data leaves your WiFi.
+
+### Installing to your home screen
+
+The web UI can be installed like an app, so it opens full-screen without browser chrome and gets its own icon:
+
+- **iOS (Safari):** open the web UI URL, tap the **Share** icon, then **Add to Home Screen**.
+- **Android / desktop (Chrome or another Chromium browser):** open the web UI URL, then use the browser's **Install app** option (usually in the address bar or the ⋮ menu).
+
+Once installed, the app shell (not your book content) can be cached for faster loads — this only kicks in when the page is served over `https` or accessed as `localhost`. Over a plain HTTP address on your home WiFi (the normal way to reach it, e.g. `http://192.168.1.20:7788`), the app still installs to your home screen and looks the same, it just always fetches the shell fresh rather than caching it offline.
+
+### Keyboard shortcuts
+
+On a device with a keyboard, the web UI supports the same kind of shortcuts as the desktop app:
+
+- `/` — focus the search box from the library view
+- `Tab` — move focus between book covers in the grid (with a visible focus ring); `Enter` or `Space` opens the focused book
+- In the reader: `←`/`→` to turn pages or move between chapters, `Home`/`End` to jump to the first/last page, `Space` to scroll, `F` to toggle fullscreen, `Esc`/Backspace to go back
+- `?` opens a shortcuts overlay listing the full set
 
 ### OPDS for reader apps
 

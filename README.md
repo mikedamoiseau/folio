@@ -61,7 +61,10 @@ Folio is for the opposite case: you already have the files, and you want a bette
 
 ### Remote access
 - Read your library from any device on the same WiFi — phone, tablet, or another computer, no install required
-- Built-in web reader with QR-code pairing and PIN login
+- Built-in web reader with QR-code pairing and PIN login, matching the desktop app's design with light/dark/system themes
+- Keyboard shortcuts (`/` to search, arrow-key reader navigation, a shortcuts overlay) and a fast, paginated library with search, filters, and sort
+- Reading progress syncs back to your library, with progress badges on book covers and animated swipe page-turns on touch devices
+- Installable as a home-screen web app (PWA, including iOS Add to Home Screen) for an app-like feel
 - OPDS server so ebook apps (KOReader, Thorium, Calibre, Moon+ Reader) can connect directly
 - Read-only and sanitized; PIN hashed in your OS keychain, with rate-limited logins and a login audit trail
 - System tray toggles to flip the Web UI and OPDS server on or off
@@ -135,6 +138,7 @@ Folio is for the opposite case: you already have the files, and you want a bette
 ## Docs
 
 - User guide: [`docs/USER_GUIDE.md`](docs/USER_GUIDE.md)
+- Web server / API reference: [`docs/WEB_SERVER_API.md`](docs/WEB_SERVER_API.md)
 - Changelog: [`docs/changelog.html`](docs/changelog.html) ([raw](CHANGELOG.md))
 - Roadmap: [`docs/ROADMAP.md`](docs/ROADMAP.md)
 
@@ -245,6 +249,7 @@ npm run tauri build
 npm run type-check
 npm run build
 npm run test
+npm run test:e2e     # Playwright web-UI suite against a seeded local harness (Playwright manages the server; first run builds it)
 ```
 
 Rust-only commands from `src-tauri/`:
@@ -282,8 +287,10 @@ suite stays green on fresh clones.
 - `src-tauri/src/commands.rs` — Tauri command handlers / IPC surface
 - `src-tauri/src/lib.rs`, `main.rs` — app setup and command registration
 - `src-tauri/src/tray.rs` — system tray + menu
-- `src-tauri/src/web_server/` — embedded HTTP server, OPDS feed, web UI
+- `src-tauri/src/web_server/` — embedded HTTP server, OPDS feed, and the embedded web UI SPA
 - `folio-core/src/` — reusable Rust crate: `db`, `models`, `error`, `paths`, parsers (`epub`, `pdf`, `cbz`, `cbr`, `mobi`), `page_cache`, `enrichment`, providers, `opds`, `openlibrary`, `backup`, `sync`, `storage`, `search`
+- `e2e/` — Playwright web-UI end-to-end tests
+- `src-tauri/examples/web_e2e_server.rs` — seeded web-server harness the e2e suite runs against
 - `docs/` — user-facing docs and roadmap
 
 ## CI

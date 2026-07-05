@@ -35,7 +35,10 @@ Frontend tests (run from project root):
 ```bash
 npm run test                 # Run Vitest (once)
 npm run test:watch           # Run Vitest (watch mode)
+npm run test:e2e             # Run the Playwright web-UI e2e suite (e2e/)
 ```
+
+`test:e2e` runs against a seeded harness (`src-tauri/examples/web_e2e_server.rs`); Playwright manages the server's lifecycle (build, start, health-check, teardown), so no manual setup is needed.
 
 Rust tests use `tempfile` for DB fixtures. Frontend pure logic lives in `src/lib/utils.ts` for testability.
 
@@ -65,6 +68,8 @@ Commands are registered in `src-tauri/src/lib.rs` via `invoke_handler`. Every ne
 ### Backend Layers
 
 The backend is two crates: **`folio`** (`src-tauri/src/`) — the Tauri shell, IPC commands, and web server — and **`folio-core`** (`folio-core/src/`) — parsing, DB, and models, with no Tauri dependency.
+
+The embedded web UI (`src-tauri/src/web_server/static/`: `index.html` + `app.js` + `app.css`, served via `include_str!`/`include_bytes!`) is a hand-written vanilla-JS SPA, independent of the React desktop frontend — it shares no code or styling with `src/`. Its service worker's `CACHE_VERSION` (`static/sw.js`) is a content hash of the shell assets, enforced by a test — bump it whenever those files change.
 
 - **commands.rs** (`src-tauri/src/`) — Tauri command handlers (the API surface). Route to format-specific parsers and DB functions.
 - **lib.rs** (`src-tauri/src/`) — App setup; registers commands in `invoke_handler`.
@@ -139,6 +144,7 @@ This is added to Mike's `~/.zshrc`. If builds fail with `fatal error: 'new' file
 GitHub Actions runs on push to main and PRs:
 - `cargo clippy --workspace --all-targets -- -D warnings` (+ `--features mobi`), `cargo fmt --all --check`, `cargo test` (Ubuntu)
 - `npm run type-check`
+- "Web UI E2E" job: builds the seeded harness (`web_e2e_server` example) and runs the Playwright suite (`pnpm run test:e2e`) on Ubuntu
 - Pdfium binaries downloaded from `bblanchon/pdfium-binaries` in CI
 - Release workflow (`release.yml`) builds platform binaries on tag push
 
