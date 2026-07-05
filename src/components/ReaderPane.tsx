@@ -281,6 +281,10 @@ export default function ReaderPane({
     historyInitialized.current = false;
     pendingSearchHistory.current = null;
     targetMatchOffset.current = null;
+    // Close the details popup and drop the previous book's record so it can't
+    // flash stale content over the newly-switched book before get_book resolves.
+    setInfoOpen(false);
+    setBookDetail(null);
   }, [bookId]);
 
   // ---- Load book info, TOC, and saved progress on mount ----
@@ -1337,6 +1341,13 @@ export default function ReaderPane({
       const tag = (e.target as HTMLElement)?.tagName;
       if (tag === "INPUT" || tag === "TEXTAREA") return;
 
+      // The read-only book-details popup (BookDetailModal) is modal: while it
+      // is open no reader shortcut or navigation key should fire. The modal
+      // owns its own Escape/Tab handling; swallow everything else here so a
+      // stray 'b'/'d'/'t' can't mutate bookmarks / toggle chrome behind it.
+      // (PageViewer's own key listener is separately gated via keyboardEnabled.)
+      if (infoOpen) return;
+
       // Let SettingsPanel handle Escape and Tab when it is open
       if (settingsOpen && (e.key === "Escape" || e.key === "Tab")) return;
 
@@ -1350,7 +1361,7 @@ export default function ReaderPane({
       }
 
       // Don't navigate chapters when any panel is open
-      if ((settingsOpen || tocOpen || bookmarksOpen || infoOpen) && (e.key === "ArrowLeft" || e.key === "ArrowRight")) return;
+      if ((settingsOpen || tocOpen || bookmarksOpen) && (e.key === "ArrowLeft" || e.key === "ArrowRight")) return;
 
       // For image-based formats (CBZ/CBR/PDF), PageViewer handles arrow keys.
       // HTML books (EPUB + MOBI) use chapter navigation here.
@@ -1375,7 +1386,6 @@ export default function ReaderPane({
       } else if (e.key === "Escape") {
         if (dndMode) { setDndMode(false); return; }
         if (showShortcuts) setShowShortcuts(false);
-        else if (infoOpen) setInfoOpen(false);
         else if (bookmarksOpen) setBookmarksOpen(false);
         else if (tocOpen) setTocOpen(false);
         else navigate("/");
@@ -2158,7 +2168,7 @@ export default function ReaderPane({
                 dualPage={dualPage}
                 mangaMode={mangaMode}
                 pageAnimation={pageAnimation}
-                keyboardEnabled={effectiveActive}
+                keyboardEnabled={effectiveActive && !infoOpen}
               />
               {thumbStripOpen && (bookFormat === "cbz" || bookFormat === "cbr" || bookFormat === "pdf") && (
                 <PageThumbnailStrip

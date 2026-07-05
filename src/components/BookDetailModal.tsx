@@ -73,6 +73,10 @@ export default function BookDetailModal({ book, onClose, onOpen, onEdit, onScan 
   }, [onClose]);
 
   const coverSrc = book.cover_path ? convertFileSrc(book.cover_path) : null;
+  // Read-only variant (e.g. the reader's info popup) has no action footer, so
+  // it would otherwise contain zero focusable elements — breaking the focus
+  // trap and leaving nothing to auto-focus. Give it an explicit close button.
+  const readOnly = !onOpen && !onEdit && !onScan;
 
   const metadataRows: { label: string; value: string }[] = [];
   if (book.series) {
@@ -93,9 +97,23 @@ export default function BookDetailModal({ book, onClose, onOpen, onEdit, onScan 
         role="dialog"
         aria-modal="true"
         aria-label={t("detail.detailsFor", { title: book.title })}
-        className="bg-surface border border-warm-border rounded-2xl shadow-xl max-w-md w-full mx-4 overflow-hidden"
+        className="relative bg-surface border border-warm-border rounded-2xl shadow-xl max-w-md w-full mx-4 overflow-hidden"
         onClick={(e) => e.stopPropagation()}
       >
+        {readOnly && (
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label={t("common.close")}
+            title={t("common.close")}
+            className="absolute top-3 right-3 z-10 p-1.5 rounded-lg text-ink-muted hover:text-ink hover:bg-warm-subtle transition-colors focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2"
+          >
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M18 6L6 18M6 6l12 12" />
+            </svg>
+          </button>
+        )}
+
         {/* Header: cover + title */}
         <div className="flex gap-4 p-5">
           {coverSrc ? (
