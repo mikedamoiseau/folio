@@ -2313,6 +2313,90 @@ mod tests {
         let _ = tx.send(());
     }
 
+    // ── Item 15: bulk reading-progress endpoint (grid progress badges) ──────
+    //
+    // `GET /api/reading-progress` is a thin wrapper over the existing
+    // `db::get_all_reading_progress` (already used internally for the
+    // `last_read` sort) — no new query, no `BookGridItem` model change. It's
+    // PIN-gated like the other `/api/books*` reads (not a public shell
+    // asset), so no auth.rs carve-out entry is needed.
+
+    #[tokio::test]
+    async fn reading_progress_returns_empty_for_fresh_db() {
+        let state = test_state();
+        let (_state, port, tx) = spawn_progress_test_server(state).await;
+        let client = reqwest::Client::new();
+
+        let resp = client
+            .get(format!("http://127.0.0.1:{port}/api/reading-progress"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+        let body: serde_json::Value = resp.json().await.unwrap();
+        assert_eq!(body.as_array().unwrap().len(), 0);
+
+        let _ = tx.send(());
+    }
+
+    #[tokio::test]
+    async fn reading_progress_returns_rows_with_progress() {
+        let state = test_state();
+        {
+            let conn = state.conn().unwrap();
+            crate::db::insert_book(&conn, &cr_test_book("rp-1", 10)).unwrap();
+            crate::db::insert_book(&conn, &cr_test_book("rp-2", 10)).unwrap();
+            crate::db::upsert_reading_progress(
+                &conn,
+                &crate::models::ReadingProgress {
+                    book_id: "rp-1".to_string(),
+                    chapter_index: 3,
+                    scroll_position: 0.5,
+                    last_read_at: 123,
+                },
+            )
+            .unwrap();
+            // rp-2 has no progress row — must not appear in the response.
+        }
+
+        let (_state, port, tx) = spawn_progress_test_server(state).await;
+        let client = reqwest::Client::new();
+
+        let resp = client
+            .get(format!("http://127.0.0.1:{port}/api/reading-progress"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+        let body: serde_json::Value = resp.json().await.unwrap();
+        let arr = body.as_array().unwrap();
+        assert_eq!(arr.len(), 1, "only books with a progress row are returned");
+        assert_eq!(arr[0]["book_id"], "rp-1");
+        assert_eq!(arr[0]["chapter_index"], 3);
+        assert_eq!(arr[0]["scroll_position"], 0.5);
+        assert_eq!(arr[0]["last_read_at"], 123);
+
+        let _ = tx.send(());
+    }
+
+    #[tokio::test]
+    async fn reading_progress_requires_auth_when_pin_configured() {
+        let state = test_state();
+        *state.pin_hash.lock().unwrap() = Some(auth::hash_pin("9999"));
+
+        let (_state, port, tx) = spawn_progress_test_server(state).await;
+        let client = reqwest::Client::new();
+
+        let resp = client
+            .get(format!("http://127.0.0.1:{port}/api/reading-progress"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 401);
+
+        let _ = tx.send(());
+    }
+
     // ── Item 14: paginate the library grid (infinite scroll) ────────────────
     //
     // `list_books` stays backward-compatible: `limit`/`offset` are optional

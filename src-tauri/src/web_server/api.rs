@@ -149,6 +149,7 @@ pub fn routes(state: WebState) -> Router<WebState> {
         .route("/books/{id}/pages/{index}", get(get_page_image))
         .route("/books/{id}/page-count", get(get_page_count))
         .route("/books/{id}/progress", get(get_progress).put(put_progress))
+        .route("/reading-progress", get(get_all_progress))
         .route("/books/{id}/download", get(download_book))
         // OPDS feeds emit `/download/{book_id}.{ext}` so clients using URL-
         // based extension detection can disambiguate AZW vs AZW3 (both share
@@ -1059,6 +1060,19 @@ async fn put_progress(
     )
     .map_err(folio_status)?;
 
+    Ok(Json(progress))
+}
+
+/// Item 15: bulk progress rows for the library grid's progress badges.
+/// Reuses `db::get_all_reading_progress` verbatim (already used internally
+/// for the `last_read` sort above) — no new query, no `BookGridItem` model
+/// change. Only books with a progress row are included; the frontend treats
+/// absence as "no badge".
+async fn get_all_progress(
+    State(state): State<WebState>,
+) -> Result<Json<Vec<crate::models::ReadingProgress>>, (StatusCode, String)> {
+    let conn = state.conn().map_err(folio_status)?;
+    let progress = db::get_all_reading_progress(&conn).map_err(folio_status)?;
     Ok(Json(progress))
 }
 

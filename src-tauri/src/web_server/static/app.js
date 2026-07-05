@@ -172,6 +172,12 @@
   let lastSentIndex = {};     // bookId -> last chapter_index confirmed sent this session
   let saveChains = {};        // bookId -> promise tail; serializes PUTs per book (F9)
 
+  // Item 15: bookId -> chapter_index for every book with a saved progress
+  // row, populated once per library entry (loadBooks) from the bulk
+  // `/api/reading-progress` endpoint and reused across infinite-scroll pages
+  // — bookCardHtml reads it directly, so appended pages get badges for free.
+  let progressByBook = new Map();
+
   // Item 10 / Finding 7: dismissible, aria-live toast for surfacing fetch
   // failures that would otherwise render as a silent empty view. A single
   // shared container stacks multiple toasts; each auto-dismisses after 6s or
@@ -1107,6 +1113,30 @@
     libraryScrollObserver.observe(sentinel);
   }
 
+  // Item 15: best-effort bulk progress fetch — a failure or slow response
+  // must never block or break the grid, it just renders without badges (same
+  // resilience pattern as the shelves' fetchShelfBooks). Guarded by `gen` so
+  // a slow fetch from a superseded loadBooks() call can't clobber a newer
+  // one's progressByBook map.
+  async function refreshProgressByBook(gen) {
+    let rows = [];
+    try {
+      const resp = await api("/api/reading-progress");
+      if (resp && resp.ok) rows = await resp.json();
+    } catch (e) {
+      rows = []; // best-effort — cards just render without bars
+    }
+    if (gen !== libraryRenderGen) return;
+    progressByBook = new Map(rows.map(p => [p.book_id, p.chapter_index]));
+    // F8: a book read this tab this session has fresher progress than
+    // whatever the bulk fetch (possibly in flight before the read) returned
+    // — prefer it unconditionally, same "this tab wins" rule showDetail's
+    // mergeProgress applies.
+    for (const id in lastKnownProgress) {
+      progressByBook.set(id, lastKnownProgress[id].chapterIndex);
+    }
+  }
+
   async function loadBooks(query) {
     // Item 5: captured once, checked after every await below — see the
     // libraryRenderGen declaration for why.
@@ -1114,6 +1144,12 @@
     // Item 14: every loadBooks() call is a fresh library entry (filter/sort/
     // search change, or a plain re-render) — always starts back at page 0.
     resetLibraryPagination();
+
+    // Item 15: kicked off in parallel with the books fetch below and awaited
+    // just before the first render — skeletons already cover the wait, so
+    // paint once with badges rather than painting bar-less cards and
+    // repainting when progress arrives (avoids a layout shift).
+    const progressPromise = refreshProgressByBook(gen);
 
     let url;
     let paginated = false;
@@ -1170,6 +1206,12 @@
       libraryPageOffset = books.length;
       libraryPagesLoaded = 1;
     }
+
+    // Item 15: every render path below (filtered grid, plain grid, shelves)
+    // goes through bookCardHtml, which reads progressByBook — wait for it
+    // here so the very first paint already has badges.
+    await progressPromise;
+    if (gen !== libraryRenderGen) return;
 
     // Finding C: an empty result for an active collection/series filter is
     // ambiguous — genuinely empty, or the filtered entity no longer exists?
@@ -1279,7 +1321,13 @@
     showToast(message || "Couldn't reach Folio server");
   }
 
+  // Item 15: same `.shelf-progress`/`.shelf-progress-fill` bar the shelf
+  // cards use — no new visual language. Absent from `progressByBook` means
+  // no progress row exists, so no bar at all (not even at 0%).
   function bookCardHtml(b) {
+    const chapterIndex = progressByBook.get(b.id);
+    const bar = chapterIndex === undefined ? "" : `
+        <div class="shelf-progress"><div class="shelf-progress-fill" style="width:${progressPercent(chapterIndex, b.total_chapters)}%"></div></div>`;
     return `
       <div class="card" data-id="${b.id}" tabindex="0" role="button" aria-label="${esc(`Open ${b.title}`)}">
         <img src="/api/books/${b.id}/cover?size=thumb" alt="" loading="lazy" data-cover-title="${esc(b.title)}">
@@ -1287,7 +1335,7 @@
           <div class="title" title="${esc(b.title)}">${esc(b.title)}</div>
           <div class="author">${esc(b.author)}</div>
           <div class="format">${b.format}</div>
-        </div>
+        </div>${bar}
       </div>`;
   }
 
