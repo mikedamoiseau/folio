@@ -264,6 +264,27 @@ pub fn extract_tag_text<'a>(xml: &'a str, tag: &str) -> Option<&'a str> {
     Some(content[..end].trim())
 }
 
+/// Decode XML/HTML character entities (`&lt;`, `&gt;`, `&amp;`, `&quot;`,
+/// numeric `&#..;`, …) in extracted metadata text. ComicInfo `<Summary>` and
+/// OPF `<dc:*>` values are frequently entity-encoded at the source; without
+/// this the raw `&gt;`/`&amp;` survive into the DB and render literally in
+/// both the desktop and web UIs. Falls back to the original string if the
+/// input isn't well-formed (e.g. a stray unescaped `&`), so decoding can
+/// never drop or mangle a value — worst case it is left exactly as today.
+fn decode_entities(s: &str) -> String {
+    quick_xml::escape::unescape(s)
+        .map(|cow| cow.into_owned())
+        .unwrap_or_else(|_| s.to_string())
+}
+
+/// Like [`extract_tag_text`] but decodes character entities in the result.
+/// Use for human-readable free-text fields (title, description, summary,
+/// series, publisher, …); numeric/identifier fields (Year, Volume,
+/// LanguageISO) should keep using the raw [`extract_tag_text`].
+pub fn extract_tag_text_decoded(xml: &str, tag: &str) -> Option<String> {
+    extract_tag_text(xml, tag).map(decode_entities)
+}
+
 /// Extract all occurrences of a tag's text content.
 fn extract_all_tag_texts(xml: &str, tag: &str) -> Vec<String> {
     let open = format!("<{tag}");
@@ -451,15 +472,15 @@ pub fn parse_epub_metadata_from_archive(
     let opf_path = find_opf_path(archive)?;
     let opf = read_zip_entry(archive, &opf_path)?;
 
-    let title = extract_tag_text(&opf, "dc:title")
-        .or_else(|| extract_tag_text(&opf, "title"))
-        .unwrap_or("Unknown Title")
-        .to_string();
+    let title = extract_tag_text_decoded(&opf, "dc:title")
+        .or_else(|| extract_tag_text_decoded(&opf, "title"))
+        .unwrap_or_else(|| "Unknown Title".to_string());
 
     let author = extract_all_tag_texts(&opf, "dc:creator")
         .into_iter()
         .next()
-        .or_else(|| extract_tag_text(&opf, "creator").map(|s| s.to_string()))
+        .map(|s| decode_entities(&s))
+        .or_else(|| extract_tag_text_decoded(&opf, "creator"))
         .unwrap_or_else(|| "Unknown Author".to_string());
 
     let language = extract_tag_text(&opf, "dc:language")
@@ -467,9 +488,8 @@ pub fn parse_epub_metadata_from_archive(
         .unwrap_or("en")
         .to_string();
 
-    let description = extract_tag_text(&opf, "dc:description")
-        .or_else(|| extract_tag_text(&opf, "description"))
-        .map(|s| s.to_string());
+    let description = extract_tag_text_decoded(&opf, "dc:description")
+        .or_else(|| extract_tag_text_decoded(&opf, "description"));
 
     let isbn = extract_all_tag_texts(&opf, "dc:identifier")
         .iter()
@@ -1474,6 +1494,38 @@ mod tests {
     fn test_extract_tag_text() {
         let xml = "<dc:title>My Book Title</dc:title>";
         assert_eq!(extract_tag_text(xml, "dc:title"), Some("My Book Title"));
+    }
+
+    #[test]
+    fn test_extract_tag_text_decoded_decodes_entities() {
+        // The reported bug: an entity-encoded ComicInfo Summary rendered its
+        // `&gt;`/`&lt;`/`&amp;` literally. Extraction must decode them.
+        let xml = "<Summary>&gt;La Compagnie&lt; A &amp; B &#39;q&#39;</Summary>";
+        assert_eq!(
+            extract_tag_text_decoded(xml, "Summary").as_deref(),
+            Some(">La Compagnie< A & B 'q'")
+        );
+    }
+
+    #[test]
+    fn test_extract_tag_text_decoded_plain_text_unchanged() {
+        // Safety: a description with no entities must be byte-for-byte unchanged.
+        let xml = "<Summary>Une dark fantasy implacable, sans entités.</Summary>";
+        assert_eq!(
+            extract_tag_text_decoded(xml, "Summary").as_deref(),
+            Some("Une dark fantasy implacable, sans entités.")
+        );
+    }
+
+    #[test]
+    fn test_extract_tag_text_decoded_malformed_falls_back_to_raw() {
+        // Safety: a stray unescaped `&` isn't well-formed; decoding must fall
+        // back to the original text rather than drop or mangle the value.
+        let xml = "<Summary>Rock & Roll</Summary>";
+        assert_eq!(
+            extract_tag_text_decoded(xml, "Summary").as_deref(),
+            Some("Rock & Roll")
+        );
     }
 
     #[test]
