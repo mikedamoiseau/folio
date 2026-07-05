@@ -474,3 +474,105 @@ Decisions taken autonomously, for later review:
 
 ## Item 13 (added 2026-07-05)
 31. **iOS install** (`Item 13`): added `apple-touch-icon` (reusing `/icon-192.png` — iOS upscales; no dedicated 180px asset, avoids a new static route + carve-out + binary-asset churn), `apple-mobile-web-app-capable`, `apple-mobile-web-app-status-bar-style=default`, plus the standardized `mobile-web-app-capable`. iOS relies on these Apple tags rather than `manifest.json` for the home-screen icon and standalone launch. Every `index.html` shell-asset edit forces a `CACHE_VERSION` content-hash bump (CI-enforced); the CSP-pinned inline theme script was left byte-identical. **Known accepted tradeoff:** `status-bar-style=default` gives a light status bar even in dark mode (consistent with the already-static light `theme-color`); `black-translucent` + a painted safe-area would fix it but wasn't worth the complexity. Add-to-Home-Screen works over the plain-HTTP LAN URL; service-worker offline still does not (secure-context requirement, unchanged from Item 9).
+
+---
+
+## Second batch (added 2026-07-05)
+
+Four candidates were proposed; **two were already shipped** by earlier items and are NOT re-implemented:
+
+- ~~Library search / filter / sort~~ — already done in **Item 7** (server-side `/api/books?q=&series=&sort=`, URL-state hash routing, 300ms-debounced search, filter dropdowns + chips).
+- ~~Loading skeletons~~ — already done in **Item 10** (`skeletonGridHtml`/`detailSkeletonHtml`/`readerSkeletonHtml`, shimmer keyframe, `prefers-reduced-motion` off-switch).
+
+The two genuinely-missing items follow.
+
+---
+
+## Item 14 — Paginate the library grid (infinite scroll)
+
+**Priority: high. Medium size. Backend + frontend. Independent of Item 15 but they share the grid render path — coordinate if built concurrently.**
+
+### Current behavior (the bug)
+
+`list_books` (`api.rs:300`) calls `db::list_books_grid(&conn)` which loads **every** book row, then filters (`series`, `q`) and sorts **in memory**, and returns the entire `Vec<BookGridItem>` as a bare JSON array. The frontend `loadBooks` (`app.js`) fetches the whole list in one request and renders every card. On a ~2000-book library this is the documented ~8s stall (Process note 24). The home/shelves view is **also** affected: even when it renders shelves, `loadBooks` still fetches the full list (it derives the "Recently Added" shelf client-side by re-sorting the full `books` array — see Finding H comment).
+
+### Decisions (locked)
+
+- **UX pattern: infinite scroll.** Auto-load the next page when the user scrolls near the bottom, via an `IntersectionObserver` sentinel appended after the grid. No "load more" button, no numbered pager. (User choice.)
+- **Backend contract stays backward-compatible.** `/api/books` gains **optional** `limit` + `offset` query params. When `limit` is **absent**, behavior is unchanged (returns everything) so OPDS / desktop / any other consumer is untouched. Pagination is applied **after** the existing in-memory filter+sort pipeline so filtering/sorting semantics are byte-identical to today — only a slice is returned.
+- **Total count via response header, not a body-shape change.** Return the post-filter total in an `X-Total-Count` response header and keep the body a bare `Vec<BookGridItem>`. This avoids a `{items, total}` wrapper that would break the existing array-shaped contract and every current caller. Frontend reads the header to know when to stop.
+- **Page size: 60.** One decision point; revisit only if profiling says otherwise. Frontend always sends `limit=60`.
+- **Collections endpoint is out of scope.** `/api/collections/{id}/books` stays unpaginated — collections are small and the 8s case is the all-books grid. Document this.
+- **Shelves view keeps its own data sources.** On the unfiltered home view, do **not** fetch the full list to build shelves. "Continue Reading" already has its dedicated `/api/books/continue-reading?limit=12` endpoint. "Recently Added" must switch to a bounded fetch (`/api/books?sort=date_added&limit=12&offset=0`) instead of client-side re-sorting the full array. The paginated infinite-scroll "All Books" grid renders below the shelves and drives further page loads.
+
+### Scope
+
+1. **Backend (`api.rs` `list_books` + `ListBooksParams`):** add `limit: Option<usize>`, `offset: Option<usize>`. After the sort step, if `limit` is `Some`, compute `total = books.len()`, slice `books[offset.min(len)..(offset+limit).min(len)]`, and attach `X-Total-Count: {total}` to the response. Use `axum`'s response-header mechanism (return `impl IntoResponse` / `([(header, value)], Json(slice))`). When `limit` is `None`, return the full `Json(books)` exactly as today (no header required, but harmless to include). Guard against `offset` past the end (empty slice, not a panic).
+2. **Frontend (`app.js`):**
+   - Add module-scoped pagination state: `libraryPageOffset`, `libraryTotal`, `libraryLoadingPage` (re-entrancy guard), and the current fetch's `libraryRenderGen` already exists — reuse it to abandon stale page loads.
+   - `loadBooks` fetches page 0 (`limit=60&offset=0`), reads `X-Total-Count`, renders the first page, and if more remain appends an IntersectionObserver **sentinel** element after the grid.
+   - A `loadNextPage()` appends the next 60 cards (reuse `bookCardHtml` + `bindGridCardHandlers` on only the new nodes — do **not** re-bind the whole grid), advances `libraryPageOffset`, and removes the sentinel when `offset >= total`.
+   - Any filter/sort/search change (every `showLibrary` re-entry) resets pagination to page 0 (offset 0, disconnect the old observer).
+   - The client-side search-within-collection path and the series/collection filtered paths funnel through the same paginated grid.
+3. **Scroll restoration interaction (Item 10):** returning from a book detail/reader currently restores the saved scroll offset. With infinite scroll, a deep offset requires the intervening pages to exist. Restore by **replaying pages**: persist the number of pages that were loaded alongside the scroll offset (extend `libraryScrollKey` payload), and on return re-fetch that many pages *before* restoring `scrollTop`. Bounded and correct. If replay fails (fewer results now), clamp to the max available scroll.
+
+### TDD (backend, red→green in `mod.rs` integration tests)
+
+- `list_books` with `limit=2&offset=0` returns 2 items **and** an `X-Total-Count` header equal to the full filtered count.
+- `offset` past the end returns an empty array + correct total (no 500).
+- `limit` absent returns the full list and is byte-identical to the pre-change response (guard the backward-compat contract).
+- `limit` composes with `q=`/`series=`/`sort=` — the total reflects the **filtered** set, not the whole table, and the slice is taken after sort (page 0 of `sort=title` starts at "A…").
+
+### Acceptance criteria
+
+- Home and filtered grids issue a first request capped at 60 items; scrolling loads more seamlessly; the ~8s first-paint stall on a large library is gone.
+- No duplicate/skipped cards across page boundaries; rapid filter changes never interleave a stale page into a newer grid (render-gen guard).
+- Back-from-book restores scroll position on a multi-page grid.
+- OPDS and any non-paginating caller of `/api/books` are unaffected (no `limit` sent → full list).
+
+---
+
+## Item 15 — Reading-progress badge on library grid cards
+
+**Priority: medium. Small–medium. Backend (one bulk endpoint) + frontend. Shares the grid card + Item 14's page-append path.**
+
+### Current behavior
+
+`bookCardHtml` (`app.js:1036`) renders cover + title + author + format only. **Shelf** cards already show a progress bar — `shelfCardHtml` emits `<div class="shelf-progress"><div class="shelf-progress-fill" style="width:${progressPercent(chapter_index, total_chapters)}%">` (CSS at `app.css:150`), fed by the `continue-reading` payload which carries `chapter_index`. Grid cards have no equivalent because `BookGridItem` carries no progress.
+
+### Decisions (locked)
+
+- **Bulk progress endpoint, not a model change.** Add `GET /api/reading-progress` returning all progress rows the web session can see (`Vec<ReadingProgress>` — `book_id`, `chapter_index`, `scroll_position`, `last_read_at`). Do **not** add a progress field to `BookGridItem`: it is a shared `folio-core` model consumed by the desktop `get_library` path, and widening it ripples outside the web surface (per the "grep consumers before schema changes" rule). The web frontend fetches progress once and merges it onto cards client-side. `db::get_all_reading_progress` already exists for the `last_read` sort but returns only `book_id → last_read_at`; either add a `db::list_all_reading_progress() -> Vec<ReadingProgress>` or reuse an existing full-row query — grep `db.rs` first.
+- **Reuse the shelf visual + helper verbatim.** Grid badge = the same thin `--accent` fill bar (`shelf-progress`/`shelf-progress-fill` style) and the same `progressPercent(chapter_index, total_chapters)` helper. Consistency with shelves, zero new visual language.
+- **Percent semantics mirror the shelf/desktop convention.** `progressPercent` already clamps; `chapter_index` doubles as page index for page-based formats (see Decision-log 8). No new math.
+- **No badge when there's no progress.** Books with no progress row render exactly as today (no bar). A "finished" book (100%) shows a full bar — no separate checkmark/state in v1 (log it as a deliberate omission).
+- **Bulk fetch is best-effort.** A failed `/api/reading-progress` fetch must never block or error the grid — cards just render without bars (same resilience pattern as the shelves' best-effort fetch, Finding F).
+
+### Scope
+
+1. **Backend:** `GET /api/reading-progress` handler in `api.rs`, registered in `routes()`, PIN-gated like the other `/api/books*` reads (it is not a public shell asset). Returns `Json(Vec<ReadingProgress>)`. Add the `db.rs` query if a full-row variant doesn't already exist.
+2. **Frontend (`app.js`):**
+   - Fetch `/api/reading-progress` once per library entry (best-effort, cached in a module-scoped `Map<book_id, chapter_index>` — call it `progressByBook`). Reuse it across pages.
+   - Extend `bookCardHtml` to emit the `shelf-progress` bar when `progressByBook` has an entry for the book (needs `total_chapters`, already on `BookGridItem`). Because the card HTML is a pure template, the map must be populated **before** the grid renders — fetch progress in `loadBooks` alongside the first page (can run in parallel with the page-0 fetch; render once both resolve, or render grid immediately and paint bars when progress arrives — pick the simpler that doesn't cause layout shift; prefer awaiting both before first paint since skeletons already cover the wait).
+   - Item 14 interaction: appended pages (`loadNextPage`) must also read `progressByBook` so later cards get bars too. Since the map is module-scoped and populated once, appended `bookCardHtml` calls just work.
+3. **Optimistic sync:** the reader already tracks per-book local progress (`F8` note — "last progress this tab knows about per book"). On returning to the library, prefer the locally-known progress over the fetched map for that book so a just-read book shows fresh progress without a round-trip. Merge local into `progressByBook` before render.
+
+### TDD
+
+- **Backend (red→green, `mod.rs`):** `GET /api/reading-progress` returns rows for books that have progress and is empty for a fresh DB; is PIN-gated (401 without session when auth is on); shape matches `ReadingProgress`.
+- **Frontend (Playwright acceptance, scratchpad — not committed):** a book with saved progress shows a `.shelf-progress` bar on its grid card with width matching `chapter_index/total_chapters`; a book with none shows no bar; a book read this session reflects fresh progress on return without reload.
+
+### Acceptance criteria
+
+- Grid cards for in-progress books show the same accent progress bar as shelf cards; untouched books show none.
+- Works on infinitely-scrolled pages (Item 14), not just the first page.
+- Progress fetch failure degrades to bar-less cards, never a broken grid.
+
+---
+
+## Suggested delegation batches (second batch)
+
+| Order | Item(s) | Rationale |
+|-------|---------|-----------|
+| 1 | **14** (pagination) | Structural; reshapes `loadBooks`/grid append path that Item 15 decorates. Land first. |
+| 2 | **15** (progress badges) | Builds on 14's page-append path; small once 14's grid plumbing exists. |
