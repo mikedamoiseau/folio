@@ -383,6 +383,33 @@ Integration tests in mod.rs first (red→green), with a synthetic large cover fi
 
 ---
 
+## Item 12 — Animated page turns on swipe (mobile)
+
+**Priority: medium (UX delight). Added 2026-07-05. Depends on Items 2+3 (reader touch handling) being merged.**
+
+### Current behavior
+Swiping left/right in the page-image reader (Item 3) turns the page instantly: `img.src` swaps with no motion. The desktop app never hard-cuts — its panels/modals all use `slide-in-left`/`slide-in-right` keyframes (`src/index.css` lines 98-106: `translateX(±100%) + opacity`, `0.22s cubic-bezier(0.22, 1, 0.36, 1)`). The web reader should speak the same motion language.
+
+### Scope
+1. **Drag-follow during swipe (touch only):** while the finger is down and moving horizontally, the current page translates with the finger (`transform: translateX(dx)`, no transition, `will-change: transform`). Vertical-dominant gestures (scrolling a fit-width page) must NOT trigger drag-follow — use an axis lock (first ~10px decides). Release past the existing ~50px threshold commits the turn; below it, the page animates back to `translateX(0)` (spring-ish: same 0.22s cubic-bezier).
+2. **Commit animation:** on a committed turn — from swipe, click zones, arrow keys, or slider is OPTIONAL (slider jumps stay instant) — the incoming page slides in from the right (next) or left (prev) using the app's exact timing: `0.22s cubic-bezier(0.22, 1, 0.36, 1)`, transform + opacity like the desktop keyframes. Implementation freedom: two stacked `<img>` elements (current + incoming) or a single element re-triggering a CSS animation class; pick the simplest that avoids layout shift and works with fit-height/fit-width.
+3. **Preload interaction:** the slide must not present a blank/broken incoming page. If the target page image is already loaded (preload cache from Item 3) animate immediately; otherwise show the existing loading state and skip the animation (hard cut once loaded is fine — never animate an unloaded image in).
+4. **Chapter mode (EPUB/MOBI):** apply the same slide-in on chapter transitions (content container, not per-image). Cheap — one animation class on the freshly rendered stage.
+5. **Reduced motion:** `prefers-reduced-motion` disables drag-follow translation feedback AND commit animations entirely (instant swap, current behavior).
+6. **No regressions:** page-turn latency for keyboard users must not increase (animation runs on the incoming render, never blocks input); rapid turns (key-repeat) must not queue/stack animations — interrupt cleanly (cancel running animation, jump to final state, start the new one).
+
+### Files
+`static/app.js` (touch handlers, turn pipeline in the reader), `static/app.css` (keyframes mirroring `src/index.css` values, will-change, reduced-motion block). No Rust changes. `sw.js` CACHE_VERSION hash must be regenerated (CI test enforces).
+
+### Acceptance criteria
+- Playwright (touch-emulated 390px): drag 100px left → committed turn, page indicator advances; drag 30px → snap back, same page. Axis lock: vertical drag on a fit-width page scrolls, doesn't turn.
+- Committed turn shows a translateX transition on the incoming element (assert computed transform/animation mid-flight, or animationstart event fired).
+- Rapid ArrowRight ×5: final page correct, no stuck mid-animation state (assert final transform is identity/none).
+- `prefers-reduced-motion`: no animation events fire on turn.
+- All existing regression scripts stay green (reader scripts especially: verify-item23*, verify-item910*).
+
+---
+
 ## Suggested delegation batches
 
 | Batch | Items | Rationale |
