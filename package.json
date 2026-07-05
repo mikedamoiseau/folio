@@ -11,7 +11,7 @@
     "type-check": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:e2e": "playwright test -c e2e/playwright.config.ts"
+    "test:e2e": "playwright test"
   },
   "dependencies": {
     "@fontsource-variable/dm-sans": "^5.2.8",
