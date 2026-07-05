@@ -1641,6 +1641,18 @@
       scrollPosition: mode === "chapter" ? (scrollPosition || 0) : 0,
       pendingScrollRestore: mode === "chapter" ? (scrollPosition || 0) : 0,
       suppressNextSave: true,
+      // Item 12: page-turn animation bookkeeping. `lastRenderedPageIndex`/
+      // `lastRenderedChapterIndex` start undefined so the very first render
+      // of a fresh entry never animates (no previous page to slide from).
+      // `preloadCache` (page mode only) tracks which neighbor images have
+      // actually finished loading, keyed by index — an animation only ever
+      // plays for an index already in this cache (see getPreloadedImage()).
+      preloadCache: {},
+      lastRenderedPageIndex: undefined,
+      lastRenderedChapterIndex: undefined,
+      chapterAnimToken: 0,
+      turnAnimCleanup: null,
+      pendingInstantTurn: false,
     };
     readerState.handlers = makeReaderHandlers(id);
     renderReaderChrome();
@@ -1703,13 +1715,17 @@
     };
   }
 
-  function gotoReaderIndex(newIndex) {
+  // Item 12: `opts.instant` marks this turn as one that must never animate
+  // (the slider) — consumed once by renderPageTurn()/the chapter-mode
+  // animation branch on the render this navigation produces.
+  function gotoReaderIndex(newIndex, opts) {
     if (!readerState || newIndex < 0 || newIndex >= readerState.count) return;
     // R1-adjacent: update in-memory state synchronously so rapid successive
     // calls (e.g. holding/repeating ArrowRight) each see the just-updated
     // index rather than all reading the same stale value before the
     // asynchronous `hashchange` round-trip catches up.
     readerState.index = newIndex;
+    readerState.pendingInstantTurn = !!(opts && opts.instant);
     navigate("#/book/" + readerState.id + "/" + newIndex + "/read");
   }
 
@@ -1739,33 +1755,114 @@
     });
   }
 
-  // Horizontal swipe (~50px threshold) = prev/next on touch devices.
+  function reducedMotionEnabled() {
+    return !!(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches);
+  }
+
+  // Item 12: clear any drag-follow transform left on the (page-mode)
+  // current image — used both when a drag commits (the incoming overlay's
+  // slide-in animation takes over immediately, so the reset is instant, no
+  // transition) and by finalizeTurnAnimation's cleanup.
+  function resetDragStyles(img) {
+    if (!img) return;
+    img.style.transition = "";
+    img.style.transform = "";
+    img.style.willChange = "";
+  }
+
+  // Item 12: below-threshold release — animate the dragged image back to
+  // translateX(0) with the same timing as a committed turn, then clean up.
+  function snapBackDrag(img) {
+    if (!img || !img.style.transform) {
+      resetDragStyles(img);
+      return;
+    }
+    img.style.transition = "transform var(--dur-page-turn) var(--ease-page-turn)";
+    requestAnimationFrame(() => { img.style.transform = "translateX(0)"; });
+    img.addEventListener("transitionend", function onEnd() {
+      img.removeEventListener("transitionend", onEnd);
+      resetDragStyles(img);
+    });
+  }
+
+  // Item 3/12: horizontal swipe (~50px threshold) = prev/next on touch
+  // devices. Item 12 adds: axis lock (first ~10px of movement decides
+  // horizontal-vs-vertical, so a fit-width vertical scroll is never
+  // hijacked), drag-follow (the current page translates with the finger
+  // while locked horizontal), and a snap-back animation below the commit
+  // threshold. A bare touchstart+touchend with no intervening touchmove
+  // (older callers/tests) falls through to the original single-shot delta
+  // check unchanged.
+  const SWIPE_COMMIT_PX = 50;
+  const AXIS_LOCK_PX = 10;
   function bindSwipe(el) {
-    let startX = 0, startY = 0, tracking = false;
+    let startX = 0, startY = 0, tracking = false, axisLock = null;
+
     el.addEventListener("touchstart", (e) => {
       if (e.touches.length !== 1) return;
       startX = e.touches[0].clientX;
       startY = e.touches[0].clientY;
       tracking = true;
+      axisLock = null;
     }, { passive: true });
+
+    // Registered non-passive so a horizontally-locked drag can
+    // preventDefault() to stop the page from also being scrolled/selected —
+    // but that call only happens once locked horizontal; a vertical drag
+    // returns immediately and never blocks the native scroll gesture.
+    el.addEventListener("touchmove", (e) => {
+      if (!tracking || e.touches.length !== 1) return;
+      const dx = e.touches[0].clientX - startX;
+      const dy = e.touches[0].clientY - startY;
+      if (axisLock === null) {
+        if (Math.abs(dx) < AXIS_LOCK_PX && Math.abs(dy) < AXIS_LOCK_PX) return;
+        axisLock = Math.abs(dx) > Math.abs(dy) ? "x" : "y";
+      }
+      if (axisLock !== "x") return;
+      e.preventDefault();
+      if (reducedMotionEnabled()) return; // gesture still recognized, no visual feedback
+      const img = $("#page-img");
+      if (img) {
+        img.style.willChange = "transform";
+        img.style.transform = `translateX(${dx}px)`;
+      }
+    }, { passive: false });
+
     el.addEventListener("touchend", (e) => {
       if (!tracking) return;
       tracking = false;
       const t = e.changedTouches[0];
       const dx = t.clientX - startX;
       const dy = t.clientY - startY;
-      if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy)) {
-        if (dx < 0) readerState.handlers.next();
-        else readerState.handlers.prev();
+      const img = $("#page-img");
+
+      if (axisLock === "x") {
+        if (Math.abs(dx) > SWIPE_COMMIT_PX) {
+          resetDragStyles(img); // instant — the commit slide-in covers the reset
+          if (dx < 0) readerState.handlers.next();
+          else readerState.handlers.prev();
+        } else {
+          snapBackDrag(img);
+        }
+      } else if (axisLock === null) {
+        // No touchmove observed (e.g. a synthetic touchstart+touchend with
+        // nothing in between) — same check the pre-Item-12 code always did.
+        if (Math.abs(dx) > SWIPE_COMMIT_PX && Math.abs(dx) > Math.abs(dy)) {
+          if (dx < 0) readerState.handlers.next();
+          else readerState.handlers.prev();
+        }
       }
+      axisLock = null;
     }, { passive: true });
   }
 
   function renderReaderChrome() {
     const { book, mode, count, index, fitMode } = readerState;
     const rootClass = mode === "page" ? `reader-page ${fitMode}` : "reader-chapter";
+    // Item 12: `page-img-incoming` is the animated overlay for a committed
+    // turn — hidden/inert until renderPageTurn() promotes it; see there.
     const stageInner = mode === "page"
-      ? `<img id="page-img" alt=""><div class="reader-page-error" id="page-error" hidden></div>`
+      ? `<img id="page-img" alt=""><img id="page-img-incoming" class="page-img-incoming" alt="" hidden><div class="reader-page-error" id="page-error" hidden></div>`
       : `<div class="content" id="reader-content"></div>`;
     const fitToggleBtn = mode === "page"
       ? `<button id="fit-toggle-btn">${fitMode === "fit-height" ? "Fit: Height" : "Fit: Width"}</button>`
@@ -1802,7 +1899,8 @@
       // K2: return focus to the document so shortcuts work immediately
       // after a slider drag, without waiting on isTypingTarget special-casing.
       e.target.blur();
-      gotoReaderIndex(parseInt(e.target.value, 10));
+      // Item 12: a slider jump stays instant — no slide-in.
+      gotoReaderIndex(parseInt(e.target.value, 10), { instant: true });
     });
     bindNavIcons();
 
@@ -1910,6 +2008,7 @@
       const html = await chResp.text();
       if (!readerState || readerState.renderGen !== gen) return;
       if (contentEl) contentEl.innerHTML = html;
+      renderChapterTurnAnimation(contentEl, index, isInitialRender);
       // K5: native Space/PageDown scrolling needs the scroll container focused.
       const stage = $("#reader-stage");
       if (stage) {
@@ -1931,14 +2030,7 @@
         });
       }
     } else {
-      const img = $("#page-img");
-      if (img) {
-        img.src = pageUrl(id, index);
-        img.alt = `Page ${index + 1} of ${count}`;
-      }
-      // Preload neighbors so turns feel instant; browser HTTP cache does the rest.
-      if (index + 1 < count) new Image().src = pageUrl(id, index + 1);
-      if (index - 1 >= 0) new Image().src = pageUrl(id, index - 1);
+      renderPageTurn(id, index, count);
     }
 
     // F2: a mere open (or resume/restart choice, which is also just an open)
@@ -1947,6 +2039,131 @@
     if (!isInitialRender) {
       scheduleProgressSave();
     }
+  }
+
+  // ── Item 12: page-turn / chapter-turn commit animation ─────────────────
+  // Page-turn semantics (index bookkeeping, saves, preload) are unchanged
+  // from Item 3/4 above — this section is a presentation layer on top: it
+  // decides whether a turn *shows* a slide-in and drives the two-stacked-img
+  // swap for page mode, or a single class toggle on `.content` for chapter
+  // mode.
+
+  // Keeps a handful of already-fetched neighbor images so a turn can tell
+  // "loaded, safe to animate in" from "not ready yet, hard cut" (point 3 of
+  // the spec: never animate an unloaded image). Keyed by index (not URL) so
+  // it can be pruned to a small window around the current page.
+  function preloadPage(id, index, count) {
+    if (index < 0 || index >= count || !readerState) return;
+    const cache = readerState.preloadCache;
+    if (cache[index]) return;
+    const img = new Image();
+    img.src = pageUrl(id, index);
+    cache[index] = img;
+  }
+
+  function getPreloadedImage(index) {
+    const cache = readerState && readerState.preloadCache;
+    const img = cache && cache[index];
+    return img && img.complete && img.naturalWidth > 0 ? img : null;
+  }
+
+  function prunePreloadCache(centerIndex) {
+    const cache = readerState && readerState.preloadCache;
+    if (!cache) return;
+    Object.keys(cache).forEach((k) => {
+      if (Math.abs(Number(k) - centerIndex) > 2) delete cache[k];
+    });
+  }
+
+  // Interrupt-safe: called at the start of every page turn so a rapid
+  // second turn never leaves the previous one's overlay/transform stuck
+  // mid-flight — it jumps straight to that turn's own end state first.
+  function finalizeTurnAnimation(img, incoming) {
+    if (readerState.turnAnimCleanup) {
+      const cleanup = readerState.turnAnimCleanup;
+      readerState.turnAnimCleanup = null;
+      cleanup();
+    } else if (incoming) {
+      incoming.hidden = true;
+      incoming.classList.remove("slide-in-left", "slide-in-right");
+      incoming.style.willChange = "";
+    }
+    resetDragStyles(img); // also clears any leftover drag-follow transform
+  }
+
+  function renderPageTurn(id, index, count) {
+    const img = $("#page-img");
+    const incoming = $("#page-img-incoming");
+    if (!img) return;
+    finalizeTurnAnimation(img, incoming);
+
+    const prevIndex = readerState.lastRenderedPageIndex;
+    const direction = typeof prevIndex === "number" && index !== prevIndex
+      ? (index > prevIndex ? "next" : "prev")
+      : null;
+    const forceInstant = !!readerState.pendingInstantTurn;
+    readerState.pendingInstantTurn = false;
+    readerState.lastRenderedPageIndex = index;
+
+    const url = pageUrl(id, index);
+    const alt = `Page ${index + 1} of ${count}`;
+    const cached = !forceInstant && direction && !reducedMotionEnabled() ? getPreloadedImage(index) : null;
+
+    if (cached && incoming) {
+      incoming.src = url; // already loaded — paints immediately, no flash
+      incoming.alt = alt;
+      incoming.hidden = false;
+      incoming.classList.remove("slide-in-left", "slide-in-right");
+      void incoming.offsetWidth; // force reflow so re-adding the class restarts the animation
+      incoming.classList.add(direction === "next" ? "slide-in-right" : "slide-in-left");
+      const finish = () => {
+        img.src = url;
+        img.alt = alt;
+        incoming.hidden = true;
+        incoming.classList.remove("slide-in-left", "slide-in-right");
+        incoming.style.willChange = "";
+        incoming.removeEventListener("animationend", finish);
+        readerState.turnAnimCleanup = null;
+      };
+      incoming.addEventListener("animationend", finish);
+      readerState.turnAnimCleanup = finish;
+    } else {
+      img.src = url;
+      img.alt = alt;
+    }
+
+    // Preload neighbors so turns feel instant; browser HTTP cache does the
+    // rest, and a bounded window keeps this from growing unbounded over a
+    // long reading session in a large book.
+    preloadPage(id, index + 1, count);
+    preloadPage(id, index - 1, count);
+    prunePreloadCache(index);
+  }
+
+  // Chapter mode has no "unloaded" concern (the full HTML is already in
+  // hand by the time this runs) — just slide the freshly-rendered content
+  // in from the appropriate side. `token` guards against a rapid second
+  // chapter render's cleanup firing after a third one has already restarted
+  // the animation on the same (reused) `.content` element.
+  function renderChapterTurnAnimation(contentEl, index, isInitialRender) {
+    if (!contentEl || !readerState) return;
+    const prevIndex = readerState.lastRenderedChapterIndex;
+    readerState.lastRenderedChapterIndex = index;
+    const forceInstant = !!readerState.pendingInstantTurn;
+    readerState.pendingInstantTurn = false;
+    if (isInitialRender || forceInstant || reducedMotionEnabled()) return;
+    if (typeof prevIndex !== "number" || index === prevIndex) return;
+
+    const direction = index > prevIndex ? "next" : "prev";
+    contentEl.classList.remove("slide-in-left", "slide-in-right");
+    void contentEl.offsetWidth; // force reflow so re-adding the class restarts the animation
+    contentEl.classList.add(direction === "next" ? "slide-in-right" : "slide-in-left");
+    const token = (readerState.chapterAnimToken = (readerState.chapterAnimToken || 0) + 1);
+    contentEl.addEventListener("animationend", function onEnd() {
+      contentEl.removeEventListener("animationend", onEnd);
+      if (!readerState || readerState.chapterAnimToken !== token) return;
+      contentEl.classList.remove("slide-in-left", "slide-in-right");
+    });
   }
 
   // ── Item 4: reading progress sync ──────────────
