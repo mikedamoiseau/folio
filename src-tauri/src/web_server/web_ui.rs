@@ -53,8 +53,18 @@ pub fn routes() -> Router<WebState> {
         .route("/icon-512.png", get(serve_icon_512))
 }
 
-async fn index() -> Html<&'static str> {
-    Html(INDEX_HTML)
+async fn index() -> Response {
+    // no-cache so the entry document (and thus any shell-asset changes it
+    // pulls in) is revalidated on every load rather than held for an hour by
+    // the browser HTTP cache on the plain-HTTP LAN path (no service worker).
+    (
+        [
+            (header::CONTENT_TYPE, "text/html; charset=utf-8"),
+            (header::CACHE_CONTROL, "no-cache"),
+        ],
+        Html(INDEX_HTML),
+    )
+        .into_response()
 }
 
 async fn serve_js() -> Response {
@@ -64,7 +74,12 @@ async fn serve_js() -> Response {
                 header::CONTENT_TYPE,
                 "application/javascript; charset=utf-8",
             ),
-            (header::CACHE_CONTROL, "public, max-age=3600"),
+            // no-cache (revalidate each load), not max-age: the primary
+            // mobile use case is a plain-HTTP LAN URL where the service
+            // worker never registers, so a long max-age would hide UI updates
+            // for up to an hour. Matches sw.js. Assets are small; the SW still
+            // owns offline caching on secure contexts.
+            (header::CACHE_CONTROL, "no-cache"),
         ],
         APP_JS,
     )
@@ -75,7 +90,12 @@ async fn serve_css() -> Response {
     (
         [
             (header::CONTENT_TYPE, "text/css; charset=utf-8"),
-            (header::CACHE_CONTROL, "public, max-age=3600"),
+            // no-cache (revalidate each load), not max-age: the primary
+            // mobile use case is a plain-HTTP LAN URL where the service
+            // worker never registers, so a long max-age would hide UI updates
+            // for up to an hour. Matches sw.js. Assets are small; the SW still
+            // owns offline caching on secure contexts.
+            (header::CACHE_CONTROL, "no-cache"),
         ],
         APP_CSS,
     )
@@ -97,7 +117,12 @@ async fn serve_manifest() -> Response {
     (
         [
             (header::CONTENT_TYPE, "application/manifest+json"),
-            (header::CACHE_CONTROL, "public, max-age=3600"),
+            // no-cache (revalidate each load), not max-age: the primary
+            // mobile use case is a plain-HTTP LAN URL where the service
+            // worker never registers, so a long max-age would hide UI updates
+            // for up to an hour. Matches sw.js. Assets are small; the SW still
+            // owns offline caching on secure contexts.
+            (header::CACHE_CONTROL, "no-cache"),
         ],
         MANIFEST_JSON,
     )

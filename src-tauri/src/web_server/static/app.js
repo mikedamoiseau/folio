@@ -1770,8 +1770,7 @@
     app().innerHTML = `
       <div class="header">
         <button class="back-btn" id="back-btn" aria-label="Back">&larr;</button>
-        <h1>${esc(book.title)}</h1>
-        <span style="flex:1"></span>
+        <h1 class="nav-book-title">${esc(book.title)}</h1>
         ${navIconsHtml("")}
       </div>
       <div class="detail">
@@ -2327,8 +2326,7 @@
         <div class="reader-chrome-top">
           <div class="header">
             <button class="back-btn" id="back-btn" aria-label="Back">&larr;</button>
-            <h1>${esc(book.title)}</h1>
-            <span style="flex:1"></span>
+            <h1 class="nav-book-title">${esc(book.title)}</h1>
             ${navIconsHtml("")}
           </div>
         </div>

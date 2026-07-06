@@ -22,7 +22,7 @@
 // activates; app.js's registration call is feature-detected/try-catched so
 // this is silent, not an error. The manifest + icons still work for iOS
 // Safari "Add to Home Screen" over plain HTTP.
-const CACHE_VERSION = "folio-shell-ec8366268f67";
+const CACHE_VERSION = "folio-shell-43fdb4436a16";
 
 const SHELL_ASSETS = [
   "/",
