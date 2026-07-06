@@ -3,6 +3,14 @@
 All notable changes to this project will be documented in this file.
 This project adheres to [Semantic Versioning](https://semver.org/).
 
+## [2.6.1] - 2026-07-06
+
+A web-UI patch for mobile.
+
+### Fixed
+- **Long book titles on mobile.** The web reader and book-detail headers now wrap long titles across lines (instead of overflowing the header or being truncated) and use a smaller, understated title so the book's content leads. Navigation icons stay pinned right.
+- **LAN updates were hidden by HTTP caching.** Shell assets (`app.js`, `app.css`, `index.html`, `manifest.json`) are now served `Cache-Control: no-cache` (revalidate each load) instead of `max-age=3600`. On the plain-HTTP LAN URL the service worker never registers, so a long `max-age` could hide UI updates for up to an hour.
+
 ## [2.6.0] - 2026-07-05
 
 A web-UI release: the built-in browser reader (the LAN/remote surface on
