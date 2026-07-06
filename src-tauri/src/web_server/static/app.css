@@ -94,7 +94,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 
 /* ── Header ────────────────────────────────────── */
 .header { display: flex; align-items: center; padding: 12px var(--gap); border-bottom: 1px solid var(--warm-border); gap: 16px; position: sticky; top: 0; background: var(--paper); z-index: 10; }
-.header h1 { font-size: 1.3rem; color: var(--accent); white-space: nowrap; }
+.header h1 { font-size: 1.3rem; color: var(--accent); white-space: nowrap; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .header input[type="search"] { flex: 1; padding: 8px 12px; background: var(--surface); border: 1px solid var(--warm-border); border-radius: var(--radius); color: var(--ink); font-size: 0.95rem; }
 .header input[type="search"]::placeholder { color: var(--ink-muted); }
 .header .back-btn { background: none; border: none; color: var(--ink); font-size: 1.2rem; cursor: pointer; padding: 4px 8px; border-radius: var(--radius); }
