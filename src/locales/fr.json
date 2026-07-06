@@ -731,7 +731,11 @@
     "longestStreak": "Plus longue s\u00e9rie",
     "dayCount": "{{count}} jour",
     "daysCount": "{{count}} jours",
-    "last30Days": "30 derniers jours"
+    "last30Days": "30 derniers jours",
+    "last365Days": "365 derniers jours",
+    "heatmapAriaLabel": "Activité de lecture sur la dernière année",
+    "heatmapTooltip": "{{date}} — {{duration}}",
+    "heatmapTooltipEmpty": "{{date}} — Aucune lecture"
   },
 
   "shortcuts": {

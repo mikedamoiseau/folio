@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useTranslation } from "react-i18next";
 import { formatDuration } from "../lib/utils";
+import ReadingHeatmap from "./ReadingHeatmap";
 
 interface ReadingStatsData {
   totalReadingTimeSecs: number;
@@ -12,6 +13,7 @@ interface ReadingStatsData {
   currentStreakDays: number;
   longestStreakDays: number;
   dailyReading: [string, number][];
+  dailyReadingYear: [string, number][];
 }
 
 interface ReadingStatsProps {
@@ -98,6 +100,9 @@ export default function ReadingStats({ onClose }: ReadingStatsProps) {
                   </div>
                 </div>
               )}
+
+              {/* Year-long reading heatmap (F-5-4) */}
+              <ReadingHeatmap dailyReadingYear={stats.dailyReadingYear} />
             </div>
           )}
         </div>

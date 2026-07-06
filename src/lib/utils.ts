@@ -435,6 +435,125 @@ export function isValidHttpUrl(value: string): boolean {
   return url.protocol === "http:" || url.protocol === "https:";
 }
 
+/** Number of days shown by the reading heatmap (F-5-4): a rolling year. */
+export const HEATMAP_DAYS = 365;
+
+/**
+ * Minute thresholds separating the heatmap's intensity buckets 0 (no reading)
+ * through 4 (heaviest). Fixed/absolute rather than relative to the data's max
+ * so a cell's color has a stable meaning day to day, instead of shifting
+ * whenever the reader's best day changes (unlike the existing 30-day bar
+ * chart, which normalizes bar height against the period's max on purpose).
+ * Compared against exact fractional minutes — see {@link getHeatmapBucket}.
+ */
+export const HEATMAP_BUCKET_THRESHOLDS_MIN = [15, 30, 60] as const;
+
+/**
+ * Bucket a day's reading duration (in seconds) into an intensity level (0-4)
+ * for the heatmap. Takes seconds rather than pre-rounded minutes so that:
+ * - a day with a few seconds of reading (bucket 1) never collapses into the
+ *   same bucket as an untouched day (bucket 0), and
+ * - minutes just under a threshold (e.g. 14m31s) aren't rounded up into the
+ *   next bucket.
+ */
+export function getHeatmapBucket(seconds: number): number {
+  if (seconds <= 0) return 0;
+  const minutes = seconds / 60;
+  if (minutes < HEATMAP_BUCKET_THRESHOLDS_MIN[0]) return 1;
+  if (minutes < HEATMAP_BUCKET_THRESHOLDS_MIN[1]) return 2;
+  if (minutes < HEATMAP_BUCKET_THRESHOLDS_MIN[2]) return 3;
+  return 4;
+}
+
+/** Format a Date as a local "YYYY-MM-DD" key, matching the backend's
+ *  `date(started_at, 'unixepoch', 'localtime')` day strings. Avoids
+ *  `toISOString()`, which is UTC-based and can shift the date by a day. */
+export function toDateKey(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+export interface HeatmapDay {
+  date: string; // "YYYY-MM-DD", local
+  seconds: number;
+  bucket: number;
+  /** False for padding cells added to complete the first/last week — the
+   *  days before the 365-day window starts, or after `today`. */
+  inRange: boolean;
+}
+
+/**
+ * Build a GitHub-style contribution grid: one column per week, weeks ordered
+ * oldest (left) to current (right), each column holding exactly 7 days.
+ * Weeks start on Sunday, matching GitHub's default contribution graph.
+ *
+ * The 365-day window ends on `today` and is padded at both ends to complete
+ * whole weeks — those padding days carry `inRange: false` so callers can
+ * render them as blank instead of the lowest reading-intensity color.
+ */
+export function buildHeatmapWeeks(
+  dailyReadingSecs: [string, number][],
+  today: Date,
+): HeatmapDay[][] {
+  const secondsByDate = new Map(dailyReadingSecs);
+
+  const rangeStart = new Date(today);
+  rangeStart.setDate(rangeStart.getDate() - (HEATMAP_DAYS - 1));
+  const rangeStartKey = toDateKey(rangeStart);
+  const todayKey = toDateKey(today);
+
+  // Pad the start back to the beginning of its week (Sunday).
+  const gridStart = new Date(rangeStart);
+  gridStart.setDate(gridStart.getDate() - gridStart.getDay());
+
+  // Pad the end forward to the end of today's week (Saturday).
+  const gridEnd = new Date(today);
+  gridEnd.setDate(gridEnd.getDate() + (6 - gridEnd.getDay()));
+
+  const days: HeatmapDay[] = [];
+  for (
+    const cursor = new Date(gridStart);
+    cursor.getTime() <= gridEnd.getTime();
+    cursor.setDate(cursor.getDate() + 1)
+  ) {
+    const dateKey = toDateKey(cursor);
+    const seconds = secondsByDate.get(dateKey) ?? 0;
+    days.push({
+      date: dateKey,
+      seconds,
+      bucket: getHeatmapBucket(seconds),
+      inRange: dateKey >= rangeStartKey && dateKey <= todayKey,
+    });
+  }
+
+  const weeks: HeatmapDay[][] = [];
+  for (let i = 0; i < days.length; i += 7) {
+    weeks.push(days.slice(i, i + 7));
+  }
+  return weeks;
+}
+
+/**
+ * Month label (0-11) for each week column, placed on the week that contains
+ * the 1st of that month — mirrors GitHub's contribution graph header, which
+ * naturally spaces labels ~4-5 columns apart. `null` means no label for that
+ * column. Only considers in-range days: a padding cell landing on a 1st (the
+ * current week's future days, or days before the window starts) is invisible
+ * in the grid, so it must not claim a label.
+ */
+export function getHeatmapMonthLabels(weeks: HeatmapDay[][]): (number | null)[] {
+  return weeks.map((week) => {
+    for (const day of week) {
+      if (day.inRange && day.date.endsWith("-01")) {
+        return Number(day.date.slice(5, 7)) - 1;
+      }
+    }
+    return null;
+  });
+}
+
 /** The valid TCP port range Folio's web server accepts (non-privileged). */
 export const WEB_SERVER_PORT_MIN = 1024;
 export const WEB_SERVER_PORT_MAX = 65535;

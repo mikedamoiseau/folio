@@ -1372,6 +1372,7 @@ mod tests {
             current_streak_days: 3,
             longest_streak_days: 7,
             daily_reading: vec![("2026-05-01".to_string(), 1800)],
+            daily_reading_year: vec![("2026-05-01".to_string(), 1800)],
         };
         let json = serde_json::to_value(&stats).unwrap();
         assert_eq!(json["totalReadingTimeSecs"], 3600);

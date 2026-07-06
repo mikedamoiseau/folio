@@ -1471,6 +1471,7 @@ pub struct ReadingStats {
     pub current_streak_days: i64,
     pub longest_streak_days: i64,
     pub daily_reading: Vec<(String, i64)>, // (date_str, seconds)
+    pub daily_reading_year: Vec<(String, i64)>, // (date_str, seconds), last 365 days — for the heatmap (F-5-4)
 }
 
 pub fn get_reading_stats(conn: &Connection) -> Result<ReadingStats> {
@@ -1495,18 +1496,37 @@ pub fn get_reading_stats(conn: &Connection) -> Result<ReadingStats> {
         |row| row.get(0),
     )?;
 
-    // Daily reading for last 30 days
+    // Daily reading for the heatmap's rolling year window (F-5-4), grouped by
+    // local calendar day rather than a rolling timestamp cutoff — this
+    // matches the frontend grid, which covers exactly the last 365 local
+    // calendar dates (today-364 .. today). A rolling-timestamp cutoff would
+    // let the oldest day get partially summed or fall outside the grid.
     let mut stmt = conn.prepare(
         "SELECT date(started_at, 'unixepoch', 'localtime') as day, SUM(duration_secs)
          FROM reading_sessions
-         WHERE started_at > strftime('%s', 'now', '-30 days')
+         WHERE date(started_at, 'unixepoch', 'localtime') >= date('now', 'localtime', '-364 days')
          GROUP BY day ORDER BY day ASC",
     )?;
-    let daily_reading: Vec<(String, i64)> = stmt
+    let daily_reading_year: Vec<(String, i64)> = stmt
         .query_map([], |row| {
             Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
         })?
         .filter_map(|r| r.ok())
+        .collect();
+
+    // Daily reading for last 30 days (the existing bar chart), derived from
+    // the year series above rather than a second query so both use the same
+    // calendar-day cutoff logic and timezone source. This makes the 30-day
+    // series calendar-day (not rolling-timestamp) semantics, matching a
+    // chart labeled "last 30 days".
+    let thirty_day_cutoff: String =
+        conn.query_row("SELECT date('now', 'localtime', '-29 days')", [], |row| {
+            row.get(0)
+        })?;
+    let daily_reading: Vec<(String, i64)> = daily_reading_year
+        .iter()
+        .filter(|(day, _)| *day >= thirty_day_cutoff)
+        .cloned()
         .collect();
 
     // Calculate streaks from daily data
@@ -1562,6 +1582,7 @@ pub fn get_reading_stats(conn: &Connection) -> Result<ReadingStats> {
         current_streak_days: current_streak,
         longest_streak_days: longest_streak,
         daily_reading,
+        daily_reading_year,
     })
 }
 
@@ -2596,6 +2617,70 @@ mod tests {
         upsert_reading_progress(&conn, &updated).unwrap();
         let fetched2 = get_reading_progress(&conn, "book-2").unwrap().unwrap();
         assert_eq!(fetched2.chapter_index, 5);
+    }
+
+    // F-5-4: the heatmap needs a 365-day series distinct from the existing
+    // 30-day bar chart's `daily_reading` — a session 40 days old should show
+    // up in `daily_reading_year` but not `daily_reading`, and a session
+    // older than 365 days should be excluded from both. Both series use a
+    // local-calendar-day window (not a rolling timestamp cutoff), so a
+    // session exactly 364 days ago (by local date) is included in full and
+    // one 365+ days ago is excluded.
+    #[test]
+    fn test_get_reading_stats_daily_reading_year_window() {
+        let (_dir, conn) = setup();
+        let book = sample_book("book-3");
+        insert_book(&conn, &book).unwrap();
+
+        let now = chrono::Local::now().timestamp();
+        let day_secs = 86_400;
+        insert_reading_session(&conn, "s-recent", "book-3", now - day_secs, 600, 1).unwrap();
+        insert_reading_session(&conn, "s-40d", "book-3", now - 40 * day_secs, 900, 1).unwrap();
+        insert_reading_session(&conn, "s-400d", "book-3", now - 400 * day_secs, 1200, 1).unwrap();
+
+        // Calendar-window edge: exactly 364 days ago (included), one day
+        // further back at 365 days ago (excluded). Built from local calendar
+        // dates at noon (not `now` minus a day count) so the test is
+        // independent of what time of day it happens to run.
+        let today = chrono::Local::now().date_naive();
+        let local_noon_timestamp = |date: chrono::NaiveDate| -> i64 {
+            date.and_hms_opt(12, 0, 0)
+                .unwrap()
+                .and_local_timezone(chrono::Local)
+                .unwrap()
+                .timestamp()
+        };
+        let day_364_ago = local_noon_timestamp(today - chrono::Duration::days(364));
+        let day_365_ago = local_noon_timestamp(today - chrono::Duration::days(365));
+        insert_reading_session(&conn, "s-364d", "book-3", day_364_ago, 300, 1).unwrap();
+        insert_reading_session(&conn, "s-365d", "book-3", day_365_ago, 450, 1).unwrap();
+
+        let stats = get_reading_stats(&conn).unwrap();
+
+        assert!(stats.daily_reading.iter().any(|(_, secs)| *secs == 600));
+        assert!(!stats.daily_reading.iter().any(|(_, secs)| *secs == 900));
+        assert!(!stats.daily_reading.iter().any(|(_, secs)| *secs == 1200));
+
+        assert!(stats
+            .daily_reading_year
+            .iter()
+            .any(|(_, secs)| *secs == 600));
+        assert!(stats
+            .daily_reading_year
+            .iter()
+            .any(|(_, secs)| *secs == 900));
+        assert!(!stats
+            .daily_reading_year
+            .iter()
+            .any(|(_, secs)| *secs == 1200));
+        assert!(stats
+            .daily_reading_year
+            .iter()
+            .any(|(_, secs)| *secs == 300));
+        assert!(!stats
+            .daily_reading_year
+            .iter()
+            .any(|(_, secs)| *secs == 450));
     }
 
     // Item 5: "Continue Reading" shelf query — excludes never-started and
