@@ -2328,7 +2328,6 @@
           <div class="header">
             <button class="back-btn" id="back-btn" aria-label="Back">&larr;</button>
             <h1>${esc(book.title)}</h1>
-            <span style="flex:1"></span>
             ${navIconsHtml("")}
           </div>
         </div>
