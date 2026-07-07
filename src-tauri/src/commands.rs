@@ -2512,6 +2512,15 @@ pub async fn get_book_reading_time(
     Ok(db::get_book_reading_time(&conn, &book_id)?)
 }
 
+#[tauri::command]
+pub async fn get_book_reading_stats(
+    book_id: String,
+    state: State<'_, AppState>,
+) -> FolioResult<Option<db::BookReadingStats>> {
+    let conn = state.active_db()?.get()?;
+    Ok(db::get_book_reading_stats(&conn, &book_id)?)
+}
+
 // --- Highlights ---
 
 #[allow(clippy::too_many_arguments)]

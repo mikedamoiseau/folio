@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   formatDuration,
+  formatDate,
   formatBytes,
   filterBooks,
   sortBooks,
@@ -55,6 +56,29 @@ describe("formatDuration", () => {
   it("formats hours with remaining minutes", () => {
     expect(formatDuration(3660)).toBe("1h 1m");
     expect(formatDuration(7320)).toBe("2h 2m");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// formatDate
+// ---------------------------------------------------------------------------
+describe("formatDate", () => {
+  it("formats a unix timestamp with the default options", () => {
+    // 2026-07-06T00:00:00Z
+    expect(formatDate(1783382400)).toBe(
+      new Date(1783382400 * 1000).toLocaleDateString(undefined, {
+        year: "numeric",
+        month: "short",
+        day: "numeric",
+      }),
+    );
+  });
+
+  it("respects custom Intl.DateTimeFormatOptions", () => {
+    const secs = 1783382400;
+    expect(formatDate(secs, { month: "short", day: "numeric" })).toBe(
+      new Date(secs * 1000).toLocaleDateString(undefined, { month: "short", day: "numeric" }),
+    );
   });
 });
 

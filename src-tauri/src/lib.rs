@@ -346,6 +346,7 @@ pub fn run() {
             commands::record_reading_session,
             commands::get_reading_stats,
             commands::get_book_reading_time,
+            commands::get_book_reading_stats,
             commands::export_collection_markdown,
             commands::export_collection_json,
             commands::export_library,

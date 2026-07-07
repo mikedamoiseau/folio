@@ -717,7 +717,13 @@
     "language": "Langue",
     "year": "Ann\u00e9e",
     "publisher": "\u00c9diteur",
-    "scanForMetadata": "Scanner les m\u00e9tadonn\u00e9es"
+    "scanForMetadata": "Scanner les m\u00e9tadonn\u00e9es",
+    "reading": "Lecture",
+    "timeRead": "Temps de lecture",
+    "sessions": "Sessions",
+    "started": "Commenc\u00e9",
+    "finished": "Termin\u00e9",
+    "avgSession": "Session moy."
   },
 
   "stats": {

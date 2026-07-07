@@ -732,7 +732,13 @@
     "language": "Language",
     "year": "Year",
     "publisher": "Publisher",
-    "scanForMetadata": "Scan for metadata"
+    "scanForMetadata": "Scan for metadata",
+    "reading": "Reading",
+    "timeRead": "Time read",
+    "sessions": "Sessions",
+    "started": "Started",
+    "finished": "Finished",
+    "avgSession": "Avg session"
   },
 
   "stats": {

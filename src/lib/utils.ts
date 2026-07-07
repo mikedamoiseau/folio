@@ -39,6 +39,16 @@ export function formatDuration(secs: number): string {
   return remMins > 0 ? `${hrs}h ${remMins}m` : `${hrs}h`;
 }
 
+/** Format a unix timestamp (seconds) as a locale-aware date string, e.g.
+ *  "Jul 6, 2026". Passes `undefined` as the locale (rather than hardcoding
+ *  one) so it follows the user's system/browser locale. */
+export function formatDate(
+  secs: number,
+  opts: Intl.DateTimeFormatOptions = { year: "numeric", month: "short", day: "numeric" },
+): string {
+  return new Date(secs * 1000).toLocaleDateString(undefined, opts);
+}
+
 export interface BookLike {
   id: string;
   title: string;

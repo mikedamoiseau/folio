@@ -1669,6 +1669,63 @@ pub fn get_book_reading_time(conn: &Connection, book_id: &str) -> Result<i64> {
     )
 }
 
+/// Per-book reading insights for the Book Details modal (F-1-7). Deliberately
+/// omits a pages/chapters-per-hour "pace" figure — that's unreliable across
+/// formats (PDF pages vs. EPUB chapters aren't comparable units). Also omits
+/// an average-session figure — trivially derivable from
+/// `total_reading_time_secs / session_count`, so the frontend computes it.
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BookReadingStats {
+    pub total_reading_time_secs: i64,
+    pub session_count: i64,
+    /// Earliest session start for this book; `None` when there are no
+    /// local `reading_sessions` rows (e.g. a book finished via sync/web UI).
+    pub first_read_at: Option<i64>,
+    /// From `reading_progress.finished_at` (F-1-3); `None` if unfinished.
+    pub finished_at: Option<i64>,
+}
+
+/// Returns `None` only when there's genuinely nothing to show: no local
+/// reading sessions AND no `finished_at`. `reading_progress`/`finished_at`
+/// can be set without any `reading_sessions` rows — sync.rs and the web UI
+/// write progress directly, and pre-feature finished books were backfilled
+/// (`backfill_finished_at`) — so a synced/web-finished book must still
+/// surface its "Finished" date even though `session_count` is 0.
+pub fn get_book_reading_stats(
+    conn: &Connection,
+    book_id: &str,
+) -> Result<Option<BookReadingStats>> {
+    let (total_reading_time_secs, session_count, first_read_at): (i64, i64, Option<i64>) = conn
+        .query_row(
+            "SELECT COALESCE(SUM(duration_secs), 0), COUNT(*), MIN(started_at)
+             FROM reading_sessions WHERE book_id = ?1",
+            params![book_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )?;
+
+    use rusqlite::OptionalExtension;
+    let finished_at: Option<i64> = conn
+        .query_row(
+            "SELECT finished_at FROM reading_progress WHERE book_id = ?1",
+            params![book_id],
+            |row| row.get(0),
+        )
+        .optional()?
+        .flatten();
+
+    if session_count == 0 && finished_at.is_none() {
+        return Ok(None);
+    }
+
+    Ok(Some(BookReadingStats {
+        total_reading_time_secs,
+        session_count,
+        first_read_at,
+        finished_at,
+    }))
+}
+
 // --- Highlights CRUD ---
 
 pub fn insert_highlight(conn: &Connection, h: &crate::models::Highlight) -> Result<()> {
@@ -5329,5 +5386,113 @@ mod tests {
         let pairs = book_etag_pairs(&conn).unwrap();
         assert_eq!(pairs.get("etag-b1"), Some(&999));
         assert_eq!(pairs.get("etag-b2"), Some(&200));
+    }
+
+    // F-1-7: per-book reading insights for the Book Details modal.
+
+    #[test]
+    fn test_get_book_reading_stats_book_without_sessions_returns_none() {
+        let (_dir, conn) = setup();
+        insert_book(&conn, &sample_book("book-unread")).unwrap();
+
+        assert!(get_book_reading_stats(&conn, "book-unread")
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn test_get_book_reading_stats_unfinished_book_with_sessions() {
+        let (_dir, conn) = setup();
+        let book = Book {
+            total_chapters: 10,
+            ..sample_book("book-in-progress")
+        };
+        insert_book(&conn, &book).unwrap();
+
+        insert_reading_session(&conn, "s-1", "book-in-progress", 1_000, 600, 3).unwrap();
+        insert_reading_session(&conn, "s-2", "book-in-progress", 2_000, 900, 4).unwrap();
+        upsert_reading_progress(
+            &conn,
+            &ReadingProgress {
+                book_id: "book-in-progress".to_string(),
+                chapter_index: 3,
+                scroll_position: 0.5,
+                last_read_at: 2_000,
+            },
+        )
+        .unwrap();
+
+        let stats = get_book_reading_stats(&conn, "book-in-progress")
+            .unwrap()
+            .expect("book has sessions");
+        assert_eq!(stats.total_reading_time_secs, 1_500);
+        assert_eq!(stats.session_count, 2);
+        assert_eq!(stats.first_read_at, Some(1_000));
+        assert_eq!(
+            stats.finished_at, None,
+            "book hasn't reached the last chapter"
+        );
+    }
+
+    // Finding 1: sync.rs and the web UI write `reading_progress`/`finished_at`
+    // directly without ever inserting `reading_sessions` rows, and
+    // `backfill_finished_at` stamped pre-feature finished books the same way.
+    // Those books must still surface a "Finished" date instead of vanishing
+    // from the Reading section because `session_count == 0`.
+    #[test]
+    fn test_get_book_reading_stats_finished_without_sessions_returns_some() {
+        let (_dir, conn) = setup();
+        let book = Book {
+            total_chapters: 10,
+            ..sample_book("book-synced-finished")
+        };
+        insert_book(&conn, &book).unwrap();
+
+        upsert_reading_progress(
+            &conn,
+            &ReadingProgress {
+                book_id: "book-synced-finished".to_string(),
+                chapter_index: 9,
+                scroll_position: 1.0,
+                last_read_at: 5_000,
+            },
+        )
+        .unwrap();
+
+        let stats = get_book_reading_stats(&conn, "book-synced-finished")
+            .unwrap()
+            .expect("finished_at alone must yield Some");
+        assert_eq!(stats.total_reading_time_secs, 0);
+        assert_eq!(stats.session_count, 0);
+        assert_eq!(stats.first_read_at, None);
+        assert_eq!(stats.finished_at, Some(5_000));
+    }
+
+    #[test]
+    fn test_get_book_reading_stats_finished_book_includes_finished_at() {
+        let (_dir, conn) = setup();
+        let book = Book {
+            total_chapters: 10,
+            ..sample_book("book-finished-stats")
+        };
+        insert_book(&conn, &book).unwrap();
+
+        insert_reading_session(&conn, "s-1", "book-finished-stats", 1_000, 1_200, 10).unwrap();
+        upsert_reading_progress(
+            &conn,
+            &ReadingProgress {
+                book_id: "book-finished-stats".to_string(),
+                chapter_index: 9,
+                scroll_position: 1.0,
+                last_read_at: 5_000,
+            },
+        )
+        .unwrap();
+
+        let stats = get_book_reading_stats(&conn, "book-finished-stats")
+            .unwrap()
+            .expect("book has sessions");
+        assert_eq!(stats.session_count, 1);
+        assert_eq!(stats.finished_at, Some(5_000));
     }
 }
