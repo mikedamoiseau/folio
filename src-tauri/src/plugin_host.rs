@@ -23,17 +23,17 @@ use crate::db::DbPool;
 use crate::error::{FolioError, FolioResult};
 
 /// `HostServices` backed by the Tauri notification plugin.
-pub struct DesktopHostServices {
-    app: AppHandle,
+pub struct DesktopHostServices<R: tauri::Runtime> {
+    app: AppHandle<R>,
 }
 
-impl DesktopHostServices {
-    pub fn new(app: AppHandle) -> Self {
+impl<R: tauri::Runtime> DesktopHostServices<R> {
+    pub fn new(app: AppHandle<R>) -> Self {
         Self { app }
     }
 }
 
-impl HostServices for DesktopHostServices {
+impl<R: tauri::Runtime> HostServices for DesktopHostServices<R> {
     fn notify(&self, title: &str, body: &str) {
         if let Err(e) = self
             .app
@@ -66,8 +66,8 @@ pub fn plugins_dir(data_dir: &std::path::Path) -> PathBuf {
 /// so a single forwarding subscriber is installed once at startup (see
 /// `lib.rs`) and reads whichever manager currently occupies the shared slot.
 /// Rebuilding here on profile switch therefore can't leak subscribers.
-pub fn init_manager(
-    app: &AppHandle,
+pub fn init_manager<R: tauri::Runtime>(
+    app: &AppHandle<R>,
     data_dir: &std::path::Path,
     pool: DbPool,
 ) -> Option<Arc<PluginManager>> {
@@ -94,8 +94,8 @@ pub type ManagerSlot = Arc<std::sync::Mutex<Option<Arc<PluginManager>>>>;
 
 /// Rebuild the plugin manager for a newly-activated profile and swap it into
 /// `slot`. Called from `switch_profile`. Failure is logged, never fatal.
-pub fn rebuild_for_profile(
-    app: &AppHandle,
+pub fn rebuild_for_profile<R: tauri::Runtime>(
+    app: &AppHandle<R>,
     data_dir: &std::path::Path,
     pool: DbPool,
     slot: &ManagerSlot,

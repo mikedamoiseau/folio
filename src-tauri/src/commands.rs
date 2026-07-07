@@ -3963,18 +3963,30 @@ pub async fn unlock_profile(
         }
     }
     state.mark_unlocked(&profile)?;
+    run_deferred_plugin_start(&app, &profile, &state)?;
+    Ok(())
+}
 
-    // Soft-lock (A-M2, D-6/SB-7): if the active profile was locked at boot,
-    // startup deliberately skipped building the plugin manager and emitting
-    // `AppStarted` (an `AppStarted` plugin with `read:library` would
-    // otherwise read the locked profile). Now that the active profile is
-    // unlocked, build the manager and fire `AppStarted` once — the deferred
-    // equivalent of the withheld startup dispatch. The empty-slot check keeps
-    // this idempotent, so re-unlocking an already-running profile is a no-op.
+/// Runs the deferred plugin-manager startup for a just-unlocked profile.
+///
+/// Soft-lock (A-M2, D-6/SB-7): if the active profile was locked at boot,
+/// startup deliberately skipped building the plugin manager and emitting
+/// `AppStarted` (an `AppStarted` plugin with `read:library` would
+/// otherwise read the locked profile). Now that the active profile is
+/// unlocked — whether by password (`unlock_profile`) or recovery reset
+/// (`reset_profile_lock`) — build the manager and fire `AppStarted` once,
+/// the deferred equivalent of the withheld startup dispatch. The empty-slot
+/// check keeps this idempotent, so re-unlocking an already-running profile
+/// is a no-op.
+fn run_deferred_plugin_start<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    profile: &str,
+    state: &AppState,
+) -> FolioResult<()> {
     let active = { state.profile_state.lock()?.active.clone() };
     if profile == active && state.plugin_manager.lock()?.is_none() {
         crate::plugin_host::rebuild_for_profile(
-            &app,
+            app,
             &state.data_dir,
             state.active_db()?,
             &state.plugin_manager,
@@ -3992,7 +4004,11 @@ pub async fn unlock_profile(
 /// on the lock screen itself). Mirrors `remove_profile_lock`'s tail: a
 /// profile with no lock is never gated, so it's marked unlocked too.
 #[tauri::command]
-pub async fn reset_profile_lock(profile: String, state: State<'_, AppState>) -> FolioResult<()> {
+pub async fn reset_profile_lock<R: tauri::Runtime>(
+    app: AppHandle<R>,
+    profile: String,
+    state: State<'_, AppState>,
+) -> FolioResult<()> {
     // Leaf serialization lock (see `AppState::profile_lifecycle`): held for
     // the whole body so this can't interleave with the other
     // profile-lifecycle commands across their `.await` points.
@@ -4000,6 +4016,9 @@ pub async fn reset_profile_lock(profile: String, state: State<'_, AppState>) -> 
     state.ensure_profile_exists(&profile)?;
     folio_core::profile_lock::clear_lock(&profile)?;
     state.mark_unlocked(&profile)?;
+    // Recovery is an alternate unlock path: if the active profile was locked
+    // at boot, run the same deferred plugin startup `unlock_profile` does.
+    run_deferred_plugin_start(&app, &profile, &state)?;
     Ok(())
 }
 
@@ -8165,8 +8184,9 @@ mod tests {
         // (Decision 10) — a mistyped/stale name must never touch the
         // keychain or the unlocked set.
         let (app, _dir) = mock_app_with_state();
-        let state = app.handle().state::<AppState>();
-        let err = reset_profile_lock("ghost".to_string(), state)
+        let handle = app.handle().clone();
+        let state = handle.state::<AppState>();
+        let err = reset_profile_lock(handle.clone(), "ghost".to_string(), state)
             .await
             .expect_err("resetting a non-existent profile must fail");
         assert_eq!(err.kind(), "InvalidInput");
@@ -8191,7 +8211,7 @@ mod tests {
         }
 
         let state = handle.state::<AppState>();
-        reset_profile_lock("carol".to_string(), state)
+        reset_profile_lock(handle.clone(), "carol".to_string(), state)
             .await
             .expect("resetting an existing profile's lock should succeed");
 
@@ -8199,6 +8219,39 @@ mod tests {
         assert!(
             state.is_unlocked("carol"),
             "reset_profile_lock must mark the profile unlocked (Decision 9)"
+        );
+    }
+
+    #[tokio::test]
+    async fn reset_profile_lock_runs_deferred_plugin_start_for_active_profile() {
+        // Recovery at startup (D-6/SB-7): when the app boots on a locked
+        // active profile, `lib.rs` skips building the plugin manager and
+        // emitting `AppStarted`. `unlock_profile` runs that deferred tail on
+        // a correct password; the "forgot password" reset is an alternate
+        // unlock path and must run the *same* tail — otherwise plugins stay
+        // dead for the session. Here the active "default" profile starts with
+        // no manager; after reset the shared slot must be populated, proving
+        // `run_deferred_plugin_start` ran `rebuild_for_profile`.
+        let (app, _dir) = mock_app_with_state();
+        let handle = app.handle().clone();
+        {
+            let state = handle.state::<AppState>();
+            assert!(
+                state.plugin_manager.lock().unwrap().is_none(),
+                "precondition: locked-at-boot leaves the manager slot empty"
+            );
+        }
+
+        let state = handle.state::<AppState>();
+        reset_profile_lock(handle.clone(), "default".to_string(), state)
+            .await
+            .expect("resetting the active profile's lock should succeed");
+
+        let state = handle.state::<AppState>();
+        assert!(
+            state.plugin_manager.lock().unwrap().is_some(),
+            "reset_profile_lock must run the deferred plugin start for the \
+             active profile, exactly like unlock_profile"
         );
     }
 
