@@ -6313,14 +6313,19 @@ pub async fn sync_pull_book(
             let _ = db::set_setting(&conn, "last_sync_success_at", &now_unix_secs().to_string());
             if merge_result.has_changes() {
                 let summary = merge_result_summary(&merge_result);
-                log_event(
-                    &conn,
-                    ActivityEvent::SyncPullSuccess {
-                        book_id: book_id.clone(),
-                        title: book.title.clone(),
-                        detail: summary,
-                    },
-                );
+                // Private mode (B-M1): this activity row stores book_id+title,
+                // a durable local trace of the read — suppress it like the
+                // BookOpened/BookClosed bus events above.
+                if !suppress_passive {
+                    log_event(
+                        &conn,
+                        ActivityEvent::SyncPullSuccess {
+                            book_id: book_id.clone(),
+                            title: book.title.clone(),
+                            detail: summary,
+                        },
+                    );
+                }
                 let _ = app.emit("sync-applied", &book_id);
                 if merge_result.progress_updated {
                     let _ = app.emit("sync-progress-updated", &book_id);
@@ -6348,14 +6353,16 @@ pub async fn sync_pull_book(
             if kind == "auth_failed" {
                 let _ = app.emit("backup-auth-error", serde_json::json!({ "message": msg }));
             }
-            log_event(
-                &conn,
-                ActivityEvent::SyncPullFailed {
-                    book_id: book_id.clone(),
-                    title: book.title.clone(),
-                    detail: e.to_string(),
-                },
-            );
+            if !suppress_passive {
+                log_event(
+                    &conn,
+                    ActivityEvent::SyncPullFailed {
+                        book_id: book_id.clone(),
+                        title: book.title.clone(),
+                        detail: e.to_string(),
+                    },
+                );
+            }
         }
         Err(_) => {
             // Timeout
@@ -6367,14 +6374,16 @@ pub async fn sync_pull_book(
             let _ = db::set_setting(&conn, "last_sync_error_at", &now_unix_secs().to_string());
             let _ = db::set_setting(&conn, "last_sync_error_message", msg);
             let _ = db::set_setting(&conn, "last_sync_error_kind", "timeout");
-            log_event(
-                &conn,
-                ActivityEvent::SyncPullFailed {
-                    book_id: book_id.clone(),
-                    title: book.title.clone(),
-                    detail: "timeout after 5s".to_string(),
-                },
-            );
+            if !suppress_passive {
+                log_event(
+                    &conn,
+                    ActivityEvent::SyncPullFailed {
+                        book_id: book_id.clone(),
+                        title: book.title.clone(),
+                        detail: "timeout after 5s".to_string(),
+                    },
+                );
+            }
         }
     }
 
@@ -6452,14 +6461,16 @@ pub async fn sync_push_book(book_id: String, state: State<'_, AppState>) -> Foli
                     "last_sync_success_at",
                     &now_unix_secs().to_string(),
                 );
-                log_event(
-                    &bg_conn,
-                    ActivityEvent::SyncPushSuccess {
-                        book_id: book_id.clone(),
-                        title: book_title.clone(),
-                        detail: "progress and annotations pushed".to_string(),
-                    },
-                );
+                if !suppress_passive {
+                    log_event(
+                        &bg_conn,
+                        ActivityEvent::SyncPushSuccess {
+                            book_id: book_id.clone(),
+                            title: book_title.clone(),
+                            detail: "progress and annotations pushed".to_string(),
+                        },
+                    );
+                }
             }
             Err(e) => {
                 events::bus().emit(FolioEvent::SyncCompleted {
@@ -6471,14 +6482,16 @@ pub async fn sync_push_book(book_id: String, state: State<'_, AppState>) -> Foli
                     db::set_setting(&bg_conn, "last_sync_error_at", &now_unix_secs().to_string());
                 let _ = db::set_setting(&bg_conn, "last_sync_error_message", &msg);
                 let _ = db::set_setting(&bg_conn, "last_sync_error_kind", sync_error_kind_str(&e));
-                log_event(
-                    &bg_conn,
-                    ActivityEvent::SyncPushFailed {
-                        book_id: book_id.clone(),
-                        title: book_title.clone(),
-                        detail: e.to_string(),
-                    },
-                );
+                if !suppress_passive {
+                    log_event(
+                        &bg_conn,
+                        ActivityEvent::SyncPushFailed {
+                            book_id: book_id.clone(),
+                            title: book_title.clone(),
+                            detail: e.to_string(),
+                        },
+                    );
+                }
             }
         }
     });

@@ -433,19 +433,28 @@ pub fn sync_book_on_close(
     suppress_progress: bool,
 ) -> Result<(), SyncError> {
     // Step 1: Pull and merge remote changes into local DB
-    if let Some(remote) = fetch_remote_sync(op, file_hash)? {
+    let remote = fetch_remote_sync(op, file_hash)?;
+    if let Some(remote) = &remote {
         let local = build_sync_payload(conn, book_id, file_hash, device_id, suppress_progress);
         merge_remote_into_local(
             conn,
             book_id,
             &local,
-            &remote,
+            remote,
             MergeOptions { suppress_progress },
         );
     }
 
     // Step 2: Build fresh payload from merged local state and push
-    let payload = build_sync_payload(conn, book_id, file_hash, device_id, suppress_progress);
+    let mut payload = build_sync_payload(conn, book_id, file_hash, device_id, suppress_progress);
+    // Private mode (B-M1, SB-5): our own progress is intentionally omitted
+    // from the payload, but `push_remote_sync` overwrites the whole remote
+    // file — so blindly pushing `progress: None` would erase a legitimate
+    // reading position another device (or an earlier non-private session)
+    // already synced. Carry the fetched remote progress forward untouched.
+    if suppress_progress {
+        payload.progress = remote.and_then(|r| r.progress);
+    }
     push_remote_sync(op, file_hash, &payload)
 }
 
@@ -1084,5 +1093,43 @@ mod tests {
         // Guards the compatibility contract: MergeOptions::default() must
         // behave exactly like the pre-B-M1 unconditional merge.
         assert!(!MergeOptions::default().suppress_progress);
+    }
+
+    #[test]
+    fn sync_book_on_close_suppressed_preserves_remote_progress() {
+        // Codex/Codex-2 finding: a private close must not clobber the
+        // reading position another device already synced. Suppression omits
+        // *our* progress from the outbound payload, but the fetched remote
+        // progress must be carried forward so the whole-file overwrite in
+        // `push_remote_sync` doesn't erase it.
+        let (conn, book_id) = setup_db();
+        let dir = tempdir().unwrap();
+        let op = make_fs_operator(dir.path());
+        let file_hash = "hash-preserve";
+
+        // A prior (non-private) session on another device pushed progress.
+        let existing = BookSyncFile {
+            schema_version: CURRENT_SCHEMA_VERSION,
+            book_hash: file_hash.to_string(),
+            device_id: "device-B".to_string(),
+            progress: Some(SyncProgress {
+                chapter_index: 9,
+                scroll_position: 0.77,
+                updated_at: 1700005000,
+            }),
+            bookmarks: vec![],
+            highlights: vec![],
+        };
+        push_remote_sync(&op, file_hash, &existing).unwrap();
+
+        sync_book_on_close(&conn, &op, &book_id, file_hash, "device-A", true).unwrap();
+
+        let fetched = fetch_remote_sync(&op, file_hash).unwrap().unwrap();
+        let p = fetched
+            .progress
+            .expect("remote progress must survive a private-mode close");
+        assert_eq!(p.chapter_index, 9);
+        assert!((p.scroll_position - 0.77).abs() < f64::EPSILON);
+        assert_eq!(p.updated_at, 1700005000);
     }
 }
