@@ -947,5 +947,22 @@
 
   "toast": {
     "backupAuthFailed": "Backup authentication failed — check credentials in Settings"
+  },
+
+  "privateMode": {
+    "title": "Don't track this session",
+    "subtitle": "Pauses passive reading history for the rest of this session.",
+    "buttonLabel": "Don't track this session",
+    "indicatorBadge": "Not tracking",
+    "indicatorLabel": "Not tracking this session — open for details",
+    "stopHeading": "Paused while on",
+    "stopProgress": "Reading progress — your place in books",
+    "stopStats": "Reading-time stats and streaks",
+    "stopRecent": "Recently-read list",
+    "stopActivity": "Activity log",
+    "continueHeading": "Still saved",
+    "continueHighlights": "Highlights and bookmarks — they stay in their lists",
+    "continueLibrary": "The book stays in your library",
+    "restartNote": "Resets to off every time you open Folio — it never carries over between sessions."
   }
 }

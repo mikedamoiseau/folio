@@ -249,7 +249,7 @@ Folio offers two reading modes for EPUBs, selectable in **Settings > Page Layout
 
 - **Focus mode:** Press `D` to hide all UI and read distraction-free. Move the mouse to the top or bottom edge to temporarily reveal controls.
 - **Book details:** Click the **(i)** icon in the reader header to open a read-only popup with the book's title, author, format, series, publisher, year, language, and full description — handy for checking a synopsis without leaving the page. Press `Escape` or click the **✕** (or outside the popup) to close it.
-- **Progress tracking:** Your reading position is saved automatically and restored when you reopen the book, regardless of which mode you use.
+- **Progress tracking:** Your reading position is saved automatically and restored when you reopen the book, in either mode — unless "Don't track this session" is on, in which case your place is only remembered for the rest of the current app session (see [Don't track this session](#dont-track-this-session) below).
 
 ### PDF and comic book reading (PDF, CBZ, CBR)
 
@@ -259,7 +259,7 @@ These formats use a page-by-page viewer. Navigate with the Previous/Next buttons
 
 **Thumbnail strip:** Click the three-bar icon in the header (or press `M`) to open a horizontal strip of page thumbnails below the reader. Click any thumbnail to jump to that page — the jump is recorded in navigation history so back/forward returns to the source page. Pages closest to the one you're reading decode first, so the strip fills outward from the current page. The strip remembers its open/closed state per book.
 
-**Split view:** Click the two-rectangle icon in the header (or press `\`) to read two books side-by-side. The companion pane starts on the same book; click "Choose another book" in its header to pick a different library entry. Each pane has its own reading progress, navigation history, and zoom — Folio writes both books' progress as you read. The pane you last clicked is the "active" pane (a subtle accent ring shows which one); arrow keys and shortcuts target it. The primary pane has a swap-panes button when a companion is set, and the companion pane has an X to close split view from its side. Split state and the companion pairing persist per book, so reopening the primary restores both panes.
+**Split view:** Click the two-rectangle icon in the header (or press `\`) to read two books side-by-side. The companion pane starts on the same book; click "Choose another book" in its header to pick a different library entry. Each pane has its own reading progress, navigation history, and zoom — Folio writes both books' progress as you read (paused for both panes together if "Don't track this session" is on, since it's one app-wide toggle). The pane you last clicked is the "active" pane (a subtle accent ring shows which one); arrow keys and shortcuts target it. The primary pane has a swap-panes button when a companion is set, and the companion pane has an X to close split view from its side. Split state and the companion pairing persist per book, so reopening the primary restores both panes.
 
 **Page cache (CBZ/CBR):** When you open a comic for the first time, Folio extracts all pages from the archive to a disk cache. Subsequent page turns read from disk and are near-instant (~1-5ms). The cache persists between sessions — reopening the same comic skips extraction entirely. Cache is managed automatically via eviction (max 5 books, configurable size cap, 7-day expiry). You can adjust the cache size limit or clear it in Settings > Library.
 
@@ -271,23 +271,43 @@ These formats use a page-by-page viewer. Navigate with the Previous/Next buttons
 
 ### Reading progress
 
-Progress is saved automatically as you read. The library shows a percentage on each book card. When you reopen a book, you return to exactly where you stopped.
+Progress is saved automatically as you read. The library shows a percentage on each book card. When you reopen a book, you return to exactly where you stopped — as long as "Don't track this session" isn't on (see below).
 
-Folio also records reading sessions (time spent, pages read) for the reading stats dashboard.
+Folio also records reading sessions (time spent, pages read) for the reading stats dashboard, again unless "Don't track this session" is on.
+
+### Don't track this session
+
+Open the toggle in the header (the eye icon, next to the language switcher) to pause passive reading tracking for the rest of the current app session — useful if you're reading something you'd rather not show up in your stats or recently-read list. Click it to see exactly what pauses and what doesn't, and to switch it on or off.
+
+**Paused while it's on:**
+
+- Reading progress — your place in books
+- Reading-time stats and streaks
+- The recently-read / "Continue Reading" list
+- The activity log
+
+**Still saved:**
+
+- Highlights and bookmarks — they stay in their lists exactly as normal
+- The book itself stays in your library
+
+While it's on, closing a book and reopening it later in the same app session still resumes where you left off — Folio just remembers that position in memory for the session instead of writing it to the library database. Restarting Folio always starts fresh with tracking back on; the setting is never remembered between launches, so the indicator can never show a state that doesn't match what's actually happening.
+
+This isn't an incognito or encryption feature — it only pauses the passive tracking listed above. Anything you deliberately save (a highlight, a bookmark) keeps working exactly as before.
 
 ### Book completion celebration
 
 When you reach the last page or chapter of any book, Folio shows a celebratory modal with a confetti animation. The modal displays:
 
 - The book's cover image
-- Total reading time accumulated across all sessions
+- Total reading time accumulated across all sessions (any time read while "Don't track this session" was on isn't included, since it was never recorded)
 - An interactive star rating — tap a star to rate the book immediately
 
-Click **Continue** to dismiss. The celebration only appears once per book; reopening a finished book won't trigger it again. The event is logged in the activity log as "Book Finished."
+Click **Continue** to dismiss. The celebration only appears once per book; reopening a finished book won't trigger it again. The event is logged in the activity log as "Book Finished," unless "Don't track this session" was on when you finished it.
 
 ### Returning to the library
 
-Click the back arrow in the top-left corner or press `Escape`. Your progress is saved when you exit.
+Click the back arrow in the top-left corner or press `Escape`. Your progress is saved when you exit, unless "Don't track this session" is on.
 
 ---
 
@@ -715,7 +735,7 @@ Open the reading stats dashboard from the library toolbar (bar chart icon).
 
 A **30-day bar chart** shows your daily reading time over the past month.
 
-Stats are tracked automatically — reading sessions are recorded when you open and close a book.
+Stats are tracked automatically — reading sessions are recorded when you open and close a book, unless "Don't track this session" is on (see [Don't track this session](#dont-track-this-session)), in which case that session's time simply isn't recorded.
 
 ---
 
@@ -745,7 +765,7 @@ When **Web UI** is enabled, open the URL in a browser. It looks and behaves like
 - **Home** — "Continue Reading" and "Recently Added" shelves for quick access to what you're currently in the middle of
 - **Library** — a grid of book covers with search, series/collection filters, and a sort dropdown (date added, title, author, last read, rating). The grid loads more books automatically as you scroll, so it stays fast even on large libraries. Books you've started show a small progress badge on the cover. Tap any book to see its details.
 - **Book detail** — shows cover, title, author, format, and a progress bar. Tap **Continue** to pick up where you left off (or **Start Over** to read from the beginning), or **Download** to save the file to your device.
-- **Reader** — EPUBs show chapter content with prev/next navigation. PDFs and comics show page images with prev/next buttons, and swiping left/right on a touch screen turns the page with a short animation. Your reading position is saved as you go, so opening the same book later — on this device or another — resumes where you stopped.
+- **Reader** — EPUBs show chapter content with prev/next navigation. PDFs and comics show page images with prev/next buttons, and swiping left/right on a touch screen turns the page with a short animation. Your reading position is saved as you go, so opening the same book later — on this device or another — resumes where you stopped. Note: "Don't track this session" is a single app-wide switch shared with the desktop app, so if it's on there, reading here pauses tracking too, even though the web UI has no toggle or indicator of its own for it.
 - **Reading Stats** — tap the bar chart icon in the header to view your reading stats: total books, time read, sessions, pages, books finished, current and longest streaks, and a 30-day daily reading chart.
 - **Collections** — tap the folder icon in the header to browse your collections and series. Filter by name, sort alphabetically, and tap any collection or series to jump to a filtered library view.
 

@@ -18,8 +18,11 @@ import BookCompletionModal from "./BookCompletionModal";
 import MissingFileDialog from "./MissingFileDialog";
 import { useBookCompletion } from "../hooks/useBookCompletion";
 import LanguageSwitcher from "./LanguageSwitcher";
+import PrivateModeToggle from "./PrivateModeToggle";
 import OverflowMenu from "./OverflowMenu";
 import ReaderSkeleton from "./ReaderSkeleton";
+import { usePrivateMode } from "../hooks/usePrivateMode";
+import { getVolatilePosition, setVolatilePosition } from "../lib/volatileResume";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { friendlyError, isBookFileMissing } from "../lib/errors";
 import { useToast } from "./Toast";
@@ -143,6 +146,10 @@ export default function ReaderPane({
   const { t } = useTranslation();
   const { addToast } = useToast();
   const { fontSize, setFontSize, fontFamily, scrollMode, typography, customCss, dualPage, setDualPage, mangaMode, setMangaMode, pageAnimation } = useTheme();
+  // Read-only here regardless of pane role (both primary and companion
+  // panes need it for the volatile-resume gate below); only the primary
+  // pane renders the actual toggle control (see the header, further down).
+  const { enabled: isPrivate } = usePrivateMode();
 
   const [bookTitle, setBookTitle] = useState("");
   const [bookFormat, setBookFormat] = useState<"epub" | "cbz" | "cbr" | "pdf" | "mobi">("epub");
@@ -367,18 +374,32 @@ export default function ReaderPane({
           setChapterIndex(initialChapterIndex);
           restoringScroll.current = initialChapterIndex;
         } else {
-          try {
-            const progress = await invoke<ReadingProgress | null>(
-              "get_reading_progress",
-              { bookId }
-            );
-            if (!cancelled && progress) {
-              setChapterIndex(progress.chapter_index);
-              savedScrollPosition.current = progress.scroll_position;
-              restoringScroll.current = progress.chapter_index;
+          // Volatile in-session resume (D-5): while private, the backend
+          // never wrote the DB row below for anything read after private
+          // mode turned on, so it can be stale. A prior in-memory position
+          // for this book (from earlier in the same private session) takes
+          // priority over it. First open of a book in a private session
+          // has no volatile entry yet, so it falls through to the normal
+          // DB read below — never a hard requirement to have one.
+          const volatile = isPrivate ? getVolatilePosition(bookId) : undefined;
+          if (volatile) {
+            setChapterIndex(volatile.chapterIndex);
+            savedScrollPosition.current = volatile.scrollPosition;
+            restoringScroll.current = volatile.chapterIndex;
+          } else {
+            try {
+              const progress = await invoke<ReadingProgress | null>(
+                "get_reading_progress",
+                { bookId }
+              );
+              if (!cancelled && progress) {
+                setChapterIndex(progress.chapter_index);
+                savedScrollPosition.current = progress.scroll_position;
+                restoringScroll.current = progress.chapter_index;
+              }
+            } catch {
+              // No saved progress — start at chapter 0
             }
-          } catch {
-            // No saved progress — start at chapter 0
           }
         }
       } catch (err) {
@@ -647,11 +668,19 @@ export default function ReaderPane({
   const saveProgress = useCallback(
     async (scrollPos?: number) => {
       if (!bookId) return;
+      const resolvedScroll = scrollPos ?? getChapterScrollPosition();
+      // Volatile in-session resume (D-5): mirror into memory only, never a
+      // persistent store. The DB write just below is a no-op on the
+      // backend while private (B-M1), so this is the only place the
+      // reader's true current position survives a book-close/reopen.
+      if (isPrivate) {
+        setVolatilePosition(bookId, { chapterIndex, scrollPosition: resolvedScroll });
+      }
       try {
         await invoke("save_reading_progress", {
           bookId,
           chapterIndex,
-          scrollPosition: scrollPos ?? getChapterScrollPosition(),
+          scrollPosition: resolvedScroll,
         });
         setSaveIndicator(true);
         setTimeout(() => setSaveIndicator(false), 1500);
@@ -661,7 +690,7 @@ export default function ReaderPane({
         setTimeout(() => setSaveError(false), 2000);
       }
     },
-    [bookId, chapterIndex, getChapterScrollPosition]
+    [bookId, chapterIndex, getChapterScrollPosition, isPrivate]
   );
 
   // Save progress on chapter change (paginated mode only — continuous tracks via scroll).
@@ -725,12 +754,23 @@ export default function ReaderPane({
   // is in the DB before the sync payload is built.
   const getScrollPosRef = useRef(getChapterScrollPosition);
   useEffect(() => { getScrollPosRef.current = getChapterScrollPosition; }, [getChapterScrollPosition]);
+  const isPrivateRef = useRef(isPrivate);
+  useEffect(() => { isPrivateRef.current = isPrivate; }, [isPrivate]);
 
   useEffect(() => {
     if (!effectivePersist) return;
     return () => {
       const id = bookIdRef.current;
       if (!id) return;
+      // Mirror the final position into volatile memory too (see
+      // `saveProgress`) — this is the true "closing" position, captured
+      // via refs since this cleanup can run after `isPrivate` changed.
+      if (isPrivateRef.current) {
+        setVolatilePosition(id, {
+          chapterIndex: chapterIndexRef.current,
+          scrollPosition: getScrollPosRef.current(),
+        });
+      }
       invoke("save_reading_progress", {
         bookId: id,
         chapterIndex: chapterIndexRef.current,
@@ -2013,6 +2053,12 @@ export default function ReaderPane({
               {t("shortcuts.title")}
             </button>
           </OverflowMenu>
+
+          {/* "Don't track this session" — app-global (one shared backend
+              flag), so only the primary pane renders it; the companion
+              pane would otherwise show a second, redundant control for
+              the same state. */}
+          {isPrimary && <PrivateModeToggle />}
 
           {/* Language switcher */}
           <LanguageSwitcher />

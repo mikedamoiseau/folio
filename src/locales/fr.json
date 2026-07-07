@@ -919,5 +919,22 @@
 
   "toast": {
     "backupAuthFailed": "Backup authentication failed \u2014 check credentials in Settings"
+  },
+
+  "privateMode": {
+    "title": "Ne pas suivre cette session",
+    "subtitle": "Met en pause l'historique de lecture passif pour le reste de cette session.",
+    "buttonLabel": "Ne pas suivre cette session",
+    "indicatorBadge": "Suivi en pause",
+    "indicatorLabel": "Suivi en pause pour cette session \u2014 ouvrir pour en savoir plus",
+    "stopHeading": "En pause pendant l'activation",
+    "stopProgress": "Progression de lecture \u2014 votre position dans les livres",
+    "stopStats": "Statistiques de temps de lecture et s\u00e9ries",
+    "stopRecent": "Liste des lectures r\u00e9centes",
+    "stopActivity": "Journal d'activit\u00e9",
+    "continueHeading": "Toujours enregistr\u00e9",
+    "continueHighlights": "Surlignages et signets \u2014 ils restent dans leurs listes",
+    "continueLibrary": "Le livre reste dans votre biblioth\u00e8que",
+    "restartNote": "Revient \u00e0 d\u00e9sactiv\u00e9 \u00e0 chaque ouverture de Folio \u2014 ne se reporte jamais d'une session \u00e0 l'autre."
   }
 }
