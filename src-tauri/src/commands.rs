@@ -78,6 +78,16 @@ pub struct AppState {
     /// profile that hasn't been unlocked yet. Leaf lock — never held
     /// together with another `AppState` mutex.
     pub unlocked_profiles: std::sync::Arc<std::sync::Mutex<std::collections::HashSet<String>>>,
+    /// Serializes the profile-lifecycle commands (`set_profile_lock`,
+    /// `remove_profile_lock`, `unlock_profile`, `delete_profile`) so two
+    /// concurrent IPC calls on the same profile can't interleave across the
+    /// `.await` gap between the existence check and the keychain/session
+    /// mutation — closing a TOCTOU that could otherwise orphan a keychain
+    /// lock or a dead `unlocked_profiles` entry. `tokio::sync::Mutex`
+    /// (not `std::sync::Mutex`) because the guard is held across `.await`.
+    /// Leaf lock — acquire it first, never while holding `profile_state` or
+    /// `unlocked_profiles`.
+    pub profile_lifecycle: std::sync::Arc<tokio::sync::Mutex<()>>,
     /// Handle to the running web server (lock #5).
     pub web_server_handle: std::sync::Mutex<Option<crate::web_server::WebServerHandle>>,
     /// IPC command timing metrics (leaf lock — no ordering constraint).
@@ -3779,6 +3789,10 @@ pub async fn switch_profile(
 
 #[tauri::command]
 pub async fn delete_profile(name: String, state: State<'_, AppState>) -> FolioResult<()> {
+    // Leaf serialization lock (see `AppState::profile_lifecycle`): held for
+    // the whole body so this can't interleave with the other
+    // profile-lifecycle commands across their `.await` points.
+    let _lifecycle = state.profile_lifecycle.lock().await;
     if name == "default" {
         return Err(FolioError::invalid("Cannot delete the default profile"));
     }
@@ -3844,6 +3858,10 @@ pub async fn set_profile_lock(
     current_password: Option<String>,
     state: State<'_, AppState>,
 ) -> FolioResult<()> {
+    // Leaf serialization lock (see `AppState::profile_lifecycle`): held for
+    // the whole body so this can't interleave with the other
+    // profile-lifecycle commands across their `.await` points.
+    let _lifecycle = state.profile_lifecycle.lock().await;
     state.ensure_profile_exists(&profile)?;
     if let Some(existing_phc) = folio_core::profile_lock::load_lock(&profile)? {
         let current = current_password.ok_or_else(|| {
@@ -3868,6 +3886,10 @@ pub async fn remove_profile_lock(
     current_password: String,
     state: State<'_, AppState>,
 ) -> FolioResult<()> {
+    // Leaf serialization lock (see `AppState::profile_lifecycle`): held for
+    // the whole body so this can't interleave with the other
+    // profile-lifecycle commands across their `.await` points.
+    let _lifecycle = state.profile_lifecycle.lock().await;
     state.ensure_profile_exists(&profile)?;
     let phc = folio_core::profile_lock::load_lock(&profile)?
         .ok_or_else(|| FolioError::invalid("Profile has no lock to remove"))?;
@@ -3894,6 +3916,10 @@ pub async fn unlock_profile(
     password: String,
     state: State<'_, AppState>,
 ) -> FolioResult<()> {
+    // Leaf serialization lock (see `AppState::profile_lifecycle`): held for
+    // the whole body so this can't interleave with the other
+    // profile-lifecycle commands across their `.await` points.
+    let _lifecycle = state.profile_lifecycle.lock().await;
     state.ensure_profile_exists(&profile)?;
     let phc = match folio_core::profile_lock::load_lock(&profile)? {
         Some(phc) => phc,
@@ -7964,6 +7990,7 @@ mod tests {
             unlocked_profiles: std::sync::Arc::new(std::sync::Mutex::new(
                 std::collections::HashSet::from(["default".to_string()]),
             )),
+            profile_lifecycle: std::sync::Arc::new(tokio::sync::Mutex::new(())),
             db: pool,
             profile_state: std::sync::Mutex::new(ProfileState {
                 active: "default".to_string(),
@@ -8068,6 +8095,69 @@ mod tests {
             !state.is_unlocked("carol"),
             "delete_profile must drop the profile from the unlocked set (Decision 10)"
         );
+        assert!(!state
+            .profile_state
+            .lock()
+            .unwrap()
+            .pools
+            .contains_key("carol"));
+    }
+
+    #[tokio::test]
+    async fn delete_profile_blocks_while_profile_lifecycle_lock_held() {
+        // Regression test for the TOCTOU the reviewer flagged: before
+        // `AppState::profile_lifecycle` existed, `delete_profile` validated
+        // profile existence under `profile_state`, dropped that lock, then
+        // mutated the keychain and `unlocked_profiles` with nothing held
+        // across the gap — a concurrent lifecycle command could interleave
+        // and orphan state. This proves `delete_profile` actually acquires
+        // `profile_lifecycle` for its whole body: while the lock is held
+        // externally (simulating another in-flight lifecycle command past
+        // its own validate step, before its mutate step), `delete_profile`
+        // cannot even begin its existence check, let alone mutate anything.
+        //
+        // A true two-task race is deliberately avoided (see the module
+        // comment above on why keychain-backed calls aren't asserted on
+        // directly) — blocking on the shared `tokio::sync::Mutex` while it
+        // is held is itself the guarantee this fix provides, and is
+        // observable deterministically via `timeout` without spawning.
+        let (app, _dir) = mock_app_with_state();
+        let handle = app.handle().clone();
+        {
+            let state = handle.state::<AppState>();
+            let mut ps = state.profile_state.lock().unwrap();
+            let pool = db::create_pool(&std::path::PathBuf::from(":memory:")).unwrap();
+            ps.pools.insert("carol".to_string(), pool);
+            drop(ps);
+            state.mark_unlocked("carol").unwrap();
+        }
+
+        let lifecycle = handle.state::<AppState>().profile_lifecycle.clone();
+        let outer_guard = lifecycle.lock().await;
+
+        let state = handle.state::<AppState>();
+        let timed_out = tokio::time::timeout(
+            std::time::Duration::from_millis(50),
+            delete_profile("carol".to_string(), state),
+        )
+        .await
+        .is_err();
+        assert!(
+            timed_out,
+            "delete_profile must block on profile_lifecycle while another \
+             lifecycle command holds it"
+        );
+
+        // Releasing the externally-held guard lets delete_profile run to
+        // completion and leave consistent state (no orphaned entries).
+        drop(outer_guard);
+        let state = handle.state::<AppState>();
+        delete_profile("carol".to_string(), state)
+            .await
+            .expect("deleting a non-active profile should succeed once the lock is free");
+
+        let state = handle.state::<AppState>();
+        assert!(!state.is_unlocked("carol"));
         assert!(!state
             .profile_state
             .lock()

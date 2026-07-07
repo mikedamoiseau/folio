@@ -168,6 +168,7 @@ pub fn run() {
                     crate::web_server::auth::load_pin_hash(),
                 )),
                 unlocked_profiles: std::sync::Arc::new(std::sync::Mutex::new(unlocked_profiles)),
+                profile_lifecycle: std::sync::Arc::new(tokio::sync::Mutex::new(())),
                 db: pool,
                 profile_state: std::sync::Mutex::new(ProfileState {
                     active: "default".to_string(),
