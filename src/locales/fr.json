@@ -717,7 +717,13 @@
     "language": "Langue",
     "year": "Ann\u00e9e",
     "publisher": "\u00c9diteur",
-    "scanForMetadata": "Scanner les m\u00e9tadonn\u00e9es"
+    "scanForMetadata": "Scanner les m\u00e9tadonn\u00e9es",
+    "reading": "Lecture",
+    "timeRead": "Temps de lecture",
+    "sessions": "Sessions",
+    "started": "Commenc\u00e9",
+    "finished": "Termin\u00e9",
+    "avgSession": "Session moy."
   },
 
   "stats": {
@@ -731,7 +737,22 @@
     "longestStreak": "Plus longue s\u00e9rie",
     "dayCount": "{{count}} jour",
     "daysCount": "{{count}} jours",
-    "last30Days": "30 derniers jours"
+    "last30Days": "30 derniers jours",
+    "last365Days": "365 derniers jours",
+    "heatmapAriaLabel": "Activité de lecture sur la dernière année",
+    "heatmapTooltip": "{{date}} — {{duration}}",
+    "heatmapTooltipEmpty": "{{date}} — Aucune lecture",
+    "goal": {
+      "title": "Objectif de lecture {{year}}",
+      "setGoal": "Définir un objectif annuel",
+      "setGoalHint": "Suivez le nombre de livres terminés cette année",
+      "inputLabel": "Livres à lire cette année",
+      "onTrack": "Dans les temps",
+      "aheadOfSchedule": "{{count}} d'avance",
+      "behindSchedule": "{{count}} de retard",
+      "completed": "Objectif atteint !",
+      "ringAriaLabel": "{{finished}} livre(s) sur {{goal}} terminés cette année, {{percent}} %"
+    }
   },
 
   "shortcuts": {

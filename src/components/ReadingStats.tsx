@@ -2,6 +2,8 @@ import { useState, useEffect, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useTranslation } from "react-i18next";
 import { formatDuration } from "../lib/utils";
+import ReadingHeatmap from "./ReadingHeatmap";
+import ReadingGoalRing from "./ReadingGoalRing";
 
 interface ReadingStatsData {
   totalReadingTimeSecs: number;
@@ -9,9 +11,11 @@ interface ReadingStatsData {
   totalPagesRead: number;
   totalBooks: number;
   booksFinished: number;
+  booksFinishedThisYear: number;
   currentStreakDays: number;
   longestStreakDays: number;
   dailyReading: [string, number][];
+  dailyReadingYear: [string, number][];
 }
 
 interface ReadingStatsProps {
@@ -74,6 +78,9 @@ export default function ReadingStats({ onClose }: ReadingStatsProps) {
                 <StatCard label={t("stats.longestStreak")} value={formatStreak(stats.longestStreakDays)} />
               </div>
 
+              {/* Yearly reading goal (F-1-3) */}
+              <ReadingGoalRing finishedThisYear={stats.booksFinishedThisYear} />
+
               {/* Daily reading chart */}
               {stats.dailyReading.length > 0 && (
                 <div>
@@ -98,6 +105,9 @@ export default function ReadingStats({ onClose }: ReadingStatsProps) {
                   </div>
                 </div>
               )}
+
+              {/* Year-long reading heatmap (F-5-4) */}
+              <ReadingHeatmap dailyReadingYear={stats.dailyReadingYear} />
             </div>
           )}
         </div>

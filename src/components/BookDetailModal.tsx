@@ -1,7 +1,15 @@
 import { useEffect, useRef, useState } from "react";
-import { convertFileSrc } from "@tauri-apps/api/core";
+import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { useTranslation } from "react-i18next";
 import type { Book } from "../types";
+import { formatDuration, formatDate } from "../lib/utils";
+
+interface BookReadingStats {
+  totalReadingTimeSecs: number;
+  sessionCount: number;
+  firstReadAt: number | null;
+  finishedAt: number | null;
+}
 
 interface BookDetailModalProps {
   book: Book;
@@ -45,6 +53,27 @@ export default function BookDetailModal({ book, onClose, onOpen, onEdit, onScan 
   // it would otherwise contain zero focusable elements — breaking the focus
   // trap and leaving nothing to auto-focus. Give it an explicit close button.
   const readOnly = !onOpen && !onEdit && !onScan;
+
+  const [readingStats, setReadingStats] = useState<BookReadingStats | null>(null);
+
+  // Known limitation: this reflects completed sessions only. When opened from
+  // the reader's info popup, the current session hasn't been recorded yet —
+  // record_reading_session only fires on reader unmount — so an in-progress
+  // (or first) session isn't counted until the reader closes.
+  useEffect(() => {
+    let ignore = false;
+    setReadingStats(null);
+    invoke<BookReadingStats | null>("get_book_reading_stats", { bookId: book.id })
+      .then((stats) => {
+        if (!ignore) setReadingStats(stats);
+      })
+      .catch(() => {
+        if (!ignore) setReadingStats(null);
+      });
+    return () => {
+      ignore = true;
+    };
+  }, [book.id]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -161,6 +190,47 @@ export default function BookDetailModal({ book, onClose, onOpen, onEdit, onScan 
                   <span className="text-ink">{row.value}</span>
                 </div>
               ))}
+            </div>
+          </div>
+        )}
+
+        {/* Reading insights (F-1-7). Each row renders only when its own datum
+            is present, so e.g. a book finished via sync (finished_at only,
+            no local sessions) shows just the "Finished" row. */}
+        {readingStats && (
+          <div className="px-5 pb-3">
+            <div className="border-t border-warm-border pt-3 space-y-1.5">
+              <h3 className="text-xs font-semibold text-ink-muted uppercase tracking-wide">{t("detail.reading")}</h3>
+              {readingStats.sessionCount > 0 && (
+                <>
+                  <div className="flex text-sm">
+                    <span className="text-ink-muted w-24 flex-shrink-0">{t("detail.timeRead")}</span>
+                    <span className="text-ink">{formatDuration(readingStats.totalReadingTimeSecs)}</span>
+                  </div>
+                  <div className="flex text-sm">
+                    <span className="text-ink-muted w-24 flex-shrink-0">{t("detail.sessions")}</span>
+                    <span className="text-ink">{readingStats.sessionCount}</span>
+                  </div>
+                  <div className="flex text-sm">
+                    <span className="text-ink-muted w-24 flex-shrink-0">{t("detail.avgSession")}</span>
+                    <span className="text-ink">
+                      {formatDuration(Math.floor(readingStats.totalReadingTimeSecs / readingStats.sessionCount))}
+                    </span>
+                  </div>
+                </>
+              )}
+              {readingStats.firstReadAt != null && (
+                <div className="flex text-sm">
+                  <span className="text-ink-muted w-24 flex-shrink-0">{t("detail.started")}</span>
+                  <span className="text-ink">{formatDate(readingStats.firstReadAt)}</span>
+                </div>
+              )}
+              {readingStats.finishedAt != null && (
+                <div className="flex text-sm">
+                  <span className="text-ink-muted w-24 flex-shrink-0">{t("detail.finished")}</span>
+                  <span className="text-ink">{formatDate(readingStats.finishedAt)}</span>
+                </div>
+              )}
             </div>
           </div>
         )}

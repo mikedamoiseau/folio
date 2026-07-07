@@ -732,7 +732,13 @@
     "language": "Language",
     "year": "Year",
     "publisher": "Publisher",
-    "scanForMetadata": "Scan for metadata"
+    "scanForMetadata": "Scan for metadata",
+    "reading": "Reading",
+    "timeRead": "Time read",
+    "sessions": "Sessions",
+    "started": "Started",
+    "finished": "Finished",
+    "avgSession": "Avg session"
   },
 
   "stats": {
@@ -746,7 +752,22 @@
     "longestStreak": "Longest Streak",
     "dayCount": "{{count}} day",
     "daysCount": "{{count}} days",
-    "last30Days": "Last 30 Days"
+    "last30Days": "Last 30 Days",
+    "last365Days": "Last 365 Days",
+    "heatmapAriaLabel": "Reading activity for the last year",
+    "heatmapTooltip": "{{date}} — {{duration}}",
+    "heatmapTooltipEmpty": "{{date}} — No reading",
+    "goal": {
+      "title": "{{year}} Reading Goal",
+      "setGoal": "Set a yearly goal",
+      "setGoalHint": "Track how many books you finish this year",
+      "inputLabel": "Books to read this year",
+      "onTrack": "On track",
+      "aheadOfSchedule": "{{count}} ahead of schedule",
+      "behindSchedule": "{{count}} behind schedule",
+      "completed": "Goal reached!",
+      "ringAriaLabel": "{{finished}} of {{goal}} books finished this year, {{percent}}%"
+    }
   },
 
   "shortcuts": {

@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   formatDuration,
+  formatDate,
   formatBytes,
   filterBooks,
   sortBooks,
@@ -20,6 +21,13 @@ import {
   validateWebServerPort,
   WEB_SERVER_PORT_MIN,
   WEB_SERVER_PORT_MAX,
+  getHeatmapBucket,
+  toDateKey,
+  buildHeatmapWeeks,
+  getHeatmapMonthLabels,
+  HEATMAP_DAYS,
+  getDayOfYear,
+  computeReadingPace,
   type BookLike,
 } from "./utils";
 
@@ -48,6 +56,29 @@ describe("formatDuration", () => {
   it("formats hours with remaining minutes", () => {
     expect(formatDuration(3660)).toBe("1h 1m");
     expect(formatDuration(7320)).toBe("2h 2m");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// formatDate
+// ---------------------------------------------------------------------------
+describe("formatDate", () => {
+  it("formats a unix timestamp with the default options", () => {
+    // 2026-07-06T00:00:00Z
+    expect(formatDate(1783382400)).toBe(
+      new Date(1783382400 * 1000).toLocaleDateString(undefined, {
+        year: "numeric",
+        month: "short",
+        day: "numeric",
+      }),
+    );
+  });
+
+  it("respects custom Intl.DateTimeFormatOptions", () => {
+    const secs = 1783382400;
+    expect(formatDate(secs, { month: "short", day: "numeric" })).toBe(
+      new Date(secs * 1000).toLocaleDateString(undefined, { month: "short", day: "numeric" }),
+    );
   });
 });
 
@@ -802,5 +833,196 @@ describe("formatBytes", () => {
   it("returns empty string for null/undefined", () => {
     expect(formatBytes(null)).toBe("");
     expect(formatBytes(undefined)).toBe("");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Reading heatmap (F-5-4): bucketing + week-grid construction
+// ---------------------------------------------------------------------------
+
+describe("getHeatmapBucket", () => {
+  it("returns 0 for no reading", () => {
+    expect(getHeatmapBucket(0)).toBe(0);
+    expect(getHeatmapBucket(-5)).toBe(0);
+  });
+
+  it("returns bucket 1 for any positive reading below 15 minutes, however brief", () => {
+    // Regression: Math.round(seconds/60) used to map 1-29s to 0 minutes,
+    // making a day with real reading indistinguishable from an empty one.
+    expect(getHeatmapBucket(25)).toBe(1);
+    expect(getHeatmapBucket(899)).toBe(1); // 14m59s
+  });
+
+  it("does not round minutes up into the next bucket near a threshold", () => {
+    // Regression: 14m31s used to round to 15 minutes and jump to bucket 2.
+    expect(getHeatmapBucket(871)).toBe(1); // 14m31s
+  });
+
+  it("treats threshold boundaries as inclusive on the higher bucket", () => {
+    expect(getHeatmapBucket(900)).toBe(2); // 15m
+    expect(getHeatmapBucket(1799)).toBe(2); // 29m59s
+    expect(getHeatmapBucket(1800)).toBe(3); // 30m
+    expect(getHeatmapBucket(3599)).toBe(3); // 59m59s
+    expect(getHeatmapBucket(3600)).toBe(4); // 60m
+  });
+
+  it("caps at the top bucket for very long reading days", () => {
+    expect(getHeatmapBucket(600 * 60)).toBe(4);
+  });
+});
+
+describe("toDateKey", () => {
+  it("formats a local date as YYYY-MM-DD with zero-padding", () => {
+    expect(toDateKey(new Date(2026, 0, 5))).toBe("2026-01-05");
+    expect(toDateKey(new Date(2026, 11, 31))).toBe("2026-12-31");
+  });
+});
+
+describe("buildHeatmapWeeks", () => {
+  const today = new Date(2026, 6, 6); // 2026-07-06, a Monday
+
+  it("covers the full 365-day window plus week-alignment padding", () => {
+    const weeks = buildHeatmapWeeks([], today);
+    const totalDays = weeks.reduce((sum, w) => sum + w.length, 0);
+    expect(totalDays).toBeGreaterThanOrEqual(HEATMAP_DAYS);
+    // Every week is a complete 7-day column.
+    for (const week of weeks) expect(week).toHaveLength(7);
+  });
+
+  it("orders weeks oldest to newest, with today in the last week", () => {
+    const weeks = buildHeatmapWeeks([], today);
+    const lastWeek = weeks[weeks.length - 1];
+    expect(lastWeek.some((d) => d.date === toDateKey(today))).toBe(true);
+    const firstDate = weeks[0][0].date;
+    const lastDate = lastWeek[lastWeek.length - 1].date;
+    expect(firstDate < toDateKey(today)).toBe(true);
+    expect(lastDate >= toDateKey(today)).toBe(true);
+  });
+
+  it("starts each week on Sunday by default", () => {
+    const weeks = buildHeatmapWeeks([], today);
+    for (const week of weeks) {
+      expect(new Date(`${week[0].date}T00:00:00`).getDay()).toBe(0);
+    }
+  });
+
+  it("marks padding days outside the 365-day window as out of range", () => {
+    const weeks = buildHeatmapWeeks([], today);
+    const allDays = weeks.flat();
+    expect(allDays.filter((d) => d.inRange)).toHaveLength(HEATMAP_DAYS);
+
+    const todayKey = toDateKey(today);
+    const rangeStart = new Date(today);
+    rangeStart.setDate(rangeStart.getDate() - (HEATMAP_DAYS - 1));
+    const rangeStartKey = toDateKey(rangeStart);
+
+    for (const d of allDays) {
+      const expectedInRange = d.date >= rangeStartKey && d.date <= todayKey;
+      expect(d.inRange).toBe(expectedInRange);
+    }
+  });
+
+  it("maps seconds to the correct bucket for a given day", () => {
+    const todayKey = toDateKey(today);
+    const weeks = buildHeatmapWeeks([[todayKey, 45 * 60]], today);
+    const day = weeks.flat().find((d) => d.date === todayKey);
+    expect(day?.seconds).toBe(45 * 60);
+    expect(day?.bucket).toBe(3);
+  });
+
+  it("treats days with no session as bucket 0 (rendered as the lowest intensity)", () => {
+    const weeks = buildHeatmapWeeks([], today);
+    const day = weeks.flat().find((d) => d.date === toDateKey(today));
+    expect(day?.bucket).toBe(0);
+  });
+});
+
+describe("getHeatmapMonthLabels", () => {
+  it("labels the week column containing the 1st of a month", () => {
+    const today = new Date(2026, 6, 6);
+    const weeks = buildHeatmapWeeks([], today);
+    const labels = getHeatmapMonthLabels(weeks);
+    expect(labels).toHaveLength(weeks.length);
+
+    // Find the week that actually contains 2026-07-01 and confirm it's
+    // labeled July (month index 6); no other week should also claim it.
+    const julyWeekIndex = weeks.findIndex((w) => w.some((d) => d.date === "2026-07-01"));
+    expect(labels[julyWeekIndex]).toBe(6);
+  });
+
+  it("returns null for weeks that don't start a month", () => {
+    const today = new Date(2026, 6, 6);
+    const weeks = buildHeatmapWeeks([], today);
+    const midMonthWeekIndex = weeks.findIndex((w) => w.some((d) => d.date === "2026-07-06"));
+    expect(getHeatmapMonthLabels(weeks)[midMonthWeekIndex]).toBeNull();
+  });
+
+  it("does not label a future month whose 1st falls only in end-of-grid padding", () => {
+    // 2026-07-29 is a Wednesday (mid-week). The grid pads forward to the
+    // Saturday of the current week, so 2026-08-01 appears as an
+    // out-of-range padding cell in the last week column. Without the fix,
+    // that column would claim the August label — a duplicate of the label
+    // already correctly placed on last year's real August (2025-08-01,
+    // which does fall inside the 365-day window).
+    const today = new Date(2026, 6, 29);
+    const weeks = buildHeatmapWeeks([], today);
+    const lastWeekIndex = weeks.length - 1;
+    expect(weeks[lastWeekIndex].some((d) => d.date === "2026-08-01" && !d.inRange)).toBe(true);
+
+    const labels = getHeatmapMonthLabels(weeks);
+    expect(labels[lastWeekIndex]).toBeNull();
+
+    // The legitimate August label (from 2025-08-01, in range) still appears
+    // exactly once elsewhere in the grid.
+    const augustLabels = labels.filter((label) => label === 7);
+    expect(augustLabels).toHaveLength(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Yearly reading goal (F-1-3): day-of-year + pace comparison
+// ---------------------------------------------------------------------------
+
+describe("getDayOfYear", () => {
+  it("returns 1 for January 1st", () => {
+    expect(getDayOfYear(new Date(2026, 0, 1))).toBe(1);
+  });
+
+  it("returns 365 for December 31st of a non-leap year", () => {
+    expect(getDayOfYear(new Date(2026, 11, 31))).toBe(365);
+  });
+
+  it("returns 366 for December 31st of a leap year", () => {
+    expect(getDayOfYear(new Date(2028, 11, 31))).toBe(366);
+  });
+
+  it("returns 166 for June 15th of a non-leap year", () => {
+    expect(getDayOfYear(new Date(2026, 5, 15))).toBe(166);
+  });
+});
+
+describe("computeReadingPace", () => {
+  it("day 1: expects 0 books yet, any finished book is ahead", () => {
+    expect(computeReadingPace(0, 12, 1)).toEqual({ status: "onTrack", count: 0, expected: 0 });
+    expect(computeReadingPace(1, 12, 1)).toEqual({ status: "ahead", count: 1, expected: 0 });
+  });
+
+  it("day 365: expects the full goal", () => {
+    expect(computeReadingPace(365, 365, 365)).toEqual({ status: "onTrack", count: 0, expected: 365 });
+    expect(computeReadingPace(364, 365, 365)).toEqual({ status: "behind", count: 1, expected: 365 });
+    expect(computeReadingPace(366, 365, 365)).toEqual({ status: "ahead", count: 1, expected: 365 });
+  });
+
+  it("reports ahead of schedule", () => {
+    // goal 12, day 182 -> expected floor(12*182/365) = 5
+    expect(computeReadingPace(8, 12, 182)).toEqual({ status: "ahead", count: 3, expected: 5 });
+  });
+
+  it("reports behind schedule", () => {
+    expect(computeReadingPace(2, 12, 182)).toEqual({ status: "behind", count: 3, expected: 5 });
+  });
+
+  it("reports on track when finished matches the expected pace exactly", () => {
+    expect(computeReadingPace(5, 12, 182)).toEqual({ status: "onTrack", count: 0, expected: 5 });
   });
 });
