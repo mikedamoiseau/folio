@@ -381,7 +381,21 @@ export default function ReaderPane({
           // priority over it. First open of a book in a private session
           // has no volatile entry yet, so it falls through to the normal
           // DB read below — never a hard requirement to have one.
-          const volatile = isPrivate ? getVolatilePosition(bookId) : undefined;
+          //
+          // Read the flag straight from the backend here rather than the
+          // `usePrivateMode` hook state: on a fresh reader mount that hook
+          // starts `false` and only resolves `get_private_mode`
+          // asynchronously, so this init effect (which depends on `bookId`
+          // only) could otherwise observe a stale `false` and skip the
+          // volatile position entirely, resurrecting the pre-private DB row.
+          let privateNow = isPrivate;
+          try {
+            privateNow = await invoke<boolean>("get_private_mode");
+          } catch {
+            // Backend unavailable — fall back to the hook's current value.
+          }
+          if (cancelled) return;
+          const volatile = privateNow ? getVolatilePosition(bookId) : undefined;
           if (volatile) {
             setChapterIndex(volatile.chapterIndex);
             savedScrollPosition.current = volatile.scrollPosition;

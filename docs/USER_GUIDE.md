@@ -284,7 +284,7 @@ Open the toggle in the header (the eye icon, next to the language switcher) to p
 - Reading progress — your place in books
 - Reading-time stats and streaks
 - The recently-read / "Continue Reading" list
-- The activity log
+- Reading entries in the activity log (deliberate library actions, like importing or deleting a book, are still logged)
 
 **Still saved:**
 
