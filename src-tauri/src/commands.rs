@@ -78,6 +78,18 @@ pub struct AppState {
     /// profile that hasn't been unlocked yet. Leaf lock — never held
     /// together with another `AppState` mutex.
     pub unlocked_profiles: std::sync::Arc<std::sync::Mutex<std::collections::HashSet<String>>>,
+    /// "Don't track this session" / private mode (B-M1). Shared with the
+    /// web server (cloned into `WebState` at every construction site,
+    /// mirroring `unlocked_profiles`/`shared_active_pool`) so desktop and
+    /// web callers read the same flag. `set_private_mode` is the only
+    /// runtime mutator. Passive write/emit sites read this once per
+    /// request via `AppState::is_private`/`WebState::is_private` and pass
+    /// an explicit `bool` into the pure folio-core functions they call —
+    /// never read deep inside those functions, so they stay deterministic
+    /// under parallel `cargo test`. Defaults `false` (no frontend toggle
+    /// exists yet — B-M2); any future ambiguity in a *derived* read (not
+    /// this direct atomic load) should still resolve to "suppress".
+    pub private_mode: std::sync::Arc<std::sync::atomic::AtomicBool>,
     /// Serializes the profile-lifecycle commands (`set_profile_lock`,
     /// `remove_profile_lock`, `unlock_profile`, `delete_profile`) so two
     /// concurrent IPC calls on the same profile can't interleave across the
@@ -212,6 +224,14 @@ impl AppState {
             .local_path(&book.file_path)?
             .to_string_lossy()
             .to_string())
+    }
+
+    /// Reads the private-mode ("Don't track this session") flag (B-M1).
+    /// Callers read this once per request and pass the resulting bool into
+    /// the pure folio-core functions that need it (D-1) — never re-read it
+    /// deep inside those functions.
+    pub fn is_private(&self) -> bool {
+        self.private_mode.load(Ordering::SeqCst)
     }
 
     /// Whether `profile` has been unlocked (soft-lock, A-M2) this process
@@ -2136,6 +2156,14 @@ pub(crate) fn validate_scroll_position(pos: f64) -> FolioResult<f64> {
 /// web PUT intentionally does not — see review finding F4, since the reader
 /// paginates against a live page-count that can exceed a stale
 /// `total_chapters`).
+///
+/// `suppress_passive` (private mode, B-M1, SB-3/SB-4, D-3): when `true`,
+/// the entire mutating block below — the progress upsert, the `BookFinished`
+/// bus emit, the `BookCompleted` activity log, and the desktop
+/// `book-completed` window event — is skipped as one unit. The caller's
+/// submitted position is still echoed back in the returned `ReadingProgress`
+/// (with a synthetic `last_read_at`) so the web/desktop reader can update its
+/// own in-memory volatile resume point (D-4) without anything touching disk.
 pub(crate) fn apply_reading_progress(
     conn: &rusqlite::Connection,
     book: &Book,
@@ -2143,7 +2171,22 @@ pub(crate) fn apply_reading_progress(
     chapter_index: u32,
     scroll_position: f64,
     app: Option<&AppHandle>,
+    suppress_passive: bool,
 ) -> FolioResult<ReadingProgress> {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64;
+
+    if suppress_passive {
+        return Ok(ReadingProgress {
+            book_id: book_id.to_string(),
+            chapter_index,
+            scroll_position,
+            last_read_at: now,
+        });
+    }
+
     let is_on_last_chapter =
         book.total_chapters > 0 && chapter_index >= book.total_chapters.saturating_sub(1);
 
@@ -2156,10 +2199,7 @@ pub(crate) fn apply_reading_progress(
         book_id: book_id.to_string(),
         chapter_index,
         scroll_position,
-        last_read_at: std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs() as i64,
+        last_read_at: now,
     };
 
     db::upsert_reading_progress(conn, &progress)?;
@@ -2222,9 +2262,39 @@ pub async fn save_reading_progress(
         chapter_index,
         scroll_position,
         Some(&app),
+        state.is_private(),
     )?;
 
     Ok(())
+}
+
+// --- Private mode ("Don't track this session", B-M1) ---
+
+/// Flips the app-wide private-mode flag — the only runtime mutator
+/// (Decision 1/3). Suppression is read fresh from this atomic at each
+/// passive write/emit site, so a flip takes effect starting with the very
+/// next write; no synthetic "session closed" record is ever produced
+/// (Decision 3, closes the toggle-then-unmount race). Highlights and
+/// bookmarks are never affected — deliberate saves always persist.
+///
+/// No frontend toggle exists yet (B-M2); this command exists so the
+/// backend guard is fully testable ahead of the UI landing.
+#[tauri::command]
+pub async fn set_private_mode<R: tauri::Runtime>(
+    enabled: bool,
+    app: AppHandle<R>,
+    state: State<'_, AppState>,
+) -> FolioResult<bool> {
+    state.private_mode.store(enabled, Ordering::SeqCst);
+    let _ = app.emit("private-mode-changed", enabled);
+    Ok(enabled)
+}
+
+/// Reads the current private-mode flag. Status-only — the flag can only be
+/// changed via `set_private_mode`.
+#[tauri::command]
+pub async fn get_private_mode(state: State<'_, AppState>) -> FolioResult<bool> {
+    Ok(state.is_private())
 }
 
 // --- Bookmarks ---
@@ -2569,6 +2639,11 @@ pub async fn record_reading_session(
     if duration_secs < 10 {
         return Ok(());
     } // Skip very short sessions
+    if state.is_private() {
+        // Private mode (B-M1): reading sessions feed the stats
+        // dashboard/heatmap/goal ring — a passive write, skipped entirely.
+        return Ok(());
+    }
     let conn = state.active_db()?.get()?;
     let id = Uuid::new_v4().to_string();
     Ok(db::insert_reading_session(
@@ -4669,7 +4744,14 @@ pub async fn get_pdf_page_bytes(
                     }
                 };
                 let (b, m) = page_cache::get_or_render_pdf_page_with_eviction(
-                    &storage, &book_hash, &file_path, page_index, on_batch,
+                    &storage,
+                    &book_hash,
+                    &file_path,
+                    page_index,
+                    on_batch,
+                    // Private mode (B-M1, OQ-3/SB-9): skip only the on-disk
+                    // page write; the read/pre-warm path above is untouched.
+                    state.is_private(),
                 )?;
                 (b, m.to_string())
             } else {
@@ -6156,11 +6238,20 @@ pub async fn sync_pull_book(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> FolioResult<()> {
+    // Private mode (B-M1): read once at the top of this request and reuse
+    // for every passive write/emit below (the plugin-bus open signal, and
+    // the inbound sync merge's progress arm).
+    let suppress_passive = state.is_private();
+
     // The reader invokes this on every book open regardless of sync state,
-    // which makes it the backend's open signal — emit before the sync guards.
-    events::bus().emit(FolioEvent::BookOpened {
-        book_id: book_id.clone(),
-    });
+    // which makes it the backend's open signal — emit before the sync
+    // guards, but never while private (a tracker plugin with `network`
+    // could exfiltrate a "private" read otherwise — SB-4).
+    if !suppress_passive {
+        events::bus().emit(FolioEvent::BookOpened {
+            book_id: book_id.clone(),
+        });
+    }
 
     let conn = state.active_db()?.get()?;
 
@@ -6203,9 +6294,22 @@ pub async fn sync_pull_book(
                 success: true,
             });
             // Merge on main thread using the existing connection
-            let local = crate::sync::build_sync_payload(&conn, &book_id, &file_hash, &device_id);
-            let merge_result =
-                crate::sync::merge_remote_into_local(&conn, &book_id, &local, &remote);
+            let local = crate::sync::build_sync_payload(
+                &conn,
+                &book_id,
+                &file_hash,
+                &device_id,
+                suppress_passive,
+            );
+            let merge_result = crate::sync::merge_remote_into_local(
+                &conn,
+                &book_id,
+                &local,
+                &remote,
+                crate::sync::MergeOptions {
+                    suppress_progress: suppress_passive,
+                },
+            );
             let _ = db::set_setting(&conn, "last_sync_success_at", &now_unix_secs().to_string());
             if merge_result.has_changes() {
                 let summary = merge_result_summary(&merge_result);
@@ -6279,11 +6383,19 @@ pub async fn sync_pull_book(
 
 #[tauri::command]
 pub async fn sync_push_book(book_id: String, state: State<'_, AppState>) -> FolioResult<()> {
+    // Private mode (B-M1): read once here and carry into the spawned
+    // background thread below (State can't be moved across the
+    // spawn_blocking boundary, so capture the bool now).
+    let suppress_passive = state.is_private();
+
     // The reader invokes this on every book close regardless of sync state,
-    // which makes it the backend's close signal — emit before the sync guards.
-    events::bus().emit(FolioEvent::BookClosed {
-        book_id: book_id.clone(),
-    });
+    // which makes it the backend's close signal — emit before the sync
+    // guards, but never while private (SB-4).
+    if !suppress_passive {
+        events::bus().emit(FolioEvent::BookClosed {
+            book_id: book_id.clone(),
+        });
+    }
 
     let conn = state.active_db()?.get()?;
 
@@ -6322,7 +6434,14 @@ pub async fn sync_push_book(book_id: String, state: State<'_, AppState>) -> Foli
             Ok(c) => c,
             Err(_) => return,
         };
-        match crate::sync::sync_book_on_close(&bg_conn, &op, &book_id, &file_hash, &device_id) {
+        match crate::sync::sync_book_on_close(
+            &bg_conn,
+            &op,
+            &book_id,
+            &file_hash,
+            &device_id,
+            suppress_passive,
+        ) {
             Ok(()) => {
                 events::bus().emit(FolioEvent::SyncCompleted {
                     direction: SyncDirection::Push,
@@ -6558,6 +6677,7 @@ pub async fn web_server_set_modes(
             login_limiter: std::sync::Arc::new(crate::web_server::auth::RateLimiter::new(5, 300)),
             active_profile_name: state.shared_active_profile_name.clone(),
             unlocked_profiles: state.unlocked_profiles.clone(),
+            private_mode: state.private_mode.clone(),
         };
 
         let handle = crate::web_server::start(web_state, port_used, modes).await?;
@@ -6742,7 +6862,7 @@ mod tests {
 
         // Landing on the last chapter (index 4 of 5) for the first time
         // fires the completion side effects exactly once.
-        apply_reading_progress(&conn, &book, "book-1", 4, 0.5, None).unwrap();
+        apply_reading_progress(&conn, &book, "book-1", 4, 0.5, None, false).unwrap();
         let activity = db::get_all_activity(&conn).unwrap();
         assert_eq!(
             activity
@@ -6756,7 +6876,7 @@ mod tests {
         // this is the desktop-after-web dedup scenario from F1: whichever
         // path crosses onto the last chapter first fires the event, and
         // later saves (from either path) must see `was_completed_before`.
-        apply_reading_progress(&conn, &book, "book-1", 4, 0.9, None).unwrap();
+        apply_reading_progress(&conn, &book, "book-1", 4, 0.9, None, false).unwrap();
         let activity = db::get_all_activity(&conn).unwrap();
         assert_eq!(
             activity
@@ -6775,9 +6895,156 @@ mod tests {
         let book = progress_test_book("book-2", 5);
         db::insert_book(&conn, &book).unwrap();
 
-        apply_reading_progress(&conn, &book, "book-2", 2, 0.5, None).unwrap();
+        apply_reading_progress(&conn, &book, "book-2", 2, 0.5, None, false).unwrap();
         let activity = db::get_all_activity(&conn).unwrap();
         assert!(activity.iter().all(|a| a.action != "book_completed"));
+    }
+
+    // --- Private mode (B-M1): suppress_passive boundary ---
+
+    #[test]
+    fn apply_reading_progress_suppressed_writes_nothing_and_emits_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let conn = db::init_db(&dir.path().join("t.db")).unwrap();
+        let book = progress_test_book("book-priv", 5);
+        db::insert_book(&conn, &book).unwrap();
+
+        // Land on the last chapter — this would normally upsert progress,
+        // emit BookFinished, and log a BookCompleted activity row.
+        let result = apply_reading_progress(&conn, &book, "book-priv", 4, 0.5, None, true).unwrap();
+
+        // The caller still gets back the position it submitted (so the
+        // frontend can hold a volatile in-memory resume point, D-4) —
+        // but nothing was persisted.
+        assert_eq!(result.chapter_index, 4);
+        assert!((result.scroll_position - 0.5).abs() < f64::EPSILON);
+
+        assert!(
+            db::get_reading_progress(&conn, "book-priv")
+                .unwrap()
+                .is_none(),
+            "reading_progress must stay empty while suppressed"
+        );
+        let activity = db::get_all_activity(&conn).unwrap();
+        assert!(
+            activity.iter().all(|a| a.action != "book_completed"),
+            "no activity log entry while suppressed"
+        );
+    }
+
+    #[test]
+    fn apply_reading_progress_suppressed_does_not_block_a_highlight_or_bookmark_in_the_same_test() {
+        // The persist/suppress boundary: a highlight + bookmark insert in
+        // the SAME test still land even though the progress write next to
+        // them is suppressed.
+        let dir = tempfile::tempdir().unwrap();
+        let conn = db::init_db(&dir.path().join("t.db")).unwrap();
+        let book = progress_test_book("book-priv-2", 5);
+        db::insert_book(&conn, &book).unwrap();
+
+        apply_reading_progress(&conn, &book, "book-priv-2", 4, 0.5, None, true).unwrap();
+        assert!(db::get_reading_progress(&conn, "book-priv-2")
+            .unwrap()
+            .is_none());
+
+        let bookmark = Bookmark {
+            id: "bm-priv".to_string(),
+            book_id: "book-priv-2".to_string(),
+            chapter_index: 1,
+            scroll_position: 0.1,
+            name: None,
+            note: None,
+            created_at: 0,
+            updated_at: 0,
+            deleted_at: None,
+        };
+        db::insert_bookmark(&conn, &bookmark).unwrap();
+
+        let highlight = Highlight {
+            id: "hl-priv".to_string(),
+            book_id: "book-priv-2".to_string(),
+            chapter_index: 1,
+            text: "quote".to_string(),
+            color: "#ffff00".to_string(),
+            note: None,
+            start_offset: 0,
+            end_offset: 5,
+            created_at: 0,
+            updated_at: 0,
+            deleted_at: None,
+        };
+        db::insert_highlight(&conn, &highlight).unwrap();
+
+        assert_eq!(db::list_bookmarks(&conn, "book-priv-2").unwrap().len(), 1);
+        assert_eq!(db::list_highlights(&conn, "book-priv-2").unwrap().len(), 1);
+        assert!(
+            db::get_reading_progress(&conn, "book-priv-2")
+                .unwrap()
+                .is_none(),
+            "progress must remain suppressed alongside persisted annotations"
+        );
+    }
+
+    #[tokio::test]
+    async fn record_reading_session_skipped_when_private() {
+        let (app, _dir) = mock_app_with_state();
+        let state = app.handle().state::<AppState>();
+        state.private_mode.store(true, Ordering::SeqCst);
+
+        record_reading_session(
+            "book-1".to_string(),
+            0,
+            3600, // well above the 10s floor
+            10,
+            state.clone(),
+        )
+        .await
+        .unwrap();
+
+        let conn = state.active_db().unwrap().get().unwrap();
+        let stats = db::get_reading_stats(&conn).unwrap();
+        assert_eq!(
+            stats.total_sessions, 0,
+            "no reading session should be recorded while private"
+        );
+    }
+
+    #[tokio::test]
+    async fn record_reading_session_recorded_when_not_private() {
+        let (app, _dir) = mock_app_with_state();
+        let state = app.handle().state::<AppState>();
+        assert!(!state.is_private());
+        {
+            let conn = state.active_db().unwrap().get().unwrap();
+            db::insert_book(&conn, &progress_test_book("book-1", 5)).unwrap();
+        }
+
+        record_reading_session("book-1".to_string(), 0, 3600, 10, state.clone())
+            .await
+            .unwrap();
+
+        let conn = state.active_db().unwrap().get().unwrap();
+        let stats = db::get_reading_stats(&conn).unwrap();
+        assert_eq!(stats.total_sessions, 1);
+    }
+
+    #[tokio::test]
+    async fn set_private_mode_flips_flag_and_get_private_mode_reads_it() {
+        let (app, _dir) = mock_app_with_state();
+        let state = app.handle().state::<AppState>();
+        assert!(!get_private_mode(state.clone()).await.unwrap());
+
+        let result = set_private_mode(true, app.handle().clone(), state.clone())
+            .await
+            .unwrap();
+        assert!(result);
+        assert!(get_private_mode(state.clone()).await.unwrap());
+        assert!(state.is_private());
+
+        set_private_mode(false, app.handle().clone(), state.clone())
+            .await
+            .unwrap();
+        assert!(!state.is_private());
     }
 
     #[test]
@@ -8076,6 +8343,7 @@ mod tests {
             unlocked_profiles: std::sync::Arc::new(std::sync::Mutex::new(
                 std::collections::HashSet::from(["default".to_string()]),
             )),
+            private_mode: std::sync::Arc::new(AtomicBool::new(false)),
             profile_lifecycle: std::sync::Arc::new(tokio::sync::Mutex::new(())),
             db: pool,
             profile_state: std::sync::Mutex::new(ProfileState {

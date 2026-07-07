@@ -751,6 +751,7 @@ mod tests {
             unlocked_profiles: Arc::new(Mutex::new(std::collections::HashSet::from([
                 "default".to_string()
             ]))),
+            private_mode: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         }
     }
 

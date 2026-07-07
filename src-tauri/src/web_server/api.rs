@@ -1050,6 +1050,7 @@ async fn put_progress(
     // web-driven completion logs the same activity entry and bus event.
     // `None` here means no desktop window-toast event is emitted for a
     // web-only completion — see `apply_reading_progress`'s doc comment.
+    // Private mode (B-M1): read the shared flag fresh for this request.
     let progress = crate::commands::apply_reading_progress(
         &conn,
         &book,
@@ -1057,6 +1058,7 @@ async fn put_progress(
         body.chapter_index,
         scroll_position,
         None,
+        state.is_private(),
     )
     .map_err(folio_status)?;
 

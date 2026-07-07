@@ -386,6 +386,7 @@ mod tests {
             login_limiter: Arc::new(RateLimiter::new(5, 300)),
             active_profile_name: Arc::new(Mutex::new("default".to_string())),
             unlocked_profiles: Arc::new(Mutex::new(HashSet::from(["default".to_string()]))),
+            private_mode: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         }
     }
 

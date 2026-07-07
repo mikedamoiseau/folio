@@ -168,6 +168,10 @@ pub fn run() {
                     crate::web_server::auth::load_pin_hash(),
                 )),
                 unlocked_profiles: std::sync::Arc::new(std::sync::Mutex::new(unlocked_profiles)),
+                // B-M1: private mode defaults off — no frontend toggle
+                // exists yet (B-M2), so main stays shippable with tracking
+                // behaving exactly as before this feature landed.
+                private_mode: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
                 profile_lifecycle: std::sync::Arc::new(tokio::sync::Mutex::new(())),
                 db: pool,
                 profile_state: std::sync::Mutex::new(ProfileState {
@@ -305,6 +309,7 @@ pub fn run() {
                     login_limiter: std::sync::Arc::new(web_server::auth::RateLimiter::new(5, 300)),
                     active_profile_name: state.shared_active_profile_name.clone(),
                     unlocked_profiles: state.unlocked_profiles.clone(),
+                    private_mode: state.private_mode.clone(),
                 };
                 if let Ok(handle) = web_server::start(web_state, port, modes).await {
                     {
@@ -419,6 +424,8 @@ pub fn run() {
             commands::get_reading_progress,
             commands::get_all_reading_progress,
             commands::save_reading_progress,
+            commands::set_private_mode,
+            commands::get_private_mode,
             commands::get_bookmarks,
             commands::add_bookmark,
             commands::remove_bookmark,

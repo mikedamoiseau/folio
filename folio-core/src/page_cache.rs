@@ -567,12 +567,20 @@ pub fn ensure_pdf_prewarmed(
 /// `on_batch` fires when the lazy-write counter crosses a multiple of
 /// [`LAZY_EVICTION_BATCH`] — the command layer wires this to spawn a
 /// background eviction.
+///
+/// `suppress_write` (private mode, B-M1, OQ-3/SB-9): skips only the page
+/// *content* write (`storage.put` + the `LAZY_WRITE_COUNTER`/`on_batch`
+/// path) — the real forensic trace of which page was viewed. The read/
+/// pre-warm fast path above is untouched, and `last_accessed` is still
+/// bumped and persisted to the manifest so a privately-read book isn't
+/// preferentially evicted by the LRU/age policy.
 pub fn get_or_render_pdf_page_with_renderer<F, B>(
     storage: &dyn Storage,
     book_hash: &str,
     page_index: u32,
     render: F,
     on_batch: B,
+    suppress_write: bool,
 ) -> FolioResult<(Vec<u8>, String)>
 where
     F: Fn(u32) -> FolioResult<(Vec<u8>, String)>,
@@ -606,33 +614,41 @@ where
     // just return the rendered bytes. Cache writes are best-effort.
     if let Some(mut manifest) = manifest_opt {
         if manifest.format == BookFormat::Pdf {
-            let name = format!("{page_index:03}.jpg");
-            match storage.put(&page_key(book_hash, &name), &bytes) {
-                Ok(()) => {
-                    // Only touch last_accessed — `total_size_bytes`
-                    // intentionally stays as the warm-time snapshot.
-                    // Eviction reads the disk directly via
-                    // `book_disk_size_bytes`, so a concurrent lazy
-                    // read-modify-write on the field would only ever
-                    // cause stats drift, not eviction misbehavior.
-                    // Dropping the update kills the lost-increment
-                    // race outright.
-                    manifest.last_accessed = now_iso();
-                    let _ = write_manifest(storage, book_hash, &manifest);
+            if suppress_write {
+                // Private mode: never persist the rendered page bytes.
+                // Still bump + persist last_accessed (memory AND
+                // manifest) so eviction doesn't treat this book as cold.
+                manifest.last_accessed = now_iso();
+                let _ = write_manifest(storage, book_hash, &manifest);
+            } else {
+                let name = format!("{page_index:03}.jpg");
+                match storage.put(&page_key(book_hash, &name), &bytes) {
+                    Ok(()) => {
+                        // Only touch last_accessed — `total_size_bytes`
+                        // intentionally stays as the warm-time snapshot.
+                        // Eviction reads the disk directly via
+                        // `book_disk_size_bytes`, so a concurrent lazy
+                        // read-modify-write on the field would only ever
+                        // cause stats drift, not eviction misbehavior.
+                        // Dropping the update kills the lost-increment
+                        // race outright.
+                        manifest.last_accessed = now_iso();
+                        let _ = write_manifest(storage, book_hash, &manifest);
 
-                    let prev =
-                        LAZY_WRITE_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                    if (prev + 1).is_multiple_of(LAZY_EVICTION_BATCH) {
-                        on_batch();
+                        let prev =
+                            LAZY_WRITE_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        if (prev + 1).is_multiple_of(LAZY_EVICTION_BATCH) {
+                            on_batch();
+                        }
                     }
-                }
-                Err(e) => {
-                    page_dbg!(
-                        "lazy cache write failed for {}/{}: {} — serving from memory",
-                        book_hash,
-                        name,
-                        e
-                    );
+                    Err(e) => {
+                        page_dbg!(
+                            "lazy cache write failed for {}/{}: {} — serving from memory",
+                            book_hash,
+                            name,
+                            e
+                        );
+                    }
                 }
             }
         }
@@ -642,13 +658,15 @@ where
 }
 
 /// Production wrapper: wires [`crate::pdf::get_page_image_bytes`] at
-/// the canonical width and forwards the `on_batch` callback unchanged.
+/// the canonical width and forwards the `on_batch` callback and
+/// `suppress_write` flag unchanged.
 pub fn get_or_render_pdf_page_with_eviction<B>(
     storage: &dyn Storage,
     book_hash: &str,
     file_path: &str,
     page_index: u32,
     on_batch: B,
+    suppress_write: bool,
 ) -> FolioResult<(Vec<u8>, String)>
 where
     B: Fn(),
@@ -661,7 +679,14 @@ where
         )?;
         Ok((bytes, mime.to_string()))
     };
-    get_or_render_pdf_page_with_renderer(storage, book_hash, page_index, render, on_batch)
+    get_or_render_pdf_page_with_renderer(
+        storage,
+        book_hash,
+        page_index,
+        render,
+        on_batch,
+        suppress_write,
+    )
 }
 
 /// No-op-eviction variant for callers that do not have a runtime
@@ -672,7 +697,7 @@ pub fn get_or_render_pdf_page(
     file_path: &str,
     page_index: u32,
 ) -> FolioResult<(Vec<u8>, String)> {
-    get_or_render_pdf_page_with_eviction(storage, book_hash, file_path, page_index, || {})
+    get_or_render_pdf_page_with_eviction(storage, book_hash, file_path, page_index, || {}, false)
 }
 
 // ---------------------------------------------------------------------------
@@ -1353,7 +1378,7 @@ mod tests {
         };
 
         let (bytes, mime) =
-            get_or_render_pdf_page_with_renderer(&storage, hash, 3, render, || {}).unwrap();
+            get_or_render_pdf_page_with_renderer(&storage, hash, 3, render, || {}, false).unwrap();
         assert_eq!(bytes, b"cached-bytes");
         assert_eq!(mime, "image/jpeg");
     }
@@ -1381,7 +1406,7 @@ mod tests {
         };
 
         let (bytes, _) =
-            get_or_render_pdf_page_with_renderer(&storage, hash, 42, render, || {}).unwrap();
+            get_or_render_pdf_page_with_renderer(&storage, hash, 42, render, || {}, false).unwrap();
         assert_eq!(bytes, b"p42");
 
         assert!(storage.exists(&page_key(hash, "042.jpg")).unwrap());
@@ -1422,8 +1447,8 @@ mod tests {
             panic!("renderer must not run for out-of-range index");
         };
 
-        let err =
-            get_or_render_pdf_page_with_renderer(&storage, hash, 999, render, || {}).unwrap_err();
+        let err = get_or_render_pdf_page_with_renderer(&storage, hash, 999, render, || {}, false)
+            .unwrap_err();
         let msg = format!("{err}");
         assert!(msg.contains("out of range"), "got: {msg}");
     }
@@ -1436,7 +1461,8 @@ mod tests {
         };
 
         let (bytes, _) =
-            get_or_render_pdf_page_with_renderer(&storage, "nope", 0, render, || {}).unwrap();
+            get_or_render_pdf_page_with_renderer(&storage, "nope", 0, render, || {}, false)
+                .unwrap();
         assert_eq!(bytes, b"p0");
         // No manifest → no cache writes.
         assert!(!storage.exists(&page_key("nope", "000.jpg")).unwrap());
@@ -1503,7 +1529,7 @@ mod tests {
             Ok((format!("p{idx}").into_bytes(), "image/jpeg".into()))
         };
         let (bytes, _) =
-            get_or_render_pdf_page_with_renderer(&storage, hash, 5, render, || {}).unwrap();
+            get_or_render_pdf_page_with_renderer(&storage, hash, 5, render, || {}, false).unwrap();
         assert_eq!(bytes, b"p5");
         // Cache write failed silently; manifest size unchanged.
         let m = read_manifest(&storage, hash).unwrap();
@@ -1541,7 +1567,8 @@ mod tests {
         reset_lazy_eviction_counter_for_tests();
 
         for i in 0..LAZY_EVICTION_BATCH * 2 {
-            get_or_render_pdf_page_with_renderer(&storage, hash, i, render, on_batch).unwrap();
+            get_or_render_pdf_page_with_renderer(&storage, hash, i, render, on_batch, false)
+                .unwrap();
         }
 
         assert_eq!(calls.get(), 2, "callback fires exactly once per batch");
@@ -1593,5 +1620,155 @@ mod tests {
             read_manifest(&storage, hash).is_some(),
             "ensure_cached must not delete the PDF manifest via comic-style validation"
         );
+    }
+
+    // --- Private mode (B-M1): suppress_write boundary ---
+
+    #[test]
+    fn get_or_render_pdf_page_suppressed_skips_disk_write_but_bumps_last_accessed() {
+        let (_d, storage) = temp_storage();
+        let hash = "priv-hash";
+        let baseline = "2020-01-01T00:00:00+00:00";
+        let manifest = CacheManifest {
+            book_id: "b".into(),
+            book_hash: hash.into(),
+            page_count: 10,
+            total_size_bytes: 0,
+            extracted_at: baseline.into(),
+            last_accessed: baseline.into(),
+            pages: Vec::new(),
+            format: BookFormat::Pdf,
+            canonical_width: Some(2400),
+        };
+        write_manifest(&storage, hash, &manifest).unwrap();
+
+        let render = |idx: u32| -> FolioResult<(Vec<u8>, String)> {
+            Ok((
+                format!("secret-page-{idx}").into_bytes(),
+                "image/jpeg".into(),
+            ))
+        };
+
+        let (bytes, _) =
+            get_or_render_pdf_page_with_renderer(&storage, hash, 3, render, || {}, true).unwrap();
+        assert_eq!(
+            bytes, b"secret-page-3",
+            "bytes must still be returned from the render fast path"
+        );
+
+        assert!(
+            !storage.exists(&page_key(hash, "003.jpg")).unwrap(),
+            "private render must never write page bytes to disk"
+        );
+        let updated = read_manifest(&storage, hash).unwrap();
+        assert_ne!(
+            updated.last_accessed, baseline,
+            "last_accessed must still be bumped so the book isn't evicted as stale"
+        );
+    }
+
+    #[test]
+    fn get_or_render_pdf_page_suppressed_never_triggers_lazy_eviction_batch() {
+        // Suppressed writes must not advance the shared lazy-write
+        // counter or fire `on_batch` — there is no disk write to coalesce.
+        let (_d, storage) = temp_storage();
+        let hash = "priv-hash-2";
+        write_manifest(
+            &storage,
+            hash,
+            &CacheManifest {
+                book_id: "b".into(),
+                book_hash: hash.into(),
+                page_count: 200,
+                total_size_bytes: 0,
+                extracted_at: now_iso(),
+                last_accessed: now_iso(),
+                pages: Vec::new(),
+                format: BookFormat::Pdf,
+                canonical_width: Some(2400),
+            },
+        )
+        .unwrap();
+
+        let render = |idx: u32| -> FolioResult<(Vec<u8>, String)> {
+            Ok((format!("p{idx}").into_bytes(), "image/jpeg".into()))
+        };
+        let calls = std::cell::Cell::new(0u32);
+        let on_batch = || calls.set(calls.get() + 1);
+
+        reset_lazy_eviction_counter_for_tests();
+        for i in 0..LAZY_EVICTION_BATCH * 2 {
+            get_or_render_pdf_page_with_renderer(&storage, hash, i, render, on_batch, true)
+                .unwrap();
+        }
+
+        assert_eq!(
+            calls.get(),
+            0,
+            "suppressed writes must never trigger an eviction batch"
+        );
+    }
+
+    #[test]
+    fn run_eviction_does_not_preferentially_evict_a_privately_read_book() {
+        let (_d, storage) = temp_storage();
+        let old_ts = "2020-01-01T00:00:00+00:00";
+
+        // "stale": warmed long ago and never touched since — must age-expire.
+        let stale_hash = "stale-hash";
+        write_manifest(
+            &storage,
+            stale_hash,
+            &CacheManifest {
+                book_id: "stale".into(),
+                book_hash: stale_hash.into(),
+                page_count: 10,
+                total_size_bytes: 0,
+                extracted_at: old_ts.into(),
+                last_accessed: old_ts.into(),
+                pages: Vec::new(),
+                format: BookFormat::Pdf,
+                canonical_width: Some(2400),
+            },
+        )
+        .unwrap();
+
+        // "priv": same old warm-time snapshot, but read privately just now.
+        // last_accessed must have been bumped even though no page bytes
+        // ever hit disk for that read.
+        let priv_hash = "priv-hash-evict";
+        write_manifest(
+            &storage,
+            priv_hash,
+            &CacheManifest {
+                book_id: "priv".into(),
+                book_hash: priv_hash.into(),
+                page_count: 10,
+                total_size_bytes: 0,
+                extracted_at: old_ts.into(),
+                last_accessed: old_ts.into(),
+                pages: Vec::new(),
+                format: BookFormat::Pdf,
+                canonical_width: Some(2400),
+            },
+        )
+        .unwrap();
+        let render = |idx: u32| -> FolioResult<(Vec<u8>, String)> {
+            Ok((format!("p{idx}").into_bytes(), "image/jpeg".into()))
+        };
+        get_or_render_pdf_page_with_renderer(&storage, priv_hash, 0, render, || {}, true).unwrap();
+
+        run_eviction(&storage, DEFAULT_MAX_CACHE_SIZE_MB).unwrap();
+
+        assert!(
+            read_manifest(&storage, stale_hash).is_none(),
+            "the untouched stale book should be age-expired"
+        );
+        assert!(
+            read_manifest(&storage, priv_hash).is_some(),
+            "the privately-read book must survive eviction thanks to its bumped last_accessed"
+        );
+        // And its page content was still never written to disk.
+        assert!(!storage.exists(&page_key(priv_hash, "000.jpg")).unwrap());
     }
 }

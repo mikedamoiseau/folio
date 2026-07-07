@@ -34,9 +34,20 @@ pub struct WebState {
     /// web (Decision 5) — this is populated only by desktop-side
     /// `unlock_profile`/`switch_profile`.
     pub unlocked_profiles: Arc<Mutex<HashSet<String>>>,
+    /// "Don't track this session" / private mode (B-M1), shared with
+    /// `AppState` — the same flag desktop commands read, so a web-driven
+    /// passive write (e.g. `PUT /api/books/:id/progress`) is suppressed
+    /// exactly like its desktop counterpart. The only runtime mutator is
+    /// the desktop-side `set_private_mode` command.
+    pub private_mode: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl WebState {
+    /// Reads the private-mode flag (B-M1). Mirrors `AppState::is_private`.
+    pub fn is_private(&self) -> bool {
+        self.private_mode.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
     /// Get a database connection from the active pool.
     pub fn conn(
         &self,
@@ -353,6 +364,7 @@ mod tests {
             login_limiter: Arc::new(auth::RateLimiter::new(5, 300)),
             active_profile_name: Arc::new(Mutex::new("default".to_string())),
             unlocked_profiles: Arc::new(Mutex::new(HashSet::from(["default".to_string()]))),
+            private_mode: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         }
     }
 

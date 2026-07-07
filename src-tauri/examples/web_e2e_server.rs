@@ -221,6 +221,7 @@ async fn async_main() -> Result<(), Box<dyn Error>> {
         unlocked_profiles: Arc::new(Mutex::new(std::collections::HashSet::from([
             "default".to_string()
         ]))),
+        private_mode: Arc::new(std::sync::atomic::AtomicBool::new(false)),
     };
 
     let router = web_server::build_router(

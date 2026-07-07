@@ -104,20 +104,32 @@ impl MergeResult {
     }
 }
 
+/// `suppress_progress` omits the `progress` field from the built payload
+/// (private mode, B-M1, SB-5): the caller pushing this file to a remote
+/// target must never leak reading position / `last_read_at` while private,
+/// even though highlights and bookmarks (deliberate saves) still go out.
+/// Callers building a payload purely for local merge comparison (never
+/// pushed) may pass `false` regardless of private mode — `false` here has
+/// no effect beyond including real progress in the returned struct.
 pub fn build_sync_payload(
     conn: &Connection,
     book_id: &str,
     file_hash: &str,
     device_id: &str,
+    suppress_progress: bool,
 ) -> BookSyncFile {
-    let progress = db::get_reading_progress(conn, book_id)
-        .ok()
-        .flatten()
-        .map(|p| SyncProgress {
-            chapter_index: p.chapter_index,
-            scroll_position: p.scroll_position,
-            updated_at: p.last_read_at,
-        });
+    let progress = if suppress_progress {
+        None
+    } else {
+        db::get_reading_progress(conn, book_id)
+            .ok()
+            .flatten()
+            .map(|p| SyncProgress {
+                chapter_index: p.chapter_index,
+                scroll_position: p.scroll_position,
+                updated_at: p.last_read_at,
+            })
+    };
 
     let bookmarks = db::list_all_bookmarks_for_sync(conn, book_id)
         .unwrap_or_default()
@@ -179,54 +191,70 @@ fn highlight_content_eq(a: &SyncHighlight, b: &SyncHighlight) -> bool {
         && a.deleted_at == b.deleted_at
 }
 
+/// Options for [`merge_remote_into_local`]. `Default` (`suppress_progress:
+/// false`) reproduces pre-B-M1 behavior exactly, so every existing call site
+/// that doesn't care about private mode can pass `MergeOptions::default()`
+/// unchanged.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct MergeOptions {
+    /// Private mode (B-M1, SB-8): skip the progress-merge arms entirely —
+    /// an inbound remote progress update is itself a passive write to the
+    /// local `reading_progress` table. Highlight/bookmark upserts below are
+    /// never gated; deliberate saves always persist.
+    pub suppress_progress: bool,
+}
+
 pub fn merge_remote_into_local(
     conn: &Connection,
     book_id: &str,
     local: &BookSyncFile,
     remote: &BookSyncFile,
+    options: MergeOptions,
 ) -> MergeResult {
     let mut result = MergeResult::default();
 
     // --- Progress ---
-    match (&local.progress, &remote.progress) {
-        (None, Some(rp)) => {
-            let progress = ReadingProgress {
-                book_id: book_id.to_string(),
-                chapter_index: rp.chapter_index,
-                scroll_position: rp.scroll_position,
-                last_read_at: rp.updated_at,
-            };
-            if db::upsert_reading_progress(conn, &progress).is_ok() {
-                result.progress_updated = true;
+    if !options.suppress_progress {
+        match (&local.progress, &remote.progress) {
+            (None, Some(rp)) => {
+                let progress = ReadingProgress {
+                    book_id: book_id.to_string(),
+                    chapter_index: rp.chapter_index,
+                    scroll_position: rp.scroll_position,
+                    last_read_at: rp.updated_at,
+                };
+                if db::upsert_reading_progress(conn, &progress).is_ok() {
+                    result.progress_updated = true;
+                }
             }
-        }
-        (Some(lp), Some(rp)) if rp.updated_at > lp.updated_at => {
-            let progress = ReadingProgress {
-                book_id: book_id.to_string(),
-                chapter_index: rp.chapter_index,
-                scroll_position: rp.scroll_position,
-                last_read_at: rp.updated_at,
-            };
-            if db::upsert_reading_progress(conn, &progress).is_ok() {
-                result.progress_updated = true;
+            (Some(lp), Some(rp)) if rp.updated_at > lp.updated_at => {
+                let progress = ReadingProgress {
+                    book_id: book_id.to_string(),
+                    chapter_index: rp.chapter_index,
+                    scroll_position: rp.scroll_position,
+                    last_read_at: rp.updated_at,
+                };
+                if db::upsert_reading_progress(conn, &progress).is_ok() {
+                    result.progress_updated = true;
+                }
             }
-        }
-        (Some(lp), Some(rp))
-            if rp.updated_at == lp.updated_at
-                && (rp.chapter_index != lp.chapter_index
-                    || (rp.scroll_position - lp.scroll_position).abs() > f64::EPSILON) =>
-        {
-            let progress = ReadingProgress {
-                book_id: book_id.to_string(),
-                chapter_index: rp.chapter_index,
-                scroll_position: rp.scroll_position,
-                last_read_at: rp.updated_at,
-            };
-            if db::upsert_reading_progress(conn, &progress).is_ok() {
-                result.progress_updated = true;
+            (Some(lp), Some(rp))
+                if rp.updated_at == lp.updated_at
+                    && (rp.chapter_index != lp.chapter_index
+                        || (rp.scroll_position - lp.scroll_position).abs() > f64::EPSILON) =>
+            {
+                let progress = ReadingProgress {
+                    book_id: book_id.to_string(),
+                    chapter_index: rp.chapter_index,
+                    scroll_position: rp.scroll_position,
+                    last_read_at: rp.updated_at,
+                };
+                if db::upsert_reading_progress(conn, &progress).is_ok() {
+                    result.progress_updated = true;
+                }
             }
+            _ => {}
         }
-        _ => {}
     }
 
     // --- Bookmarks ---
@@ -364,39 +392,60 @@ pub fn push_remote_sync(
 
 /// Pull remote sync data for a book and merge into local DB.
 /// Returns the merge result (may be empty if no remote data exists).
+///
+/// `suppress_progress` (private mode, B-M1): skip only the inbound
+/// progress-merge arms; highlights/bookmarks always merge.
 pub fn sync_book_on_open(
     conn: &Connection,
     op: &Operator,
     book_id: &str,
     file_hash: &str,
     device_id: &str,
+    suppress_progress: bool,
 ) -> Result<MergeResult, SyncError> {
     let remote = fetch_remote_sync(op, file_hash)?;
     let remote = match remote {
         Some(r) => r,
         None => return Ok(MergeResult::default()),
     };
-    let local = build_sync_payload(conn, book_id, file_hash, device_id);
-    Ok(merge_remote_into_local(conn, book_id, &local, &remote))
+    let local = build_sync_payload(conn, book_id, file_hash, device_id, suppress_progress);
+    Ok(merge_remote_into_local(
+        conn,
+        book_id,
+        &local,
+        &remote,
+        MergeOptions { suppress_progress },
+    ))
 }
 
 /// Pull remote, merge into local DB, rebuild payload from merged state, then push.
 /// This ensures remote-only changes from other devices are preserved.
+///
+/// `suppress_progress` (private mode, B-M1, SB-5/SB-8): skips the inbound
+/// progress-merge arms AND omits progress from the outbound pushed file;
+/// highlights/bookmarks are never gated in either direction.
 pub fn sync_book_on_close(
     conn: &Connection,
     op: &Operator,
     book_id: &str,
     file_hash: &str,
     device_id: &str,
+    suppress_progress: bool,
 ) -> Result<(), SyncError> {
     // Step 1: Pull and merge remote changes into local DB
     if let Some(remote) = fetch_remote_sync(op, file_hash)? {
-        let local = build_sync_payload(conn, book_id, file_hash, device_id);
-        merge_remote_into_local(conn, book_id, &local, &remote);
+        let local = build_sync_payload(conn, book_id, file_hash, device_id, suppress_progress);
+        merge_remote_into_local(
+            conn,
+            book_id,
+            &local,
+            &remote,
+            MergeOptions { suppress_progress },
+        );
     }
 
     // Step 2: Build fresh payload from merged local state and push
-    let payload = build_sync_payload(conn, book_id, file_hash, device_id);
+    let payload = build_sync_payload(conn, book_id, file_hash, device_id, suppress_progress);
     push_remote_sync(op, file_hash, &payload)
 }
 
@@ -615,7 +664,7 @@ mod tests {
         };
         db::insert_bookmark(&conn, &bookmark).unwrap();
 
-        let payload = build_sync_payload(&conn, &book_id, "hash123", "device-A");
+        let payload = build_sync_payload(&conn, &book_id, "hash123", "device-A", false);
 
         assert_eq!(payload.schema_version, CURRENT_SCHEMA_VERSION);
         assert_eq!(payload.book_hash, "hash123");
@@ -649,7 +698,7 @@ mod tests {
         db::insert_bookmark(&conn, &bookmark).unwrap();
         db::soft_delete_bookmark(&conn, "bm-del").unwrap();
 
-        let payload = build_sync_payload(&conn, &book_id, "hash123", "device-A");
+        let payload = build_sync_payload(&conn, &book_id, "hash123", "device-A", false);
         assert_eq!(payload.bookmarks.len(), 1);
         assert!(payload.bookmarks[0].deleted_at.is_some());
 
@@ -670,7 +719,7 @@ mod tests {
         };
         db::upsert_reading_progress(&conn, &progress).unwrap();
 
-        let local = build_sync_payload(&conn, &book_id, "hash123", "device-A");
+        let local = build_sync_payload(&conn, &book_id, "hash123", "device-A", false);
 
         let remote = BookSyncFile {
             schema_version: CURRENT_SCHEMA_VERSION,
@@ -685,7 +734,8 @@ mod tests {
             highlights: vec![],
         };
 
-        let result = merge_remote_into_local(&conn, &book_id, &local, &remote);
+        let result =
+            merge_remote_into_local(&conn, &book_id, &local, &remote, MergeOptions::default());
         assert!(result.progress_updated);
 
         let updated = db::get_reading_progress(&conn, &book_id).unwrap().unwrap();
@@ -706,7 +756,7 @@ mod tests {
         };
         db::upsert_reading_progress(&conn, &progress).unwrap();
 
-        let local = build_sync_payload(&conn, &book_id, "hash123", "device-A");
+        let local = build_sync_payload(&conn, &book_id, "hash123", "device-A", false);
 
         let remote = BookSyncFile {
             schema_version: CURRENT_SCHEMA_VERSION,
@@ -721,7 +771,8 @@ mod tests {
             highlights: vec![],
         };
 
-        let result = merge_remote_into_local(&conn, &book_id, &local, &remote);
+        let result =
+            merge_remote_into_local(&conn, &book_id, &local, &remote, MergeOptions::default());
         assert!(!result.progress_updated);
 
         let unchanged = db::get_reading_progress(&conn, &book_id).unwrap().unwrap();
@@ -733,7 +784,7 @@ mod tests {
     fn test_merge_new_remote_bookmark() {
         let (conn, book_id) = setup_db();
 
-        let local = build_sync_payload(&conn, &book_id, "hash123", "device-A");
+        let local = build_sync_payload(&conn, &book_id, "hash123", "device-A", false);
 
         let remote = BookSyncFile {
             schema_version: CURRENT_SCHEMA_VERSION,
@@ -753,7 +804,8 @@ mod tests {
             highlights: vec![],
         };
 
-        let result = merge_remote_into_local(&conn, &book_id, &local, &remote);
+        let result =
+            merge_remote_into_local(&conn, &book_id, &local, &remote, MergeOptions::default());
         assert_eq!(result.bookmarks_added, 1);
         assert_eq!(result.bookmarks_updated, 0);
 
@@ -781,7 +833,7 @@ mod tests {
         };
         db::insert_bookmark(&conn, &bookmark).unwrap();
 
-        let local = build_sync_payload(&conn, &book_id, "hash123", "device-A");
+        let local = build_sync_payload(&conn, &book_id, "hash123", "device-A", false);
 
         // Remote has the same bookmark but soft-deleted with a newer timestamp
         let remote = BookSyncFile {
@@ -802,7 +854,8 @@ mod tests {
             highlights: vec![],
         };
 
-        let result = merge_remote_into_local(&conn, &book_id, &local, &remote);
+        let result =
+            merge_remote_into_local(&conn, &book_id, &local, &remote, MergeOptions::default());
         assert_eq!(result.bookmarks_updated, 1);
 
         // Normal list should exclude soft-deleted
@@ -903,5 +956,133 @@ mod tests {
             SyncError::Malformed(msg) => assert!(msg.contains("parse"), "got: {msg}"),
             other => panic!("Expected Malformed, got: {other:?}"),
         }
+    }
+
+    // --- Private mode (B-M1): suppress_progress boundary ---
+
+    #[test]
+    fn build_sync_payload_suppressed_omits_progress_keeps_annotations() {
+        let (conn, book_id) = setup_db();
+
+        let progress = ReadingProgress {
+            book_id: book_id.clone(),
+            chapter_index: 5,
+            scroll_position: 0.42,
+            last_read_at: 1700001000,
+        };
+        db::upsert_reading_progress(&conn, &progress).unwrap();
+
+        let bookmark = Bookmark {
+            id: "bm-1".to_string(),
+            book_id: book_id.clone(),
+            chapter_index: 3,
+            scroll_position: 0.2,
+            name: Some("Test BM".to_string()),
+            note: None,
+            created_at: 1700000500,
+            updated_at: 1700000500,
+            deleted_at: None,
+        };
+        db::insert_bookmark(&conn, &bookmark).unwrap();
+
+        let highlight = crate::models::Highlight {
+            id: "hl-1".to_string(),
+            book_id: book_id.clone(),
+            chapter_index: 1,
+            text: "quote".to_string(),
+            color: "#ffff00".to_string(),
+            note: None,
+            start_offset: 0,
+            end_offset: 5,
+            created_at: 1700000500,
+            updated_at: 1700000500,
+            deleted_at: None,
+        };
+        db::insert_highlight(&conn, &highlight).unwrap();
+
+        let payload = build_sync_payload(&conn, &book_id, "hash123", "device-A", true);
+
+        assert!(
+            payload.progress.is_none(),
+            "suppressed payload must omit progress"
+        );
+        assert_eq!(payload.bookmarks.len(), 1, "bookmarks must still go out");
+        assert_eq!(payload.highlights.len(), 1, "highlights must still go out");
+    }
+
+    #[test]
+    fn merge_remote_into_local_suppressed_skips_progress_keeps_annotations() {
+        let (conn, book_id) = setup_db();
+
+        // Local has no progress yet — an inbound remote progress update
+        // would normally populate it (see test_merge_progress_remote_newer).
+        let local = build_sync_payload(&conn, &book_id, "hash123", "device-A", false);
+
+        let remote = BookSyncFile {
+            schema_version: CURRENT_SCHEMA_VERSION,
+            book_hash: "hash123".to_string(),
+            device_id: "device-B".to_string(),
+            progress: Some(SyncProgress {
+                chapter_index: 7,
+                scroll_position: 0.9,
+                updated_at: 1700002000,
+            }),
+            bookmarks: vec![SyncBookmark {
+                id: "bm-remote".to_string(),
+                chapter_index: 4,
+                scroll_position: 0.6,
+                name: Some("Remote BM".to_string()),
+                note: None,
+                created_at: 1700000500,
+                updated_at: 1700000500,
+                deleted_at: None,
+            }],
+            highlights: vec![SyncHighlight {
+                id: "hl-remote".to_string(),
+                chapter_index: 1,
+                start_offset: 10,
+                end_offset: 50,
+                text: "highlighted text".to_string(),
+                color: "#ffff00".to_string(),
+                note: None,
+                created_at: 1700000500,
+                updated_at: 1700000500,
+                deleted_at: None,
+            }],
+        };
+
+        let result = merge_remote_into_local(
+            &conn,
+            &book_id,
+            &local,
+            &remote,
+            MergeOptions {
+                suppress_progress: true,
+            },
+        );
+
+        assert!(
+            !result.progress_updated,
+            "suppressed merge must not update progress"
+        );
+        assert!(
+            db::get_reading_progress(&conn, &book_id).unwrap().is_none(),
+            "reading_progress table must stay empty while suppressed"
+        );
+
+        // Annotations are deliberate saves — they must still land.
+        assert_eq!(result.bookmarks_added, 1);
+        assert_eq!(result.highlights_added, 1);
+        let bookmarks = db::list_bookmarks(&conn, &book_id).unwrap();
+        assert_eq!(bookmarks.len(), 1);
+        let highlights = db::list_highlights(&conn, &book_id).unwrap();
+        assert_eq!(highlights.len(), 1);
+    }
+
+    #[test]
+    fn merge_options_default_matches_pre_bm1_behavior() {
+        // Guards the compatibility contract: MergeOptions::default() must
+        // behave exactly like the pre-B-M1 unconditional merge.
+        assert!(!MergeOptions::default().suppress_progress);
     }
 }
