@@ -6253,6 +6253,17 @@ pub async fn sync_pull_book(
         });
     }
 
+    // Private mode (B-M1): the automatic open-sync itself is passive egress.
+    // A GET on `.folio-sync/books/{file_hash}.json` reveals *which* book was
+    // opened (object path) and *when* (timing) to the configured remote, even
+    // with zero annotation changes. Gating the progress/activity/event side
+    // effects is not enough — the network round-trip must not happen at all.
+    // Return before touching the backup operator or remote path. Deliberate
+    // annotation saves reconcile on the next non-private open.
+    if suppress_passive {
+        return Ok(());
+    }
+
     let conn = state.active_db()?.get()?;
 
     // Guard: sync must be enabled and backup provider configured
@@ -6404,6 +6415,15 @@ pub async fn sync_push_book(book_id: String, state: State<'_, AppState>) -> Foli
         events::bus().emit(FolioEvent::BookClosed {
             book_id: book_id.clone(),
         });
+    }
+
+    // Private mode (B-M1): symmetric with `sync_pull_book`. The automatic
+    // close-sync fetches then pushes `.folio-sync/books/{file_hash}.json`,
+    // exposing the book-hash + timing to the remote as passive egress. Return
+    // before touching the backup operator; deliberate annotation saves
+    // reconcile on the next non-private close.
+    if suppress_passive {
+        return Ok(());
     }
 
     let conn = state.active_db()?.get()?;
@@ -7058,6 +7078,40 @@ mod tests {
             .await
             .unwrap();
         assert!(!state.is_private());
+    }
+
+    #[tokio::test]
+    async fn sync_push_book_skips_network_sync_when_private() {
+        // B-M1 regression (Codex + Codex-2): automatic close-sync is passive
+        // egress (GET+PUT on `.folio-sync/books/{file_hash}.json` reveals the
+        // book-hash + timing) and must not run while private. The private
+        // early return fires before the backup config is even parsed, so with
+        // a *malformed* config + sync enabled a non-private close surfaces the
+        // parse error while a private close short-circuits to Ok — proving no
+        // operator/network path is reached. `sync_pull_book` carries the
+        // symmetric guard; it takes a concrete `AppHandle` so it can't be
+        // constructed under the mock runtime here.
+        let (app, _dir) = mock_app_with_state();
+        let state = app.handle().state::<AppState>();
+        {
+            let conn = state.active_db().unwrap().get().unwrap();
+            db::set_setting(&conn, "sync_enabled", "true").unwrap();
+            db::set_setting(&conn, "backup_config", "not-valid-json").unwrap();
+        }
+
+        // Sanity: without private mode the same call reaches config parsing
+        // and fails — so an Ok below can only come from the early return.
+        assert!(
+            sync_push_book("book-1".to_string(), state.clone())
+                .await
+                .is_err(),
+            "non-private close must reach (and fail on) the malformed backup config"
+        );
+
+        state.private_mode.store(true, Ordering::SeqCst);
+        sync_push_book("book-1".to_string(), state.clone())
+            .await
+            .expect("private close must return before touching the remote sync path");
     }
 
     #[test]
