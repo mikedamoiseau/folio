@@ -200,6 +200,21 @@ impl AppState {
         self.unlocked_profiles.lock()?.remove(profile);
         Ok(())
     }
+
+    /// Errors unless `profile` is a real profile: `"default"` always exists;
+    /// any other name must be present in `profile_state.pools`. Mirrors the
+    /// existence guard `switch_profile` already applies, so the profile-lock
+    /// commands can't create orphaned keychain locks for names that were
+    /// mistyped or never created (A-M2) — such a lock would otherwise be
+    /// silently inherited by a later same-name profile.
+    pub fn ensure_profile_exists(&self, profile: &str) -> FolioResult<()> {
+        if profile != "default" && !self.profile_state.lock()?.pools.contains_key(profile) {
+            return Err(FolioError::invalid(format!(
+                "Profile '{profile}' not found"
+            )));
+        }
+        Ok(())
+    }
 }
 
 /// Build the storage key for a book file from its ID and the (already
@@ -3829,6 +3844,7 @@ pub async fn set_profile_lock(
     current_password: Option<String>,
     state: State<'_, AppState>,
 ) -> FolioResult<()> {
+    state.ensure_profile_exists(&profile)?;
     if let Some(existing_phc) = folio_core::profile_lock::load_lock(&profile)? {
         let current = current_password.ok_or_else(|| {
             FolioError::invalid("Current password is required to change the profile lock")
@@ -3852,6 +3868,7 @@ pub async fn remove_profile_lock(
     current_password: String,
     state: State<'_, AppState>,
 ) -> FolioResult<()> {
+    state.ensure_profile_exists(&profile)?;
     let phc = folio_core::profile_lock::load_lock(&profile)?
         .ok_or_else(|| FolioError::invalid("Profile has no lock to remove"))?;
     if !verify_password_blocking(SecretString::from(current_password), phc).await? {
@@ -3877,6 +3894,7 @@ pub async fn unlock_profile(
     password: String,
     state: State<'_, AppState>,
 ) -> FolioResult<()> {
+    state.ensure_profile_exists(&profile)?;
     let phc = match folio_core::profile_lock::load_lock(&profile)? {
         Some(phc) => phc,
         None => {
@@ -3905,6 +3923,7 @@ pub async fn profile_lock_status(
     profile: String,
     state: State<'_, AppState>,
 ) -> FolioResult<ProfileLockStatus> {
+    state.ensure_profile_exists(&profile)?;
     Ok(ProfileLockStatus {
         locked: folio_core::profile_lock::has_lock(&profile)?,
         unlocked_this_session: state.is_unlocked(&profile),
@@ -8007,6 +8026,20 @@ mod tests {
             true,
             state.is_unlocked("bob")
         ));
+    }
+
+    #[tokio::test]
+    async fn set_profile_lock_rejects_missing_profile() {
+        // A lock command for a name that is neither "default" nor a created
+        // profile must be refused before any keychain write, so a mistyped or
+        // stale name can't leave an orphaned lock a later same-name profile
+        // would inherit.
+        let (app, _dir) = mock_app_with_state();
+        let state = app.handle().state::<AppState>();
+        let err = set_profile_lock("ghost".to_string(), "pw".to_string(), None, state)
+            .await
+            .expect_err("locking a non-existent profile must fail");
+        assert_eq!(err.kind(), "InvalidInput");
     }
 
     #[tokio::test]
