@@ -20,6 +20,11 @@ zip = { workspace = true }
 quick-xml = { workspace = true }
 keyring = { workspace = true }
 opendal = { workspace = true }
+
+# profile_lock.rs (A-M1)
+argon2 = { workspace = true }
+secrecy = { workspace = true }
+rand_core = { workspace = true }
 uuid = { workspace = true }
 chrono = { workspace = true }
 url = { workspace = true }

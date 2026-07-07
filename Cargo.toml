@@ -35,6 +35,13 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "tracing-log"]
 tracing-appender = "0.2"
 keyring = "3"
 image = "0.25"
+
+# profile_lock.rs (A-M1): Argon2id KDF + zeroizing password wrapper for the
+# profile soft-lock. rand_core/getrandom is argon2's salt RNG — not pulled in
+# by argon2's own default features, so it's listed explicitly.
+argon2 = "0.5"
+secrecy = "0.10"
+rand_core = { version = "0.6", features = ["getrandom"] }
 base64 = "0.22"
 reqwest = { version = "0.12", features = ["blocking", "json"] }
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "fs"] }
