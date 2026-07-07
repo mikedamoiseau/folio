@@ -107,9 +107,35 @@ pub struct AppState {
 }
 
 impl AppState {
-    /// Returns the DB pool for the active profile.
-    /// Uses a single lock to read profile name and look up the pool atomically.
+    /// Returns the DB pool for the active profile, gated by the soft-lock
+    /// session state (A-M2, spec D-6/SB-7). The active profile's DB is the
+    /// single chokepoint every data-bearing IPC command flows through, so
+    /// gating here closes the desktop-IPC bypass: a locked-and-not-yet-
+    /// unlocked profile (including a locked `"default"` at startup) is
+    /// unreadable in-app, not merely dark on the network. Returns
+    /// `FolioError::LockRequired` in that case.
+    ///
+    /// Reads `active` and releases `profile_state` before touching
+    /// `unlocked_profiles` so the two mutexes are never held together
+    /// (keeps `unlocked_profiles` a leaf lock). Internal/startup callers
+    /// that must reach the DB before unlock use `active_db_unchecked`.
     pub fn active_db(&self) -> FolioResult<DbPool> {
+        let active = { self.profile_state.lock()?.active.clone() };
+        if !self.is_unlocked(&active) {
+            return Err(FolioError::lock_required(format!(
+                "Profile '{active}' is locked"
+            )));
+        }
+        self.active_db_unchecked()
+    }
+
+    /// Returns the DB pool for the active profile **without** the soft-lock
+    /// gate. Only for internal/startup callers that must reach the DB before
+    /// the profile is unlocked (reading web-server config to bring the —
+    /// still gate-protected — server up). Every data-bearing IPC command
+    /// MUST use [`active_db`](Self::active_db) instead.
+    /// Uses a single lock to read profile name and look up the pool atomically.
+    pub fn active_db_unchecked(&self) -> FolioResult<DbPool> {
         let ps = self.profile_state.lock()?;
         if ps.active == "default" {
             return Ok(self.db.clone());
@@ -8033,6 +8059,29 @@ mod tests {
         assert!(state.is_unlocked("alice"));
         state.mark_locked("alice").unwrap();
         assert!(!state.is_unlocked("alice"));
+    }
+
+    #[test]
+    fn active_db_denied_when_active_profile_locked_and_not_unlocked() {
+        // The desktop-IPC bypass fix (A-M2, spec D-6/SB-7): with the active
+        // profile ("default") not in the unlocked set — i.e. a stored lock
+        // at startup — every data command that resolves `active_db` must be
+        // refused with `LockRequired`, not served.
+        let (app, _dir) = mock_app_with_state();
+        let state = app.handle().state::<AppState>();
+        state.unlocked_profiles.lock().unwrap().clear();
+
+        let err = state
+            .active_db()
+            .expect_err("locked active profile must refuse active_db");
+        assert_eq!(err.kind(), "LockRequired");
+
+        // The unchecked escape hatch (startup web auto-start) still resolves.
+        assert!(state.active_db_unchecked().is_ok());
+
+        // Unlocking (as `unlock_profile`/`switch_profile` would) restores access.
+        state.mark_unlocked("default").unwrap();
+        assert!(state.active_db().is_ok());
     }
 
     /// Mirrors the exact condition `switch_profile` gates on: a locked,

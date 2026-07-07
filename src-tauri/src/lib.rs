@@ -227,8 +227,17 @@ pub fn run() {
                 let state = app_handle.state::<AppState>();
 
                 // Migrate legacy setting if present.
+                // `active_db_unchecked`: startup web auto-start must read its
+                // own config even when the active profile is soft-locked
+                // (A-M2). The server it starts is still gated by
+                // `profile_lock_gate`, so it stays dark until unlock — this
+                // only lets it come up so it serves the moment the profile
+                // is unlocked, without an app restart.
                 {
-                    let conn = match state.active_db().and_then(|p| p.get().map_err(Into::into)) {
+                    let conn = match state
+                        .active_db_unchecked()
+                        .and_then(|p| p.get().map_err(Into::into))
+                    {
                         Ok(c) => c,
                         Err(_) => return,
                     };
@@ -237,7 +246,10 @@ pub fn run() {
 
                 // Read the new settings.
                 let modes = {
-                    let conn = match state.active_db().and_then(|p| p.get().map_err(Into::into)) {
+                    let conn = match state
+                        .active_db_unchecked()
+                        .and_then(|p| p.get().map_err(Into::into))
+                    {
                         Ok(c) => c,
                         Err(_) => return,
                     };
@@ -259,7 +271,10 @@ pub fn run() {
                 }
 
                 let port = {
-                    let conn = match state.active_db().and_then(|p| p.get().map_err(Into::into)) {
+                    let conn = match state
+                        .active_db_unchecked()
+                        .and_then(|p| p.get().map_err(Into::into))
+                    {
                         Ok(c) => c,
                         Err(_) => return,
                     };
