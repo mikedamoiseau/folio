@@ -3945,6 +3945,7 @@ pub async fn remove_profile_lock(
 /// prompt (Decision 8).
 #[tauri::command]
 pub async fn unlock_profile(
+    app: AppHandle,
     profile: String,
     password: String,
     state: State<'_, AppState>,
@@ -3954,18 +3955,32 @@ pub async fn unlock_profile(
     // profile-lifecycle commands across their `.await` points.
     let _lifecycle = state.profile_lifecycle.lock().await;
     state.ensure_profile_exists(&profile)?;
-    let phc = match folio_core::profile_lock::load_lock(&profile)? {
-        Some(phc) => phc,
-        None => {
-            // No lock configured for this profile — nothing to verify.
-            state.mark_unlocked(&profile)?;
-            return Ok(());
+    // A profile with no lock configured has nothing to verify — falls
+    // through to `mark_unlocked` and the plugin-start tail below.
+    if let Some(phc) = folio_core::profile_lock::load_lock(&profile)? {
+        if !verify_password_blocking(SecretString::from(password), phc).await? {
+            return Err(FolioError::invalid("Incorrect password"));
         }
-    };
-    if !verify_password_blocking(SecretString::from(password), phc).await? {
-        return Err(FolioError::invalid("Incorrect password"));
     }
     state.mark_unlocked(&profile)?;
+
+    // Soft-lock (A-M2, D-6/SB-7): if the active profile was locked at boot,
+    // startup deliberately skipped building the plugin manager and emitting
+    // `AppStarted` (an `AppStarted` plugin with `read:library` would
+    // otherwise read the locked profile). Now that the active profile is
+    // unlocked, build the manager and fire `AppStarted` once — the deferred
+    // equivalent of the withheld startup dispatch. The empty-slot check keeps
+    // this idempotent, so re-unlocking an already-running profile is a no-op.
+    let active = { state.profile_state.lock()?.active.clone() };
+    if profile == active && state.plugin_manager.lock()?.is_none() {
+        crate::plugin_host::rebuild_for_profile(
+            &app,
+            &state.data_dir,
+            state.active_db()?,
+            &state.plugin_manager,
+        );
+        folio_core::events::bus().emit(folio_core::events::FolioEvent::AppStarted);
+    }
     Ok(())
 }
 

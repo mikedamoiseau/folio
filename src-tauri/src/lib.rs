@@ -331,19 +331,24 @@ pub fn run() {
             // AppStarted so AppStarted-subscribing plugins receive it.
             // Failure is logged, never fatal.
             {
-                let (data_dir, pool, slot) = {
+                let (data_dir, pool, slot, active_unlocked) = {
                     let state = app.state::<AppState>();
+                    let active = state
+                        .profile_state
+                        .lock()
+                        .map(|ps| ps.active.clone())
+                        .unwrap_or_else(|_| "default".to_string());
                     (
                         state.data_dir.clone(),
                         state.db.clone(),
                         state.plugin_manager.clone(),
+                        state.is_unlocked(&active),
                     )
                 };
-                let manager = plugin_host::init_manager(&app.handle().clone(), &data_dir, pool);
-                if let Ok(mut guard) = slot.lock() {
-                    *guard = manager;
-                }
-                // Single, permanent forwarding subscriber.
+                // Install the single, permanent forwarding subscriber
+                // unconditionally — the bus has no unsubscribe, and the slot
+                // may be populated later by `unlock_profile` once a
+                // locked-at-boot profile is unlocked.
                 let bus_slot = slot.clone();
                 folio_core::events::bus().subscribe(Box::new(
                     move |event: &folio_core::events::FolioEvent| {
@@ -353,10 +358,24 @@ pub fn run() {
                         }
                     },
                 ));
-            }
 
-            // Plugin/hook system M1: app-lifecycle hook point.
-            folio_core::events::bus().emit(folio_core::events::FolioEvent::AppStarted);
+                // Soft-lock (A-M2, D-6/SB-7): only build the plugin manager
+                // and emit `AppStarted` when the active profile is unlocked.
+                // If the startup profile is locked, an `AppStarted`-subscribing
+                // plugin with `read:library`/`read:highlights`/write would
+                // otherwise read or mutate the locked profile before unlock —
+                // the same bypass the `active_db()` gate closes for IPC.
+                // `unlock_profile` rebuilds the manager and emits `AppStarted`
+                // once the active profile is unlocked.
+                if active_unlocked {
+                    let manager = plugin_host::init_manager(&app.handle().clone(), &data_dir, pool);
+                    if let Ok(mut guard) = slot.lock() {
+                        *guard = manager;
+                    }
+                    // Plugin/hook system M1: app-lifecycle hook point.
+                    folio_core::events::bus().emit(folio_core::events::FolioEvent::AppStarted);
+                }
+            }
 
             Ok(())
         })
