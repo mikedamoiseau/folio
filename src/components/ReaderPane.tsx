@@ -264,6 +264,11 @@ export default function ReaderPane({
   const [bottomNavVisible, setBottomNavVisible] = useState(true);
   const sessionStartRef = useRef<number>(Math.floor(Date.now() / 1000));
   const startChapterRef = useRef<number>(0);
+  // Latest private-mode flag, read from cleanup/callbacks that must not
+  // re-fire when the flag changes (a private→off transition must never
+  // masquerade as a reader close — see the unmount effect below).
+  const isPrivateRef = useRef(isPrivate);
+  useEffect(() => { isPrivateRef.current = isPrivate; }, [isPrivate]);
   const restoringScroll = useRef<number | null>(null);
   const savedScrollPosition = useRef<number | null>(null);
   const targetMatchOffset = useRef<number | null>(null);
@@ -687,7 +692,7 @@ export default function ReaderPane({
       // persistent store. The DB write just below is a no-op on the
       // backend while private (B-M1), so this is the only place the
       // reader's true current position survives a book-close/reopen.
-      if (isPrivate) {
+      if (isPrivateRef.current) {
         setVolatilePosition(bookId, { chapterIndex, scrollPosition: resolvedScroll });
       }
       try {
@@ -704,7 +709,7 @@ export default function ReaderPane({
         setTimeout(() => setSaveError(false), 2000);
       }
     },
-    [bookId, chapterIndex, getChapterScrollPosition, isPrivate]
+    [bookId, chapterIndex, getChapterScrollPosition]
   );
 
   // Save progress on chapter change (paginated mode only — continuous tracks via scroll).
@@ -746,30 +751,48 @@ export default function ReaderPane({
     startChapterRef.current = chapterIndex;
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Keep the latest saveProgress reachable from the unmount cleanup below
+  // without listing it (or chapterIndex) as a dependency — otherwise the
+  // cleanup re-fires on every chapter change and, critically, on a private
+  // mode toggle, recording a session as if the reader had closed.
+  const saveProgressRef = useRef(saveProgress);
+  useEffect(() => { saveProgressRef.current = saveProgress; }, [saveProgress]);
+
+  // When tracking resumes (private → off), restart the session baseline so
+  // the time and pages accumulated while private aren't folded into the
+  // next non-private session record.
+  const prevPrivateRef = useRef(isPrivate);
+  useEffect(() => {
+    if (prevPrivateRef.current && !isPrivate) {
+      sessionStartRef.current = Math.floor(Date.now() / 1000);
+      startChapterRef.current = chapterIndexRef.current;
+    }
+    prevPrivateRef.current = isPrivate;
+  }, [isPrivate]);
+
   useEffect(() => {
     if (!effectivePersist) return;
     return () => {
-      saveProgress();
+      saveProgressRef.current();
+      const id = bookIdRef.current;
       const now = Math.floor(Date.now() / 1000);
       const duration = now - sessionStartRef.current;
-      if (bookId && duration >= 10) {
+      if (id && duration >= 10) {
         invoke("record_reading_session", {
-          bookId,
+          bookId: id,
           startedAt: sessionStartRef.current,
           durationSecs: duration,
-          pagesRead: Math.abs(chapterIndex - startChapterRef.current) + 1,
+          pagesRead: Math.abs(chapterIndexRef.current - startChapterRef.current) + 1,
         }).catch(() => {});
       }
     };
-  }, [saveProgress, bookId, chapterIndex, effectivePersist]);
+  }, [effectivePersist]);
 
   // Push local changes to sync remote only on reader unmount (not on chapter change).
   // Chains after an explicit save_reading_progress to guarantee the final position
   // is in the DB before the sync payload is built.
   const getScrollPosRef = useRef(getChapterScrollPosition);
   useEffect(() => { getScrollPosRef.current = getChapterScrollPosition; }, [getChapterScrollPosition]);
-  const isPrivateRef = useRef(isPrivate);
-  useEffect(() => { isPrivateRef.current = isPrivate; }, [isPrivate]);
 
   useEffect(() => {
     if (!effectivePersist) return;
