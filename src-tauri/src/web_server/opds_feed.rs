@@ -747,6 +747,10 @@ mod tests {
             pin_hash: Arc::new(Mutex::new(None)),
             sessions: Arc::new(Mutex::new(std::collections::HashMap::new())),
             login_limiter: Arc::new(auth::RateLimiter::new(5, 300)),
+            active_profile_name: Arc::new(Mutex::new("default".to_string())),
+            unlocked_profiles: Arc::new(Mutex::new(std::collections::HashSet::from([
+                "default".to_string()
+            ]))),
         }
     }
 

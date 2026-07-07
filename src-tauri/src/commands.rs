@@ -1,3 +1,4 @@
+use secrecy::SecretString;
 use tauri::{AppHandle, Emitter, Manager, State};
 use uuid::Uuid;
 
@@ -66,8 +67,17 @@ pub struct AppState {
     pub enrichment_registry: std::sync::Mutex<crate::providers::ProviderRegistry>,
     /// DB pool shared with the web server, swapped on profile switch.
     pub shared_active_pool: std::sync::Arc<std::sync::Mutex<DbPool>>,
+    /// Active profile name shared with the web server, swapped on profile
+    /// switch alongside `shared_active_pool`. Lets the web layer's soft-lock
+    /// gate (A-M2) know which profile's lock state to check.
+    pub shared_active_profile_name: std::sync::Arc<std::sync::Mutex<String>>,
     /// PIN hash shared with the web server, updated by `web_server_set_pin`.
     pub shared_pin_hash: std::sync::Arc<std::sync::Mutex<Option<String>>>,
+    /// Profiles unlocked (soft-lock, A-M2) for the rest of this process
+    /// session. Shared with the web server so it can refuse to serve a
+    /// profile that hasn't been unlocked yet. Leaf lock — never held
+    /// together with another `AppState` mutex.
+    pub unlocked_profiles: std::sync::Arc<std::sync::Mutex<std::collections::HashSet<String>>>,
     /// Handle to the running web server (lock #5).
     pub web_server_handle: std::sync::Mutex<Option<crate::web_server::WebServerHandle>>,
     /// IPC command timing metrics (leaf lock — no ordering constraint).
@@ -166,6 +176,29 @@ impl AppState {
             .local_path(&book.file_path)?
             .to_string_lossy()
             .to_string())
+    }
+
+    /// Whether `profile` has been unlocked (soft-lock, A-M2) this process
+    /// session. A poisoned lock fails closed (`false` = still locked).
+    pub fn is_unlocked(&self, profile: &str) -> bool {
+        self.unlocked_profiles
+            .lock()
+            .map(|guard| guard.contains(profile))
+            .unwrap_or(false)
+    }
+
+    /// Marks `profile` as unlocked for the rest of this process session.
+    pub fn mark_unlocked(&self, profile: &str) -> FolioResult<()> {
+        self.unlocked_profiles.lock()?.insert(profile.to_string());
+        Ok(())
+    }
+
+    /// Removes `profile` from the unlocked set. Used by `delete_profile`
+    /// hygiene (A-M2, Decision 10) so a re-created same-name profile never
+    /// inherits an already-unlocked session.
+    pub fn mark_locked(&self, profile: &str) -> FolioResult<()> {
+        self.unlocked_profiles.lock()?.remove(profile);
+        Ok(())
     }
 }
 
@@ -3670,18 +3703,46 @@ pub async fn switch_profile(
     state: State<'_, AppState>,
 ) -> FolioResult<()> {
     {
-        let mut ps = state.profile_state.lock()?;
+        let ps = state.profile_state.lock()?;
         if name != "default" && !ps.pools.contains_key(&name) {
             return Err(FolioError::invalid(format!("Profile '{name}' not found")));
         }
+    }
+
+    // Soft-lock gate (A-M2): a profile with a stored lock that hasn't been
+    // unlocked this session cannot be switched into. Checked before
+    // mutating `profile_state` so a rejected switch leaves the active
+    // profile untouched — the frontend retries after a successful
+    // `unlock_profile`.
+    if !folio_core::profile_lock::access_allowed(
+        folio_core::profile_lock::has_lock(&name)?,
+        state.is_unlocked(&name),
+    ) {
+        return Err(FolioError::lock_required(format!(
+            "Profile '{name}' is locked"
+        )));
+    }
+
+    {
+        let mut ps = state.profile_state.lock()?;
         ps.active = name.clone();
     }
 
-    // Sync the shared pool used by the web server
+    // Mark the profile unlocked *before* publishing it as the shared active
+    // profile name, so the web gate (which only checks `unlocked_profiles`
+    // membership, not the keychain) never observes a new active profile
+    // that isn't in the set yet.
+    state.mark_unlocked(&name)?;
+
+    // Sync the shared pool + profile name used by the web server.
     let new_pool = state.active_db()?;
     {
         let mut shared = state.shared_active_pool.lock()?;
         *shared = new_pool;
+    }
+    {
+        let mut shared_name = state.shared_active_profile_name.lock()?;
+        *shared_name = name.clone();
     }
 
     // Rebuild the plugin manager against the new profile's DB so plugin
@@ -3706,17 +3767,148 @@ pub async fn delete_profile(name: String, state: State<'_, AppState>) -> FolioRe
     if name == "default" {
         return Err(FolioError::invalid("Cannot delete the default profile"));
     }
-    let mut ps = state.profile_state.lock()?;
-    if ps.active == name {
-        return Err(FolioError::invalid(
-            "Cannot delete the active profile. Switch to another profile first.",
-        ));
+    {
+        let mut ps = state.profile_state.lock()?;
+        if ps.active == name {
+            return Err(FolioError::invalid(
+                "Cannot delete the active profile. Switch to another profile first.",
+            ));
+        }
+        ps.pools.remove(&name);
     }
-    ps.pools.remove(&name);
     // Remove DB file
     let db_path = state.data_dir.join(format!("library-{name}.db"));
     let _ = std::fs::remove_file(db_path);
+
+    // Soft-lock hygiene (A-M2, Decision 10): clear the keychain entry and
+    // drop the profile from the unlocked set, best-effort, so a re-created
+    // same-name profile never inherits the old lock or an already-unlocked
+    // session.
+    let _ = folio_core::profile_lock::clear_lock(&name);
+    state.mark_locked(&name)?;
+
     Ok(())
+}
+
+// --- Profile soft-lock (A-M2) ---
+//
+// See `docs/superpowers/specs/2026-07-07-profile-soft-lock-design.md`.
+// `folio_core::profile_lock` (A-M1) owns the Argon2id KDF and keychain
+// storage; these commands are the IPC-facing wiring plus the session
+// unlock state on `AppState`. The profile password never crosses the web
+// layer (Decision 5) — these commands are desktop-only.
+
+/// Run [`folio_core::profile_lock::hash_password`] off the async runtime.
+/// Argon2id is CPU/memory-heavy (~19 MiB, 2 iterations); never call it
+/// directly from a `#[tauri::command]` body.
+async fn hash_password_blocking(password: SecretString) -> FolioResult<String> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    tauri::async_runtime::spawn_blocking(move || {
+        let _ = tx.send(folio_core::profile_lock::hash_password(&password));
+    });
+    rx.recv()?
+}
+
+/// Run [`folio_core::profile_lock::verify_password`] off the async runtime.
+async fn verify_password_blocking(password: SecretString, phc: String) -> FolioResult<bool> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    tauri::async_runtime::spawn_blocking(move || {
+        let _ = tx.send(folio_core::profile_lock::verify_password(&password, &phc));
+    });
+    rx.recv()?
+}
+
+/// Sets or changes `profile`'s lock. If a lock already exists, `current_password`
+/// must verify against it (Decision 9) — changing a lock from an
+/// already-unlocked session still requires proving the current password.
+/// On success the profile is marked unlocked for this session.
+#[tauri::command]
+pub async fn set_profile_lock(
+    profile: String,
+    password: String,
+    current_password: Option<String>,
+    state: State<'_, AppState>,
+) -> FolioResult<()> {
+    if let Some(existing_phc) = folio_core::profile_lock::load_lock(&profile)? {
+        let current = current_password.ok_or_else(|| {
+            FolioError::invalid("Current password is required to change the profile lock")
+        })?;
+        if !verify_password_blocking(SecretString::from(current), existing_phc).await? {
+            return Err(FolioError::invalid("Incorrect current password"));
+        }
+    }
+
+    let phc = hash_password_blocking(SecretString::from(password)).await?;
+    folio_core::profile_lock::set_lock(&profile, &phc)?;
+    state.mark_unlocked(&profile)?;
+    Ok(())
+}
+
+/// Removes `profile`'s lock. Requires the current password (Decision 9) —
+/// there is no one-tap removal from the lock screen.
+#[tauri::command]
+pub async fn remove_profile_lock(
+    profile: String,
+    current_password: String,
+    state: State<'_, AppState>,
+) -> FolioResult<()> {
+    let phc = folio_core::profile_lock::load_lock(&profile)?
+        .ok_or_else(|| FolioError::invalid("Profile has no lock to remove"))?;
+    if !verify_password_blocking(SecretString::from(current_password), phc).await? {
+        return Err(FolioError::invalid("Incorrect password"));
+    }
+    folio_core::profile_lock::clear_lock(&profile)?;
+    // A profile with no lock is never gated (see `access_allowed`) — keep
+    // the invariant that `unlocked_profiles` reflects that, in case this
+    // profile is currently active and being watched by the web gate.
+    state.mark_unlocked(&profile)?;
+    Ok(())
+}
+
+/// Verifies `password` against `profile`'s stored lock and, on success,
+/// marks it unlocked for the rest of this session. Fails closed: any
+/// keychain error other than "no lock set" propagates as an error rather
+/// than being treated as an unlock (Decision 7). Wrong password returns a
+/// plain typed error — there is no lockout or rate-limit on the local
+/// prompt (Decision 8).
+#[tauri::command]
+pub async fn unlock_profile(
+    profile: String,
+    password: String,
+    state: State<'_, AppState>,
+) -> FolioResult<()> {
+    let phc = match folio_core::profile_lock::load_lock(&profile)? {
+        Some(phc) => phc,
+        None => {
+            // No lock configured for this profile — nothing to verify.
+            state.mark_unlocked(&profile)?;
+            return Ok(());
+        }
+    };
+    if !verify_password_blocking(SecretString::from(password), phc).await? {
+        return Err(FolioError::invalid("Incorrect password"));
+    }
+    state.mark_unlocked(&profile)?;
+    Ok(())
+}
+
+/// Soft-lock status for `profile`, driving the frontend's unlock prompt.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProfileLockStatus {
+    pub locked: bool,
+    pub unlocked_this_session: bool,
+}
+
+#[tauri::command]
+pub async fn profile_lock_status(
+    profile: String,
+    state: State<'_, AppState>,
+) -> FolioResult<ProfileLockStatus> {
+    Ok(ProfileLockStatus {
+        locked: folio_core::profile_lock::has_lock(&profile)?,
+        unlocked_this_session: state.is_unlocked(&profile),
+    })
 }
 
 // --- Library Folder ---
@@ -6233,6 +6425,8 @@ pub async fn web_server_set_modes(
             pin_hash: state.shared_pin_hash.clone(),
             sessions: std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             login_limiter: std::sync::Arc::new(crate::web_server::auth::RateLimiter::new(5, 300)),
+            active_profile_name: state.shared_active_profile_name.clone(),
+            unlocked_profiles: state.unlocked_profiles.clone(),
         };
 
         let handle = crate::web_server::start(web_state, port_used, modes).await?;
@@ -7707,6 +7901,146 @@ mod tests {
             std::io::ErrorKind::PermissionDenied,
         )
         .is_none());
+    }
+
+    // ---- Profile soft-lock (A-M2) ----
+    //
+    // `folio_core::profile_lock`'s keychain-backed functions
+    // (`has_lock`/`load_lock`/`set_lock`) are deliberately never called in a
+    // way whose *result* this test suite depends on — mirrors A-M1's own
+    // tests and `backup.rs`'s untested `store_secrets`/`load_secrets`. A
+    // real keychain call can behave differently per environment (no
+    // secret-service on headless Linux CI vs. a real Keychain on macOS) and
+    // asserting on its outcome would make a test flaky by host. The one
+    // exception is `delete_profile`'s `clear_lock` call below, which is
+    // fire-and-forget (`let _ = ...`) in the command itself — the test
+    // exercises the real call but never asserts on what it returned, only
+    // on `AppState` bookkeeping that doesn't depend on it. The soft-lock
+    // *decision* itself (locked && not-unlocked => denied) is covered
+    // exhaustively and keychain-free by
+    // `folio_core::profile_lock::access_allowed`'s own unit tests.
+    //
+    // `switch_profile` additionally takes a Tauri `AppHandle` (concrete,
+    // defaulting to the real `Wry` runtime — see `#[default_runtime]` on
+    // `tauri::AppHandle`), which `tauri::test::mock_app()`'s `MockRuntime`
+    // handle cannot satisfy. So `switch_profile` itself isn't exercised
+    // end-to-end here; its soft-lock gate condition is the same
+    // `access_allowed` call tested below and in folio-core.
+
+    /// Builds a `tauri::App<MockRuntime>` with a fresh `AppState` managed on
+    /// it, backed by an in-memory DB and a tempdir data dir. `State<'_, T>`
+    /// has no public constructor, so this is the only way to obtain one in
+    /// a test — commands taking only `State` (not `AppHandle`) can be
+    /// called directly against `handle.state::<AppState>()`.
+    fn mock_app_with_state() -> (tauri::App<tauri::test::MockRuntime>, tempfile::TempDir) {
+        let dir = tempfile::tempdir().unwrap();
+        let pool = db::create_pool(&dir.path().join("library.db")).unwrap();
+        let app = tauri::test::mock_app();
+        app.manage(AppState {
+            shared_active_pool: std::sync::Arc::new(std::sync::Mutex::new(pool.clone())),
+            shared_active_profile_name: std::sync::Arc::new(std::sync::Mutex::new(
+                "default".to_string(),
+            )),
+            shared_pin_hash: std::sync::Arc::new(std::sync::Mutex::new(None)),
+            unlocked_profiles: std::sync::Arc::new(std::sync::Mutex::new(
+                std::collections::HashSet::from(["default".to_string()]),
+            )),
+            db: pool,
+            profile_state: std::sync::Mutex::new(ProfileState {
+                active: "default".to_string(),
+                pools: std::collections::HashMap::new(),
+            }),
+            data_dir: dir.path().to_path_buf(),
+            epub_cache: std::sync::Arc::new(std::sync::Mutex::new(LruCache::new(5))),
+            #[cfg(feature = "mobi")]
+            mobi_cache: std::sync::Arc::new(std::sync::Mutex::new(LruCache::new(5))),
+            enrichment_registry: std::sync::Mutex::new(crate::providers::ProviderRegistry::new()),
+            web_server_handle: std::sync::Mutex::new(None),
+            ipc_metrics: IpcMetrics::new(500, 500.0),
+            plugin_manager: std::sync::Arc::new(std::sync::Mutex::new(None)),
+            _log_guard: None,
+        });
+        (app, dir)
+    }
+
+    #[test]
+    fn appstate_is_unlocked_defaults_false_until_marked() {
+        let (app, _dir) = mock_app_with_state();
+        let state = app.handle().state::<AppState>();
+        assert!(!state.is_unlocked("alice"));
+        state.mark_unlocked("alice").unwrap();
+        assert!(state.is_unlocked("alice"));
+    }
+
+    #[test]
+    fn appstate_mark_locked_removes_from_unlocked_set() {
+        let (app, _dir) = mock_app_with_state();
+        let state = app.handle().state::<AppState>();
+        state.mark_unlocked("alice").unwrap();
+        assert!(state.is_unlocked("alice"));
+        state.mark_locked("alice").unwrap();
+        assert!(!state.is_unlocked("alice"));
+    }
+
+    /// Mirrors the exact condition `switch_profile` gates on: a locked,
+    /// not-yet-unlocked profile must be denied (surfaced as
+    /// `FolioError::LockRequired`).
+    #[test]
+    fn switch_profile_gate_denies_locked_and_not_unlocked() {
+        assert!(!folio_core::profile_lock::access_allowed(true, false));
+    }
+
+    #[test]
+    fn switch_profile_gate_allows_after_unlock_profile_marks_unlocked() {
+        // Simulates `unlock_profile`'s success path (`state.mark_unlocked`)
+        // followed by `switch_profile`'s gate check on the same session
+        // state — proving a successful unlock really does let a retried
+        // switch through.
+        let (app, _dir) = mock_app_with_state();
+        let state = app.handle().state::<AppState>();
+        assert!(!folio_core::profile_lock::access_allowed(
+            true,
+            state.is_unlocked("bob")
+        ));
+        state.mark_unlocked("bob").unwrap();
+        assert!(folio_core::profile_lock::access_allowed(
+            true,
+            state.is_unlocked("bob")
+        ));
+    }
+
+    #[tokio::test]
+    async fn delete_profile_clears_unlocked_set_entry() {
+        let (app, _dir) = mock_app_with_state();
+        let handle = app.handle().clone();
+        {
+            let state = handle.state::<AppState>();
+            let mut ps = state.profile_state.lock().unwrap();
+            let pool = db::create_pool(&std::path::PathBuf::from(":memory:")).unwrap();
+            ps.pools.insert("carol".to_string(), pool);
+            drop(ps);
+            // Simulate a previously-unlocked session for this profile, as
+            // `switch_profile`/`unlock_profile` would have left it.
+            state.mark_unlocked("carol").unwrap();
+            assert!(state.is_unlocked("carol"));
+        }
+
+        let state = handle.state::<AppState>();
+        delete_profile("carol".to_string(), state)
+            .await
+            .expect("deleting a non-active profile should succeed");
+
+        let state = handle.state::<AppState>();
+        assert!(
+            !state.is_unlocked("carol"),
+            "delete_profile must drop the profile from the unlocked set (Decision 10)"
+        );
+        assert!(!state
+            .profile_state
+            .lock()
+            .unwrap()
+            .pools
+            .contains_key("carol"));
     }
 }
 

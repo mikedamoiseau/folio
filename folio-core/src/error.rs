@@ -64,6 +64,11 @@ pub enum FolioError {
     Io(String),
     /// JSON or other serialization / deserialization failure.
     Serialization(String),
+    /// The target profile has a soft-lock configured (see the `profile_lock`
+    /// module) and has not been unlocked this desktop session. The frontend
+    /// matches this `kind` to show the unlock prompt instead of a generic
+    /// error toast.
+    LockRequired(String),
     /// Everything else — lock poisoning, unexpected states, cancellation.
     Internal(String),
 }
@@ -80,6 +85,7 @@ impl FolioError {
             Self::Database(_) => "Database",
             Self::Io(_) => "Io",
             Self::Serialization(_) => "Serialization",
+            Self::LockRequired(_) => "LockRequired",
             Self::Internal(_) => "Internal",
         }
     }
@@ -104,6 +110,9 @@ impl FolioError {
     }
     pub fn io(msg: impl Into<String>) -> Self {
         Self::Io(msg.into())
+    }
+    pub fn lock_required(msg: impl Into<String>) -> Self {
+        Self::LockRequired(msg.into())
     }
 }
 
@@ -144,6 +153,7 @@ impl fmt::Display for FolioError {
             | Self::Database(m)
             | Self::Io(m)
             | Self::Serialization(m)
+            | Self::LockRequired(m)
             | Self::Internal(m) => m.as_str(),
         };
         f.write_str(&redact_home(raw))
@@ -319,6 +329,7 @@ mod tests {
             FolioError::Serialization("x".into()).kind(),
             "Serialization"
         );
+        assert_eq!(FolioError::LockRequired("x".into()).kind(), "LockRequired");
         assert_eq!(FolioError::Internal("x".into()).kind(), "Internal");
     }
 

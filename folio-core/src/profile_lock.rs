@@ -172,6 +172,16 @@ pub fn has_lock(profile: &str) -> FolioResult<bool> {
     Ok(load_lock(profile)?.is_some())
 }
 
+/// Whether a profile may be accessed right now, given whether it has a
+/// stored lock and whether it has already been unlocked this session.
+/// Pure logic shared by `switch_profile` and the web layer's per-request
+/// gate (A-M2) so both enforce the identical rule: a profile with no lock
+/// is always accessible; a locked profile requires having been unlocked
+/// this session.
+pub fn access_allowed(has_lock: bool, unlocked_this_session: bool) -> bool {
+    !has_lock || unlocked_this_session
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -288,6 +298,24 @@ mod tests {
     fn map_load_result_found_password_becomes_ok_some() {
         let result = map_load_result(Ok("$argon2id$...".to_string()));
         assert!(matches!(result, Ok(Some(_))));
+    }
+
+    // ---- access_allowed (A-M2) ----
+
+    #[test]
+    fn access_allowed_when_no_lock_regardless_of_session_state() {
+        assert!(access_allowed(false, false));
+        assert!(access_allowed(false, true));
+    }
+
+    #[test]
+    fn access_denied_when_locked_and_not_unlocked_this_session() {
+        assert!(!access_allowed(true, false));
+    }
+
+    #[test]
+    fn access_allowed_when_locked_but_unlocked_this_session() {
+        assert!(access_allowed(true, true));
     }
 
     #[test]

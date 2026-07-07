@@ -234,6 +234,8 @@ async fn toggle_mode(app: &AppHandle, which: ToggleWhich) {
             pin_hash: state.shared_pin_hash.clone(),
             sessions: std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             login_limiter: std::sync::Arc::new(crate::web_server::auth::RateLimiter::new(5, 300)),
+            active_profile_name: state.shared_active_profile_name.clone(),
+            unlocked_profiles: state.unlocked_profiles.clone(),
         };
         if let Ok(handle) = crate::web_server::start(web_state, current_port, modes).await {
             let mut h = state.web_server_handle.lock().unwrap();

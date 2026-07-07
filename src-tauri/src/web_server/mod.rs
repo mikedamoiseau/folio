@@ -6,7 +6,7 @@ pub mod web_ui;
 use crate::db::DbPool;
 use crate::error::{FolioError, FolioResult};
 use axum::{http::StatusCode, middleware, Router};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -25,6 +25,15 @@ pub struct WebState {
     pub sessions: Arc<Mutex<HashMap<String, std::time::Instant>>>,
     /// Rate limiter for login attempts (R2-2).
     pub login_limiter: Arc<auth::RateLimiter>,
+    /// The currently-active profile's name, shared with `AppState` and
+    /// swapped on profile switch (A-M2). Read by `profile_lock_gate` to
+    /// know which profile's soft-lock state to check.
+    pub active_profile_name: Arc<Mutex<String>>,
+    /// Profiles unlocked (soft-lock, A-M2) this desktop session, shared
+    /// with `AppState`. The profile password is never accepted over the
+    /// web (Decision 5) — this is populated only by desktop-side
+    /// `unlock_profile`/`switch_profile`.
+    pub unlocked_profiles: Arc<Mutex<HashSet<String>>>,
 }
 
 impl WebState {
@@ -194,6 +203,53 @@ async fn security_headers_middleware(
     response
 }
 
+/// Middleware gating every request behind the soft-lock session state
+/// (A-M2, Decision 5 / OQ-1a): the web/OPDS server only serves the
+/// currently-active profile once it has been unlocked in the desktop
+/// session. A locked-and-not-yet-unlocked profile is dark on the network —
+/// the server keeps running but responds `503` to everything except the
+/// public shell assets and the health check. This is independent of, and
+/// in addition to, `auth::auth_middleware`'s web-PIN gate below; the
+/// profile password itself is never accepted over HTTP.
+///
+/// Per the design spec this checks `unlocked_profiles` membership only —
+/// it does not re-derive lock status from the keychain on every request.
+/// `AppState`/`WebState` keep that set in sync with reality: a profile
+/// with no lock configured is inserted into the set the moment it becomes
+/// active (`switch_profile`, startup), so "not in the set" always means
+/// "locked and not yet unlocked", never "never checked".
+async fn profile_lock_gate(
+    axum::extract::State(state): axum::extract::State<WebState>,
+    req: axum::http::Request<axum::body::Body>,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+
+    let path = req.uri().path();
+    if path == "/api/health" || web_ui::PUBLIC_SHELL_ASSETS.contains(&path) {
+        return next.run(req).await;
+    }
+
+    let active = match state.active_profile_name.lock() {
+        Ok(guard) => guard.clone(),
+        Err(_) => {
+            return (StatusCode::INTERNAL_SERVER_ERROR, "Internal server error").into_response()
+        }
+    };
+    let unlocked = match state.unlocked_profiles.lock() {
+        Ok(guard) => guard.contains(&active),
+        Err(_) => {
+            return (StatusCode::INTERNAL_SERVER_ERROR, "Internal server error").into_response()
+        }
+    };
+
+    if unlocked {
+        next.run(req).await
+    } else {
+        (StatusCode::SERVICE_UNAVAILABLE, "Profile locked").into_response()
+    }
+}
+
 /// Build the full axum router with all routes and middleware.
 /// Routes are conditionally mounted based on `modes`. Calling with
 /// `ServerModes { web_ui: false, opds: false }` returns a router that
@@ -217,6 +273,10 @@ pub fn build_router(state: WebState, modes: ServerModes) -> Router {
         .layer(middleware::from_fn_with_state(
             state.clone(),
             auth::auth_middleware,
+        ))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            profile_lock_gate,
         ))
         .layer(middleware::from_fn(security_headers_middleware))
         .with_state(state)
@@ -291,6 +351,8 @@ mod tests {
             pin_hash: Arc::new(Mutex::new(None)),
             sessions: Arc::new(Mutex::new(HashMap::new())),
             login_limiter: Arc::new(auth::RateLimiter::new(5, 300)),
+            active_profile_name: Arc::new(Mutex::new("default".to_string())),
+            unlocked_profiles: Arc::new(Mutex::new(HashSet::from(["default".to_string()]))),
         }
     }
 
@@ -408,6 +470,82 @@ mod tests {
         // Public routes should work without auth
         let resp = client
             .get(format!("http://127.0.0.1:{actual_port}/api/health"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+
+        let _ = shutdown_tx.send(());
+    }
+
+    #[tokio::test]
+    async fn test_profile_lock_gate_blocks_locked_and_not_unlocked_profile() {
+        let state = test_state();
+        // `test_state()` defaults `unlocked_profiles` to `{"default"}` (the
+        // common case: no lock ever configured). Clearing it simulates the
+        // active profile having a stored lock that hasn't been unlocked
+        // this session (A-M2) — no PIN is configured, so without the
+        // profile-lock gate this request would otherwise sail through.
+        state.unlocked_profiles.lock().unwrap().clear();
+
+        let addr = SocketAddr::from(([127, 0, 0, 1], 0));
+        let router = build_router(
+            state.clone(),
+            ServerModes {
+                web_ui: true,
+                opds: true,
+            },
+        );
+        let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
+        let actual_port = listener.local_addr().unwrap().port();
+
+        let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+        tokio::spawn(async move {
+            axum::serve(
+                listener,
+                router.into_make_service_with_connect_info::<SocketAddr>(),
+            )
+            .with_graceful_shutdown(async {
+                let _ = shutdown_rx.await;
+            })
+            .await
+            .ok();
+        });
+
+        let client = reqwest::Client::new();
+
+        // Library-data routes are refused while the active profile is locked.
+        let resp = client
+            .get(format!("http://127.0.0.1:{actual_port}/api/books"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 503);
+
+        // The server keeps running: health check and the public shell
+        // still respond.
+        let resp = client
+            .get(format!("http://127.0.0.1:{actual_port}/api/health"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+        let resp = client
+            .get(format!("http://127.0.0.1:{actual_port}/"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+
+        // Unlocking the active profile (as `unlock_profile`/`switch_profile`
+        // would) lets requests through again.
+        state
+            .unlocked_profiles
+            .lock()
+            .unwrap()
+            .insert("default".to_string());
+        let resp = client
+            .get(format!("http://127.0.0.1:{actual_port}/api/books"))
             .send()
             .await
             .unwrap();

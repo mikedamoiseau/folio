@@ -214,6 +214,13 @@ async fn async_main() -> Result<(), Box<dyn Error>> {
         pin_hash: Arc::new(Mutex::new(None)),
         sessions: Arc::new(Mutex::new(HashMap::new())),
         login_limiter: Arc::new(auth::RateLimiter::new(5, 300)),
+        // This harness has no profile-switch flow of its own, so it's
+        // always the (unlocked, lock-free) "default" profile — the
+        // soft-lock gate (A-M2) must stay a no-op here.
+        active_profile_name: Arc::new(Mutex::new("default".to_string())),
+        unlocked_profiles: Arc::new(Mutex::new(std::collections::HashSet::from([
+            "default".to_string()
+        ]))),
     };
 
     let router = web_server::build_router(

@@ -143,11 +143,31 @@ pub fn run() {
                 std::sync::Mutex::new(reg)
             };
 
+            // Soft-lock startup check (A-M2, Decision 6 / SB-7): the
+            // initially-active profile is entered without a
+            // `switch_profile` call, so it must be checked here too —
+            // "default" is not exempt. Fail closed on a keychain error
+            // (treat as locked, i.e. do NOT auto-unlock) rather than
+            // silently exposing the profile (Decision 7). When unlocked,
+            // seed the session's unlocked set so a normal, never-locked
+            // startup behaves exactly as before this feature existed. The
+            // frontend detects a locked startup profile via
+            // `profile_lock_status` (checked against `get_profiles`'
+            // active entry) and presents the unlock prompt.
+            let mut unlocked_profiles = std::collections::HashSet::new();
+            if !folio_core::profile_lock::has_lock("default").unwrap_or(true) {
+                unlocked_profiles.insert("default".to_string());
+            }
+
             app.manage(AppState {
                 shared_active_pool: std::sync::Arc::new(std::sync::Mutex::new(pool.clone())),
+                shared_active_profile_name: std::sync::Arc::new(std::sync::Mutex::new(
+                    "default".to_string(),
+                )),
                 shared_pin_hash: std::sync::Arc::new(std::sync::Mutex::new(
                     crate::web_server::auth::load_pin_hash(),
                 )),
+                unlocked_profiles: std::sync::Arc::new(std::sync::Mutex::new(unlocked_profiles)),
                 db: pool,
                 profile_state: std::sync::Mutex::new(ProfileState {
                     active: "default".to_string(),
@@ -267,6 +287,8 @@ pub fn run() {
                         std::collections::HashMap::new(),
                     )),
                     login_limiter: std::sync::Arc::new(web_server::auth::RateLimiter::new(5, 300)),
+                    active_profile_name: state.shared_active_profile_name.clone(),
+                    unlocked_profiles: state.unlocked_profiles.clone(),
                 };
                 if let Ok(handle) = web_server::start(web_state, port, modes).await {
                     {
@@ -387,6 +409,10 @@ pub fn run() {
             commands::create_profile,
             commands::switch_profile,
             commands::delete_profile,
+            commands::set_profile_lock,
+            commands::remove_profile_lock,
+            commands::unlock_profile,
+            commands::profile_lock_status,
             plugin_host::plugin_list,
             plugin_host::plugin_enable,
             plugin_host::plugin_disable,

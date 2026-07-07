@@ -371,7 +371,7 @@ pub async fn auth_middleware(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
+    use std::collections::{HashMap, HashSet};
     use std::sync::{Arc, Mutex};
 
     fn test_state() -> WebState {
@@ -384,6 +384,8 @@ mod tests {
             pin_hash: Arc::new(Mutex::new(None)),
             sessions: Arc::new(Mutex::new(HashMap::new())),
             login_limiter: Arc::new(RateLimiter::new(5, 300)),
+            active_profile_name: Arc::new(Mutex::new("default".to_string())),
+            unlocked_profiles: Arc::new(Mutex::new(HashSet::from(["default".to_string()]))),
         }
     }
 
