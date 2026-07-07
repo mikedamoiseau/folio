@@ -3727,6 +3727,13 @@ pub async fn switch_profile(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> FolioResult<()> {
+    // Leaf serialization lock (see `AppState::profile_lifecycle`): held for
+    // the whole body so this validate-then-mutate sequence can't interleave
+    // with `delete_profile` — otherwise `switch_profile` could validate that
+    // `name` exists, `delete_profile` could then remove its pool, and this
+    // would still set `ps.active = name`, leaving the active profile pointing
+    // at a deleted profile.
+    let _lifecycle = state.profile_lifecycle.lock().await;
     {
         let ps = state.profile_state.lock()?;
         if name != "default" && !ps.pools.contains_key(&name) {
