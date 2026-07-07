@@ -15,6 +15,7 @@ export type FolioErrorPayload = {
     | "Database"
     | "Io"
     | "Serialization"
+    | "LockRequired"
     | "Internal"
     | string;
   message: string;
@@ -52,6 +53,7 @@ const KIND_TO_KEY: Record<string, string> = {
   Database: "errors.database",
   Io: "errors.io",
   Serialization: "errors.corrupt",
+  LockRequired: "errors.lockRequired",
   Internal: "errors.generic",
 };
 
@@ -87,6 +89,10 @@ export const MESSAGE_KEYS: Record<string, string> = {
   "could not find eocd": "errors.notZip",
   "not a valid zip": "errors.notZip",
   "not a valid rar": "errors.notRar",
+  "incorrect password": "errors.incorrectPassword",
+  "incorrect current password": "errors.incorrectPassword",
+  "current password is required": "errors.currentPasswordRequired",
+  "profile has no lock to remove": "errors.profileNotLocked",
 };
 
 /**
@@ -113,6 +119,17 @@ export const MESSAGE_KEYS: Record<string, string> = {
 export function isBookFileMissing(raw: unknown): boolean {
   const { message } = toFolioError(raw);
   return message.toLowerCase().includes("book file not found");
+}
+
+/**
+ * Detect the profile soft-lock gate (`FolioError::LockRequired`, backend
+ * `kind: "LockRequired"`). `switch_profile` and the active-profile gate on
+ * every data-bearing command raise this when the target profile has a
+ * stored lock that hasn't been unlocked this session — the frontend shows
+ * the unlock prompt instead of a generic error toast.
+ */
+export function isLockRequired(raw: unknown): boolean {
+  return toFolioError(raw).kind === "LockRequired";
 }
 
 export function isBookFileError(raw: unknown): boolean {

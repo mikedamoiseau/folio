@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import type { TFunction } from "i18next";
-import { friendlyError, toFolioError, isBookFileError, isBookFileMissing } from "./errors";
+import { friendlyError, toFolioError, isBookFileError, isBookFileMissing, isLockRequired } from "./errors";
 
 const mockT = ((key: string) => key) as TFunction;
 
@@ -99,6 +99,24 @@ describe("friendlyError", () => {
             expect(friendlyError(err, mockT)).toBe("errors.generic");
         });
 
+        it("maps LockRequired kind to the lock-required key", () => {
+            const err = { kind: "LockRequired", message: "Profile 'work' is locked" };
+            expect(friendlyError(err, mockT)).toBe("errors.lockRequired");
+        });
+
+        it("maps 'incorrect password' messages regardless of kind", () => {
+            const err = { kind: "InvalidInput", message: "Incorrect password" };
+            expect(friendlyError(err, mockT)).toBe("errors.incorrectPassword");
+        });
+
+        it("maps 'current password is required' messages", () => {
+            const err = {
+                kind: "InvalidInput",
+                message: "Current password is required to change the profile lock",
+            };
+            expect(friendlyError(err, mockT)).toBe("errors.currentPasswordRequired");
+        });
+
         it("handles Error instances", () => {
             expect(friendlyError(new Error("HTTP error: connection reset"), mockT)).toBe("errors.networkError");
         });
@@ -189,5 +207,25 @@ describe("isBookFileMissing", () => {
 
     it("does NOT match generic NotFound (missing TOC entry)", () => {
         expect(isBookFileMissing({ kind: "NotFound", message: "Entry missing in archive" })).toBe(false);
+    });
+});
+
+describe("isLockRequired", () => {
+    it("matches the LockRequired kind", () => {
+        expect(isLockRequired({ kind: "LockRequired", message: "Profile 'work' is locked" })).toBe(true);
+    });
+
+    it("does NOT match other kinds, even with a similar message", () => {
+        expect(isLockRequired({ kind: "InvalidInput", message: "Profile 'work' is locked" })).toBe(false);
+    });
+
+    it("does NOT match plain strings or Error instances", () => {
+        expect(isLockRequired("Profile 'work' is locked")).toBe(false);
+        expect(isLockRequired(new Error("locked"))).toBe(false);
+    });
+
+    it("handles null and undefined gracefully", () => {
+        expect(isLockRequired(null)).toBe(false);
+        expect(isLockRequired(undefined)).toBe(false);
     });
 });

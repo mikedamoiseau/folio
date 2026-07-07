@@ -1,4 +1,5 @@
 import { useState, useCallback, lazy, Suspense, useEffect, useRef } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { BrowserRouter, Routes, Route, Link, useLocation, useNavigate } from "react-router-dom";
 import { listen } from "@tauri-apps/api/event";
 import { useTranslation } from "react-i18next";
@@ -9,12 +10,66 @@ import { ToastProvider, useToast } from "./components/Toast";
 import SettingsPanel from "./components/SettingsPanel";
 import ReadingStats from "./components/ReadingStats";
 import ProfileSwitcher from "./components/ProfileSwitcher";
+import ProfileUnlockDialog from "./components/ProfileUnlockDialog";
 import CatalogBrowser from "./components/CatalogBrowser";
 import LanguageSwitcher from "./components/LanguageSwitcher";
 import ImportStatusBar from "./components/ImportStatusBar";
 import Library from "./screens/Library";
 import ReaderSkeleton from "./components/ReaderSkeleton";
 import ReaderErrorBoundary from "./components/ReaderErrorBoundary";
+
+interface ProfileSummary {
+  name: string;
+  is_active: boolean;
+}
+
+interface ProfileLockStatus {
+  locked: boolean;
+  unlockedThisSession: boolean;
+}
+
+/**
+ * Startup soft-lock gate (A-M3, spec Decision 6 / SB-7): the initially
+ * active profile is entered without a `switch_profile` call, so it's never
+ * offered the unlock prompt that call's `LockRequired` error normally
+ * triggers. This checks it explicitly on mount, before the library ever
+ * renders.
+ *
+ * This check is a UX nicety, not the security boundary — the real gate is
+ * `AppState::active_db()` on the backend, which every data-bearing command
+ * (including `get_library`) already enforces via `is_unlocked`. If this
+ * check itself fails (e.g. a transient IPC error), we fail open *here* and
+ * let the library attempt to render — a still-locked profile is still
+ * blocked at the data layer, just without the polished prompt.
+ */
+function useStartupLockGate(): {
+  checked: boolean;
+  lockedProfile: string | null;
+  clearLockedProfile: () => void;
+} {
+  const [checked, setChecked] = useState(false);
+  const [lockedProfile, setLockedProfile] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const profiles = await invoke<ProfileSummary[]>("get_profiles");
+        const active = profiles.find((p) => p.is_active)?.name ?? "default";
+        const status = await invoke<ProfileLockStatus>("profile_lock_status", { profile: active });
+        if (cancelled) return;
+        setLockedProfile(status.locked && !status.unlockedThisSession ? active : null);
+      } catch {
+        if (!cancelled) setLockedProfile(null);
+      } finally {
+        if (!cancelled) setChecked(true);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  return { checked, lockedProfile, clearLockedProfile: () => setLockedProfile(null) };
+}
 
 const Reader = lazy(() => import("./screens/Reader"));
 
@@ -30,6 +85,7 @@ function AppShell() {
   const { addToast } = useToast();
   const { t } = useTranslation();
   const authErrorShown = useRef(false);
+  const { checked: lockGateChecked, lockedProfile, clearLockedProfile } = useStartupLockGate();
 
   useEffect(() => {
     const unlisten = listen<{ message: string }>("backup-auth-error", () => {
@@ -45,6 +101,21 @@ function AppShell() {
     setCatalogImportedBookIds([]);
     setProfileKey((k) => k + 1); // force Library remount
   }, [navigate]);
+
+  // Soft-lock startup gate (A-M3): don't render the library — or even the
+  // brief unstyled flash of it — until we know whether the active profile
+  // needs unlocking. No `onCancel`: there's no other profile to fall back
+  // to at boot (see `useStartupLockGate`'s doc comment).
+  if (!lockGateChecked) {
+    return <div className="h-screen bg-paper" />;
+  }
+  if (lockedProfile) {
+    return (
+      <div className="h-screen bg-paper">
+        <ProfileUnlockDialog profile={lockedProfile} onUnlocked={clearLockedProfile} />
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col h-screen bg-paper text-ink">

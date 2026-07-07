@@ -3984,6 +3984,25 @@ pub async fn unlock_profile(
     Ok(())
 }
 
+/// Clears `profile`'s lock **without** the current password — the "forgot
+/// password" recovery path (Decision 9). Safe because nothing is
+/// encrypted: this only removes the deterrent and never touches the
+/// library, books, or database. The frontend routes this behind a
+/// deliberate, clearly-labelled confirmation step (never a one-tap button
+/// on the lock screen itself). Mirrors `remove_profile_lock`'s tail: a
+/// profile with no lock is never gated, so it's marked unlocked too.
+#[tauri::command]
+pub async fn reset_profile_lock(profile: String, state: State<'_, AppState>) -> FolioResult<()> {
+    // Leaf serialization lock (see `AppState::profile_lifecycle`): held for
+    // the whole body so this can't interleave with the other
+    // profile-lifecycle commands across their `.await` points.
+    let _lifecycle = state.profile_lifecycle.lock().await;
+    state.ensure_profile_exists(&profile)?;
+    folio_core::profile_lock::clear_lock(&profile)?;
+    state.mark_unlocked(&profile)?;
+    Ok(())
+}
+
 /// Soft-lock status for `profile`, driving the frontend's unlock prompt.
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -8138,6 +8157,49 @@ mod tests {
             .await
             .expect_err("locking a non-existent profile must fail");
         assert_eq!(err.kind(), "InvalidInput");
+    }
+
+    #[tokio::test]
+    async fn reset_profile_lock_rejects_missing_profile() {
+        // Same existence guard as the other profile-lifecycle commands
+        // (Decision 10) — a mistyped/stale name must never touch the
+        // keychain or the unlocked set.
+        let (app, _dir) = mock_app_with_state();
+        let state = app.handle().state::<AppState>();
+        let err = reset_profile_lock("ghost".to_string(), state)
+            .await
+            .expect_err("resetting a non-existent profile must fail");
+        assert_eq!(err.kind(), "InvalidInput");
+    }
+
+    #[tokio::test]
+    async fn reset_profile_lock_marks_profile_unlocked() {
+        // The recovery path (Decision 9) clears the keychain entry
+        // (fire-and-forget, like `delete_profile`'s hygiene call — see the
+        // module note above on why the real keychain result isn't asserted
+        // on) and must mark the profile unlocked so a retried switch
+        // succeeds without ever knowing the old password.
+        let (app, _dir) = mock_app_with_state();
+        let handle = app.handle().clone();
+        {
+            let state = handle.state::<AppState>();
+            let mut ps = state.profile_state.lock().unwrap();
+            let pool = db::create_pool(&std::path::PathBuf::from(":memory:")).unwrap();
+            ps.pools.insert("carol".to_string(), pool);
+            drop(ps);
+            assert!(!state.is_unlocked("carol"));
+        }
+
+        let state = handle.state::<AppState>();
+        reset_profile_lock("carol".to_string(), state)
+            .await
+            .expect("resetting an existing profile's lock should succeed");
+
+        let state = handle.state::<AppState>();
+        assert!(
+            state.is_unlocked("carol"),
+            "reset_profile_lock must mark the profile unlocked (Decision 9)"
+        );
     }
 
     #[tokio::test]

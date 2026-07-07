@@ -18,6 +18,7 @@ import {
   FONT_OPTIONS,
 } from "../lib/themes";
 import ActivityLog from "./ActivityLog";
+import ConfirmDialog from "./ConfirmDialog";
 import SavedThemesList from "./SavedThemesList";
 import PluginsPanel from "./PluginsPanel";
 import { emit } from "@tauri-apps/api/event";
@@ -519,6 +520,20 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
   const [savedPin, setSavedPin] = useState("");
   const [pinError, setPinError] = useState<string | null>(null);
 
+  // Profile lock state (A-M3). Distinct from the web-access PIN above:
+  // this gates switching into the *active* profile inside the desktop app
+  // itself (see docs/superpowers/specs/2026-07-07-profile-soft-lock-design.md).
+  const [profileLockName, setProfileLockName] = useState("default");
+  const [profileLockStatus, setProfileLockStatus] = useState<{
+    locked: boolean;
+    unlockedThisSession: boolean;
+  } | null>(null);
+  const [newLockPassword, setNewLockPassword] = useState("");
+  const [currentLockPassword, setCurrentLockPassword] = useState("");
+  const [changeLockPassword, setChangeLockPassword] = useState("");
+  const [lockBusy, setLockBusy] = useState(false);
+  const [pendingRemoveLock, setPendingRemoveLock] = useState(false);
+
   // Custom fonts
   interface CustomFont {
     id: string;
@@ -700,6 +715,76 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
     }
   }, [webServerPin, t]);
 
+  // Loads which profile is active and its lock status. The section always
+  // operates on the currently active profile — there's no picker, matching
+  // how the rest of Settings implicitly scopes to it (e.g. the library
+  // folder, web server settings).
+  const loadProfileLockStatus = useCallback(async () => {
+    try {
+      const profiles = await invoke<{ name: string; is_active: boolean }[]>("get_profiles");
+      const active = profiles.find((p) => p.is_active)?.name ?? "default";
+      setProfileLockName(active);
+      const status = await invoke<{ locked: boolean; unlockedThisSession: boolean }>(
+        "profile_lock_status",
+        { profile: active }
+      );
+      setProfileLockStatus(status);
+    } catch {
+      // non-fatal
+    }
+  }, []);
+
+  const handleSetProfileLock = useCallback(async () => {
+    if (!newLockPassword || lockBusy) return;
+    setLockBusy(true);
+    try {
+      await invoke("set_profile_lock", { profile: profileLockName, password: newLockPassword });
+      setNewLockPassword("");
+      await loadProfileLockStatus();
+      addToast(t("settings.lockSetSuccess"), "success");
+    } catch (e) {
+      addToast(friendlyError(e, t), "error");
+    } finally {
+      setLockBusy(false);
+    }
+  }, [newLockPassword, lockBusy, profileLockName, loadProfileLockStatus, addToast, t]);
+
+  const handleChangeProfileLock = useCallback(async () => {
+    if (!currentLockPassword || !changeLockPassword || lockBusy) return;
+    setLockBusy(true);
+    try {
+      await invoke("set_profile_lock", {
+        profile: profileLockName,
+        password: changeLockPassword,
+        currentPassword: currentLockPassword,
+      });
+      setCurrentLockPassword("");
+      setChangeLockPassword("");
+      addToast(t("settings.lockChangedSuccess"), "success");
+    } catch (e) {
+      addToast(friendlyError(e, t), "error");
+    } finally {
+      setLockBusy(false);
+    }
+  }, [currentLockPassword, changeLockPassword, lockBusy, profileLockName, addToast, t]);
+
+  const handleRemoveProfileLock = useCallback(async () => {
+    if (!currentLockPassword || lockBusy) return;
+    setLockBusy(true);
+    try {
+      await invoke("remove_profile_lock", { profile: profileLockName, currentPassword: currentLockPassword });
+      setCurrentLockPassword("");
+      setChangeLockPassword("");
+      setPendingRemoveLock(false);
+      await loadProfileLockStatus();
+      addToast(t("settings.lockRemovedSuccess"), "success");
+    } catch (e) {
+      addToast(friendlyError(e, t), "error");
+    } finally {
+      setLockBusy(false);
+    }
+  }, [currentLockPassword, lockBusy, profileLockName, loadProfileLockStatus, addToast, t]);
+
   useEffect(() => {
     if (!open) return;
     const onFocus = () => { loadServerStatus(); };
@@ -713,6 +798,7 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
       loadBackupSettings();
       loadProviders();
       loadCacheInfo();
+      loadProfileLockStatus();
       (async () => {
         const scanImport = await invoke<string | null>("get_setting_value", { key: "auto_scan_import" });
         setAutoScanImport(scanImport !== "false");
@@ -723,7 +809,7 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
         await loadServerStatus();
       })().catch(() => {});
     }
-  }, [open, loadLibraryFolder, loadBackupSettings, loadProviders, loadCacheInfo, loadServerStatus]);
+  }, [open, loadLibraryFolder, loadBackupSettings, loadProviders, loadCacheInfo, loadServerStatus, loadProfileLockStatus]);
 
   useEffect(() => {
     if (!open) return;
@@ -2193,6 +2279,104 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
               )}
             </div>
           </Accordion>
+
+          <Accordion title={t("settings.profileLockSection")} open={openSection === "profileLock"} onToggle={() => toggleSection("profileLock")} query={settingsQuery} keywords={t("settings.searchTermsProfileLock")}>
+            <div className="space-y-2">
+              <p className="text-xs text-ink-muted px-1">{t("settings.profileLockDescription")}</p>
+              <div className="bg-warm-subtle rounded-xl px-3 py-2.5 space-y-2">
+                <p className="text-xs text-ink-muted leading-relaxed">{t("settings.profileLockHonestSentence")}</p>
+                <p className="text-xs text-ink">
+                  {t("settings.profileLockFor", { name: profileLockName })}{" "}
+                  <span className={profileLockStatus?.locked ? "text-accent" : "text-ink-muted"}>
+                    {profileLockStatus?.locked ? t("settings.profileLockStatusOn") : t("settings.profileLockStatusOff")}
+                  </span>
+                </p>
+              </div>
+
+              {profileLockStatus && !profileLockStatus.locked && (
+                <div className="bg-warm-subtle rounded-xl px-3 py-2.5">
+                  <label htmlFor="new-lock-password" className="text-xs text-ink-muted mb-1 block">
+                    {t("settings.newLockPasswordLabel")}
+                  </label>
+                  <input
+                    id="new-lock-password"
+                    type="password"
+                    value={newLockPassword}
+                    onChange={(e) => setNewLockPassword(e.target.value)}
+                    placeholder={t("settings.newLockPasswordPlaceholder")}
+                    className="w-full bg-transparent text-sm text-ink focus:outline-none"
+                  />
+                  <button
+                    type="button"
+                    onClick={handleSetProfileLock}
+                    disabled={!newLockPassword || lockBusy}
+                    className="mt-1.5 text-xs text-accent hover:underline disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    {t("settings.setLockButton")}
+                  </button>
+                </div>
+              )}
+
+              {profileLockStatus?.locked && (
+                <div className="bg-warm-subtle rounded-xl px-3 py-2.5 space-y-2">
+                  <div>
+                    <label htmlFor="current-lock-password" className="text-xs text-ink-muted mb-1 block">
+                      {t("settings.currentLockPasswordLabel")}
+                    </label>
+                    <input
+                      id="current-lock-password"
+                      type="password"
+                      value={currentLockPassword}
+                      onChange={(e) => setCurrentLockPassword(e.target.value)}
+                      className="w-full bg-transparent text-sm text-ink focus:outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label htmlFor="change-lock-password" className="text-xs text-ink-muted mb-1 block">
+                      {t("settings.changeLockPasswordLabel")}
+                    </label>
+                    <input
+                      id="change-lock-password"
+                      type="password"
+                      value={changeLockPassword}
+                      onChange={(e) => setChangeLockPassword(e.target.value)}
+                      placeholder={t("settings.changeLockPasswordPlaceholder")}
+                      className="w-full bg-transparent text-sm text-ink focus:outline-none"
+                    />
+                  </div>
+                  <div className="flex items-center gap-3 pt-0.5">
+                    <button
+                      type="button"
+                      onClick={handleChangeProfileLock}
+                      disabled={!currentLockPassword || !changeLockPassword || lockBusy}
+                      className="text-xs text-accent hover:underline disabled:opacity-40 disabled:cursor-not-allowed"
+                    >
+                      {t("settings.changeLockButton")}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setPendingRemoveLock(true)}
+                      disabled={!currentLockPassword || lockBusy}
+                      className="text-xs text-red-500 hover:underline disabled:opacity-40 disabled:cursor-not-allowed"
+                    >
+                      {t("settings.removeLockButton")}
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          </Accordion>
+
+          {pendingRemoveLock && (
+            <ConfirmDialog
+              title={t("settings.removeLockConfirmTitle")}
+              message={t("settings.removeLockConfirmMessage")}
+              confirmLabel={t("settings.removeLockConfirm")}
+              confirmDisabled={lockBusy}
+              onConfirm={handleRemoveProfileLock}
+              onCancel={() => setPendingRemoveLock(false)}
+            />
+          )}
 
           {backupProviders.length > 0 && (
             <Accordion title={t("settings.remoteBackup")} open={openSection === "remote"} onToggle={() => toggleSection("remote")} query={settingsQuery} keywords={t("settings.searchTermsRemote")}>

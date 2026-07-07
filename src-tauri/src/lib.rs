@@ -447,6 +447,7 @@ pub fn run() {
             commands::set_profile_lock,
             commands::remove_profile_lock,
             commands::unlock_profile,
+            commands::reset_profile_lock,
             commands::profile_lock_status,
             plugin_host::plugin_list,
             plugin_host::plugin_enable,

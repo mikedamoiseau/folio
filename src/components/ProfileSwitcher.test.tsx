@@ -99,3 +99,60 @@ describe("ProfileSwitcher switching loading state", () => {
     await waitFor(() => expect(screen.queryByRole("status")).not.toBeInTheDocument());
   });
 });
+
+describe("ProfileSwitcher soft-lock handling", () => {
+  it("shows the unlock prompt (not a generic error) when switch_profile reports LockRequired", async () => {
+    invoke.mockImplementation((cmd: string) => {
+      if (cmd === "get_profiles")
+        return Promise.resolve([
+          { name: "default", is_active: true },
+          { name: "work", is_active: false },
+        ]);
+      if (cmd === "switch_profile")
+        return Promise.reject({ kind: "LockRequired", message: "Profile 'work' is locked" });
+      return Promise.resolve(undefined);
+    });
+
+    await openDropdown();
+    const workRow = screen.getByText("work").closest("div")!;
+    await act(async () => fireEvent.click(workRow));
+
+    expect(await screen.findByRole("dialog", { name: "profiles.unlockTitle:work" })).toBeInTheDocument();
+  });
+
+  it("retries the switch after a successful unlock", async () => {
+    let switchAttempts = 0;
+    invoke.mockImplementation((cmd: string, args?: Record<string, unknown>) => {
+      if (cmd === "get_profiles")
+        return Promise.resolve([
+          { name: "default", is_active: true },
+          { name: "work", is_active: false },
+        ]);
+      if (cmd === "switch_profile") {
+        switchAttempts += 1;
+        if (switchAttempts === 1) {
+          return Promise.reject({ kind: "LockRequired", message: "Profile 'work' is locked" });
+        }
+        return Promise.resolve(undefined);
+      }
+      if (cmd === "unlock_profile") return Promise.resolve(undefined);
+      void args;
+      return Promise.resolve(undefined);
+    });
+
+    await openDropdown();
+    const workRow = screen.getByText("work").closest("div")!;
+    await act(async () => fireEvent.click(workRow));
+    await screen.findByRole("dialog", { name: "profiles.unlockTitle:work" });
+
+    fireEvent.change(screen.getByLabelText("profiles.unlockPasswordLabel"), {
+      target: { value: "hunter2" },
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /profiles.unlock/ }));
+    });
+
+    await waitFor(() => expect(switchAttempts).toBe(2));
+    expect(invoke).toHaveBeenCalledWith("switch_profile", { name: "work" });
+  });
+});

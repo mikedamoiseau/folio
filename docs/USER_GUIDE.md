@@ -423,6 +423,17 @@ Profiles give you completely separate libraries. Each profile has its own books,
 
 Create and switch profiles from the profile dropdown in the library header. The dropdown only appears once you have more than one profile. Non-default profiles can be deleted.
 
+### Profile lock
+
+You can lock a profile behind a password, from **Settings → Profile lock**. This hides the profile from anyone using the app casually — a housemate, or someone picking up your laptop — by requiring the password before it can be switched into (including at app startup, if the locked profile is the one that opens automatically).
+
+**A profile lock hides this profile in the app. It does not encrypt your books, database, or cached pages — anyone with access to this computer's files can still read them.** It's a deterrent, not encryption: don't rely on it to protect the profile's contents on a device someone else can access at the file-system level (e.g. an unencrypted disk, a cloud sync of your app-data folder, or a shared machine with another OS-level account). This also means a locked profile is not served over the web/OPDS remote-access server until it has been unlocked in the desktop app for that session — the profile password is never asked for over the web.
+
+- **Setting a lock:** open Settings → Profile lock while the profile you want to lock is active, and choose a password. Any passphrase works — it isn't limited to digits like the web-access PIN.
+- **Switching into a locked profile** prompts for its password. There's no lockout after wrong attempts — the check itself is intentionally slow enough to discourage guessing.
+- **Changing or removing a lock** from Settings requires the current password.
+- **Forgot the password?** The unlock prompt has a "Can't sign in?" link that clears the lock after a deliberate confirmation step. This never touches your books or library — it only removes the lock, exactly like knowing the password and removing it yourself.
+
 ---
 
 ## 9. Customizing Your Reading Experience

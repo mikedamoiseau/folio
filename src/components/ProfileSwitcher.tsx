@@ -1,8 +1,9 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useTranslation } from "react-i18next";
-import { friendlyError } from "../lib/errors";
+import { friendlyError, isLockRequired } from "../lib/errors";
 import ConfirmDialog from "./ConfirmDialog";
+import ProfileUnlockDialog from "./ProfileUnlockDialog";
 
 interface Profile {
   name: string;
@@ -23,6 +24,7 @@ export default function ProfileSwitcher({ onSwitch }: ProfileSwitcherProps) {
   const [pendingDelete, setPendingDelete] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [switching, setSwitching] = useState<string | null>(null);
+  const [lockPrompt, setLockPrompt] = useState<string | null>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
   const loadProfiles = useCallback(async () => {
@@ -62,10 +64,23 @@ export default function ProfileSwitcher({ onSwitch }: ProfileSwitcherProps) {
       setOpen(false);
       onSwitch();
     } catch (err) {
-      setError(friendlyError(err, t));
+      // A soft-locked profile (A-M3): show the unlock prompt instead of a
+      // generic error. `handleUnlocked` retries this same switch once
+      // `unlock_profile`/the recovery reset succeeds.
+      if (isLockRequired(err)) {
+        setLockPrompt(name);
+      } else {
+        setError(friendlyError(err, t));
+      }
     } finally {
       setSwitching(null);
     }
+  };
+
+  const handleUnlocked = () => {
+    const name = lockPrompt;
+    setLockPrompt(null);
+    if (name) handleSwitch(name);
   };
 
   const handleCreate = async () => {
@@ -233,6 +248,14 @@ export default function ProfileSwitcher({ onSwitch }: ProfileSwitcherProps) {
         >
           {error && <p className="text-xs text-red-500">{error}</p>}
         </ConfirmDialog>
+      )}
+
+      {lockPrompt && (
+        <ProfileUnlockDialog
+          profile={lockPrompt}
+          onUnlocked={handleUnlocked}
+          onCancel={() => setLockPrompt(null)}
+        />
       )}
     </div>
   );
