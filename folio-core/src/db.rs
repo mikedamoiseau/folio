@@ -13,7 +13,7 @@ use crate::models::{
 pub type DbPool = Pool<SqliteConnectionManager>;
 
 /// Current schema version. Bump this when adding new migrations.
-const SCHEMA_VERSION: i64 = 2;
+const SCHEMA_VERSION: i64 = 3;
 
 /// Get the current schema version from the database (0 if not yet set).
 pub fn get_schema_version(conn: &Connection) -> Result<i64> {
@@ -86,6 +86,28 @@ fn migrate_file_path_to_key(conn: &Connection) -> Result<()> {
         }
     }
 
+    Ok(())
+}
+
+/// F-1-3: backfill `reading_progress.finished_at` for rows that already
+/// satisfy the "finished" predicate (on or past the last chapter, with the
+/// `total_chapters > 0` guard from Finding 2) from before the column
+/// existed. `last_read_at` is the best available approximation of the
+/// completion timestamp — there's no better signal for when a pre-existing
+/// row finished. Guarded by `finished_at IS NULL`, so it's safe to treat as
+/// idempotent, but the caller only invokes it once (`prev_version < 3`).
+fn backfill_finished_at(conn: &Connection) -> Result<()> {
+    conn.execute(
+        "UPDATE reading_progress
+         SET finished_at = last_read_at
+         WHERE finished_at IS NULL
+           AND book_id IN (
+             SELECT rp.book_id FROM reading_progress rp
+             JOIN books b ON rp.book_id = b.id
+             WHERE b.total_chapters > 0 AND rp.chapter_index >= b.total_chapters - 1
+           )",
+        [],
+    )?;
     Ok(())
 }
 
@@ -290,6 +312,13 @@ fn run_schema(conn: &Connection) -> Result<()> {
     let _ = conn.execute_batch("ALTER TABLE bookmarks ADD COLUMN deleted_at INTEGER;");
     let _ = conn.execute_batch("ALTER TABLE highlights ADD COLUMN deleted_at INTEGER;");
 
+    // F-1-3: dedicated completion timestamp, set once when a progress write
+    // transitions a book to finished (see `upsert_reading_progress`) and
+    // never cleared afterwards — re-reading or restarting a finished book
+    // must not change when it originally finished. Distinct from
+    // `last_read_at`, which re-opening a book bumps into the current year.
+    let _ = conn.execute_batch("ALTER TABLE reading_progress ADD COLUMN finished_at INTEGER;");
+
     // Backfill: set updated_at = added_at or created_at for existing rows
     let _ = conn.execute_batch("UPDATE books SET updated_at = added_at WHERE updated_at = 0;");
     let _ =
@@ -355,6 +384,12 @@ fn run_schema(conn: &Connection) -> Result<()> {
     let prev_version = get_schema_version(conn)?;
     if prev_version < 2 {
         migrate_file_path_to_key(conn)?;
+    }
+
+    // F-1-3: one-time backfill of `finished_at` for rows already finished
+    // before the column existed.
+    if prev_version < 3 {
+        backfill_finished_at(conn)?;
     }
 
     // Record schema version (#49)
@@ -1050,14 +1085,34 @@ pub fn delete_feature_flag(conn: &Connection, key: &str) -> Result<()> {
 
 // --- ReadingProgress CRUD ---
 
+/// Upserts a book's reading progress. Also stamps `finished_at` (F-1-3) the
+/// first time a write lands on or past the last chapter (guarded by
+/// `total_chapters > 0`, same predicate as `get_reading_stats`'s "finished"
+/// count — Finding 2) — via a `JOIN` against `books` so every caller gets
+/// this for free without passing `total_chapters` in. Once set, `finished_at`
+/// is never cleared or overwritten: re-reading or restarting a finished book
+/// (chapter_index back to 0, then finished again) keeps the original
+/// completion date, matching Goodreads-style semantics.
 pub fn upsert_reading_progress(conn: &Connection, progress: &ReadingProgress) -> Result<()> {
     conn.execute(
-        "INSERT INTO reading_progress (book_id, chapter_index, scroll_position, last_read_at)
-         VALUES (?1, ?2, ?3, ?4)
+        "INSERT INTO reading_progress (book_id, chapter_index, scroll_position, last_read_at, finished_at)
+         VALUES (
+             ?1, ?2, ?3, ?4,
+             CASE WHEN (SELECT total_chapters > 0 AND ?2 >= total_chapters - 1
+                        FROM books WHERE id = ?1)
+                  THEN ?4 ELSE NULL END
+         )
          ON CONFLICT(book_id) DO UPDATE SET
            chapter_index=excluded.chapter_index,
            scroll_position=excluded.scroll_position,
-           last_read_at=excluded.last_read_at",
+           last_read_at=excluded.last_read_at,
+           finished_at = CASE
+               WHEN reading_progress.finished_at IS NOT NULL THEN reading_progress.finished_at
+               WHEN (SELECT total_chapters > 0 AND excluded.chapter_index >= total_chapters - 1
+                     FROM books WHERE id = reading_progress.book_id)
+               THEN excluded.last_read_at
+               ELSE NULL
+           END",
         params![
             progress.book_id,
             progress.chapter_index,
@@ -1115,13 +1170,11 @@ pub fn get_recently_read_books(conn: &Connection, limit: u32) -> Result<Vec<Book
 /// read first — powers the web UI's "Continue Reading" shelf (Item 5).
 /// "Finished" mirrors the predicate `get_reading_stats` uses for
 /// `books_finished` (on or past the last chapter: `chapter_index >=
-/// total_chapters - 1`, unguarded against `total_chapters = 0`), so a book
-/// counted as finished there never shows up here as still in progress.
-/// `total_chapters = 0` (not yet known) is excluded outright rather than
-/// treated as "never finished" — `books_finished`'s unguarded predicate
-/// already counts any progress on such a book as finished, so keeping it
-/// here as well would show it as both finished and in-progress at once. A
-/// book with an unknown page count can't show meaningful progress anyway.
+/// total_chapters - 1`, guarded against `total_chapters = 0` — Finding 2),
+/// so a book counted as finished there never shows up here as still in
+/// progress. `total_chapters = 0` (not yet known) is excluded outright
+/// rather than treated as "never finished" — a book with an unknown page
+/// count can't show meaningful progress either way.
 pub fn get_continue_reading_books(
     conn: &Connection,
     limit: u32,
@@ -1468,6 +1521,11 @@ pub struct ReadingStats {
     pub total_pages_read: i64,
     pub total_books: i64,
     pub books_finished: i64,
+    /// Books finished during the current local calendar year, by
+    /// `reading_progress.finished_at`'s local year — powers the yearly
+    /// reading goal ring (F-1-3). Distinct from `books_finished`, which is
+    /// all-time.
+    pub books_finished_this_year: i64,
     pub current_streak_days: i64,
     pub longest_streak_days: i64,
     pub daily_reading: Vec<(String, i64)>, // (date_str, seconds)
@@ -1490,10 +1548,26 @@ pub fn get_reading_stats(conn: &Connection) -> Result<ReadingStats> {
         |row| row.get(0),
     )?;
     let total_books: i64 = conn.query_row("SELECT COUNT(*) FROM books", [], |row| row.get(0))?;
-    let books_finished: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM reading_progress rp JOIN books b ON rp.book_id = b.id WHERE rp.chapter_index >= b.total_chapters - 1",
+    // `books_finished` (all-time) and `books_finished_this_year` share the
+    // same "finished" predicate (on or past the last chapter, guarded
+    // against `total_chapters = 0` — Finding 2, a zero-chapter book with any
+    // progress row would otherwise look "finished" the moment it's opened),
+    // so both are computed by one scan with conditional aggregation rather
+    // than two separate `COUNT` queries over the same join.
+    // `books_finished_this_year` is scoped by `finished_at`'s local calendar
+    // year (F-1-3), not `last_read_at` — `last_read_at` is bumped by simply
+    // re-opening an already-finished book, which would wrongly re-count it
+    // in whatever year it happens to be re-opened.
+    let (books_finished, books_finished_this_year): (i64, i64) = conn.query_row(
+        "SELECT
+             COALESCE(SUM(CASE WHEN b.total_chapters > 0 AND rp.chapter_index >= b.total_chapters - 1
+                                THEN 1 ELSE 0 END), 0),
+             COALESCE(SUM(CASE WHEN b.total_chapters > 0 AND rp.chapter_index >= b.total_chapters - 1
+                                 AND strftime('%Y', rp.finished_at, 'unixepoch', 'localtime') = strftime('%Y', 'now', 'localtime')
+                                THEN 1 ELSE 0 END), 0)
+         FROM reading_progress rp JOIN books b ON rp.book_id = b.id",
         [],
-        |row| row.get(0),
+        |row| Ok((row.get(0)?, row.get(1)?)),
     )?;
 
     // Daily reading for the heatmap's rolling year window (F-5-4), grouped by
@@ -1579,6 +1653,7 @@ pub fn get_reading_stats(conn: &Connection) -> Result<ReadingStats> {
         total_pages_read,
         total_books,
         books_finished,
+        books_finished_this_year,
         current_streak_days: current_streak,
         longest_streak_days: longest_streak,
         daily_reading,
@@ -2681,6 +2756,270 @@ mod tests {
             .daily_reading_year
             .iter()
             .any(|(_, secs)| *secs == 450));
+    }
+
+    // F-1-3: `books_finished_this_year` must only count books whose
+    // `finished_at` falls in the current local calendar year — a book
+    // finished last year contributes to the all-time `books_finished` but
+    // not to this year's count (the goal-ring boundary case).
+    #[test]
+    fn test_get_reading_stats_books_finished_this_year_boundary() {
+        use chrono::Datelike;
+
+        let (_dir, conn) = setup();
+
+        let finished_this_year = Book {
+            file_path: "/tmp/finished-this-year.epub".to_string(),
+            total_chapters: 10,
+            ..sample_book("finished-this-year")
+        };
+        insert_book(&conn, &finished_this_year).unwrap();
+        upsert_reading_progress(
+            &conn,
+            &ReadingProgress {
+                book_id: "finished-this-year".to_string(),
+                chapter_index: 9,
+                scroll_position: 1.0,
+                last_read_at: chrono::Local::now().timestamp(),
+            },
+        )
+        .unwrap();
+
+        let finished_last_year = Book {
+            file_path: "/tmp/finished-last-year.epub".to_string(),
+            total_chapters: 10,
+            ..sample_book("finished-last-year")
+        };
+        insert_book(&conn, &finished_last_year).unwrap();
+        let last_year = chrono::Local::now().year() - 1;
+        let last_year_ts = chrono::NaiveDate::from_ymd_opt(last_year, 6, 15)
+            .unwrap()
+            .and_hms_opt(12, 0, 0)
+            .unwrap()
+            .and_local_timezone(chrono::Local)
+            .unwrap()
+            .timestamp();
+        upsert_reading_progress(
+            &conn,
+            &ReadingProgress {
+                book_id: "finished-last-year".to_string(),
+                chapter_index: 9,
+                scroll_position: 1.0,
+                last_read_at: last_year_ts,
+            },
+        )
+        .unwrap();
+
+        let stats = get_reading_stats(&conn).unwrap();
+        assert_eq!(stats.books_finished, 2, "both books count all-time");
+        assert_eq!(
+            stats.books_finished_this_year, 1,
+            "only the book finished this calendar year should count"
+        );
+    }
+
+    fn get_finished_at(conn: &Connection, book_id: &str) -> Option<i64> {
+        conn.query_row(
+            "SELECT finished_at FROM reading_progress WHERE book_id = ?1",
+            params![book_id],
+            |row| row.get(0),
+        )
+        .unwrap()
+    }
+
+    // Finding 1: `upsert_reading_progress` stamps `finished_at` the first
+    // time a write crosses onto the last chapter, and never touches it
+    // again — restarting (chapter_index back to 0) or re-finishing later
+    // must not move or clear the original completion timestamp.
+    #[test]
+    fn test_upsert_reading_progress_stamps_finished_at_once() {
+        let (_dir, conn) = setup();
+        let book = Book {
+            total_chapters: 10,
+            ..sample_book("book-finish")
+        };
+        insert_book(&conn, &book).unwrap();
+
+        upsert_reading_progress(
+            &conn,
+            &ReadingProgress {
+                book_id: "book-finish".to_string(),
+                chapter_index: 9,
+                scroll_position: 1.0,
+                last_read_at: 1_000,
+            },
+        )
+        .unwrap();
+        assert_eq!(get_finished_at(&conn, "book-finish"), Some(1_000));
+
+        // Restart: back to chapter 0, later timestamp — finished_at must
+        // stay put.
+        upsert_reading_progress(
+            &conn,
+            &ReadingProgress {
+                book_id: "book-finish".to_string(),
+                chapter_index: 0,
+                scroll_position: 0.0,
+                last_read_at: 2_000,
+            },
+        )
+        .unwrap();
+        assert_eq!(get_finished_at(&conn, "book-finish"), Some(1_000));
+
+        // Finish again: back on the last chapter — still must not move.
+        upsert_reading_progress(
+            &conn,
+            &ReadingProgress {
+                book_id: "book-finish".to_string(),
+                chapter_index: 9,
+                scroll_position: 1.0,
+                last_read_at: 3_000,
+            },
+        )
+        .unwrap();
+        assert_eq!(get_finished_at(&conn, "book-finish"), Some(1_000));
+    }
+
+    // Finding 1 (headline bug): re-opening a book finished in a prior year
+    // bumps `last_read_at` into the current year but must not re-count it
+    // in `books_finished_this_year` — the count is scoped by `finished_at`,
+    // which stays pinned to the original completion time.
+    #[test]
+    fn test_books_finished_this_year_excludes_reopened_prior_year_book() {
+        use chrono::Datelike;
+
+        let (_dir, conn) = setup();
+        let book = Book {
+            total_chapters: 10,
+            ..sample_book("book-reopened")
+        };
+        insert_book(&conn, &book).unwrap();
+
+        let last_year = chrono::Local::now().year() - 1;
+        let last_year_ts = chrono::NaiveDate::from_ymd_opt(last_year, 6, 15)
+            .unwrap()
+            .and_hms_opt(12, 0, 0)
+            .unwrap()
+            .and_local_timezone(chrono::Local)
+            .unwrap()
+            .timestamp();
+
+        // Finished last year.
+        upsert_reading_progress(
+            &conn,
+            &ReadingProgress {
+                book_id: "book-reopened".to_string(),
+                chapter_index: 9,
+                scroll_position: 1.0,
+                last_read_at: last_year_ts,
+            },
+        )
+        .unwrap();
+
+        let now = chrono::Local::now().timestamp();
+
+        // Re-opened this year (not on the last chapter) — bumps last_read_at
+        // into this year.
+        upsert_reading_progress(
+            &conn,
+            &ReadingProgress {
+                book_id: "book-reopened".to_string(),
+                chapter_index: 3,
+                scroll_position: 0.2,
+                last_read_at: now,
+            },
+        )
+        .unwrap();
+
+        // Re-finished this year — last_read_at is this year, but finished_at
+        // must remain pinned to last year's original completion.
+        upsert_reading_progress(
+            &conn,
+            &ReadingProgress {
+                book_id: "book-reopened".to_string(),
+                chapter_index: 9,
+                scroll_position: 1.0,
+                last_read_at: now,
+            },
+        )
+        .unwrap();
+        assert_eq!(get_finished_at(&conn, "book-reopened"), Some(last_year_ts));
+
+        let stats = get_reading_stats(&conn).unwrap();
+        assert_eq!(stats.books_finished, 1, "counts all-time");
+        assert_eq!(
+            stats.books_finished_this_year, 0,
+            "must not be re-counted just because it was re-opened this year"
+        );
+    }
+
+    // Finding 1: pre-existing rows that already satisfy the finished
+    // predicate before `finished_at` existed get backfilled from
+    // `last_read_at`, the best available approximation.
+    #[test]
+    fn test_backfill_finished_at_migration() {
+        let (_dir, conn) = setup();
+        let book = Book {
+            total_chapters: 10,
+            ..sample_book("book-legacy")
+        };
+        insert_book(&conn, &book).unwrap();
+        upsert_reading_progress(
+            &conn,
+            &ReadingProgress {
+                book_id: "book-legacy".to_string(),
+                chapter_index: 9,
+                scroll_position: 1.0,
+                last_read_at: 5_000,
+            },
+        )
+        .unwrap();
+
+        // Simulate a pre-migration row: finished, but finished_at not yet
+        // populated.
+        conn.execute(
+            "UPDATE reading_progress SET finished_at = NULL WHERE book_id = 'book-legacy'",
+            [],
+        )
+        .unwrap();
+        assert_eq!(get_finished_at(&conn, "book-legacy"), None);
+
+        backfill_finished_at(&conn).unwrap();
+        assert_eq!(get_finished_at(&conn, "book-legacy"), Some(5_000));
+    }
+
+    // Finding 2: a book with an unknown chapter count (`total_chapters ==
+    // 0`) must not look "finished" just because a progress row exists —
+    // `chapter_index >= total_chapters - 1` is trivially true at
+    // `total_chapters == 0` without the guard.
+    #[test]
+    fn test_zero_chapter_book_not_counted_as_finished() {
+        let (_dir, conn) = setup();
+        let book = Book {
+            total_chapters: 0,
+            ..sample_book("book-zero-chapters")
+        };
+        insert_book(&conn, &book).unwrap();
+        upsert_reading_progress(
+            &conn,
+            &ReadingProgress {
+                book_id: "book-zero-chapters".to_string(),
+                chapter_index: 0,
+                scroll_position: 0.0,
+                last_read_at: 1_000,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            get_finished_at(&conn, "book-zero-chapters"),
+            None,
+            "zero-chapter book must never get a finished_at stamp"
+        );
+
+        let stats = get_reading_stats(&conn).unwrap();
+        assert_eq!(stats.books_finished, 0);
+        assert_eq!(stats.books_finished_this_year, 0);
     }
 
     // Item 5: "Continue Reading" shelf query — excludes never-started and

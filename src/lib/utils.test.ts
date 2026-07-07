@@ -25,6 +25,8 @@ import {
   buildHeatmapWeeks,
   getHeatmapMonthLabels,
   HEATMAP_DAYS,
+  getDayOfYear,
+  computeReadingPace,
   type BookLike,
 } from "./utils";
 
@@ -950,5 +952,53 @@ describe("getHeatmapMonthLabels", () => {
     // exactly once elsewhere in the grid.
     const augustLabels = labels.filter((label) => label === 7);
     expect(augustLabels).toHaveLength(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Yearly reading goal (F-1-3): day-of-year + pace comparison
+// ---------------------------------------------------------------------------
+
+describe("getDayOfYear", () => {
+  it("returns 1 for January 1st", () => {
+    expect(getDayOfYear(new Date(2026, 0, 1))).toBe(1);
+  });
+
+  it("returns 365 for December 31st of a non-leap year", () => {
+    expect(getDayOfYear(new Date(2026, 11, 31))).toBe(365);
+  });
+
+  it("returns 366 for December 31st of a leap year", () => {
+    expect(getDayOfYear(new Date(2028, 11, 31))).toBe(366);
+  });
+
+  it("returns 166 for June 15th of a non-leap year", () => {
+    expect(getDayOfYear(new Date(2026, 5, 15))).toBe(166);
+  });
+});
+
+describe("computeReadingPace", () => {
+  it("day 1: expects 0 books yet, any finished book is ahead", () => {
+    expect(computeReadingPace(0, 12, 1)).toEqual({ status: "onTrack", count: 0, expected: 0 });
+    expect(computeReadingPace(1, 12, 1)).toEqual({ status: "ahead", count: 1, expected: 0 });
+  });
+
+  it("day 365: expects the full goal", () => {
+    expect(computeReadingPace(365, 365, 365)).toEqual({ status: "onTrack", count: 0, expected: 365 });
+    expect(computeReadingPace(364, 365, 365)).toEqual({ status: "behind", count: 1, expected: 365 });
+    expect(computeReadingPace(366, 365, 365)).toEqual({ status: "ahead", count: 1, expected: 365 });
+  });
+
+  it("reports ahead of schedule", () => {
+    // goal 12, day 182 -> expected floor(12*182/365) = 5
+    expect(computeReadingPace(8, 12, 182)).toEqual({ status: "ahead", count: 3, expected: 5 });
+  });
+
+  it("reports behind schedule", () => {
+    expect(computeReadingPace(2, 12, 182)).toEqual({ status: "behind", count: 3, expected: 5 });
+  });
+
+  it("reports on track when finished matches the expected pace exactly", () => {
+    expect(computeReadingPace(5, 12, 182)).toEqual({ status: "onTrack", count: 0, expected: 5 });
   });
 });

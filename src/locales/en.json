@@ -750,7 +750,18 @@
     "last365Days": "Last 365 Days",
     "heatmapAriaLabel": "Reading activity for the last year",
     "heatmapTooltip": "{{date}} — {{duration}}",
-    "heatmapTooltipEmpty": "{{date}} — No reading"
+    "heatmapTooltipEmpty": "{{date}} — No reading",
+    "goal": {
+      "title": "{{year}} Reading Goal",
+      "setGoal": "Set a yearly goal",
+      "setGoalHint": "Track how many books you finish this year",
+      "inputLabel": "Books to read this year",
+      "onTrack": "On track",
+      "aheadOfSchedule": "{{count}} ahead of schedule",
+      "behindSchedule": "{{count}} behind schedule",
+      "completed": "Goal reached!",
+      "ringAriaLabel": "{{finished}} of {{goal}} books finished this year, {{percent}}%"
+    }
   },
 
   "shortcuts": {

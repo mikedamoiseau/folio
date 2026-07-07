@@ -575,3 +575,49 @@ export function validateWebServerPort(
   }
   return { valid: true, port };
 }
+
+/**
+ * 1-based day-of-year for a local date (Jan 1 = 1). Used to gauge progress
+ * toward the yearly reading goal against elapsed time (F-1-3).
+ *
+ * Computed via UTC calendar arithmetic on the date's local year/month/day
+ * components rather than flooring a wall-clock millisecond difference —
+ * the latter is one day short during 00:00-00:59 on the day after a DST
+ * spring-forward, since that local day is only 23 hours long. `Date.UTC`
+ * has no DST, so this is correct by construction regardless of timezone.
+ */
+export function getDayOfYear(d: Date): number {
+  const y = d.getFullYear();
+  const start = Date.UTC(y, 0, 1);
+  const current = Date.UTC(y, d.getMonth(), d.getDate());
+  return (current - start) / 86_400_000 + 1;
+}
+
+export type ReadingPaceStatus = "ahead" | "behind" | "onTrack";
+
+export interface ReadingPace {
+  status: ReadingPaceStatus;
+  /** Books ahead of / behind schedule; 0 when `onTrack`. */
+  count: number;
+  /** Books expected to be finished by today at a steady pace toward `goal`. */
+  expected: number;
+}
+
+/**
+ * Compares books actually finished this year against the number expected by
+ * today at a steady pace (`goal * dayOfYear / 365`, floored) for the yearly
+ * reading goal's pace indicator (F-1-3). `daysInYear` defaults to 365 per
+ * spec rather than accounting for leap years.
+ */
+export function computeReadingPace(
+  finished: number,
+  goal: number,
+  dayOfYear: number,
+  daysInYear = 365
+): ReadingPace {
+  const expected = Math.floor((goal * dayOfYear) / daysInYear);
+  const diff = finished - expected;
+  if (diff > 0) return { status: "ahead", count: diff, expected };
+  if (diff < 0) return { status: "behind", count: -diff, expected };
+  return { status: "onTrack", count: 0, expected };
+}

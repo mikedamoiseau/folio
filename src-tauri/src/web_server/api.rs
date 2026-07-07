@@ -1369,6 +1369,7 @@ mod tests {
             total_pages_read: 200,
             total_books: 5,
             books_finished: 2,
+            books_finished_this_year: 1,
             current_streak_days: 3,
             longest_streak_days: 7,
             daily_reading: vec![("2026-05-01".to_string(), 1800)],
@@ -1379,6 +1380,7 @@ mod tests {
         assert_eq!(json["totalSessions"], 10);
         assert_eq!(json["totalPagesRead"], 200);
         assert_eq!(json["booksFinished"], 2);
+        assert_eq!(json["booksFinishedThisYear"], 1);
         assert_eq!(json["currentStreakDays"], 3);
         assert_eq!(json["longestStreakDays"], 7);
         assert!(json["dailyReading"].is_array());
