@@ -3,7 +3,7 @@
 All notable changes to this project will be documented in this file.
 This project adheres to [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [2.7.0] - 2026-07-08
 
 A reading-insights and privacy release: the stats screen gains a year view and
 a goal to read toward, book details show how you actually read each title, and
