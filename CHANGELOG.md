@@ -33,8 +33,10 @@ mode — let you decide what the app records and shows.
   The password is hashed with Argon2id in your OS keychain. This is a
   **deterrent that hides a profile from casual view — it does not encrypt** your
   books, database, or cached pages; anyone with access to your files can still
-  read them, and the in-app copy says so. Includes a deliberate "Can't sign in?"
-  recovery that clears the lock (safe, since nothing is encrypted).
+  read them, and the in-app copy says so. A lock can be set when creating a new
+  profile (a "Lock this profile" option in the create dialog) or later from
+  Settings, and there's a deliberate "Can't sign in?" recovery that clears the
+  lock (safe, since nothing is encrypted).
 - **"Don't track this session" mode.** An app-wide toggle with a persistent
   indicator that pauses passive tracking — reading position, session stats and
   streaks, recently-read, and reading entries in the activity log — while it's
