@@ -3818,10 +3818,12 @@ pub async fn create_profile(
     }
 
     // Leaf serialization lock (see `AppState::profile_lifecycle`): held for
-    // the whole body so creation plus the optional lock is atomic — no
-    // window where the profile exists unlocked-and-unprotected — and so
-    // this can't interleave with the other profile-lifecycle commands
-    // across their `.await` points.
+    // the whole body so this can't interleave with the other
+    // profile-lifecycle commands across their `.await` points. Creation plus
+    // the optional lock is also atomic on failure: the pool is only inserted
+    // after the lock succeeds, and a lock failure rolls the DB/folder back
+    // (see below), so there is no window where a profile the user asked to
+    // lock exists unlocked-and-visible.
     let _lifecycle = state.profile_lifecycle.lock().await;
 
     let db_path = state.data_dir.join(format!("library-{name}.db"));
@@ -3840,26 +3842,35 @@ pub async fn create_profile(
     db::set_setting(&conn, "library_folder", &profile_folder)?;
     drop(conn);
 
+    // If a lock was requested, set it BEFORE inserting the pool into
+    // `profile_state.pools`. That insert — and the on-disk `library-{name}.db`
+    // that the startup scan (see `lib.rs`) rediscovers with no lock check — is
+    // what makes the profile visible. Locking first means a lock failure can
+    // roll back the created DB file and folder, so a profile the user asked to
+    // lock never lingers unlocked-and-visible (this session or after a restart).
+    let lock_requested = password.as_deref().is_some_and(|p| !p.trim().is_empty());
+    if lock_requested {
+        let password = password.expect("lock_requested implies Some");
+        let set = async {
+            let phc = hash_password_blocking(SecretString::from(password)).await?;
+            folio_core::profile_lock::set_lock(&name, &phc)
+        }
+        .await;
+        if let Err(e) = set {
+            drop(pool);
+            let _ = std::fs::remove_file(&db_path);
+            let _ = std::fs::remove_dir_all(&profile_folder);
+            return Err(FolioError::internal(format!(
+                "Failed to create locked profile '{name}': {e}"
+            )));
+        }
+    }
+
     {
         let mut ps = state.profile_state.lock()?;
         ps.pools.insert(name.clone(), pool);
     }
-
-    if let Some(password) = password.filter(|p| !p.trim().is_empty()) {
-        let phc = hash_password_blocking(SecretString::from(password))
-            .await
-            .map_err(|e| {
-                FolioError::internal(format!(
-                    "Profile '{name}' was created, but setting its lock failed: {e}. \
-                     You can set a lock for it from Settings."
-                ))
-            })?;
-        folio_core::profile_lock::set_lock(&name, &phc).map_err(|e| {
-            FolioError::internal(format!(
-                "Profile '{name}' was created, but setting its lock failed: {e}. \
-                 You can set a lock for it from Settings."
-            ))
-        })?;
+    if lock_requested {
         state.mark_unlocked(&name)?;
     }
 
