@@ -744,6 +744,8 @@
     "deleteConfirmTitle": "Delete “{{name}}”?",
     "deleteConfirmMessage": "This permanently deletes this profile and its library database. Your imported book files are not removed. This can’t be undone.",
     "deleteConfirm": "Delete profile",
+    "lockThisProfile": "Lock this profile",
+    "lockPasswordPlaceholder": "Choose a password",
     "unlockTitle": "Unlock “{{name}}”",
     "unlockPasswordLabel": "Password",
     "unlockPlaceholder": "Enter this profile's password",

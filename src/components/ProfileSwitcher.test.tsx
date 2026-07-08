@@ -100,6 +100,62 @@ describe("ProfileSwitcher switching loading state", () => {
   });
 });
 
+describe("ProfileSwitcher create-with-lock", () => {
+  async function openCreateForm() {
+    await openDropdown();
+    const newProfileBtn = await screen.findByText("profiles.newProfile");
+    await act(async () => fireEvent.click(newProfileBtn));
+  }
+
+  it("does not show a password field until the lock checkbox is checked", async () => {
+    await openCreateForm();
+    expect(screen.queryByPlaceholderText("profiles.lockPasswordPlaceholder")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByText("profiles.lockThisProfile"));
+    expect(await screen.findByPlaceholderText("profiles.lockPasswordPlaceholder")).toBeInTheDocument();
+  });
+
+  it("passes the password to create_profile when the lock checkbox is checked", async () => {
+    await openCreateForm();
+    fireEvent.change(screen.getByPlaceholderText("profiles.profileName"), {
+      target: { value: "work" },
+    });
+    fireEvent.click(screen.getByText("profiles.lockThisProfile"));
+    fireEvent.change(screen.getByPlaceholderText("profiles.lockPasswordPlaceholder"), {
+      target: { value: "hunter2" },
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "common.create" }));
+    });
+
+    expect(invoke).toHaveBeenCalledWith("create_profile", { name: "work", password: "hunter2" });
+  });
+
+  it("omits the password from create_profile when the lock checkbox is unchecked", async () => {
+    await openCreateForm();
+    fireEvent.change(screen.getByPlaceholderText("profiles.profileName"), {
+      target: { value: "work" },
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "common.create" }));
+    });
+
+    expect(invoke).toHaveBeenCalledWith("create_profile", { name: "work" });
+  });
+
+  it("disables the create button when the lock checkbox is checked but the password is blank", async () => {
+    await openCreateForm();
+    fireEvent.change(screen.getByPlaceholderText("profiles.profileName"), {
+      target: { value: "work" },
+    });
+    fireEvent.click(screen.getByText("profiles.lockThisProfile"));
+
+    expect(screen.getByRole("button", { name: "common.create" })).toBeDisabled();
+  });
+});
+
 describe("ProfileSwitcher soft-lock handling", () => {
   it("shows the unlock prompt (not a generic error) when switch_profile reports LockRequired", async () => {
     invoke.mockImplementation((cmd: string) => {

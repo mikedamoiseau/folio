@@ -3796,12 +3796,34 @@ pub async fn get_profiles(state: State<'_, AppState>) -> FolioResult<Vec<Profile
     Ok(result)
 }
 
+/// Creates a new profile, optionally locking it in the same call.
+///
+/// `password` is treated as "no lock" when `None` or blank/whitespace-only
+/// (matching the frontend's checkbox-off case) — in which case behavior is
+/// unchanged from before this option existed. A non-empty password is
+/// hashed and stored via [`folio_core::profile_lock::set_lock`], then the
+/// profile is marked unlocked for this session: the caller just typed the
+/// password to create it, so re-prompting immediately would be pointless
+/// (a future app restart still prompts normally, since the session set
+/// starts empty).
 #[tauri::command]
-pub async fn create_profile(name: String, state: State<'_, AppState>) -> FolioResult<()> {
+pub async fn create_profile(
+    name: String,
+    password: Option<String>,
+    state: State<'_, AppState>,
+) -> FolioResult<()> {
     let name = name.trim().to_string();
     if name.is_empty() || name == "default" {
         return Err(FolioError::invalid("Invalid profile name"));
     }
+
+    // Leaf serialization lock (see `AppState::profile_lifecycle`): held for
+    // the whole body so creation plus the optional lock is atomic — no
+    // window where the profile exists unlocked-and-unprotected — and so
+    // this can't interleave with the other profile-lifecycle commands
+    // across their `.await` points.
+    let _lifecycle = state.profile_lifecycle.lock().await;
+
     let db_path = state.data_dir.join(format!("library-{name}.db"));
     if db_path.exists() {
         return Err(FolioError::invalid(format!(
@@ -3816,9 +3838,31 @@ pub async fn create_profile(name: String, state: State<'_, AppState>) -> FolioRe
     let profile_folder = format!("{} - {}", library_folder, name);
     let _ = std::fs::create_dir_all(&profile_folder);
     db::set_setting(&conn, "library_folder", &profile_folder)?;
+    drop(conn);
 
-    let mut ps = state.profile_state.lock()?;
-    ps.pools.insert(name, pool);
+    {
+        let mut ps = state.profile_state.lock()?;
+        ps.pools.insert(name.clone(), pool);
+    }
+
+    if let Some(password) = password.filter(|p| !p.trim().is_empty()) {
+        let phc = hash_password_blocking(SecretString::from(password))
+            .await
+            .map_err(|e| {
+                FolioError::internal(format!(
+                    "Profile '{name}' was created, but setting its lock failed: {e}. \
+                     You can set a lock for it from Settings."
+                ))
+            })?;
+        folio_core::profile_lock::set_lock(&name, &phc).map_err(|e| {
+            FolioError::internal(format!(
+                "Profile '{name}' was created, but setting its lock failed: {e}. \
+                 You can set a lock for it from Settings."
+            ))
+        })?;
+        state.mark_unlocked(&name)?;
+    }
+
     Ok(())
 }
 
@@ -8497,6 +8541,113 @@ mod tests {
             true,
             state.is_unlocked("bob")
         ));
+    }
+
+    #[tokio::test]
+    async fn create_profile_without_password_behaves_as_before() {
+        // `password: None` (the checkbox-off case) must be a no-op change:
+        // the profile is created and left unlocked, exactly like before
+        // this option existed.
+        let (app, _dir) = mock_app_with_state();
+        let state = app.handle().state::<AppState>();
+        create_profile("erin".to_string(), None, state)
+            .await
+            .expect("creating a profile without a password should succeed");
+
+        let state = app.handle().state::<AppState>();
+        assert!(state
+            .profile_state
+            .lock()
+            .unwrap()
+            .pools
+            .contains_key("erin"));
+        assert!(
+            !folio_core::profile_lock::has_lock("erin").unwrap(),
+            "no password must mean no lock is set"
+        );
+        assert!(
+            !state.is_unlocked("erin"),
+            "create_profile must not mark an unlocked-without-a-password profile as unlocked"
+        );
+    }
+
+    #[tokio::test]
+    async fn create_profile_with_blank_password_behaves_as_before() {
+        // Whitespace-only input from the frontend's password field must be
+        // treated the same as the checkbox being off, not as "lock with an
+        // empty password".
+        let (app, _dir) = mock_app_with_state();
+        let state = app.handle().state::<AppState>();
+        create_profile("frank".to_string(), Some("   ".to_string()), state)
+            .await
+            .expect("creating a profile with a blank password should succeed unlocked");
+
+        assert!(
+            !folio_core::profile_lock::has_lock("frank").unwrap(),
+            "a blank password must not set a lock"
+        );
+    }
+
+    #[tokio::test]
+    async fn create_profile_with_password_creates_it_and_marks_it_unlocked() {
+        // The new behavior: a non-empty password creates the profile,
+        // hashes and stores it via `set_lock` (exercised for real here —
+        // see the module note above on why the real keychain *result*
+        // isn't asserted on), and marks the profile unlocked for this
+        // session (the caller just typed the password, so no immediate
+        // re-prompt — see the `create_profile` doc comment). Like
+        // `reset_profile_lock_marks_profile_unlocked`, this asserts on
+        // `AppState` bookkeeping (`is_unlocked`) rather than reading the
+        // lock back from the keychain (`has_lock`), which isn't reliably
+        // observable in a headless/automated test environment.
+        let (app, _dir) = mock_app_with_state();
+        let state = app.handle().state::<AppState>();
+        create_profile("dave".to_string(), Some("hunter2".to_string()), state)
+            .await
+            .expect("creating a profile with a password should succeed");
+
+        let state = app.handle().state::<AppState>();
+        assert!(state
+            .profile_state
+            .lock()
+            .unwrap()
+            .pools
+            .contains_key("dave"));
+        assert!(
+            state.is_unlocked("dave"),
+            "create_profile must mark a just-locked profile unlocked for this session"
+        );
+    }
+
+    #[tokio::test]
+    async fn create_profile_locks_and_creates_atomically_under_lifecycle_lock() {
+        // Mirrors `delete_profile_blocks_while_profile_lifecycle_lock_held`:
+        // while another lifecycle command holds `profile_lifecycle`,
+        // `create_profile` (which now also touches the lock/session state)
+        // must block rather than interleave.
+        let (app, _dir) = mock_app_with_state();
+        let handle = app.handle().clone();
+        let lifecycle = handle.state::<AppState>().profile_lifecycle.clone();
+        let outer_guard = lifecycle.lock().await;
+
+        let state = handle.state::<AppState>();
+        let timed_out = tokio::time::timeout(
+            std::time::Duration::from_millis(50),
+            create_profile("grace".to_string(), Some("pw".to_string()), state),
+        )
+        .await
+        .is_err();
+        assert!(
+            timed_out,
+            "create_profile must block on profile_lifecycle while another \
+             lifecycle command holds it"
+        );
+
+        drop(outer_guard);
+        let state = handle.state::<AppState>();
+        create_profile("grace".to_string(), Some("pw".to_string()), state)
+            .await
+            .expect("creating the profile should succeed once the lock is free");
     }
 
     #[tokio::test]

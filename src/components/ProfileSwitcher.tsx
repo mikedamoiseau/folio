@@ -20,6 +20,8 @@ export default function ProfileSwitcher({ onSwitch }: ProfileSwitcherProps) {
   const [open, setOpen] = useState(false);
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState("");
+  const [lockOnCreate, setLockOnCreate] = useState(false);
+  const [lockPassword, setLockPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [pendingDelete, setPendingDelete] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
@@ -45,6 +47,8 @@ export default function ProfileSwitcher({ onSwitch }: ProfileSwitcherProps) {
       if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
         setOpen(false);
         setCreating(false);
+        setLockOnCreate(false);
+        setLockPassword("");
         setError(null);
       }
     }
@@ -83,15 +87,26 @@ export default function ProfileSwitcher({ onSwitch }: ProfileSwitcherProps) {
     if (name) handleSwitch(name);
   };
 
+  const trimmedLockPassword = lockPassword.trim();
+  const createDisabled = !newName.trim() || (lockOnCreate && !trimmedLockPassword);
+
   const handleCreate = async () => {
     const trimmed = newName.trim();
     if (!trimmed) return;
+    if (lockOnCreate && !trimmedLockPassword) return;
     setError(null);
     try {
-      await invoke("create_profile", { name: trimmed });
+      await invoke(
+        "create_profile",
+        lockOnCreate && trimmedLockPassword
+          ? { name: trimmed, password: trimmedLockPassword }
+          : { name: trimmed },
+      );
       await invoke("switch_profile", { name: trimmed });
       await loadProfiles();
       setNewName("");
+      setLockOnCreate(false);
+      setLockPassword("");
       setCreating(false);
       setOpen(false);
       onSwitch();
@@ -201,22 +216,47 @@ export default function ProfileSwitcher({ onSwitch }: ProfileSwitcherProps) {
                 type="text"
                 value={newName}
                 onChange={(e) => setNewName(e.target.value)}
-                onKeyDown={(e) => { if (e.key === "Enter") handleCreate(); if (e.key === "Escape") { setCreating(false); setError(null); } }}
+                onKeyDown={(e) => { if (e.key === "Enter") handleCreate(); if (e.key === "Escape") { setCreating(false); setLockOnCreate(false); setLockPassword(""); setError(null); } }}
                 placeholder={t("profiles.profileName")}
                 autoFocus
                 className="w-full text-sm bg-warm-subtle border border-warm-border rounded-lg px-2.5 py-1.5 text-ink placeholder-ink-muted/50 focus:outline-none focus:border-accent"
               />
+              <label className="flex items-center gap-1.5 text-xs text-ink-muted cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={lockOnCreate}
+                  onChange={(e) => setLockOnCreate(e.target.checked)}
+                  className="rounded border-warm-border"
+                />
+                {t("profiles.lockThisProfile")}
+              </label>
+              {lockOnCreate && (
+                <div className="space-y-1">
+                  <input
+                    type="password"
+                    value={lockPassword}
+                    onChange={(e) => setLockPassword(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === "Enter") handleCreate(); if (e.key === "Escape") { setCreating(false); setLockOnCreate(false); setLockPassword(""); setError(null); } }}
+                    placeholder={t("profiles.lockPasswordPlaceholder")}
+                    aria-label={t("profiles.lockPasswordPlaceholder")}
+                    className="w-full text-sm bg-warm-subtle border border-warm-border rounded-lg px-2.5 py-1.5 text-ink placeholder-ink-muted/50 focus:outline-none focus:border-accent"
+                  />
+                  <p className="text-[10px] text-ink-muted leading-relaxed px-0.5">
+                    {t("settings.profileLockHonestSentence")}
+                  </p>
+                </div>
+              )}
               {error && <p className="text-[10px] text-red-500">{error}</p>}
               <div className="flex gap-1.5">
                 <button
                   onClick={handleCreate}
-                  disabled={!newName.trim()}
+                  disabled={createDisabled}
                   className="flex-1 py-1 text-xs font-medium text-white bg-accent hover:bg-accent-hover rounded-lg transition-colors disabled:opacity-40"
                 >
                   {t("common.create")}
                 </button>
                 <button
-                  onClick={() => { setCreating(false); setError(null); }}
+                  onClick={() => { setCreating(false); setLockOnCreate(false); setLockPassword(""); setError(null); }}
                   className="flex-1 py-1 text-xs text-ink-muted hover:text-ink transition-colors"
                 >
                   {t("common.cancel")}
