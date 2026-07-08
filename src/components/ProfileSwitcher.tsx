@@ -99,7 +99,7 @@ export default function ProfileSwitcher({ onSwitch }: ProfileSwitcherProps) {
       await invoke(
         "create_profile",
         lockOnCreate && trimmedLockPassword
-          ? { name: trimmed, password: trimmedLockPassword }
+          ? { name: trimmed, password: lockPassword }
           : { name: trimmed },
       );
       await invoke("switch_profile", { name: trimmed });
