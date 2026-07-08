@@ -929,6 +929,7 @@
     "buttonLabel": "Ne pas suivre cette session",
     "indicatorBadge": "Suivi en pause",
     "indicatorLabel": "Suivi en pause pour cette session \u2014 ouvrir pour en savoir plus",
+    "stripLabel": "Session non suivie",
     "stopHeading": "En pause pendant l'activation",
     "stopProgress": "Progression de lecture \u2014 votre position dans les livres",
     "stopStats": "Statistiques de temps de lecture et s\u00e9ries",

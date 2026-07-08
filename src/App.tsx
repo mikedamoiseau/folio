@@ -14,6 +14,7 @@ import ProfileUnlockDialog from "./components/ProfileUnlockDialog";
 import CatalogBrowser from "./components/CatalogBrowser";
 import LanguageSwitcher from "./components/LanguageSwitcher";
 import PrivateModeToggle from "./components/PrivateModeToggle";
+import PrivateModeBar from "./components/PrivateModeBar";
 import ImportStatusBar from "./components/ImportStatusBar";
 import Library from "./screens/Library";
 import ReaderSkeleton from "./components/ReaderSkeleton";
@@ -120,6 +121,8 @@ function AppShell() {
 
   return (
     <div className="flex flex-col h-screen bg-paper text-ink">
+      {/* App-wide private-mode strip — always on top, survives into the reader */}
+      <PrivateModeBar />
       {/* Top nav — minimal wordmark header, hidden in reader (reader has its own header) */}
       {!inReader && (
         <nav className="shrink-0 h-12 px-6 flex items-center border-b border-warm-border bg-surface">

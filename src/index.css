@@ -48,6 +48,10 @@
   --accent:       #c2714e;
   --accent-hover: #a85f3f;
   --accent-light: #f7ede6;
+  /* Private-mode indicator — cool indigo, deliberately outside the warm
+     palette so "don't track this session" reads as a distinct mode. */
+  --private:      #6366f1;
+  --private-fg:   #ffffff;
 }
 
 .dark {
@@ -60,6 +64,8 @@
   --accent:       #d4886a;
   --accent-hover: #c27050;
   --accent-light: #2e1f17;
+  --private:      #818cf8;
+  --private-fg:   #1a1614;
 }
 
 @theme {
@@ -78,6 +84,8 @@
   --color-accent:      var(--accent);
   --color-accent-hover: var(--accent-hover);
   --color-accent-light: var(--accent-light);
+  --color-private:     var(--private);
+  --color-private-fg:  var(--private-fg);
 
   /* Animation */
   --animate-slide-in-left:  slide-in-left  0.22s cubic-bezier(0.22, 1, 0.36, 1) both;

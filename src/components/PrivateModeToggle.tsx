@@ -54,9 +54,11 @@ export default function PrivateModeToggle() {
             : "text-ink-muted hover:text-ink hover:bg-warm-subtle"
         }`}
       >
-        <svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M2 10s3-6 8-6c1.5 0 2.8.35 4 1M18 10s-1 2-3 3.6M10 4c5 0 8 6 8 6s-.7 1.4-2 2.8M4.3 5.3l11.4 11.4" />
-          <path d="M8.2 8.2a2.5 2.5 0 003.6 3.6" />
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M9.88 9.88a3 3 0 1 0 4.24 4.24" />
+          <path d="M10.73 5.08A10.43 10.43 0 0 1 12 5c7 0 10 7 10 7a13.16 13.16 0 0 1-1.67 2.68" />
+          <path d="M6.61 6.61A13.526 13.526 0 0 0 2 12s3 7 10 7a9.74 9.74 0 0 0 5.39-1.61" />
+          <path d="M2 2l20 20" />
         </svg>
         {enabled && (
           <span className="text-xs font-medium whitespace-nowrap">

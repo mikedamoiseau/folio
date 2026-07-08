@@ -957,6 +957,7 @@
     "buttonLabel": "Don't track this session",
     "indicatorBadge": "Not tracking",
     "indicatorLabel": "Not tracking this session — open for details",
+    "stripLabel": "Not tracking this session",
     "stopHeading": "Paused while on",
     "stopProgress": "Reading progress — your place in books",
     "stopStats": "Reading-time stats and streaks",
