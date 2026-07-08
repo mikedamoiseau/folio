@@ -46,7 +46,8 @@ Folio is for the opposite case: you already have the files, and you want a bette
 - Tags with autocomplete
 - Metadata editing: title, author, series, language, publisher, cover, rating, tags
 - Recently opened books for quick resume
-- Multiple profiles with separate libraries
+- Per-book reading insights (time spent, sessions, start/finish dates) in the book details view
+- Multiple profiles with separate libraries — optionally lock a profile behind a password to keep it out of casual view
 
 ### Catalogs, metadata, and backup
 - OPDS catalog browsing
@@ -57,7 +58,7 @@ Folio is for the opposite case: you already have the files, and you want a bette
 - Library export and backup
 - Restore from backup archive
 - Activity log for imports, edits, deletes, collection changes, and more
-- Reading stats dashboard
+- Reading stats dashboard, including a year-long reading heatmap and a yearly reading goal with a progress ring and pace
 
 ### Remote access
 - Read your library from any device on the same WiFi — phone, tablet, or another computer, no install required
@@ -77,6 +78,7 @@ Folio is for the opposite case: you already have the files, and you want a bette
 
 ### Interface
 - Multi-language UI — English and French, with OS-language auto-detection
+- "Don't track this session" mode — an app-wide toggle that pauses passive tracking (reading position, session stats, recently-read, activity log) while keeping your highlights and bookmarks; resets off on restart
 - Cross-platform desktop app for macOS, Windows, and Linux
 
 ## Screenshots

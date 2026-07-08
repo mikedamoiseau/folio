@@ -3,6 +3,48 @@
 All notable changes to this project will be documented in this file.
 This project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+A reading-insights and privacy release: the stats screen gains a year view and
+a goal to read toward, book details show how you actually read each title, and
+two new privacy controls — a per-profile lock and a "don't track this session"
+mode — let you decide what the app records and shows.
+
+### Added
+- **Year-long reading heatmap.** The Reading Stats screen adds a GitHub-style
+  calendar heatmap of the last 365 days (intensity = minutes read that day),
+  alongside the existing 30-day bar chart. Hover or focus a day to see its date
+  and reading time. Month labels track the visible window; days with no reading
+  read as empty cells.
+- **Yearly reading goal.** Set a target number of books to finish this calendar
+  year and track it with a progress ring on the stats screen, a pace indicator
+  ("3 ahead of schedule" / "on track" / "2 behind"), and a completed state when
+  you cross the goal. Backed by a new `reading_progress.finished_at` timestamp
+  so the count reflects when a book was actually finished (re-opening an old
+  finished book no longer inflates this year's total).
+- **Per-book reading insights.** The book details view now shows how you read a
+  specific title — total time spent, number of sessions, date started, date
+  finished, and average session length — from the same session data that feeds
+  the global dashboard. Rows appear only when there's data, so a book finished
+  on another device (synced, no local sessions) still shows its finished date.
+- **Profile lock.** Optionally protect a profile with a password: switching into
+  it (and reaching it at startup) prompts for the password, and the LAN web /
+  OPDS server won't serve a locked profile until it's unlocked on the desktop.
+  The password is hashed with Argon2id in your OS keychain. This is a
+  **deterrent that hides a profile from casual view — it does not encrypt** your
+  books, database, or cached pages; anyone with access to your files can still
+  read them, and the in-app copy says so. Includes a deliberate "Can't sign in?"
+  recovery that clears the lock (safe, since nothing is encrypted).
+- **"Don't track this session" mode.** An app-wide toggle with a persistent
+  indicator that pauses passive tracking — reading position, session stats and
+  streaks, recently-read, and reading entries in the activity log — while it's
+  on. Your highlights and bookmarks are still saved and the book stays in your
+  library (an info popover spells out exactly what pauses and what doesn't).
+  Suppression covers every path data would otherwise leak through, including the
+  plugin event bus, the on-disk page cache, and outbound sync. A book reopened
+  within the same session still resumes from where you were (held in memory
+  only, never written to disk). Resets off on every app restart.
+
 ## [2.6.1] - 2026-07-06
 
 A web-UI patch for mobile.

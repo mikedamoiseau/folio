@@ -185,7 +185,7 @@ Expand where books come from and how they persist.
 ### 16. Reading Stats / Dashboard — **Done**
 - ~~Time spent reading (track session duration)~~
 - ~~Pages/chapters per day, books finished per month~~
-- ~~Reading streaks~~, yearly goal (TBD)
+- ~~Reading streaks~~, ~~yearly goal~~ — **Done** (progress ring + pace on the stats screen)
 - ~~Visual dashboard with charts (30-day bar chart)~~
 
 ### 17. Goodreads / OpenLibrary Integration — **Done** *(Multi-Provider)*
