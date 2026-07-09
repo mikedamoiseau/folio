@@ -41,6 +41,10 @@
 //!   PNGs), seeded as a linked (`is_imported = false`) book with an
 //!   absolute `file_path` so `WebState::resolve_book_path` returns it
 //!   unchanged — no library-folder resolution needed.
+//! - `Book 050` is an EPUB with a real 2-chapter file on disk (see
+//!   `build_test_epub`), also linked with an absolute `file_path`. It's the
+//!   only reflowable book whose chapter route returns real HTML, used by the
+//!   F-4-4 chapter-prefetch e2e; chapter index 1 embeds one inline image.
 //! - Every other book is `is_imported = false` with a fake, nonexistent
 //!   relative `file_path`; that's fine since nothing beyond the grid/
 //!   detail metadata is exercised for them (a missing cover 404s and the
@@ -69,6 +73,16 @@ const ZERO_CHAPTERS_N: u32 = 60;
 
 /// `Book 130` — the CBZ book with a real file on disk.
 const CBZ_N: u32 = 130;
+
+/// `Book 050` — the EPUB book with a real multi-chapter file on disk (see
+/// `build_test_epub`): 2 chapters, chapter index 1 embeds one inline image.
+/// It's the fixture for the F-4-4 web-reader chapter-prefetch e2e — the only
+/// reflowable book whose `/api/books/:id/chapters/:index` route returns real
+/// HTML. Chosen to sit outside every count/ordering/progress assertion: it's
+/// on page 2 of the default grid, is seeded with no reading-progress row, and
+/// (being only 2 chapters) can never reach the Continue Reading shelf even
+/// after the e2e turns a page — see `build_test_epub`.
+const EPUB_N: u32 = 50;
 
 /// `Book 099` / `Book 100` share an `added_at` to exercise the `id`
 /// tiebreaker in the default sort.
@@ -107,7 +121,92 @@ fn build_test_cbz(path: &Path) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-fn new_book(n: u32, cbz_path: &Path) -> Book {
+/// Writes a tiny, valid 2-chapter EPUB to `path`. Chapter index 1 embeds one
+/// inline `<img>` so the F-4-4 prefetch e2e can assert both HTML prefetch and
+/// inline-image warming. Structure mirrors what `folio_core::epub` parses:
+/// `META-INF/container.xml` -> `OEBPS/content.opf` (spine of 2 xhtml items).
+/// Two chapters (not three) is deliberate: the deepest a reader can navigate
+/// is the last chapter, which fails `get_continue_reading_books`' guard
+/// (`chapter_index < total_chapters - 1`), so the e2e turning to chapter 1
+/// can never leave Book 050 on the Continue Reading shelf and perturb the
+/// progress-shelf fixtures other specs rely on.
+fn build_test_epub(path: &Path) -> Result<(), Box<dyn Error>> {
+    let file = std::fs::File::create(path)?;
+    let mut zip = zip::ZipWriter::new(file);
+    let stored =
+        zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    let deflated = zip::write::SimpleFileOptions::default();
+
+    // `mimetype` first and stored uncompressed, per the EPUB OCF spec.
+    zip.start_file("mimetype", stored)?;
+    zip.write_all(b"application/epub+zip")?;
+
+    zip.start_file("META-INF/container.xml", deflated)?;
+    zip.write_all(
+        br#"<?xml version="1.0"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles>
+    <rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>
+  </rootfiles>
+</container>"#,
+    )?;
+
+    zip.start_file("OEBPS/content.opf", deflated)?;
+    zip.write_all(
+        br#"<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="bookid">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:title>E2E Prefetch Book</dc:title>
+    <dc:creator>E2E Author</dc:creator>
+    <dc:language>en</dc:language>
+    <dc:identifier id="bookid">e2e-epub-prefetch</dc:identifier>
+  </metadata>
+  <manifest>
+    <item id="ch0" href="ch0.xhtml" media-type="application/xhtml+xml"/>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+    <item id="pic" href="pic.png" media-type="image/png"/>
+  </manifest>
+  <spine>
+    <itemref idref="ch0"/>
+    <itemref idref="ch1"/>
+  </spine>
+</package>"#,
+    )?;
+
+    let chapter = |title: &str, body: &str| -> String {
+        format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><head><title>{title}</title></head>
+<body>{body}</body></html>"#
+        )
+    };
+    zip.start_file("OEBPS/ch0.xhtml", deflated)?;
+    zip.write_all(chapter("Ch0", "<p>E2E chapter zero content.</p>").as_bytes())?;
+    zip.start_file("OEBPS/ch1.xhtml", deflated)?;
+    zip.write_all(
+        chapter(
+            "Ch1",
+            r#"<p>E2E chapter one content.</p><img src="pic.png" alt="inline"/>"#,
+        )
+        .as_bytes(),
+    )?;
+
+    // A tiny valid PNG for the inline image referenced by chapter 1.
+    let img = image::RgbImage::from_pixel(4, 4, image::Rgb([10, 120, 200]));
+    let mut png_bytes = Vec::new();
+    {
+        use image::ImageEncoder;
+        let encoder = image::codecs::png::PngEncoder::new(&mut png_bytes);
+        encoder.write_image(img.as_raw(), 4, 4, image::ExtendedColorType::Rgb8)?;
+    }
+    zip.start_file("OEBPS/pic.png", deflated)?;
+    zip.write_all(&png_bytes)?;
+
+    zip.finish()?;
+    Ok(())
+}
+
+fn new_book(n: u32, cbz_path: &Path, epub_path: &Path) -> Book {
     let id = book_id(n);
     let is_cbz = n == CBZ_N;
     let added_at = if n == TIE_HIGH_N {
@@ -121,13 +220,18 @@ fn new_book(n: u32, cbz_path: &Path) -> Book {
         author: format!("Author {n:03}"),
         file_path: if is_cbz {
             cbz_path.to_string_lossy().to_string()
+        } else if n == EPUB_N {
+            epub_path.to_string_lossy().to_string()
         } else {
             format!("{id}.epub")
         },
         cover_path: None,
         total_chapters: if n == ZERO_CHAPTERS_N {
             0
-        } else if is_cbz {
+        } else if is_cbz || n == EPUB_N {
+            // CBZ: 2 pages. EPUB: 2 chapters — keeping the EPUB at the same
+            // count is deliberate (see `build_test_epub`): turning to the last
+            // chapter must not satisfy the Continue Reading guard.
             2
         } else {
             10
@@ -155,9 +259,13 @@ fn new_book(n: u32, cbz_path: &Path) -> Book {
     }
 }
 
-fn seed(conn: &rusqlite::Connection, cbz_path: &Path) -> Result<(), Box<dyn Error>> {
+fn seed(
+    conn: &rusqlite::Connection,
+    cbz_path: &Path,
+    epub_path: &Path,
+) -> Result<(), Box<dyn Error>> {
     for n in 1..=TOTAL_BOOKS {
-        let book = new_book(n, cbz_path);
+        let book = new_book(n, cbz_path, epub_path);
         let added_at = book.added_at;
         db::insert_book(conn, &book)?;
 
@@ -202,10 +310,13 @@ async fn async_main() -> Result<(), Box<dyn Error>> {
     let cbz_path = tempdir.path().join("test-book.cbz");
     build_test_cbz(&cbz_path)?;
 
+    let epub_path = tempdir.path().join("test-book.epub");
+    build_test_epub(&epub_path)?;
+
     let pool = db::create_pool(&db_path)?;
     {
         let conn = pool.get()?;
-        seed(&conn, &cbz_path)?;
+        seed(&conn, &cbz_path, &epub_path)?;
     }
 
     let state = WebState {

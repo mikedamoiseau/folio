@@ -2035,6 +2035,16 @@
       // actually finished loading, keyed by index — an animation only ever
       // plays for an index already in this cache (see getPreloadedImage()).
       preloadCache: {},
+      // F-4-4: prefetched chapter HTML (chapter mode only), keyed by chapter
+      // index. Lives on readerState, which is recreated per book open (see
+      // showReader's `!sameBook` branch), so the cache is inherently
+      // book-scoped and reset on book change — one book's HTML can never be
+      // served for another. `chapterPrefetching` maps an in-flight chapter
+      // index to its fetch promise, so a rapid re-entry (and an on-demand
+      // render that races an outstanding prefetch) can reuse it instead of
+      // firing a duplicate request.
+      chapterHtmlCache: {},
+      chapterPrefetching: new Map(),
       lastRenderedPageIndex: undefined,
       lastRenderedChapterIndex: undefined,
       chapterAnimCleanup: null,
@@ -2430,35 +2440,63 @@
 
     if (mode === "chapter") {
       const contentEl = $("#reader-content");
-      if (contentEl) contentEl.innerHTML = '<div class="loading">Loading...</div>';
-      // Finding 1: a network error here previously propagated as an
-      // unhandled rejection, leaving the "Loading..." text stuck forever —
-      // catch it and show the same escaped reader-error message a non-2xx
-      // response already gets, plus a toast.
-      let chResp;
-      try {
-        chResp = await api(`/api/books/${id}/chapters/${index}`);
-      } catch (e) {
-        if (!readerState || readerState.renderGen !== gen) return;
-        if (contentEl) {
-          contentEl.innerHTML = `<div class="reader-error">${esc(apiFailureToastMessage(e))}</div>`;
+      // F-4-4: serve synchronously from the prefetch cache when present — a
+      // forward turn to an already-prefetched chapter renders with no network
+      // round-trip. A miss falls back to the existing on-demand fetch below.
+      const cachedHtml = getCachedChapterHtml(index);
+      let html;
+      if (cachedHtml !== null) {
+        html = cachedHtml;
+      } else {
+        if (contentEl) contentEl.innerHTML = '<div class="loading">Loading...</div>';
+        // F-4-4: if a prefetch for this chapter is already in flight (a fast
+        // forward turn that beat it), await that request rather than firing a
+        // duplicate — the prefetch stores into the cache on success, so this
+        // still yields the same HTML without a second round-trip.
+        const pending = readerState.chapterPrefetching && readerState.chapterPrefetching.get(index);
+        if (pending) {
+          let pendingHtml = null;
+          try {
+            pendingHtml = await pending;
+          } catch (e) {
+            pendingHtml = null;
+          }
+          if (!readerState || readerState.renderGen !== gen) return;
+          if (typeof pendingHtml === "string") html = pendingHtml;
         }
-        showToast(apiFailureToastMessage(e));
-        return;
-      }
-      if (!readerState || readerState.renderGen !== gen) return;
-      if (!chResp) return;
-      // S1: non-2xx bodies are plain-text error strings that may contain
-      // book-derived content (e.g. from a crafted EPUB) — never insert them
-      // as HTML. Render a static, escaped message instead.
-      if (!chResp.ok) {
-        if (contentEl) {
-          contentEl.innerHTML = `<div class="reader-error">${esc(`Couldn't load this chapter (HTTP ${chResp.status})`)}</div>`;
+        if (html === undefined) {
+          // Finding 1: a network error here previously propagated as an
+          // unhandled rejection, leaving the "Loading..." text stuck forever —
+          // catch it and show the same escaped reader-error message a non-2xx
+          // response already gets, plus a toast.
+          let chResp;
+          try {
+            chResp = await api(`/api/books/${id}/chapters/${index}`);
+          } catch (e) {
+            if (!readerState || readerState.renderGen !== gen) return;
+            if (contentEl) {
+              contentEl.innerHTML = `<div class="reader-error">${esc(apiFailureToastMessage(e))}</div>`;
+            }
+            showToast(apiFailureToastMessage(e));
+            return;
+          }
+          if (!readerState || readerState.renderGen !== gen) return;
+          if (!chResp) return;
+          // S1: non-2xx bodies are plain-text error strings that may contain
+          // book-derived content (e.g. from a crafted EPUB) — never insert
+          // them as HTML. Render a static, escaped message instead.
+          if (!chResp.ok) {
+            if (contentEl) {
+              contentEl.innerHTML = `<div class="reader-error">${esc(`Couldn't load this chapter (HTTP ${chResp.status})`)}</div>`;
+            }
+            return;
+          }
+          html = await chResp.text();
+          if (!readerState || readerState.renderGen !== gen) return;
+          // Cache it so a later return to this chapter is instant too.
+          if (readerState.chapterHtmlCache) readerState.chapterHtmlCache[index] = html;
         }
-        return;
       }
-      const html = await chResp.text();
-      if (!readerState || readerState.renderGen !== gen) return;
       if (contentEl) contentEl.innerHTML = html;
       renderChapterTurnAnimation(contentEl, index, isInitialRender);
       // K5: native Space/PageDown scrolling needs the scroll container focused.
@@ -2481,6 +2519,9 @@
           }
         });
       }
+      // F-4-4: now that this chapter is on screen, prefetch its neighbours
+      // (next first) into the cache so the next forward turn is instant.
+      prefetchAdjacentChapters(id, index, count);
     } else {
       renderPageTurn(id, index, count);
     }
@@ -2525,6 +2566,90 @@
     Object.keys(cache).forEach((k) => {
       if (Math.abs(Number(k) - centerIndex) > 2) delete cache[k];
     });
+  }
+
+  // ── F-4-4: chapter HTML prefetch (reflowable EPUB/MOBI reader) ──────────
+  // The chapter-mode analogue of the page-image preloader above: as soon as a
+  // chapter renders, fetch the NEXT chapter's sanitized HTML (and warm its
+  // inline image URLs) into `readerState.chapterHtmlCache` so a forward turn
+  // renders synchronously from cache instead of awaiting the
+  // /api/books/:id/chapters/:index round-trip. Bounded to a small window
+  // around the current chapter to cap memory; book-scoped because the cache
+  // lives on readerState (recreated per book open).
+  const CHAPTER_PREFETCH_RADIUS = 2;
+
+  function getCachedChapterHtml(index) {
+    const cache = readerState && readerState.chapterHtmlCache;
+    const html = cache && cache[index];
+    return typeof html === "string" ? html : null;
+  }
+
+  // Warm the browser's HTTP cache for the inline images the prefetched
+  // chapter references, so they're already in hand when the turn happens.
+  // The server rewrites a book's own images to same-origin
+  // /api/books/:id/images/... URLs; only those are warmed. External
+  // (http(s)) <img> sources — which the sanitizer passes through untouched —
+  // are deliberately skipped: proactively fetching a third-party image for a
+  // chapter the reader may never open would leak reading activity earlier and
+  // more broadly than an on-demand load ever did.
+  function warmChapterImages(html) {
+    const re = /<img\b[^>]*?\bsrc\s*=\s*["']([^"']+)["']/gi;
+    let m;
+    while ((m = re.exec(html)) !== null) {
+      let url;
+      try {
+        url = new URL(m[1], window.location.href);
+      } catch (e) {
+        continue;
+      }
+      if (url.origin !== window.location.origin) continue;
+      const img = new Image();
+      img.src = url.href;
+    }
+  }
+
+  function prefetchChapter(id, index, count) {
+    if (index < 0 || index >= count || !readerState) return;
+    const cache = readerState.chapterHtmlCache;
+    const inflight = readerState.chapterPrefetching;
+    if (!cache || !inflight) return;
+    if (typeof cache[index] === "string" || inflight.has(index)) return;
+    // Best-effort background fetch: use a bare `fetch`, NOT the shared `api()`
+    // helper. `api()` tears down the view and shows the login screen on a 401
+    // — that must never happen for a request the user didn't initiate (a
+    // mid-read session expiry would otherwise eject the reader). A prefetch
+    // miss just falls back to the on-demand fetch on the actual turn.
+    const p = fetch(`/api/books/${id}/chapters/${index}`, { credentials: "same-origin" })
+      .then((resp) => (resp && resp.ok ? resp.text() : null))
+      .then((html) => {
+        // The book may have changed while this was in flight — readerState
+        // (and thus its cache) is recreated per book open, so only store when
+        // we're still looking at the same cache object.
+        if (html != null && readerState && readerState.chapterHtmlCache === cache) {
+          cache[index] = html;
+          warmChapterImages(html);
+        }
+        return html;
+      })
+      .catch(() => null) // best-effort: a miss falls back to on-demand fetch
+      .finally(() => {
+        if (inflight.get(index) === p) inflight.delete(index);
+      });
+    inflight.set(index, p);
+  }
+
+  function prefetchAdjacentChapters(id, centerIndex, count) {
+    if (!readerState || readerState.mode !== "chapter") return;
+    const cache = readerState.chapterHtmlCache;
+    if (!cache) return;
+    // Bound memory: drop chapters outside the window around the current one.
+    Object.keys(cache).forEach((k) => {
+      if (Math.abs(Number(k) - centerIndex) > CHAPTER_PREFETCH_RADIUS) delete cache[k];
+    });
+    // Next chapter first — forward reading is the common case; previous too,
+    // symmetric with the page-image preloader.
+    prefetchChapter(id, centerIndex + 1, count);
+    prefetchChapter(id, centerIndex - 1, count);
   }
 
   // Interrupt-safe: called at the start of every page turn so a rapid
