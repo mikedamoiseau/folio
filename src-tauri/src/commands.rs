@@ -2629,13 +2629,29 @@ pub async fn prepare_pdf(
         let bg_hash = book_hash.to_string();
         let bg_path = file_path.clone();
         let max_size_bytes = max_size_mb.saturating_mul(1024 * 1024);
+        // Live private-mode flag (B-M1). The spawn-time check above skips the
+        // pass when private is already on; this shared atomic lets the running
+        // pass also stop if private is toggled on *mid-pass*, so it never
+        // writes the rest of the book to disk behind a "don't track this
+        // session" switch — matching the on-demand read path's write
+        // suppression (`get_pdf_page_bytes`).
+        let bg_private = state.private_mode.clone();
         tauri::async_runtime::spawn_blocking(move || {
+            use std::sync::atomic::Ordering;
+            let emit_private = bg_private.clone();
+            let abort_private = bg_private.clone();
             let outcome = page_cache::prerender_pdf_remaining(
                 &bg_storage,
                 &bg_hash,
                 &bg_path,
                 max_size_bytes,
                 |loaded, total| {
+                    // Suppress progress emits once private (a bookId + page
+                    // counts emit is a passive signal); the loop stops writing
+                    // via `should_abort` too, so this stops firing promptly.
+                    if emit_private.load(Ordering::SeqCst) {
+                        return;
+                    }
                     let (loaded, total) = (loaded as usize, total as usize);
                     if should_emit_chapter_progress(loaded, total) {
                         let _ = bg_app.emit(
@@ -2648,21 +2664,25 @@ pub async fn prepare_pdf(
                         );
                     }
                 },
+                move || abort_private.load(Ordering::SeqCst),
             );
             // Guaranteed terminal event: settle the frontend bar at true
             // coverage (100% normally, or the partial value when the size
             // bound stopped the pass early). Skipped when there was no PDF
-            // manifest to prerender against (`page_count == 0`).
-            if let Ok(ref o) = outcome {
-                if o.page_count > 0 {
-                    let _ = bg_app.emit(
-                        "pdf-prerender-progress",
-                        ChapterLoadProgress {
-                            book_id: bg_book_id.clone(),
-                            loaded: o.cached_total as usize,
-                            total: o.page_count as usize,
-                        },
-                    );
+            // manifest to prerender against (`page_count == 0`), and while
+            // private (no passive emits — the bar idle-settles on its own).
+            if !bg_private.load(Ordering::SeqCst) {
+                if let Ok(ref o) = outcome {
+                    if o.page_count > 0 {
+                        let _ = bg_app.emit(
+                            "pdf-prerender-progress",
+                            ChapterLoadProgress {
+                                book_id: bg_book_id.clone(),
+                                loaded: o.cached_total as usize,
+                                total: o.page_count as usize,
+                            },
+                        );
+                    }
                 }
             }
             let _ = page_cache::run_eviction(&bg_storage, max_size_mb);

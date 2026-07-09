@@ -901,6 +901,13 @@ pub struct PdfPrerenderOutcome {
 /// A single page's render or write failure is logged and skipped rather than
 /// aborting the whole pass (the page falls back to on-demand rendering).
 ///
+/// `should_abort` is polled before each page is rendered; when it returns
+/// `true` the pass stops cleanly (like the size bound). Production wires this
+/// to the live private-mode flag so that turning "don't track this session"
+/// on mid-pass halts further page-cache writes — matching the on-demand read
+/// path's write suppression (B-M1/OQ-3/SB-9). Pages already written stay;
+/// remaining pages are served (and, while private, not written) on-demand.
+///
 /// Mirrors [`extract_comic_remaining`]'s orphan-cleanup contract: if our
 /// manifest is evicted mid-run by a concurrent open's `run_eviction`, any
 /// pages written afterward are orphans (invisible to `collect_cached_books`,
@@ -908,16 +915,18 @@ pub struct PdfPrerenderOutcome {
 /// Concurrent on-demand reads are safe — `Storage::put` is atomic
 /// (temp-file + rename), so a reader sees either the absent or the fully
 /// written page, never a partial.
-pub fn prerender_pdf_remaining_with_renderer<F, P>(
+pub fn prerender_pdf_remaining_with_renderer<F, P, A>(
     storage: &dyn Storage,
     book_hash: &str,
     max_size_bytes: u64,
     render: F,
     mut on_progress: P,
+    should_abort: A,
 ) -> FolioResult<PdfPrerenderOutcome>
 where
     F: Fn(u32) -> FolioResult<(Vec<u8>, String)>,
     P: FnMut(u32, u32),
+    A: Fn() -> bool,
 {
     let page_count = match read_manifest(storage, book_hash) {
         Some(m) if m.format == BookFormat::Pdf => m.page_count,
@@ -966,6 +975,20 @@ where
     let mut stopped_early = false;
 
     for idx in missing {
+        // Abort: private mode turned on mid-pass (B-M1). Stop before writing
+        // any more pages to disk so a "don't track this session" toggle is
+        // honored by the background writer just as it is by the on-demand
+        // read path. Pages already on disk stay; the rest render on-demand.
+        if should_abort() {
+            page_dbg!(
+                "prerender_pdf_remaining: abort requested for {} — stopping at {}/{} pages",
+                book_hash,
+                cached,
+                page_count
+            );
+            break;
+        }
+
         // Bound: stop before we cross the whole-cache size cap. A single page
         // may overshoot by at most its own size; `run_eviction` (fired by the
         // caller after this pass) reconciles the multi-book budget.
@@ -1044,15 +1067,17 @@ where
 
 /// Production entry point: wires [`crate::pdf::get_page_image_bytes`] at the
 /// canonical cache width into [`prerender_pdf_remaining_with_renderer`].
-pub fn prerender_pdf_remaining<P>(
+pub fn prerender_pdf_remaining<P, A>(
     storage: &dyn Storage,
     book_hash: &str,
     file_path: &str,
     max_size_bytes: u64,
     on_progress: P,
+    should_abort: A,
 ) -> FolioResult<PdfPrerenderOutcome>
 where
     P: FnMut(u32, u32),
+    A: Fn() -> bool,
 {
     let render = |idx: u32| -> FolioResult<(Vec<u8>, String)> {
         let (bytes, mime) = crate::pdf::get_page_image_bytes(
@@ -1062,7 +1087,14 @@ where
         )?;
         Ok((bytes, mime.to_string()))
     };
-    prerender_pdf_remaining_with_renderer(storage, book_hash, max_size_bytes, render, on_progress)
+    prerender_pdf_remaining_with_renderer(
+        storage,
+        book_hash,
+        max_size_bytes,
+        render,
+        on_progress,
+        should_abort,
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -1767,11 +1799,15 @@ mod tests {
             Ok((vec![7u8; 8], "image/jpeg".into()))
         };
 
-        let outcome =
-            prerender_pdf_remaining_with_renderer(&storage, hash, u64::MAX, render, |c, t| {
-                progress.borrow_mut().push((c, t))
-            })
-            .unwrap();
+        let outcome = prerender_pdf_remaining_with_renderer(
+            &storage,
+            hash,
+            u64::MAX,
+            render,
+            |c, t| progress.borrow_mut().push((c, t)),
+            || false,
+        )
+        .unwrap();
 
         // Only pages 3..10 rendered, in order.
         assert_eq!(rendered_idxs.into_inner(), (3..10).collect::<Vec<_>>());
@@ -1803,9 +1839,15 @@ mod tests {
             panic!("renderer must not be called when everything is cached");
         };
 
-        let outcome =
-            prerender_pdf_remaining_with_renderer(&storage, hash, u64::MAX, render, |_, _| {})
-                .unwrap();
+        let outcome = prerender_pdf_remaining_with_renderer(
+            &storage,
+            hash,
+            u64::MAX,
+            render,
+            |_, _| {},
+            || false,
+        )
+        .unwrap();
         assert_eq!(outcome.rendered, 0);
         assert_eq!(outcome.cached_total, 5);
         assert!(!outcome.stopped_early);
@@ -1817,9 +1859,15 @@ mod tests {
         let render = |_idx: u32| -> FolioResult<(Vec<u8>, String)> {
             panic!("renderer must not run without a manifest");
         };
-        let outcome =
-            prerender_pdf_remaining_with_renderer(&storage, "nope", u64::MAX, render, |_, _| {})
-                .unwrap();
+        let outcome = prerender_pdf_remaining_with_renderer(
+            &storage,
+            "nope",
+            u64::MAX,
+            render,
+            |_, _| {},
+            || false,
+        )
+        .unwrap();
         assert_eq!(outcome.page_count, 0);
         assert_eq!(outcome.rendered, 0);
         assert!(!outcome.stopped_early);
@@ -1840,7 +1888,8 @@ mod tests {
         };
 
         let outcome =
-            prerender_pdf_remaining_with_renderer(&storage, hash, 250, render, |_, _| {}).unwrap();
+            prerender_pdf_remaining_with_renderer(&storage, hash, 250, render, |_, _| {}, || false)
+                .unwrap();
 
         assert!(outcome.stopped_early, "should stop at the size bound");
         assert_eq!(outcome.rendered, 3, "3 pages fit before crossing 250 B");
@@ -1848,6 +1897,47 @@ mod tests {
         assert_eq!(outcome.page_count, 20);
         // Later pages were NOT rendered — served on-demand instead.
         assert!(!storage.exists(&page_key(hash, "003.jpg")).unwrap());
+    }
+
+    #[test]
+    fn prerender_pdf_remaining_stops_when_abort_trips() {
+        // Private mode toggled on mid-pass (B-M1): `should_abort` flips to
+        // true after two pages land, and the pass must stop writing further
+        // pages to disk — mirroring the on-demand read path's write
+        // suppression. Pages already written stay; the rest are left for
+        // on-demand rendering.
+        let (_d, storage) = temp_storage();
+        let hash = "h";
+        seed_pdf_manifest(&storage, hash, 10, 0, 0);
+
+        let rendered_count = std::cell::Cell::new(0u32);
+        let render = |_idx: u32| -> FolioResult<(Vec<u8>, String)> {
+            rendered_count.set(rendered_count.get() + 1);
+            Ok((vec![1u8; 10], "image/jpeg".into()))
+        };
+        // Abort once two pages have been written.
+        let should_abort = || rendered_count.get() >= 2;
+
+        let outcome = prerender_pdf_remaining_with_renderer(
+            &storage,
+            hash,
+            u64::MAX,
+            render,
+            |_, _| {},
+            should_abort,
+        )
+        .unwrap();
+
+        assert_eq!(outcome.rendered, 2, "must stop after the abort flag trips");
+        assert_eq!(outcome.cached_total, 2);
+        assert_eq!(outcome.page_count, 10);
+        // The size bound was never hit — the stop was the abort, so
+        // `stopped_early` (a size-bound signal) stays false.
+        assert!(!outcome.stopped_early);
+        // Pages 0,1 written; page 2 onward left for on-demand.
+        assert!(storage.exists(&page_key(hash, "000.jpg")).unwrap());
+        assert!(storage.exists(&page_key(hash, "001.jpg")).unwrap());
+        assert!(!storage.exists(&page_key(hash, "002.jpg")).unwrap());
     }
 
     #[test]
@@ -1865,9 +1955,15 @@ mod tests {
             }
         };
 
-        let outcome =
-            prerender_pdf_remaining_with_renderer(&storage, hash, u64::MAX, render, |_, _| {})
-                .unwrap();
+        let outcome = prerender_pdf_remaining_with_renderer(
+            &storage,
+            hash,
+            u64::MAX,
+            render,
+            |_, _| {},
+            || false,
+        )
+        .unwrap();
 
         assert_eq!(outcome.rendered, 3);
         assert!(!storage.exists(&page_key(hash, "001.jpg")).unwrap());
@@ -1888,7 +1984,15 @@ mod tests {
         let render = |_idx: u32| -> FolioResult<(Vec<u8>, String)> {
             Ok((vec![5u8; 40], "image/jpeg".into()))
         };
-        prerender_pdf_remaining_with_renderer(&storage, hash, u64::MAX, render, |_, _| {}).unwrap();
+        prerender_pdf_remaining_with_renderer(
+            &storage,
+            hash,
+            u64::MAX,
+            render,
+            |_, _| {},
+            || false,
+        )
+        .unwrap();
 
         // Snapshot refreshed to disk-truth: 3 pages * 40 bytes.
         assert_eq!(read_manifest(&storage, hash).unwrap().total_size_bytes, 120);
@@ -1916,9 +2020,15 @@ mod tests {
             Ok((vec![3u8; 10], "image/jpeg".into()))
         };
 
-        let outcome =
-            prerender_pdf_remaining_with_renderer(&storage, hash, u64::MAX, render, |_, _| {})
-                .unwrap();
+        let outcome = prerender_pdf_remaining_with_renderer(
+            &storage,
+            hash,
+            u64::MAX,
+            render,
+            |_, _| {},
+            || false,
+        )
+        .unwrap();
 
         // The pass rendered pages, but with the manifest gone at the end the
         // book (including every orphan page) is scrubbed.
@@ -1954,7 +2064,8 @@ mod tests {
         // (240) and page 1 (280); page 2 would be checked at 280 < 300 so it
         // also renders (320), then 320 >= 300 stops. So 3 pages fit.
         let outcome =
-            prerender_pdf_remaining_with_renderer(&storage, "h", 300, render, |_, _| {}).unwrap();
+            prerender_pdf_remaining_with_renderer(&storage, "h", 300, render, |_, _| {}, || false)
+                .unwrap();
 
         assert!(
             outcome.stopped_early,
