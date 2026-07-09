@@ -177,6 +177,14 @@ pub fn get_page_count(path: &str) -> FolioResult<u32> {
     Ok(images.len() as u32)
 }
 
+/// Canonical sorted page-entry names for a CBR, using the exact same
+/// filter/sort as [`get_page_image_bytes`]. The page cache relies on this
+/// so a page cached at index `i` is byte-identical to an on-demand read of
+/// index `i` (see `page_cache`).
+pub(crate) fn collect_page_names(path: &str) -> FolioResult<Vec<String>> {
+    collect_image_names(path)
+}
+
 pub fn get_page_image(path: &str, page_index: u32) -> FolioResult<String> {
     let images = collect_image_names(path)?;
     let target_name = images

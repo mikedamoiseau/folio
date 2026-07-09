@@ -2460,6 +2460,7 @@ pub async fn get_comic_page_bytes(
 #[tauri::command]
 pub async fn prepare_comic(
     book_id: String,
+    start_page: Option<u32>,
     state: State<'_, AppState>,
     app: AppHandle,
 ) -> FolioResult<page_cache::CacheManifest> {
@@ -2488,26 +2489,64 @@ pub async fn prepare_comic(
     let book_hash = book.file_hash.as_deref().ok_or("Book has no file hash")?;
     let storage = page_cache_storage(&app)?;
 
+    // F-4-1 fast path: extract only page 0 (plus the resume page, if the
+    // caller opened mid-book) and return immediately so the reader can paint.
+    // The remaining pages stream in on the background task below; any page the
+    // frontend requests before then is served on-demand by
+    // `get_comic_page_bytes` (cache miss → direct archive read).
+    let priority_pages: Vec<u32> = start_page.into_iter().collect();
     let prep_start = std::time::Instant::now();
     page_cache::page_dbg!(
-        "prepare_comic: book={} format={:?} hash={}",
+        "prepare_comic: book={} format={:?} hash={} start_page={:?}",
         book_id,
         book.format,
-        book_hash
+        book_hash,
+        start_page
     );
-    let manifest =
-        page_cache::ensure_cached(&storage, &book_id, book_hash, &file_path, &book.format)?;
+    let manifest = page_cache::ensure_comic_fast(
+        &storage,
+        &book_id,
+        book_hash,
+        &file_path,
+        &book.format,
+        &priority_pages,
+    )?;
     page_cache::page_dbg!(
-        "prepare_comic done: pages={} size={}KB elapsed={:?}",
+        "prepare_comic fast path done: pages={} elapsed={:?}",
         manifest.page_count,
-        manifest.total_size_bytes / 1024,
         prep_start.elapsed()
     );
 
-    // Run eviction in background
-    let evict_storage = page_cache_storage(&app)?;
+    // Background: extract the rest of the archive (emitting progress), then
+    // run eviction. `extract_comic_remaining` is idempotent and only appends
+    // page files, so it races safely against on-demand cache reads.
+    let bg_storage = page_cache_storage(&app)?;
+    let bg_app = app.clone();
+    let bg_book_id = book_id.clone();
+    let bg_hash = book_hash.to_string();
+    let bg_path = file_path.clone();
+    let bg_format = book.format.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let _ = page_cache::run_eviction(&evict_storage, max_size_mb);
+        let _ = page_cache::extract_comic_remaining(
+            &bg_storage,
+            &bg_hash,
+            &bg_path,
+            &bg_format,
+            |loaded, total| {
+                let (loaded, total) = (loaded as usize, total as usize);
+                if should_emit_chapter_progress(loaded, total) {
+                    let _ = bg_app.emit(
+                        "comic-extract-progress",
+                        ChapterLoadProgress {
+                            book_id: bg_book_id.clone(),
+                            loaded,
+                            total,
+                        },
+                    );
+                }
+            },
+        );
+        let _ = page_cache::run_eviction(&bg_storage, max_size_mb);
     });
 
     Ok(manifest)

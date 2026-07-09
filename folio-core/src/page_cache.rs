@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::io::Read;
 use std::sync::OnceLock;
 use zip::ZipArchive;
@@ -126,15 +126,6 @@ fn now_iso() -> String {
 // Image helpers
 // ---------------------------------------------------------------------------
 
-fn is_image_ext(name: &str) -> bool {
-    let lower = name.to_lowercase();
-    lower.ends_with(".jpg")
-        || lower.ends_with(".jpeg")
-        || lower.ends_with(".png")
-        || lower.ends_with(".webp")
-        || lower.ends_with(".gif")
-}
-
 fn file_extension(name: &str) -> &str {
     if let Some(pos) = name.rfind('.') {
         &name[pos..]
@@ -156,8 +147,182 @@ fn mime_for_page_name(name: &str) -> &'static str {
 }
 
 // ---------------------------------------------------------------------------
-// CBZ extraction
+// Comic extraction (CBZ / CBR)
+//
+// The cache stores each page under an index-derived key (`{idx:03}{ext}`).
+// The `idx` is a position into the *canonical* page ordering — the exact
+// same filter and sort the on-demand readers (`cbz`/`cbr`) use. This is
+// load-bearing: `get_comic_page_bytes` serves a cached page when present
+// and otherwise falls back to a direct archive read by the same index, so
+// the two must agree or a fallback read would return the wrong page.
 // ---------------------------------------------------------------------------
+
+/// Canonical sorted page-entry names for a comic archive, delegating to the
+/// on-demand readers so cache indices and fallback indices never diverge.
+fn comic_page_names(format: &BookFormat, file_path: &str) -> FolioResult<Vec<String>> {
+    match format {
+        BookFormat::Cbz => crate::cbz::collect_page_names(file_path),
+        BookFormat::Cbr => crate::cbr::collect_page_names(file_path),
+        other => Err(FolioError::invalid(format!(
+            "comic_page_names not supported for {other:?}"
+        ))),
+    }
+}
+
+/// Cache filename for the page at `idx`, deriving the (lowercased)
+/// extension from the source archive entry name.
+fn comic_page_filename(idx: usize, src_name: &str) -> String {
+    format!("{:03}{}", idx, file_extension(src_name).to_lowercase())
+}
+
+/// Extract the page indices in `want` from a comic archive into the cache,
+/// storing each at `{idx:03}{ext}`. `names` must be the canonical list from
+/// [`comic_page_names`]. `on_page(idx)` is invoked after each successful
+/// write. Returns the total bytes written across the extracted subset.
+///
+/// CBZ uses random access by entry name; CBR streams a single processing
+/// pass and stops early once every wanted page has been read.
+fn extract_comic_subset<F: FnMut(usize)>(
+    storage: &dyn Storage,
+    book_hash: &str,
+    format: &BookFormat,
+    file_path: &str,
+    names: &[String],
+    want: &BTreeSet<usize>,
+    mut on_page: F,
+) -> FolioResult<u64> {
+    if want.is_empty() {
+        return Ok(0);
+    }
+    match format {
+        BookFormat::Cbz => {
+            let file = std::fs::File::open(file_path)
+                .map_err(|e| FolioError::io(format!("Failed to open CBZ: {e}")))?;
+            let mut archive = ZipArchive::new(file)
+                .map_err(|e| FolioError::invalid(format!("Invalid CBZ archive: {e}")))?;
+
+            let mut total_size: u64 = 0;
+            for &idx in want {
+                let name = &names[idx];
+                let mut entry = archive.by_name(name).map_err(|e| {
+                    FolioError::invalid(format!("Failed to read entry {name}: {e}"))
+                })?;
+                let mut data = Vec::new();
+                entry
+                    .read_to_end(&mut data)
+                    .map_err(|e| FolioError::io(format!("Failed to extract {name}: {e}")))?;
+
+                let page_filename = comic_page_filename(idx, name);
+                storage
+                    .put(&page_key(book_hash, &page_filename), &data)
+                    .map_err(|e| FolioError::io(format!("Failed to write page {idx}: {e}")))?;
+                total_size += data.len() as u64;
+                on_page(idx);
+            }
+            Ok(total_size)
+        }
+        BookFormat::Cbr => {
+            // Map the wanted archive-entry names to their canonical index so
+            // a single streaming pass can pick them out in archive order.
+            let mut remaining: HashMap<String, usize> =
+                want.iter().map(|&i| (names[i].clone(), i)).collect();
+
+            let mut total_size: u64 = 0;
+            let archive = unrar::Archive::new(file_path)
+                .open_for_processing()
+                .map_err(|e| {
+                    FolioError::invalid(format!("Failed to open CBR for processing: {e}"))
+                })?;
+
+            let mut cursor = archive;
+            loop {
+                if remaining.is_empty() {
+                    break;
+                }
+                let header = cursor
+                    .read_header()
+                    .map_err(|e| FolioError::invalid(format!("Error reading CBR header: {e}")))?;
+                match header {
+                    None => break,
+                    Some(entry) => {
+                        let entry_name = entry.entry().filename.to_string_lossy().to_string();
+                        if let Some(idx) = remaining.remove(&entry_name) {
+                            let (data, next) = entry.read().map_err(|e| {
+                                FolioError::invalid(format!("Failed to extract CBR entry: {e}"))
+                            })?;
+                            let page_filename = comic_page_filename(idx, &entry_name);
+                            storage
+                                .put(&page_key(book_hash, &page_filename), &data)
+                                .map_err(|e| {
+                                    FolioError::io(format!("Failed to write page {idx}: {e}"))
+                                })?;
+                            total_size += data.len() as u64;
+                            on_page(idx);
+                            cursor = next;
+                        } else {
+                            cursor = entry.skip().map_err(|e| {
+                                FolioError::invalid(format!("Failed to skip CBR entry: {e}"))
+                            })?;
+                        }
+                    }
+                }
+            }
+            Ok(total_size)
+        }
+        other => Err(FolioError::invalid(format!(
+            "extract_comic_subset not supported for {other:?}"
+        ))),
+    }
+}
+
+/// Build a comic manifest whose `pages` lists ALL page filenames (so
+/// `get_cached_page` can map any index to a filename), even when only a
+/// subset of the corresponding files exist on disk. Missing pages simply
+/// fail the disk read and are served on-demand.
+fn build_comic_manifest(
+    book_id: &str,
+    book_hash: &str,
+    format: &BookFormat,
+    names: &[String],
+    total_size_bytes: u64,
+) -> CacheManifest {
+    let pages: Vec<String> = names
+        .iter()
+        .enumerate()
+        .map(|(i, n)| comic_page_filename(i, n))
+        .collect();
+    let now = now_iso();
+    CacheManifest {
+        book_id: book_id.to_string(),
+        book_hash: book_hash.to_string(),
+        page_count: pages.len() as u32,
+        total_size_bytes,
+        extracted_at: now.clone(),
+        last_accessed: now,
+        pages,
+        format: format.clone(),
+        canonical_width: None,
+    }
+}
+
+/// Full comic extraction: every page into the cache plus a complete
+/// manifest. Backs [`extract_cbz`]/[`extract_cbr`] and the `ensure_cached`
+/// comic path.
+fn extract_comic_full(
+    storage: &dyn Storage,
+    book_id: &str,
+    book_hash: &str,
+    file_path: &str,
+    format: &BookFormat,
+) -> FolioResult<CacheManifest> {
+    let names = comic_page_names(format, file_path)?;
+    let want: BTreeSet<usize> = (0..names.len()).collect();
+    let total_size =
+        extract_comic_subset(storage, book_hash, format, file_path, &names, &want, |_| {})?;
+    let manifest = build_comic_manifest(book_id, book_hash, format, &names, total_size);
+    write_manifest(storage, book_hash, &manifest)?;
+    Ok(manifest)
+}
 
 pub fn extract_cbz(
     storage: &dyn Storage,
@@ -165,66 +330,8 @@ pub fn extract_cbz(
     book_hash: &str,
     file_path: &str,
 ) -> FolioResult<CacheManifest> {
-    let file = std::fs::File::open(file_path)
-        .map_err(|e| FolioError::io(format!("Failed to open CBZ: {e}")))?;
-    let mut archive = ZipArchive::new(file)
-        .map_err(|e| FolioError::invalid(format!("Invalid CBZ archive: {e}")))?;
-
-    let mut image_names: Vec<String> = (0..archive.len())
-        .filter_map(|i| {
-            let entry = archive.by_index(i).ok()?;
-            let name = entry.name().to_string();
-            if !entry.is_dir() && is_image_ext(&name) {
-                Some(name)
-            } else {
-                None
-            }
-        })
-        .collect();
-    image_names.sort();
-
-    let mut pages: Vec<String> = Vec::new();
-    let mut total_size: u64 = 0;
-
-    for (idx, name) in image_names.iter().enumerate() {
-        let mut entry = archive
-            .by_name(name)
-            .map_err(|e| FolioError::invalid(format!("Failed to read entry {name}: {e}")))?;
-        let mut data = Vec::new();
-        entry
-            .read_to_end(&mut data)
-            .map_err(|e| FolioError::io(format!("Failed to extract {name}: {e}")))?;
-
-        let ext = file_extension(name).to_lowercase();
-        let page_filename = format!("{:03}{}", idx, ext);
-        storage
-            .put(&page_key(book_hash, &page_filename), &data)
-            .map_err(|e| FolioError::io(format!("Failed to write page {idx}: {e}")))?;
-
-        total_size += data.len() as u64;
-        pages.push(page_filename);
-    }
-
-    let now = now_iso();
-    let manifest = CacheManifest {
-        book_id: book_id.to_string(),
-        book_hash: book_hash.to_string(),
-        page_count: pages.len() as u32,
-        total_size_bytes: total_size,
-        extracted_at: now.clone(),
-        last_accessed: now,
-        pages,
-        format: BookFormat::Cbz,
-        canonical_width: None,
-    };
-
-    write_manifest(storage, book_hash, &manifest)?;
-    Ok(manifest)
+    extract_comic_full(storage, book_id, book_hash, file_path, &BookFormat::Cbz)
 }
-
-// ---------------------------------------------------------------------------
-// CBR extraction
-// ---------------------------------------------------------------------------
 
 pub fn extract_cbr(
     storage: &dyn Storage,
@@ -232,84 +339,138 @@ pub fn extract_cbr(
     book_hash: &str,
     file_path: &str,
 ) -> FolioResult<CacheManifest> {
-    // First pass: collect sorted image names
-    let mut image_names: Vec<String> = Vec::new();
-    {
-        let archive = unrar::Archive::new(file_path)
-            .open_for_listing()
-            .map_err(|e| FolioError::invalid(format!("Failed to open CBR for listing: {e}")))?;
-        for entry in archive {
-            let entry =
-                entry.map_err(|e| FolioError::invalid(format!("Failed to read CBR entry: {e}")))?;
-            let name = entry.filename.to_string_lossy().to_string();
-            if !entry.is_directory() && is_image_ext(&name) {
-                image_names.push(name);
-            }
+    extract_comic_full(storage, book_id, book_hash, file_path, &BookFormat::Cbr)
+}
+
+/// Fast-path comic open (F-4-1). Extracts only the first page — plus any
+/// `priority_pages` (e.g. a mid-book resume index) — writes a *full*
+/// manifest, and returns immediately so the reader can paint. The rest of
+/// the archive is left for [`extract_comic_remaining`], spawned by the
+/// caller on a background task; any page requested before then is served
+/// on-demand by `get_comic_page_bytes` (cache miss → direct archive read).
+///
+/// If a complete, valid cache already exists (first and last page present)
+/// this short-circuits exactly like `ensure_cached`, bumping
+/// `last_accessed` without reopening the archive. A partial/corrupt cache
+/// is evicted and re-primed.
+pub fn ensure_comic_fast(
+    storage: &dyn Storage,
+    book_id: &str,
+    book_hash: &str,
+    file_path: &str,
+    format: &BookFormat,
+    priority_pages: &[u32],
+) -> FolioResult<CacheManifest> {
+    if let Some(mut manifest) = read_manifest(storage, book_hash) {
+        let first_ok = manifest
+            .pages
+            .first()
+            .and_then(|p| storage.exists(&page_key(book_hash, p)).ok())
+            .unwrap_or(false);
+        let last_ok = manifest
+            .pages
+            .last()
+            .and_then(|p| storage.exists(&page_key(book_hash, p)).ok())
+            .unwrap_or(false);
+        if first_ok && last_ok {
+            page_dbg!(
+                "ensure_comic_fast: complete cache hit for {} ({} pages)",
+                book_hash,
+                manifest.page_count
+            );
+            manifest.last_accessed = now_iso();
+            let _ = write_manifest(storage, book_hash, &manifest);
+            return Ok(manifest);
         }
-    }
-    image_names.sort();
-
-    // Build name->index map
-    let name_to_idx: HashMap<String, usize> = image_names
-        .iter()
-        .enumerate()
-        .map(|(i, n)| (n.clone(), i))
-        .collect();
-
-    let mut pages_data: Vec<(usize, String, u64)> = Vec::new();
-
-    let archive = unrar::Archive::new(file_path)
-        .open_for_processing()
-        .map_err(|e| FolioError::invalid(format!("Failed to open CBR for processing: {e}")))?;
-
-    let mut cursor = archive;
-    loop {
-        let header = cursor
-            .read_header()
-            .map_err(|e| FolioError::invalid(format!("Error reading CBR header: {e}")))?;
-        match header {
-            None => break,
-            Some(entry) => {
-                let entry_name = entry.entry().filename.to_string_lossy().to_string();
-                if let Some(&idx) = name_to_idx.get(&entry_name) {
-                    let (data, next) = entry.read().map_err(|e| {
-                        FolioError::invalid(format!("Failed to extract CBR entry: {e}"))
-                    })?;
-                    let ext = file_extension(&entry_name).to_lowercase();
-                    let page_filename = format!("{:03}{}", idx, ext);
-                    storage
-                        .put(&page_key(book_hash, &page_filename), &data)
-                        .map_err(|e| FolioError::io(format!("Failed to write page {idx}: {e}")))?;
-                    pages_data.push((idx, page_filename, data.len() as u64));
-                    cursor = next;
-                } else {
-                    cursor = entry.skip().map_err(|e| {
-                        FolioError::invalid(format!("Failed to skip CBR entry: {e}"))
-                    })?;
-                }
-            }
-        }
+        page_dbg!(
+            "ensure_comic_fast: partial/corrupt cache for {}, re-priming",
+            book_hash
+        );
+        let _ = evict_book(storage, book_hash);
     }
 
-    pages_data.sort_by_key(|(idx, _, _)| *idx);
-    let total_size: u64 = pages_data.iter().map(|(_, _, s)| s).sum();
-    let pages: Vec<String> = pages_data.into_iter().map(|(_, name, _)| name).collect();
+    let names = comic_page_names(format, file_path)?;
+    if names.is_empty() {
+        return Err(FolioError::invalid("Comic archive contains no pages"));
+    }
 
-    let now = now_iso();
-    let manifest = CacheManifest {
-        book_id: book_id.to_string(),
-        book_hash: book_hash.to_string(),
-        page_count: pages.len() as u32,
-        total_size_bytes: total_size,
-        extracted_at: now.clone(),
-        last_accessed: now,
-        pages,
-        format: BookFormat::Cbr,
-        canonical_width: None,
-    };
+    let mut want: BTreeSet<usize> = BTreeSet::new();
+    want.insert(0);
+    for &p in priority_pages {
+        let idx = p as usize;
+        if idx < names.len() {
+            want.insert(idx);
+        }
+    }
 
+    let total_size =
+        extract_comic_subset(storage, book_hash, format, file_path, &names, &want, |_| {})?;
+    let manifest = build_comic_manifest(book_id, book_hash, format, &names, total_size);
     write_manifest(storage, book_hash, &manifest)?;
     Ok(manifest)
+}
+
+/// Background pass (F-4-1): extract every page not already cached, calling
+/// `on_progress(available, total)` once up front and again after each page
+/// lands. Idempotent — pages already on disk are skipped — so it is safe to
+/// run after [`ensure_comic_fast`] and even to re-run. On completion the
+/// manifest's `total_size_bytes` is refreshed to disk-truth (best-effort).
+///
+/// This never deletes or mutates existing page files, and the only writer
+/// of page bytes besides the fast path. Concurrent on-demand cache reads
+/// are safe: `Storage::put` is atomic (temp-file + rename), so a reader
+/// sees either the old (absent) or the fully-written page, never a partial.
+pub fn extract_comic_remaining<F: FnMut(u32, u32)>(
+    storage: &dyn Storage,
+    book_hash: &str,
+    file_path: &str,
+    format: &BookFormat,
+    mut on_progress: F,
+) -> FolioResult<()> {
+    let names = comic_page_names(format, file_path)?;
+    let total = names.len() as u32;
+    if total == 0 {
+        return Ok(());
+    }
+
+    let mut missing: BTreeSet<usize> = BTreeSet::new();
+    for (i, src) in names.iter().enumerate() {
+        let key = page_key(book_hash, &comic_page_filename(i, src));
+        if !storage.exists(&key).unwrap_or(false) {
+            missing.insert(i);
+        }
+    }
+
+    let available = std::cell::Cell::new(total - missing.len() as u32);
+    on_progress(available.get(), total);
+    if missing.is_empty() {
+        return Ok(());
+    }
+
+    let cb = |_idx: usize| {
+        available.set(available.get() + 1);
+        on_progress(available.get(), total);
+    };
+    extract_comic_subset(storage, book_hash, format, file_path, &names, &missing, cb)?;
+
+    if let Some(mut manifest) = read_manifest(storage, book_hash) {
+        // Refresh the informational size snapshot to disk-truth. Eviction and
+        // stats read disk directly, so a failure here is harmless.
+        manifest.total_size_bytes = book_disk_size_bytes(storage, book_hash);
+        let _ = write_manifest(storage, book_hash, &manifest);
+    } else {
+        // Our manifest vanished mid-run — a concurrent open's `run_eviction`
+        // reclaimed this book under the size cap while we were extracting.
+        // Any pages we wrote after that deletion are orphans:
+        // `collect_cached_books` skips manifest-less hashes, so eviction can
+        // never reclaim them and they defeat the size cap. Remove them.
+        page_dbg!(
+            "extract_comic_remaining: manifest for {} gone mid-run — cleaning orphans",
+            book_hash
+        );
+        let _ = evict_book(storage, book_hash);
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -1770,5 +1931,300 @@ mod tests {
         );
         // And its page content was still never written to disk.
         assert!(!storage.exists(&page_key(priv_hash, "000.jpg")).unwrap());
+    }
+
+    // ---------------------------------------------------------------------
+    // F-4-1: progressive comic open (fast path + background extraction)
+    // ---------------------------------------------------------------------
+
+    /// Build a synthetic CBZ (a zip of tiny "image" blobs) on disk. Entries
+    /// are written in the given order; the readers sort them canonically.
+    fn build_cbz(path: &std::path::Path, entries: &[(&str, &[u8])]) {
+        use std::io::Write as _;
+        let file = std::fs::File::create(path).unwrap();
+        let mut zip = zip::ZipWriter::new(file);
+        let opts = zip::write::SimpleFileOptions::default();
+        for (name, data) in entries {
+            zip.start_file(*name, opts).unwrap();
+            zip.write_all(data).unwrap();
+        }
+        zip.finish().unwrap();
+    }
+
+    fn four_page_cbz(dir: &TempDir) -> String {
+        let cbz = dir.path().join("comic.cbz");
+        build_cbz(
+            &cbz,
+            &[
+                ("p1.jpg", b"AAAA"),
+                ("p2.jpg", b"BBBB"),
+                ("p3.jpg", b"CCCC"),
+                ("p4.jpg", b"DDDD"),
+                // macOS resource fork with an image extension — the on-demand
+                // readers exclude it, so extraction must too or indices drift.
+                ("__MACOSX/._p1.jpg", b"junkjunk"),
+            ],
+        );
+        cbz.to_str().unwrap().to_string()
+    }
+
+    #[test]
+    fn fast_path_extracts_only_first_page() {
+        let (_sd, storage) = temp_storage();
+        let book_dir = TempDir::new().unwrap();
+        let path = four_page_cbz(&book_dir);
+
+        let manifest =
+            ensure_comic_fast(&storage, "book", "h", &path, &BookFormat::Cbz, &[]).unwrap();
+
+        // __MACOSX image excluded → 4 real pages, full manifest listing.
+        assert_eq!(manifest.page_count, 4);
+        assert_eq!(manifest.pages.len(), 4);
+
+        // Only page 0 is on disk immediately; the rest wait for background.
+        assert!(storage.exists(&page_key("h", &manifest.pages[0])).unwrap());
+        assert!(!storage.exists(&page_key("h", &manifest.pages[1])).unwrap());
+        assert!(!storage.exists(&page_key("h", &manifest.pages[2])).unwrap());
+        assert!(!storage.exists(&page_key("h", &manifest.pages[3])).unwrap());
+
+        // Page 0 serves the right bytes right away.
+        let (bytes, _) = get_cached_page(&storage, "h", 0).unwrap();
+        assert_eq!(bytes, b"AAAA");
+    }
+
+    #[test]
+    fn fast_path_extracts_priority_page_for_midbook_resume() {
+        let (_sd, storage) = temp_storage();
+        let book_dir = TempDir::new().unwrap();
+        let path = four_page_cbz(&book_dir);
+
+        // Opening mid-book at page 2: page 0 + page 2 must be immediate.
+        let manifest =
+            ensure_comic_fast(&storage, "book", "h", &path, &BookFormat::Cbz, &[2]).unwrap();
+
+        assert!(storage.exists(&page_key("h", &manifest.pages[0])).unwrap());
+        assert!(storage.exists(&page_key("h", &manifest.pages[2])).unwrap());
+        assert!(!storage.exists(&page_key("h", &manifest.pages[1])).unwrap());
+        assert!(!storage.exists(&page_key("h", &manifest.pages[3])).unwrap());
+
+        let (b0, _) = get_cached_page(&storage, "h", 0).unwrap();
+        assert_eq!(b0, b"AAAA");
+        let (b2, _) = get_cached_page(&storage, "h", 2).unwrap();
+        assert_eq!(b2, b"CCCC");
+    }
+
+    #[test]
+    fn fast_path_out_of_range_priority_is_ignored() {
+        let (_sd, storage) = temp_storage();
+        let book_dir = TempDir::new().unwrap();
+        let path = four_page_cbz(&book_dir);
+
+        // A resume index past the end must not panic or error; page 0 still lands.
+        let manifest =
+            ensure_comic_fast(&storage, "book", "h", &path, &BookFormat::Cbz, &[99]).unwrap();
+        assert_eq!(manifest.page_count, 4);
+        assert!(storage.exists(&page_key("h", &manifest.pages[0])).unwrap());
+    }
+
+    #[test]
+    fn unextracted_page_is_not_served_from_cache_before_background() {
+        // get_cached_page must fail for a not-yet-extracted page so the
+        // command layer falls through to its on-demand archive read.
+        let (_sd, storage) = temp_storage();
+        let book_dir = TempDir::new().unwrap();
+        let path = four_page_cbz(&book_dir);
+
+        ensure_comic_fast(&storage, "book", "h", &path, &BookFormat::Cbz, &[]).unwrap();
+        assert!(get_cached_page(&storage, "h", 2).is_err());
+    }
+
+    #[test]
+    fn background_extracts_all_remaining_pages_and_reports_progress() {
+        let (_sd, storage) = temp_storage();
+        let book_dir = TempDir::new().unwrap();
+        let path = four_page_cbz(&book_dir);
+
+        let manifest =
+            ensure_comic_fast(&storage, "book", "h", &path, &BookFormat::Cbz, &[]).unwrap();
+
+        let mut samples: Vec<(u32, u32)> = Vec::new();
+        extract_comic_remaining(&storage, "h", &path, &BookFormat::Cbz, |loaded, total| {
+            samples.push((loaded, total));
+        })
+        .unwrap();
+
+        // Every page now on disk.
+        for i in 0..4 {
+            assert!(
+                storage.exists(&page_key("h", &manifest.pages[i])).unwrap(),
+                "page {i} should be extracted by the background pass"
+            );
+        }
+
+        // Progress is monotonic non-decreasing and finishes at total.
+        assert!(!samples.is_empty());
+        for w in samples.windows(2) {
+            assert!(w[1].0 >= w[0].0, "progress must not go backwards");
+        }
+        let (last_loaded, last_total) = *samples.last().unwrap();
+        assert_eq!(last_total, 4);
+        assert_eq!(last_loaded, 4);
+
+        // Ordering lock: each cached page equals a direct on-demand read of
+        // the same index (proves cache index == fallback index).
+        let expected = [&b"AAAA"[..], b"BBBB", b"CCCC", b"DDDD"];
+        for i in 0..4u32 {
+            let (cached, _) = get_cached_page(&storage, "h", i).unwrap();
+            assert_eq!(
+                cached, expected[i as usize],
+                "cache bytes wrong for page {i}"
+            );
+            let (arch, _) = crate::cbz::get_page_image_bytes(&path, i, None).unwrap();
+            assert_eq!(cached, arch, "cache/fallback mismatch for page {i}");
+        }
+    }
+
+    #[test]
+    fn background_is_idempotent() {
+        let (_sd, storage) = temp_storage();
+        let book_dir = TempDir::new().unwrap();
+        let path = four_page_cbz(&book_dir);
+
+        ensure_comic_fast(&storage, "book", "h", &path, &BookFormat::Cbz, &[]).unwrap();
+        extract_comic_remaining(&storage, "h", &path, &BookFormat::Cbz, |_, _| {}).unwrap();
+        // Re-running must be a no-op, not an error, and must not corrupt pages.
+        extract_comic_remaining(&storage, "h", &path, &BookFormat::Cbz, |_, _| {}).unwrap();
+
+        for i in 0..4u32 {
+            assert!(get_cached_page(&storage, "h", i).is_ok());
+        }
+    }
+
+    #[test]
+    fn background_cleans_up_orphans_if_manifest_evicted_midrun() {
+        // Simulates a concurrent `run_eviction` (from another book's open)
+        // reclaiming this book's manifest while the background pass is still
+        // extracting. The pass must not leave orphan page files behind:
+        // `collect_cached_books` can't see a manifest-less hash, so eviction
+        // could never reclaim them and they would defeat the size cap.
+        let (_sd, storage) = temp_storage();
+        let book_dir = TempDir::new().unwrap();
+        let path = four_page_cbz(&book_dir);
+
+        ensure_comic_fast(&storage, "book", "h", &path, &BookFormat::Cbz, &[]).unwrap();
+        // Delete just the manifest, mimicking the tail of an `evict_book` that
+        // raced our extraction (pages then get written afterwards).
+        storage.delete(&manifest_key("h")).unwrap();
+
+        extract_comic_remaining(&storage, "h", &path, &BookFormat::Cbz, |_, _| {}).unwrap();
+
+        assert!(read_manifest(&storage, "h").is_none());
+        let leftover = storage.list(&book_prefix("h")).unwrap_or_default();
+        assert!(
+            leftover.is_empty(),
+            "orphan cache files left behind: {leftover:?}"
+        );
+    }
+
+    #[test]
+    fn ensure_comic_fast_returns_complete_cache_without_touching_archive() {
+        let (_sd, storage) = temp_storage();
+        let book_dir = TempDir::new().unwrap();
+        let path = four_page_cbz(&book_dir);
+
+        // Fully populate the cache first.
+        extract_cbz(&storage, "book", "h", &path).unwrap();
+
+        // With first+last present the fast path must short-circuit — a bogus
+        // archive path proves it never reopens the file.
+        let manifest = ensure_comic_fast(
+            &storage,
+            "book",
+            "h",
+            "/does/not/exist.cbz",
+            &BookFormat::Cbz,
+            &[],
+        )
+        .unwrap();
+        assert_eq!(manifest.page_count, 4);
+    }
+
+    #[test]
+    fn extract_cbz_excludes_macosx_and_matches_fallback_ordering() {
+        // Full extraction (used by ensure_cached) must also use the canonical
+        // ordering — otherwise a warm cache disagrees with on-demand reads.
+        let (_sd, storage) = temp_storage();
+        let book_dir = TempDir::new().unwrap();
+        let path = four_page_cbz(&book_dir);
+
+        let manifest = extract_cbz(&storage, "book", "h", &path).unwrap();
+        assert_eq!(manifest.page_count, 4, "__MACOSX image must be excluded");
+        for i in 0..4u32 {
+            let (cached, _) = get_cached_page(&storage, "h", i).unwrap();
+            let (arch, _) = crate::cbz::get_page_image_bytes(&path, i, None).unwrap();
+            assert_eq!(cached, arch, "index {i} mismatch after full extraction");
+        }
+    }
+
+    #[test]
+    fn on_demand_reads_race_background_without_corruption() {
+        use std::sync::Arc;
+        use std::thread;
+
+        let store_dir = TempDir::new().unwrap();
+        let storage = Arc::new(LocalStorage::new(store_dir.path()).unwrap());
+        let book_dir = TempDir::new().unwrap();
+        let cbz = book_dir.path().join("big.cbz");
+
+        // 30 uniquely-identifiable pages to widen the race window.
+        let contents: Vec<(String, Vec<u8>)> = (0..30)
+            .map(|i| (format!("p{i:02}.jpg"), format!("PAGE-{i:02}").into_bytes()))
+            .collect();
+        let entry_refs: Vec<(&str, &[u8])> = contents
+            .iter()
+            .map(|(n, d)| (n.as_str(), d.as_slice()))
+            .collect();
+        build_cbz(&cbz, &entry_refs);
+        let path = cbz.to_str().unwrap().to_string();
+
+        // Fast path first (page 0 only).
+        ensure_comic_fast(storage.as_ref(), "book", "h", &path, &BookFormat::Cbz, &[]).unwrap();
+
+        // Background extraction on a second storage handle over the same root.
+        let bg_storage = Arc::clone(&storage);
+        let bg_path = path.clone();
+        let handle = thread::spawn(move || {
+            extract_comic_remaining(
+                bg_storage.as_ref(),
+                "h",
+                &bg_path,
+                &BookFormat::Cbz,
+                |_, _| {},
+            )
+            .unwrap();
+        });
+
+        // Hammer cache reads concurrently. A miss (NotFound) is legitimate —
+        // it is exactly when the command layer would serve on-demand from the
+        // archive. Any HIT must return the correct, untruncated bytes.
+        for _ in 0..400 {
+            for i in 0..30u32 {
+                if let Ok((bytes, _)) = get_cached_page(storage.as_ref(), "h", i) {
+                    assert_eq!(
+                        bytes,
+                        format!("PAGE-{i:02}").into_bytes(),
+                        "torn or mismatched cache read for page {i}"
+                    );
+                }
+            }
+        }
+
+        handle.join().unwrap();
+
+        // After the background pass every page is present and correct.
+        for i in 0..30u32 {
+            let (bytes, _) = get_cached_page(storage.as_ref(), "h", i).unwrap();
+            assert_eq!(bytes, format!("PAGE-{i:02}").into_bytes());
+        }
     }
 }
