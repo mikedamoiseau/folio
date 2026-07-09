@@ -126,7 +126,7 @@ Open `http://<your-ip>:7788/` in a browser for a built-in reading interface. It 
 - Paginated, infinite-scroll book grid with server-side search, series/collection filters, and sort — fast even on large libraries
 - Home shelves for "Continue Reading" and "Recently Added", with reading-progress badges on grid and shelf cards
 - Book detail page with a progress bar and Continue / Start-over
-- EPUB reader with chapter navigation; PDF/CBZ/CBR page-image reader with animated swipe page-turns on touch devices (reduced-motion aware)
+- EPUB reader with chapter navigation (neighbouring chapters are prefetched in the background, so turning to the next chapter on a phone is instant); PDF/CBZ/CBR page-image reader with animated swipe page-turns on touch devices (reduced-motion aware)
 - Reading progress syncs back to the library, so a book picks up where a desktop or other device session left off
 - Installable as a PWA (web app manifest, service worker) and supports iOS "Add to Home Screen". The service worker only registers on a secure context (`https` or `localhost`), so offline shell caching does not activate over a plain-HTTP LAN URL — Add-to-Home-Screen and the manifest still work there
 - Loading skeletons, friendly empty states, and broken-cover placeholders

@@ -368,6 +368,7 @@ Manual sharing via the existing Markdown / JSON export is sufficient.
 - ~~Prefetch the adjacent chapters (current ±1) in the background so Previous/Next renders synchronously from cache instead of awaiting the `get_chapter_content` IPC~~ (`src/lib/chapterCache.ts`, wired into `src/components/ReaderPane.tsx`)
 - ~~Book-scoped in-memory cache, bounded to a ±2 eviction window around the current chapter — never persisted, never leaks one book's HTML into another~~
 - ~~Applies to the desktop paginated reader (EPUB/MOBI); page-based formats already had their own preloading (#38, #40)~~ ([CHANGELOG](../CHANGELOG.md#unreleased))
+- ~~Web-reader parity — the embedded web/phone reader prefetches the adjacent chapters (current ±2) into a book-scoped in-memory cache and warms same-origin inline image URLs, so forward chapter turns render from cache~~ — **Done** *(F-4-4)* (`src-tauri/src/web_server/static/app.js`)
 
 ### Organization & Format
 

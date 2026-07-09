@@ -13,6 +13,12 @@ This project adheres to [Semantic Versioning](https://semver.org/).
   cache is scoped to the open book and bounded to a small window around your
   position, so it never grows unbounded or leaks one book's content into
   another.
+- **Instant chapter turns in the web reader, too.** The embedded web/phone
+  reader now gets the same treatment: after a chapter renders it prefetches the
+  neighbouring chapters (current ±2) into a book-scoped in-memory cache and
+  warms their inline image URLs, so paging forward on a phone renders straight
+  from cache instead of waiting on a network round-trip. Brings the web reader
+  to parity with the desktop reader above.
 - **Live feedback while searching catalogs.** Searching all catalogs now shows a
   per-catalog checklist that ticks each source off (with its result count, or a
   "Failed" marker) the moment it responds, instead of a single static
