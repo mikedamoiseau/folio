@@ -2610,10 +2610,64 @@ pub async fn prepare_pdf(
         prep_start.elapsed()
     );
 
-    let evict_storage = page_cache_storage(&app)?;
-    tauri::async_runtime::spawn_blocking(move || {
-        let _ = page_cache::run_eviction(&evict_storage, max_size_mb);
-    });
+    // Background (F-4-5): render the remaining pages into the disk cache so
+    // later go-to-page / thumbnail scrubbing is instant, emitting progress,
+    // then run eviction. The pass is bounded by the whole-cache size cap so a
+    // huge PDF cannot blow past it. Skipped in private mode (B-M1): a full
+    // background pass would persist the entire book to disk, defeating the
+    // page-content write suppression the on-demand read path enforces —
+    // eviction still runs so the cap holds.
+    if state.is_private() {
+        let evict_storage = page_cache_storage(&app)?;
+        tauri::async_runtime::spawn_blocking(move || {
+            let _ = page_cache::run_eviction(&evict_storage, max_size_mb);
+        });
+    } else {
+        let bg_storage = page_cache_storage(&app)?;
+        let bg_app = app.clone();
+        let bg_book_id = book_id.clone();
+        let bg_hash = book_hash.to_string();
+        let bg_path = file_path.clone();
+        let max_size_bytes = max_size_mb.saturating_mul(1024 * 1024);
+        tauri::async_runtime::spawn_blocking(move || {
+            let outcome = page_cache::prerender_pdf_remaining(
+                &bg_storage,
+                &bg_hash,
+                &bg_path,
+                max_size_bytes,
+                |loaded, total| {
+                    let (loaded, total) = (loaded as usize, total as usize);
+                    if should_emit_chapter_progress(loaded, total) {
+                        let _ = bg_app.emit(
+                            "pdf-prerender-progress",
+                            ChapterLoadProgress {
+                                book_id: bg_book_id.clone(),
+                                loaded,
+                                total,
+                            },
+                        );
+                    }
+                },
+            );
+            // Guaranteed terminal event: settle the frontend bar at true
+            // coverage (100% normally, or the partial value when the size
+            // bound stopped the pass early). Skipped when there was no PDF
+            // manifest to prerender against (`page_count == 0`).
+            if let Ok(ref o) = outcome {
+                if o.page_count > 0 {
+                    let _ = bg_app.emit(
+                        "pdf-prerender-progress",
+                        ChapterLoadProgress {
+                            book_id: bg_book_id.clone(),
+                            loaded: o.cached_total as usize,
+                            total: o.page_count as usize,
+                        },
+                    );
+                }
+            }
+            let _ = page_cache::run_eviction(&bg_storage, max_size_mb);
+        });
+    }
 
     Ok(manifest)
 }

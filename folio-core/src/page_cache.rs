@@ -862,6 +862,210 @@ pub fn get_or_render_pdf_page(
 }
 
 // ---------------------------------------------------------------------------
+// PDF background prerender (F-4-5)
+// ---------------------------------------------------------------------------
+
+/// Outcome of a background PDF prerender pass, returned so the caller can
+/// emit a definitive terminal progress event and log partial coverage.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PdfPrerenderOutcome {
+    /// Pages rendered and written to disk during THIS pass.
+    pub rendered: u32,
+    /// Pages present on disk after the pass (already-cached + newly rendered).
+    pub cached_total: u32,
+    /// Full page count of the document, from the manifest.
+    pub page_count: u32,
+    /// True if the size bound stopped the pass before covering every page.
+    pub stopped_early: bool,
+}
+
+/// Background pass (F-4-5): render every PDF page not already on disk into
+/// the shared page cache, bounded by `max_size_bytes` so a single oversized
+/// book cannot blow past the whole-cache size cap. The renderer is injected
+/// so unit tests can stub pdfium out; production callers go through
+/// [`prerender_pdf_remaining`].
+///
+/// Requires a PDF manifest to already exist (written by
+/// [`ensure_pdf_prewarmed`]) — without one there is nothing to key pages
+/// against, so the pass is a no-op. Idempotent: pages already on disk are
+/// skipped, so it is safe to run right after the fast prewarm and even to
+/// re-run.
+///
+/// `on_progress(cached, total)` fires once up front and again after each
+/// page lands, where `total` is the document page count and `cached` the
+/// pages on disk so far. When the size bound stops the pass early, `cached`
+/// settles below `total` — an honest reflection of partial coverage; the
+/// remaining pages are still served on-demand by
+/// [`get_or_render_pdf_page_with_renderer`].
+///
+/// A single page's render or write failure is logged and skipped rather than
+/// aborting the whole pass (the page falls back to on-demand rendering).
+///
+/// Mirrors [`extract_comic_remaining`]'s orphan-cleanup contract: if our
+/// manifest is evicted mid-run by a concurrent open's `run_eviction`, any
+/// pages written afterward are orphans (invisible to `collect_cached_books`,
+/// so never reclaimable by eviction) and are removed via [`evict_book`].
+/// Concurrent on-demand reads are safe — `Storage::put` is atomic
+/// (temp-file + rename), so a reader sees either the absent or the fully
+/// written page, never a partial.
+pub fn prerender_pdf_remaining_with_renderer<F, P>(
+    storage: &dyn Storage,
+    book_hash: &str,
+    max_size_bytes: u64,
+    render: F,
+    mut on_progress: P,
+) -> FolioResult<PdfPrerenderOutcome>
+where
+    F: Fn(u32) -> FolioResult<(Vec<u8>, String)>,
+    P: FnMut(u32, u32),
+{
+    let page_count = match read_manifest(storage, book_hash) {
+        Some(m) if m.format == BookFormat::Pdf => m.page_count,
+        // No PDF manifest — the prewarm must create it first. No-op.
+        _ => {
+            return Ok(PdfPrerenderOutcome {
+                rendered: 0,
+                cached_total: 0,
+                page_count: 0,
+                stopped_early: false,
+            });
+        }
+    };
+
+    let missing: Vec<u32> = (0..page_count)
+        .filter(|i| {
+            !storage
+                .exists(&page_key(book_hash, &format!("{i:03}.jpg")))
+                .unwrap_or(false)
+        })
+        .collect();
+
+    let mut cached = page_count - missing.len() as u32;
+    on_progress(cached, page_count);
+    if missing.is_empty() {
+        return Ok(PdfPrerenderOutcome {
+            rendered: 0,
+            cached_total: cached,
+            page_count,
+            stopped_early: false,
+        });
+    }
+
+    // Bound against the WHOLE cache, not just this book: seed the running
+    // total with every cached book's disk usage so the pass cannot push the
+    // aggregate past `max_size_bytes` even when other books already occupy
+    // most of it (otherwise the cache could transiently reach ~2× the cap
+    // before the caller's post-pass `run_eviction` reconciles it). The
+    // just-opened book is the most-recently-used, so the post-pass eviction
+    // trims colder books first, freeing room for it over subsequent opens.
+    let mut current_size: u64 = collect_cached_books(storage)
+        .iter()
+        .map(|b| book_disk_size_bytes(storage, &b.book_hash))
+        .sum();
+    let mut rendered: u32 = 0;
+    let mut stopped_early = false;
+
+    for idx in missing {
+        // Bound: stop before we cross the whole-cache size cap. A single page
+        // may overshoot by at most its own size; `run_eviction` (fired by the
+        // caller after this pass) reconciles the multi-book budget.
+        if current_size >= max_size_bytes {
+            stopped_early = true;
+            page_dbg!(
+                "prerender_pdf_remaining: size bound {} B reached for {} — stopping at {}/{} pages",
+                max_size_bytes,
+                book_hash,
+                cached,
+                page_count
+            );
+            break;
+        }
+
+        let bytes = match render(idx) {
+            Ok((bytes, _mime)) => bytes,
+            Err(e) => {
+                // Best-effort: a page that fails to prerender is served
+                // on-demand later. Do not abort the rest of the pass.
+                page_dbg!(
+                    "prerender_pdf_remaining: render of page {} failed for {}: {} — skipping",
+                    idx,
+                    book_hash,
+                    e
+                );
+                continue;
+            }
+        };
+
+        let name = format!("{idx:03}.jpg");
+        match storage.put(&page_key(book_hash, &name), &bytes) {
+            Ok(()) => {
+                current_size += bytes.len() as u64;
+                cached += 1;
+                rendered += 1;
+                on_progress(cached, page_count);
+            }
+            Err(e) => {
+                page_dbg!(
+                    "prerender_pdf_remaining: write of page {} failed for {}: {} — skipping",
+                    idx,
+                    book_hash,
+                    e
+                );
+            }
+        }
+    }
+
+    // Refresh the informational size snapshot to disk-truth (best-effort),
+    // mirroring the comic pass. A vanished manifest means a concurrent open's
+    // `run_eviction` reclaimed this book mid-run; pages written afterward are
+    // orphans, so clean them up.
+    if let Some(mut m) = read_manifest(storage, book_hash) {
+        m.total_size_bytes = book_disk_size_bytes(storage, book_hash);
+        let _ = write_manifest(storage, book_hash, &m);
+    } else {
+        page_dbg!(
+            "prerender_pdf_remaining: manifest for {} gone mid-run — cleaning orphans",
+            book_hash
+        );
+        let _ = evict_book(storage, book_hash);
+        // The book (every page) was just scrubbed from disk, so `cached`
+        // would overstate coverage. Report disk-truth (0) so the caller's
+        // terminal progress event does not leave the bar stuck mid-way.
+        cached = 0;
+    }
+
+    Ok(PdfPrerenderOutcome {
+        rendered,
+        cached_total: cached,
+        page_count,
+        stopped_early,
+    })
+}
+
+/// Production entry point: wires [`crate::pdf::get_page_image_bytes`] at the
+/// canonical cache width into [`prerender_pdf_remaining_with_renderer`].
+pub fn prerender_pdf_remaining<P>(
+    storage: &dyn Storage,
+    book_hash: &str,
+    file_path: &str,
+    max_size_bytes: u64,
+    on_progress: P,
+) -> FolioResult<PdfPrerenderOutcome>
+where
+    P: FnMut(u32, u32),
+{
+    let render = |idx: u32| -> FolioResult<(Vec<u8>, String)> {
+        let (bytes, mime) = crate::pdf::get_page_image_bytes(
+            file_path,
+            idx,
+            Some(crate::pdf::CACHE_CANONICAL_WIDTH),
+        )?;
+        Ok((bytes, mime.to_string()))
+    };
+    prerender_pdf_remaining_with_renderer(storage, book_hash, max_size_bytes, render, on_progress)
+}
+
+// ---------------------------------------------------------------------------
 // Eviction
 // ---------------------------------------------------------------------------
 
@@ -1512,6 +1716,253 @@ mod tests {
             remaining_pages.is_empty(),
             "partial cache must be rolled back; orphans: {remaining_pages:?}"
         );
+    }
+
+    // ---------------------------------------------------------------------
+    // PDF background prerender (F-4-5)
+    // ---------------------------------------------------------------------
+
+    /// Write a bare PDF manifest with `page_count` pages and the first
+    /// `prewarmed` page files present on disk (each `bytes_per_page` bytes).
+    fn seed_pdf_manifest(
+        storage: &dyn Storage,
+        hash: &str,
+        page_count: u32,
+        prewarmed: u32,
+        bytes_per_page: usize,
+    ) {
+        let manifest = CacheManifest {
+            book_id: "b".into(),
+            book_hash: hash.into(),
+            page_count,
+            total_size_bytes: (prewarmed as u64) * bytes_per_page as u64,
+            extracted_at: now_iso(),
+            last_accessed: now_iso(),
+            pages: Vec::new(),
+            format: BookFormat::Pdf,
+            canonical_width: Some(2400),
+        };
+        write_manifest(storage, hash, &manifest).unwrap();
+        for i in 0..prewarmed {
+            storage
+                .put(
+                    &page_key(hash, &format!("{i:03}.jpg")),
+                    &vec![0u8; bytes_per_page],
+                )
+                .unwrap();
+        }
+    }
+
+    #[test]
+    fn prerender_pdf_remaining_renders_only_missing_pages() {
+        let (_d, storage) = temp_storage();
+        let hash = "h";
+        // 10 pages, first 3 prewarmed.
+        seed_pdf_manifest(&storage, hash, 10, 3, 8);
+
+        let rendered_idxs = std::cell::RefCell::new(Vec::<u32>::new());
+        let progress = std::cell::RefCell::new(Vec::<(u32, u32)>::new());
+        let render = |idx: u32| -> FolioResult<(Vec<u8>, String)> {
+            rendered_idxs.borrow_mut().push(idx);
+            Ok((vec![7u8; 8], "image/jpeg".into()))
+        };
+
+        let outcome =
+            prerender_pdf_remaining_with_renderer(&storage, hash, u64::MAX, render, |c, t| {
+                progress.borrow_mut().push((c, t))
+            })
+            .unwrap();
+
+        // Only pages 3..10 rendered, in order.
+        assert_eq!(rendered_idxs.into_inner(), (3..10).collect::<Vec<_>>());
+        assert_eq!(outcome.rendered, 7);
+        assert_eq!(outcome.cached_total, 10);
+        assert_eq!(outcome.page_count, 10);
+        assert!(!outcome.stopped_early);
+
+        // Every page now on disk.
+        for i in 0..10 {
+            assert!(storage
+                .exists(&page_key(hash, &format!("{i:03}.jpg")))
+                .unwrap());
+        }
+
+        // Progress starts at the prewarmed count and ends at full coverage.
+        let p = progress.into_inner();
+        assert_eq!(p.first(), Some(&(3, 10)));
+        assert_eq!(p.last(), Some(&(10, 10)));
+    }
+
+    #[test]
+    fn prerender_pdf_remaining_noop_when_all_cached() {
+        let (_d, storage) = temp_storage();
+        let hash = "h";
+        seed_pdf_manifest(&storage, hash, 5, 5, 8);
+
+        let render = |_idx: u32| -> FolioResult<(Vec<u8>, String)> {
+            panic!("renderer must not be called when everything is cached");
+        };
+
+        let outcome =
+            prerender_pdf_remaining_with_renderer(&storage, hash, u64::MAX, render, |_, _| {})
+                .unwrap();
+        assert_eq!(outcome.rendered, 0);
+        assert_eq!(outcome.cached_total, 5);
+        assert!(!outcome.stopped_early);
+    }
+
+    #[test]
+    fn prerender_pdf_remaining_noop_without_manifest() {
+        let (_d, storage) = temp_storage();
+        let render = |_idx: u32| -> FolioResult<(Vec<u8>, String)> {
+            panic!("renderer must not run without a manifest");
+        };
+        let outcome =
+            prerender_pdf_remaining_with_renderer(&storage, "nope", u64::MAX, render, |_, _| {})
+                .unwrap();
+        assert_eq!(outcome.page_count, 0);
+        assert_eq!(outcome.rendered, 0);
+        assert!(!outcome.stopped_early);
+    }
+
+    #[test]
+    fn prerender_pdf_remaining_stops_at_size_bound() {
+        let (_d, storage) = temp_storage();
+        let hash = "h";
+        // 20 pages, none prewarmed, each rendered page is 100 bytes.
+        seed_pdf_manifest(&storage, hash, 20, 0, 0);
+
+        // Bound at 250 bytes: pages 0 (0B pre), then render adds 100B each.
+        // Rendering stops once on-disk size reaches the bound, so we get
+        // exactly pages 0,1,2 (size 0 -> 100 -> 200, then 300 >= 250 stops).
+        let render = |_idx: u32| -> FolioResult<(Vec<u8>, String)> {
+            Ok((vec![9u8; 100], "image/jpeg".into()))
+        };
+
+        let outcome =
+            prerender_pdf_remaining_with_renderer(&storage, hash, 250, render, |_, _| {}).unwrap();
+
+        assert!(outcome.stopped_early, "should stop at the size bound");
+        assert_eq!(outcome.rendered, 3, "3 pages fit before crossing 250 B");
+        assert_eq!(outcome.cached_total, 3);
+        assert_eq!(outcome.page_count, 20);
+        // Later pages were NOT rendered — served on-demand instead.
+        assert!(!storage.exists(&page_key(hash, "003.jpg")).unwrap());
+    }
+
+    #[test]
+    fn prerender_pdf_remaining_continues_past_single_render_failure() {
+        let (_d, storage) = temp_storage();
+        let hash = "h";
+        seed_pdf_manifest(&storage, hash, 4, 0, 0);
+
+        // Page 1 fails; the rest still render.
+        let render = |idx: u32| -> FolioResult<(Vec<u8>, String)> {
+            if idx == 1 {
+                Err(FolioError::internal("boom"))
+            } else {
+                Ok((vec![1u8; 10], "image/jpeg".into()))
+            }
+        };
+
+        let outcome =
+            prerender_pdf_remaining_with_renderer(&storage, hash, u64::MAX, render, |_, _| {})
+                .unwrap();
+
+        assert_eq!(outcome.rendered, 3);
+        assert!(!storage.exists(&page_key(hash, "001.jpg")).unwrap());
+        assert!(storage.exists(&page_key(hash, "000.jpg")).unwrap());
+        assert!(storage.exists(&page_key(hash, "003.jpg")).unwrap());
+        // Not "stopped early" — the bound was never hit.
+        assert!(!outcome.stopped_early);
+    }
+
+    #[test]
+    fn prerender_pdf_remaining_refreshes_manifest_size() {
+        let (_d, storage) = temp_storage();
+        let hash = "h";
+        seed_pdf_manifest(&storage, hash, 3, 0, 0);
+        // Manifest claims 0 bytes initially.
+        assert_eq!(read_manifest(&storage, hash).unwrap().total_size_bytes, 0);
+
+        let render = |_idx: u32| -> FolioResult<(Vec<u8>, String)> {
+            Ok((vec![5u8; 40], "image/jpeg".into()))
+        };
+        prerender_pdf_remaining_with_renderer(&storage, hash, u64::MAX, render, |_, _| {}).unwrap();
+
+        // Snapshot refreshed to disk-truth: 3 pages * 40 bytes.
+        assert_eq!(read_manifest(&storage, hash).unwrap().total_size_bytes, 120);
+    }
+
+    #[test]
+    fn prerender_pdf_remaining_cleans_orphans_if_manifest_evicted_midrun() {
+        // Simulate a concurrent `run_eviction` deleting our manifest partway
+        // through: the render closure removes the manifest after the first
+        // page. Pages written afterward would be orphans; the pass must
+        // evict the whole book so they cannot defeat the size cap.
+        let (_d, storage) = temp_storage();
+        let hash = "h";
+        seed_pdf_manifest(&storage, hash, 4, 0, 0);
+
+        let calls = std::cell::Cell::new(0u32);
+        let render = |_idx: u32| -> FolioResult<(Vec<u8>, String)> {
+            let n = calls.get();
+            calls.set(n + 1);
+            if n == 1 {
+                // After the first successful page, wipe the manifest to
+                // mimic eviction reclaiming this book mid-run.
+                storage.delete(&manifest_key(hash)).unwrap();
+            }
+            Ok((vec![3u8; 10], "image/jpeg".into()))
+        };
+
+        let outcome =
+            prerender_pdf_remaining_with_renderer(&storage, hash, u64::MAX, render, |_, _| {})
+                .unwrap();
+
+        // The pass rendered pages, but with the manifest gone at the end the
+        // book (including every orphan page) is scrubbed.
+        assert!(outcome.rendered >= 1);
+        // Coverage is reported as disk-truth (0) after the scrub, so the
+        // caller's terminal event does not overstate what is cached.
+        assert_eq!(outcome.cached_total, 0);
+        let leftovers: Vec<String> = storage.list(&book_prefix(hash)).unwrap();
+        assert!(
+            leftovers.is_empty(),
+            "orphan pages must be cleaned up; leftovers: {leftovers:?}"
+        );
+    }
+
+    #[test]
+    fn prerender_pdf_remaining_bound_counts_whole_cache() {
+        // The size bound must account for OTHER cached books, not just this
+        // one — otherwise the aggregate cache can grow to ~2x the cap before
+        // eviction runs. A pre-existing book already fills most of the cap,
+        // leaving room for only a couple of this book's pages.
+        let (_d, storage) = temp_storage();
+        // Existing book "other": 5 pages * 40 B = 200 B on disk.
+        create_fake_cache(&storage, "other", "other", 5, 200, &now_iso());
+
+        // Target PDF "h": 20 pages, none prewarmed, 40 B per rendered page.
+        seed_pdf_manifest(&storage, "h", 20, 0, 0);
+
+        let render = |_idx: u32| -> FolioResult<(Vec<u8>, String)> {
+            Ok((vec![9u8; 40], "image/jpeg".into()))
+        };
+
+        // Cap 300 B. Start total = 200 B (the other book). Render page 0
+        // (240) and page 1 (280); page 2 would be checked at 280 < 300 so it
+        // also renders (320), then 320 >= 300 stops. So 3 pages fit.
+        let outcome =
+            prerender_pdf_remaining_with_renderer(&storage, "h", 300, render, |_, _| {}).unwrap();
+
+        assert!(
+            outcome.stopped_early,
+            "must stop once the whole cache hits the cap"
+        );
+        assert_eq!(outcome.rendered, 3);
+        // The pre-existing book is untouched by the prerender pass.
+        assert!(read_manifest(&storage, "other").is_some());
     }
 
     #[test]
