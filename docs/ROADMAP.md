@@ -420,7 +420,7 @@ Manual sharing via the existing Markdown / JSON export is sufficient.
 - ~~Global setting (applies to all books)~~
 - ~~EPUB: CSS columns approach; page-based formats: two images side by side~~
 - ~~Zoom and pan work on the spread as a unit with proper bounds clamping~~
-- Future: preload next spread in background for smoother page turns
+- ~~Preload next spread in background for smoother page turns~~ — **Done** (`PageViewer.tsx:400-432`, debounced next/prev spread prefetch)
 - Future: auto-detect landscape/wide images and display solo at full width
 
 #### 38b. Settings Panel Reorganization — **Done**
@@ -469,11 +469,11 @@ Improvements identified via codebase audit (April 2026). Security and stability 
 
 ### Robustness
 
-#### 49. Database Migration Versioning — **Done**
-- Replace current `ALTER TABLE ... let _ =` pattern with a `schema_version` table
-- Track applied migrations by version number
-- Enable safe non-additive schema changes (column renames, type changes)
-- Implement rollback or backup-before-migrate strategy
+#### 49. Database Migration Versioning — **Partial**
+- ~~Add a `schema_version` table~~ — **Done** (`folio-core/src/db.rs:117`; `SCHEMA_VERSION = 3`, `get_schema_version`/`set_schema_version` at `db.rs:19,37`)
+- ~~Track applied migrations by version number~~ — **Done** (`prev_version`-gated migrations at `db.rs:384-396`)
+- Enable safe non-additive schema changes (column renames, type changes) — *not done; additive `ALTER TABLE ... let _ =` pattern still coexists*
+- Implement rollback or backup-before-migrate strategy — *not done*
 
 #### 50. Transaction Boundaries for Import — **Done**
 - ~~Wrap `import_book()` multi-step flow in an explicit DB transaction~~
@@ -487,15 +487,15 @@ Improvements identified via codebase audit (April 2026). Security and stability 
 - ~~Prevents memory/disk exhaustion from maliciously crafted EPUB/CBZ/CBR archives~~
 
 #### 52. PDF Cache Memory Limits — **Done**
-- Current LRU cache evicts by count (20 entries) but not by memory
-- 20 rendered PDF pages at max resolution could reach 400+ MB
-- Add memory-based eviction (e.g., max 200 MB total cache size)
-- Consider disk-based caching for older pages
+- ~~Current LRU cache evicts by count (20 entries) but not by memory~~
+- ~~20 rendered PDF pages at max resolution could reach 400+ MB~~
+- ~~Add memory-based eviction (e.g., max 200 MB total cache size)~~ — byte-cap LRU in `folio-core/src/cache.rs:65-79`, wired at `src-tauri/src/lib.rs:190` (200 MB)
+- ~~Consider disk-based caching for older pages~~ — rendered PDF pages moved to the on-disk `page-cache/` (500 MB budget, `page_cache.rs`)
 
 #### 53. Thread Pool for Background Operations — **Done**
-- Enrichment scans and backups currently spawn unbounded threads via `std::thread::spawn`
-- Large batch operations could spawn 1000+ threads
-- Use `rayon::ThreadPool` or Tauri's async runtime with bounded concurrency
+- ~~Enrichment scans and backups currently spawn unbounded threads via `std::thread::spawn`~~
+- ~~Large batch operations could spawn 1000+ threads~~
+- ~~Use `rayon::ThreadPool` or Tauri's async runtime with bounded concurrency~~ — background ops run on Tauri's bounded blocking runtime (`spawn_blocking` single-loop tasks, slot-gated by `acquire_import_slot`); no unbounded production `std::thread::spawn`
 
 #### 54. Backup Secret Atomicity — **Done**
 - ~~Verify OS keychain write succeeds before saving non-secret config to DB~~
@@ -544,8 +544,8 @@ Improvements identified via codebase audit (April 2026). Security and stability 
 - ~~Select all / deselect all~~
 
 #### 61. Highlight Popup Smart Positioning — **Done**
-- When text selection spans multiple lines, the highlight color picker popup may be offscreen
-- Detect viewport bounds and reposition popup to opposite side when it would be clipped
+- ~~When text selection spans multiple lines, the highlight color picker popup may be offscreen~~
+- ~~Detect viewport bounds and reposition popup to opposite side when it would be clipped~~ (`src/components/ReaderPane.tsx:2336-2352` — clamps X, flips above/below on top/bottom clip)
 - Same pattern for any floating UI anchored to text selections
 
 ## Phase 10: folio-core Refactor & Paid Server
@@ -718,7 +718,7 @@ Tauri v2 supports mobile targets. The React frontend renders in a mobile WebView
 | 5 | Multiple Profiles | Done | Multi-user |
 | 6 | Remote Library Access, OPDS Server | Done | Remote access |
 | 8 | Sepia Theme, OpenDyslexic, Star Ratings, In-Book Search, Typography, Custom Fonts, Continuous Scroll, Time-to-Finish, Bookmark Naming, Series, Activity Log, MOBI, Nav History, Custom CSS, Dual-Page/Manga, Settings Reorg, i18n (EN+FR), PDF Zoom Quality, Go to Page, Animations, Comic Page Cache, Split View | 19 done | Reader & library enhancements |
-| 9 | DB Migration Versioning, Transaction Boundaries, Zip Bomb Protection, PDF Cache Memory Limits, Thread Pool, Backup Secret Atomicity, Screen Reader Live Regions, Loading Skeletons, Toast System, Search Nav, Bulk Actions, Highlight Positioning, Structured Errors | 13 done | Hardening & polish |
+| 9 | DB Migration Versioning, Transaction Boundaries, Zip Bomb Protection, PDF Cache Memory Limits, Thread Pool, Backup Secret Atomicity, Screen Reader Live Regions, Loading Skeletons, Toast System, Search Nav, Bulk Actions, Highlight Positioning, Structured Errors | 12 done, 1 partial (#49 migration versioning: version table done; non-additive/rollback not) | Hardening & polish |
 | 10 | `folio-core` refactor, Storage trait, `folio-server` (private) | 2 done (#63, #64), `folio-server` in active development (private repo, axum + sqlx + auth scaffolding shipped, handlers WIP) | Open-core + paid server |
 | N/H | Dictionary, Vocabulary Builder, TTS, Library-Wide Search, Annotation Exports, Plugins/Hooks | Not started (User Themes done) | Nice to have |
 | Deferred | Android & iOS App (was Phase 7) | Deferred — web server covers the primary mobile use case | Mobile |
