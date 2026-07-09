@@ -6,6 +6,13 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Changed
+- **Instant chapter turns in the paginated reader.** The paginated EPUB/MOBI
+  reader now prefetches the adjacent chapters (current ±1) in the background, so
+  pressing Previous/Next renders the next chapter synchronously from an
+  in-memory cache instead of waiting on a `get_chapter_content` round-trip. The
+  cache is scoped to the open book and bounded to a small window around your
+  position, so it never grows unbounded or leaks one book's content into
+  another.
 - **Live feedback while searching catalogs.** Searching all catalogs now shows a
   per-catalog checklist that ticks each source off (with its result count, or a
   "Failed" marker) the moment it responds, instead of a single static

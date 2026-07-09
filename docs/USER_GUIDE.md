@@ -231,7 +231,7 @@ Folio offers two reading modes for EPUBs, selectable in **Settings > Page Layout
 
 **Paginated mode** (default) — read one chapter at a time:
 
-- **Chapter navigation:** Use the Previous/Next buttons at the bottom, press the left/right arrow keys, or pick a chapter from the Table of Contents.
+- **Chapter navigation:** Use the Previous/Next buttons at the bottom, press the left/right arrow keys, or pick a chapter from the Table of Contents. Folio prefetches the neighbouring chapters in the background, so turning to the next or previous chapter is instant.
 - Floating chapter arrows appear on the left/right edges when you scroll past the bottom navigation bar.
 
 **Continuous scroll mode** — all chapters in one long scrollable document:

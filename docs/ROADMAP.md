@@ -364,6 +364,11 @@ Manual sharing via the existing Markdown / JSON export is sufficient.
 - ~~Correctly handles continuous scroll mode (chapter-local progress)~~
 - Future: compute personalized WPM from user's reading session history
 
+#### 66. Instant Chapter Turns (Paginated EPUB/MOBI Prefetch) — **Done** *(F-4-3)*
+- ~~Prefetch the adjacent chapters (current ±1) in the background so Previous/Next renders synchronously from cache instead of awaiting the `get_chapter_content` IPC~~ (`src/lib/chapterCache.ts`, wired into `src/components/ReaderPane.tsx`)
+- ~~Book-scoped in-memory cache, bounded to a ±2 eviction window around the current chapter — never persisted, never leaks one book's HTML into another~~
+- ~~Applies to the desktop paginated reader (EPUB/MOBI); page-based formats already had their own preloading (#38, #40)~~ ([CHANGELOG](../CHANGELOG.md#unreleased))
+
 ### Organization & Format
 
 #### 32. Series Grouping — **Done**
