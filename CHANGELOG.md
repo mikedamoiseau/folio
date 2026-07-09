@@ -14,6 +14,15 @@ This project adheres to [Semantic Versioning](https://semver.org/).
   bar. Navigation stays correct throughout — jumping to a page that hasn't been
   extracted yet reads it on demand — so the bar is pure feedback you can ignore
   or close.
+- **PDFs keep warming up behind you.** The PDF counterpart to the comics change
+  above. Opening a PDF still paints its first pages instantly, and now Folio
+  renders the *rest* of the book's pages into the disk cache on a background
+  task — behind the same dismissible "caching pages N/total" bar — so jumping to
+  any page or scrubbing the thumbnail strip becomes instant instead of waiting
+  on the PDF engine. The pass is bounded by the page-cache size limit (on very
+  large PDFs it stops once the cap is reached and the remaining pages are still
+  rendered on demand), and it's skipped entirely while "don't track this
+  session" is on.
 - **Instant chapter turns in the paginated reader.** The paginated EPUB/MOBI
   reader now prefetches the adjacent chapters (current ±1) in the background, so
   pressing Previous/Next renders the next chapter synchronously from an
