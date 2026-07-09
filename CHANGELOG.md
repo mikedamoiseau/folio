@@ -6,6 +6,14 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Changed
+- **Comics open instantly, even large ones.** Opening a CBZ/CBR now paints the
+  first page in tens of milliseconds instead of waiting seconds for the whole
+  archive to extract. Folio extracts just the first page (plus your resume page)
+  up front and returns immediately, then streams the remaining pages into the
+  disk cache on a background task behind a dismissible "preparing pages N/total"
+  bar. Navigation stays correct throughout — jumping to a page that hasn't been
+  extracted yet reads it on demand — so the bar is pure feedback you can ignore
+  or close.
 - **Instant chapter turns in the paginated reader.** The paginated EPUB/MOBI
   reader now prefetches the adjacent chapters (current ±1) in the background, so
   pressing Previous/Next renders the next chapter synchronously from an
