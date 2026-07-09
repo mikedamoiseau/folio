@@ -28,6 +28,14 @@ import { friendlyError, isBookFileMissing } from "../lib/errors";
 import { useToast } from "./Toast";
 import { resolveBookmarkScrollTop, isExternalUrl } from "../lib/utils";
 import {
+  createChapterCache,
+  getCachedChapter,
+  setCachedChapter,
+  evictOutsideWindow,
+  adjacentChapterIndices,
+  type ChapterCache,
+} from "../lib/chapterCache";
+import {
   emptyHistory,
   pushEntry,
   replaceCurrent,
@@ -259,6 +267,10 @@ export default function ReaderPane({
 
   const contentRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+  // In-memory adjacent-chapter prefetch cache (F-4-3). Serves prev/next
+  // chapter turns synchronously; reset on book change (below) so one book's
+  // HTML is never served for another.
+  const chapterCacheRef = useRef<ChapterCache>(createChapterCache());
   const chapterNavRef = useRef<HTMLDivElement>(null);
   const tocSidebarRef = useRef<HTMLElement>(null);
   const [bottomNavVisible, setBottomNavVisible] = useState(true);
@@ -293,6 +305,9 @@ export default function ReaderPane({
     historyInitialized.current = false;
     pendingSearchHistory.current = null;
     targetMatchOffset.current = null;
+    // F-4-3: drop the previous book's prefetched chapters so a stale entry
+    // can never be served for the newly-switched book.
+    chapterCacheRef.current = createChapterCache();
     // Close the details popup and drop the previous book's record so it can't
     // flash stale content over the newly-switched book before get_book resolves.
     setInfoOpen(false);
@@ -591,6 +606,26 @@ export default function ReaderPane({
   useEffect(() => {
     if (!bookId || loading || isContinuous) return;
 
+    // Reset scroll to the top of the new chapter unless we're restoring a
+    // saved position or scrolling to a search match. Shared by the cache-hit
+    // and IPC-load paths so both behave identically.
+    const resetScroll = () => {
+      if (restoringScroll.current !== chapterIndex && targetMatchOffset.current === null && scrollContainerRef.current) {
+        scrollContainerRef.current.scrollTop = 0;
+      }
+    };
+
+    // F-4-3: serve synchronously from the prefetch cache when present — this
+    // is what removes the blank/spinner flash at chapter boundaries. On a
+    // miss, fall through to the async IPC path (unchanged behavior).
+    const cached = getCachedChapter(chapterCacheRef.current, bookId, chapterIndex);
+    if (cached !== undefined) {
+      setChapterHtml(cached);
+      setChapterError(null);
+      resetScroll();
+      return;
+    }
+
     let cancelled = false;
 
     async function loadChapter() {
@@ -600,11 +635,10 @@ export default function ReaderPane({
           chapterIndex,
         });
         if (!cancelled) {
+          setCachedChapter(chapterCacheRef.current, bookId, chapterIndex, html);
           setChapterHtml(html);
           setChapterError(null);
-          if (restoringScroll.current !== chapterIndex && targetMatchOffset.current === null && scrollContainerRef.current) {
-            scrollContainerRef.current.scrollTop = 0;
-          }
+          resetScroll();
         }
       } catch (err) {
         if (!cancelled) {
@@ -621,6 +655,31 @@ export default function ReaderPane({
       cancelled = true;
     };
   }, [bookId, chapterIndex, loading, chapterRetryCount]);
+
+  // ---- Prefetch adjacent chapters after the current one renders (F-4-3) ----
+  // Gated on `chapterHtml` so this fires after the current chapter is on
+  // screen — it never blocks the current render. Prefetches are best-effort
+  // and idempotent (cache hits are skipped); eviction bounds memory to a
+  // small window around the current position.
+  useEffect(() => {
+    if (!bookId || loading || isContinuous || !isHtmlBook || !chapterHtml) return;
+
+    const cache = chapterCacheRef.current;
+    evictOutsideWindow(cache, chapterIndex);
+
+    let cancelled = false;
+    for (const idx of adjacentChapterIndices(chapterIndex, totalChapters)) {
+      if (getCachedChapter(cache, bookId, idx) !== undefined) continue;
+      invoke<string>("get_chapter_content", { bookId, chapterIndex: idx })
+        .then((html) => {
+          if (!cancelled) setCachedChapter(cache, bookId, idx, html);
+        })
+        .catch(() => {}); // prefetch is best-effort; misses fall back to IPC
+    }
+    return () => {
+      cancelled = true;
+    };
+  }, [bookId, chapterHtml, chapterIndex, totalChapters, loading, isContinuous, isHtmlBook]);
 
   // ---- Restore scroll position after chapter HTML renders ----
 
