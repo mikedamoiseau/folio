@@ -3,6 +3,15 @@
 All notable changes to this project will be documented in this file.
 This project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+- **Live feedback while searching catalogs.** Searching all catalogs now shows a
+  per-catalog checklist that ticks each source off (with its result count, or a
+  "Failed" marker) the moment it responds, instead of a single static
+  "Searching all catalogs…" message. Searching a single catalog names it
+  ("Searching Project Gutenberg…") rather than showing a bare "Loading…".
+
 ## [2.7.0] - 2026-07-08
 
 A reading-insights and privacy release: the stats screen gains a year view and

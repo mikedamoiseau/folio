@@ -3403,10 +3403,25 @@ pub async fn remove_opds_catalog(url: String, state: State<'_, AppState>) -> Fol
     Ok(db::set_setting(&conn, "opds_custom_catalogs", &json)?)
 }
 
+/// Live progress for a single catalog during a unified `search_all_catalogs`
+/// run. Emitted (as `catalog-search-progress`) once per catalog the moment its
+/// fan-out thread finishes. `query` lets the UI ignore stale events from a
+/// prior search; `ok` is false only on a network/parse failure.
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CatalogSearchProgress {
+    query: String,
+    url: String,
+    name: String,
+    count: usize,
+    ok: bool,
+}
+
 /// Search all configured OPDS catalogs in parallel and return aggregated results.
 #[tauri::command]
 pub async fn search_all_catalogs(
     query: String,
+    app: AppHandle,
     state: State<'_, AppState>,
 ) -> FolioResult<Vec<opds::OpdsEntry>> {
     // Collect all catalog URLs
@@ -3423,37 +3438,41 @@ pub async fn search_all_catalogs(
         let tx = result_tx.clone();
         let cat_name = cat.name.clone();
         let trusted = trusted.clone();
+        let app = app.clone();
         tauri::async_runtime::spawn_blocking(move || {
-            // 1. Fetch root feed to get searchUrl
-            let root = match opds::fetch_feed_with_trusted(&url, &trusted) {
-                Ok(f) => f,
+            // Search this catalog. `ok` distinguishes a network/parse failure
+            // (surfaced to the user as "failed") from a catalog that simply
+            // has no search endpoint or returned nothing (shown as "no
+            // results") — both yield an empty `entries` list.
+            let mut ok = true;
+            let entries = match opds::fetch_feed_with_trusted(&url, &trusted) {
+                Ok(root) => match root.search_url {
+                    // Resolve OpenSearch description if needed, then search.
+                    Some(raw) => match opds::resolve_search_url_with_trusted(&raw, &trusted) {
+                        Some(template) => {
+                            let search_url =
+                                template.replace("{searchTerms}", &opds::url_encode(&q));
+                            match opds::fetch_feed_with_trusted(&search_url, &trusted) {
+                                Ok(f) => f.entries,
+                                Err(_) => {
+                                    ok = false;
+                                    Vec::new()
+                                }
+                            }
+                        }
+                        // No resolvable search template — nothing to search.
+                        None => Vec::new(),
+                    },
+                    // Catalog exposes no search — contributes zero results.
+                    None => Vec::new(),
+                },
                 Err(_) => {
-                    let _ = tx.send(Vec::new());
-                    return;
+                    ok = false;
+                    Vec::new()
                 }
-            };
-            let raw_search_url = match root.search_url {
-                Some(u) => u,
-                None => {
-                    let _ = tx.send(Vec::new());
-                    return;
-                }
-            };
-            // 2. Resolve OpenSearch description if needed, then search
-            let template = match opds::resolve_search_url_with_trusted(&raw_search_url, &trusted) {
-                Some(t) => t,
-                None => {
-                    let _ = tx.send(Vec::new());
-                    return;
-                }
-            };
-            let search_url = template.replace("{searchTerms}", &opds::url_encode(&q));
-            let results = match opds::fetch_feed_with_trusted(&search_url, &trusted) {
-                Ok(f) => f.entries,
-                Err(_) => Vec::new(),
             };
             // Tag entries with catalog source
-            let tagged: Vec<opds::OpdsEntry> = results
+            let tagged: Vec<opds::OpdsEntry> = entries
                 .into_iter()
                 .map(|mut e| {
                     if !e.summary.is_empty() {
@@ -3464,6 +3483,18 @@ pub async fn search_all_catalogs(
                     e
                 })
                 .collect();
+            // Emit live progress so the UI can tick this catalog off as soon
+            // as it finishes, rather than waiting for the whole fan-out.
+            let _ = app.emit(
+                "catalog-search-progress",
+                CatalogSearchProgress {
+                    query: q.clone(),
+                    url: url.clone(),
+                    name: cat_name.clone(),
+                    count: tagged.len(),
+                    ok,
+                },
+            );
             let _ = tx.send(tagged);
         });
         thread_count += 1;

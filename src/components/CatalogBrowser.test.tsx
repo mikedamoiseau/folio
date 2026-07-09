@@ -4,6 +4,11 @@ import "@testing-library/jest-dom/vitest";
 
 const invoke = vi.fn();
 vi.mock("@tauri-apps/api/core", () => ({ invoke: (...a: unknown[]) => invoke(...a) }));
+// Capture the `catalog-search-progress` listener so tests can drive live
+// per-catalog progress events, and hand back an unlisten stub.
+let progressHandler: ((e: { payload: unknown }) => void) | null = null;
+const listen = vi.fn();
+vi.mock("@tauri-apps/api/event", () => ({ listen: (...a: unknown[]) => listen(...a) }));
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({ t: (k: string, p?: Record<string, unknown>) => (p ? `${k}:${JSON.stringify(p)}` : k) }),
 }));
@@ -15,10 +20,18 @@ vi.mock("./OpdsPresetPicker", () => ({ default: () => null }));
 vi.mock("../lib/useFocusTrap", () => ({ useFocusTrap: () => ({ current: null }) }));
 
 import { render, screen, cleanup, fireEvent, act, waitFor } from "@testing-library/react";
+import { StrictMode } from "react";
 import CatalogBrowser from "./CatalogBrowser";
 
 beforeEach(() => {
   invoke.mockReset();
+  listen.mockReset();
+  progressHandler = null;
+  // Capture the progress listener; return an unlisten stub.
+  listen.mockImplementation((name: string, cb: (e: { payload: unknown }) => void) => {
+    if (name === "catalog-search-progress") progressHandler = cb;
+    return Promise.resolve(() => {});
+  });
   invoke.mockImplementation((cmd: string) => {
     if (cmd === "get_opds_catalogs") return Promise.resolve([]);
     return Promise.resolve(undefined);
@@ -156,5 +169,122 @@ describe("CatalogBrowser remove confirmation", () => {
     await waitFor(() =>
       expect(invoke).toHaveBeenCalledWith("remove_opds_catalog", { url: "https://example.com/opds" })
     );
+  });
+});
+
+describe("CatalogBrowser unified search live progress", () => {
+  const CATALOGS = [
+    { name: "Gutenberg", url: "https://g/opds" },
+    { name: "Feedbooks", url: "https://f/opds" },
+  ];
+
+  it("shows a per-catalog checklist and ticks each off as its progress event arrives", async () => {
+    let resolveSearch!: (v: unknown[]) => void;
+    invoke.mockImplementation((cmd: string) => {
+      if (cmd === "get_opds_catalogs") return Promise.resolve(CATALOGS);
+      // Keep the unified search pending so we can drive progress events while
+      // the checklist is on screen.
+      if (cmd === "search_all_catalogs")
+        return new Promise((res) => {
+          resolveSearch = res as (v: unknown[]) => void;
+        });
+      return Promise.resolve(undefined);
+    });
+
+    render(<CatalogBrowser onClose={() => {}} onBookImported={() => {}} />);
+    await waitFor(() => expect(screen.getByText("Gutenberg")).toBeInTheDocument());
+
+    const input = screen.getByPlaceholderText("catalog.searchAllPlaceholder");
+    await act(async () => fireEvent.change(input, { target: { value: "bible" } }));
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "common.search" })));
+
+    // Checklist header + both catalogs seeded as pending (no counts yet).
+    expect(await screen.findByText("catalog.searchingAll")).toBeInTheDocument();
+    expect(screen.getByText("Gutenberg")).toBeInTheDocument();
+    expect(screen.getByText("Feedbooks")).toBeInTheDocument();
+    expect(screen.queryByText('catalog.searchCatalogCount:{"count":14}')).not.toBeInTheDocument();
+
+    // Gutenberg finishes with 14 results.
+    await act(async () => {
+      progressHandler?.({
+        payload: { query: "bible", url: "https://g/opds", name: "Gutenberg", count: 14, ok: true },
+      });
+    });
+    expect(screen.getByText('catalog.searchCatalogCount:{"count":14}')).toBeInTheDocument();
+
+    // Feedbooks fails.
+    await act(async () => {
+      progressHandler?.({
+        payload: { query: "bible", url: "https://f/opds", name: "Feedbooks", count: 0, ok: false },
+      });
+    });
+    expect(screen.getByText("catalog.searchCatalogFailed")).toBeInTheDocument();
+
+    // Finishing the search holds the completed checklist on screen for
+    // RESULTS_REVEAL_DELAY_MS (2 s) so the last tick is readable...
+    await act(async () => resolveSearch([]));
+    expect(screen.getByText("catalog.searchingAll")).toBeInTheDocument();
+    // ...then flips to results. Allow past the 2 s hold.
+    await waitFor(() => expect(screen.getByText("common.noResults")).toBeInTheDocument(), {
+      timeout: 3000,
+    });
+    expect(screen.queryByText("catalog.searchingAll")).not.toBeInTheDocument();
+  });
+
+  it("ignores progress events from a stale (mismatched-query) search", async () => {
+    invoke.mockImplementation((cmd: string) => {
+      if (cmd === "get_opds_catalogs") return Promise.resolve(CATALOGS);
+      // Leave the search pending — we only assert the stale event is ignored.
+      if (cmd === "search_all_catalogs") return new Promise(() => {});
+      return Promise.resolve(undefined);
+    });
+
+    render(<CatalogBrowser onClose={() => {}} onBookImported={() => {}} />);
+    await waitFor(() => expect(screen.getByText("Gutenberg")).toBeInTheDocument());
+
+    const input = screen.getByPlaceholderText("catalog.searchAllPlaceholder");
+    await act(async () => fireEvent.change(input, { target: { value: "bible" } }));
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "common.search" })));
+    await screen.findByText("catalog.searchingAll");
+
+    // An event tagged with a different query must not update the checklist.
+    await act(async () => {
+      progressHandler?.({
+        payload: { query: "shakespeare", url: "https://g/opds", name: "Gutenberg", count: 99, ok: true },
+      });
+    });
+    expect(screen.queryByText('catalog.searchCatalogCount:{"count":99}')).not.toBeInTheDocument();
+  });
+
+  it("reveals results under StrictMode (mount→unmount→remount must not freeze the reveal)", async () => {
+    let resolveSearch!: (v: unknown[]) => void;
+    invoke.mockImplementation((cmd: string) => {
+      if (cmd === "get_opds_catalogs") return Promise.resolve(CATALOGS);
+      if (cmd === "search_all_catalogs")
+        return new Promise((res) => {
+          resolveSearch = res as (v: unknown[]) => void;
+        });
+      return Promise.resolve(undefined);
+    });
+
+    // StrictMode double-invokes effects; the mountedRef guard must survive it,
+    // otherwise the checklist never flips to results (regression).
+    render(
+      <StrictMode>
+        <CatalogBrowser onClose={() => {}} onBookImported={() => {}} />
+      </StrictMode>,
+    );
+    await waitFor(() => expect(screen.getByText("Gutenberg")).toBeInTheDocument());
+
+    const input = screen.getByPlaceholderText("catalog.searchAllPlaceholder");
+    await act(async () => fireEvent.change(input, { target: { value: "bible" } }));
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "common.search" })));
+    await screen.findByText("catalog.searchingAll");
+
+    await act(async () => resolveSearch([]));
+    await waitFor(() => expect(screen.getByText("common.noResults")).toBeInTheDocument(), {
+      timeout: 3000,
+    });
+    expect(screen.queryByText("catalog.searchingAll")).not.toBeInTheDocument();
   });
 });

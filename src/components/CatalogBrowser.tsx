@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { useTranslation } from "react-i18next";
 import { friendlyError } from "../lib/errors";
 import { pickSupportedOpdsLink, isValidHttpUrl, formatBytes } from "../lib/utils";
@@ -37,6 +38,29 @@ interface OpdsFeed {
   searchUrl: string | null;
 }
 
+// Live per-catalog progress emitted by the backend during a unified search.
+// Payload mirrors the `catalog-search-progress` event in commands.rs.
+interface CatalogSearchProgress {
+  query: string;
+  url: string;
+  name: string;
+  count: number;
+  ok: boolean;
+}
+
+// Per-catalog row in the unified-search checklist.
+interface SearchProgressRow {
+  url: string;
+  name: string;
+  status: "pending" | "done" | "failed";
+  count: number;
+}
+
+// How long the finished checklist lingers before the view flips to results,
+// so the last catalog's tick/count is actually readable. Only applied when a
+// checklist was shown (i.e. at least one catalog).
+const RESULTS_REVEAL_DELAY_MS = 2000;
+
 interface CatalogBrowserProps {
   onClose: () => void;
   onBookImported: (bookId: string | null) => void;
@@ -55,8 +79,24 @@ export default function CatalogBrowser({ onClose, onBookImported }: CatalogBrows
   const [catalogsLoaded, setCatalogsLoaded] = useState(false);
   const [feed, setFeed] = useState<OpdsFeed | null>(null);
   const [loading, setLoading] = useState(false);
+  // Non-null while a single-catalog search is in flight — names the catalog
+  // ("Searching {name}…") instead of the generic "Loading…". Plain browsing
+  // and pagination leave it null.
+  const [feedLoadingLabel, setFeedLoadingLabel] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const lastActionRef = useRef<(() => void) | null>(null);
+  // Guards the post-search reveal delay: don't touch state if the modal was
+  // closed during the ~2 s hold.
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    // Set on (re)mount too — under StrictMode the effect runs mount → cleanup
+    // → mount, and without re-setting true the ref would stay false and freeze
+    // the post-search reveal.
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
   const [history, setHistory] = useState<{ url: string; title: string }[]>([]);
   const [downloading, setDownloading] = useState<string | null>(null);
   const [downloadedIds, setDownloadedIds] = useState<Set<string>>(new Set());
@@ -80,6 +120,9 @@ export default function CatalogBrowser({ onClose, onBookImported }: CatalogBrows
   const [unifiedQuery, setUnifiedQuery] = useState("");
   const [unifiedResults, setUnifiedResults] = useState<OpdsEntry[] | null>(null);
   const [unifiedLoading, setUnifiedLoading] = useState(false);
+  // Live checklist of each catalog's search status. Null when no unified
+  // search is running.
+  const [searchProgress, setSearchProgress] = useState<SearchProgressRow[] | null>(null);
 
   const loadCatalogs = useCallback(async () => {
     try {
@@ -96,6 +139,7 @@ export default function CatalogBrowser({ onClose, onBookImported }: CatalogBrows
 
   const browseTo = useCallback(async (url: string, title?: string) => {
     setLoading(true);
+    setFeedLoadingLabel(null); // plain navigation → generic "Loading…"
     setError(null);
     lastActionRef.current = () => browseTo(url, title);
     try {
@@ -126,6 +170,7 @@ export default function CatalogBrowser({ onClose, onBookImported }: CatalogBrows
     const searchUrl = feed.searchUrl;
     const url = searchUrl.replace("{searchTerms}", encodeURIComponent(searchQuery.trim()));
     setLoading(true);
+    setFeedLoadingLabel(t("catalog.searchingServer", { name: feed.title || t("catalog.catalog") }));
     setError(null);
     try {
       const f = await invoke<OpdsFeed>("browse_opds", { url });
@@ -137,8 +182,9 @@ export default function CatalogBrowser({ onClose, onBookImported }: CatalogBrows
       setError(friendlyError(err, t));
     } finally {
       setLoading(false);
+      setFeedLoadingLabel(null);
     }
-  }, [feed, searchQuery]);
+  }, [feed, searchQuery, t]);
 
   const handleDownload = useCallback(async (entry: OpdsEntry) => {
     // Walk the Folio preference order (EPUB → PDF → CBZ → CBR → AZW3 → MOBI
@@ -213,18 +259,47 @@ export default function CatalogBrowser({ onClose, onBookImported }: CatalogBrows
   };
 
   const handleUnifiedSearch = useCallback(async () => {
-    if (!unifiedQuery.trim()) return;
+    const q = unifiedQuery.trim();
+    if (!q) return;
     setUnifiedLoading(true);
     setError(null);
+    // Seed the checklist from the known catalog list; the backend emits one
+    // `catalog-search-progress` event per catalog (matched by url) as it
+    // finishes. `query` on the payload guards against stale events from a
+    // previous, still-draining search.
+    setSearchProgress(catalogs.map((c) => ({ url: c.url, name: c.name, status: "pending", count: 0 })));
+    const unlisten = await listen<CatalogSearchProgress>("catalog-search-progress", (event) => {
+      if (event.payload.query !== q) return;
+      setSearchProgress((prev) =>
+        prev
+          ? prev.map((row) =>
+              row.url === event.payload.url
+                ? { ...row, status: event.payload.ok ? "done" : "failed", count: event.payload.count }
+                : row,
+            )
+          : prev,
+      );
+    });
     try {
-      const results = await invoke<OpdsEntry[]>("search_all_catalogs", { query: unifiedQuery.trim() });
+      const results = await invoke<OpdsEntry[]>("search_all_catalogs", { query: q });
+      // The last catalog's progress event and this result land almost
+      // together, so hold the finished checklist on screen briefly before
+      // flipping to results — otherwise the final tick is never seen.
+      if (catalogs.length > 0) {
+        await new Promise((resolve) => setTimeout(resolve, RESULTS_REVEAL_DELAY_MS));
+      }
+      if (!mountedRef.current) return;
       setUnifiedResults(results);
     } catch (err) {
-      setError(friendlyError(err, t));
+      if (mountedRef.current) setError(friendlyError(err, t));
     } finally {
-      setUnifiedLoading(false);
+      unlisten();
+      if (mountedRef.current) {
+        setUnifiedLoading(false);
+        setSearchProgress(null);
+      }
     }
-  }, [unifiedQuery]);
+  }, [unifiedQuery, catalogs, t]);
 
   const clearUnifiedSearch = useCallback(() => {
     setUnifiedResults(null);
@@ -311,8 +386,34 @@ export default function CatalogBrowser({ onClose, onBookImported }: CatalogBrows
                   }}
                 />
               ) : unifiedLoading ? (
-                <div className="flex items-center justify-center py-12">
-                  <p className="text-sm text-ink-muted">{t("catalog.searchingAll")}</p>
+                <div className="px-5 py-6">
+                  <p className="text-sm text-ink-muted mb-3 text-center">{t("catalog.searchingAll")}</p>
+                  <div className="space-y-1.5 max-w-xs mx-auto">
+                    {(searchProgress ?? []).map((row) => (
+                      <div key={row.url} className="flex items-center gap-2 text-sm">
+                        {row.status === "pending" ? (
+                          <div className="w-3.5 h-3.5 border-2 border-accent/30 border-t-accent rounded-full animate-spin shrink-0" />
+                        ) : row.status === "failed" ? (
+                          <svg width="14" height="14" viewBox="0 0 20 20" fill="none" className="text-red-500 shrink-0">
+                            <path d="M15 5L5 15M5 5l10 10" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                          </svg>
+                        ) : (
+                          <svg width="14" height="14" viewBox="0 0 20 20" fill="none" className="text-accent shrink-0">
+                            <path d="M4 10l4 4 8-8" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                          </svg>
+                        )}
+                        <span className="text-ink truncate flex-1">{row.name}</span>
+                        {row.status === "done" && (
+                          <span className="text-xs text-ink-muted shrink-0">
+                            {t("catalog.searchCatalogCount", { count: row.count })}
+                          </span>
+                        )}
+                        {row.status === "failed" && (
+                          <span className="text-xs text-red-500 shrink-0">{t("catalog.searchCatalogFailed")}</span>
+                        )}
+                      </div>
+                    ))}
+                  </div>
                 </div>
               ) : unifiedResults ? (
                 unifiedResults.length === 0 ? (
@@ -536,7 +637,7 @@ export default function CatalogBrowser({ onClose, onBookImported }: CatalogBrows
           <div className="flex-1 overflow-y-auto">
             {loading ? (
               <div className="flex items-center justify-center py-12">
-                <p className="text-sm text-ink-muted">{t("common.loading")}</p>
+                <p className="text-sm text-ink-muted">{feedLoadingLabel ?? t("common.loading")}</p>
               </div>
             ) : feed.entries.length === 0 ? (
               <div className="flex items-center justify-center py-12">
