@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef, useMemo } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo, useReducer } from "react";
 import { useNavigate } from "react-router-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -7,6 +7,7 @@ import { useTheme, MIN_FONT_SIZE, MAX_FONT_SIZE } from "../context/ThemeContext"
 import PageViewer from "./PageViewer";
 import ChapterErrorCard from "./ChapterErrorCard";
 import ChapterLoadProgress from "./ChapterLoadProgress";
+import ComicExtractProgress from "./ComicExtractProgress";
 import PageThumbnailStrip from "./PageThumbnailStrip";
 import KeyboardShortcutsHelp from "./KeyboardShortcutsHelp";
 import HighlightsPanel, { HIGHLIGHT_COLORS } from "./HighlightsPanel";
@@ -46,6 +47,11 @@ import {
   type NavigationEntry,
   type NavigationHistory,
 } from "../lib/navigationHistory";
+import {
+  initialComicExtractProgress,
+  comicExtractProgressReducer,
+  isComicExtractProgressVisible,
+} from "../lib/comicExtractProgress";
 
 // ---- Types matching Rust backend ----
 
@@ -260,6 +266,17 @@ export default function ReaderPane({
   // text-rendering path; PDF/CBZ/CBR go through PageViewer instead.
   const isHtmlBook = bookFormat === "epub" || bookFormat === "mobi";
   const isContinuous = scrollMode === "continuous" && isHtmlBook;
+  // Comic formats extract their pages in the background after prepare_comic
+  // returns (F-4-1); PDF has its own warm pass and doesn't stream progress.
+  const isComic = bookFormat === "cbz" || bookFormat === "cbr";
+
+  // Progressive comic-open progress bar (F-4-1). Driven by the
+  // `comic-extract-progress` event; pure state lives in ../lib.
+  const [comicProgress, dispatchComicProgress] = useReducer(
+    comicExtractProgressReducer,
+    undefined,
+    initialComicExtractProgress,
+  );
 
   // Time-to-finish state
   const [chapterWordCounts, setChapterWordCounts] = useState<number[]>([]);
@@ -349,14 +366,6 @@ export default function ReaderPane({
           setToc([]);
         }
 
-        if (bookInfo.format === "cbz" || bookInfo.format === "cbr") {
-          try {
-            await invoke("prepare_comic", { bookId });
-          } catch (e) {
-            console.warn("Cache preparation failed, falling back to direct read:", e);
-          }
-        }
-
         // Page count is only meaningful for fixed-layout (PDF) and image
         // (CBZ/CBR) formats. HTML-reflowable books (EPUB + MOBI) use scroll
         // progress instead, so skip the fetch and leave pageCount at 0.
@@ -390,9 +399,14 @@ export default function ReaderPane({
           }
         }
 
+        // Resolved resume page — passed to prepare_comic as `startPage` so a
+        // mid-book open extracts that page eagerly (alongside page 0) and
+        // paints instantly instead of waiting for the background pass.
+        let resumePage = 0;
         if (initialChapterIndex !== undefined) {
           setChapterIndex(initialChapterIndex);
           restoringScroll.current = initialChapterIndex;
+          resumePage = initialChapterIndex;
         } else {
           // Volatile in-session resume (D-5): while private, the backend
           // never wrote the DB row below for anything read after private
@@ -420,6 +434,7 @@ export default function ReaderPane({
             setChapterIndex(volatile.chapterIndex);
             savedScrollPosition.current = volatile.scrollPosition;
             restoringScroll.current = volatile.chapterIndex;
+            resumePage = volatile.chapterIndex;
           } else {
             try {
               const progress = await invoke<ReadingProgress | null>(
@@ -430,10 +445,24 @@ export default function ReaderPane({
                 setChapterIndex(progress.chapter_index);
                 savedScrollPosition.current = progress.scroll_position;
                 restoringScroll.current = progress.chapter_index;
+                resumePage = progress.chapter_index;
               }
             } catch {
               // No saved progress — start at chapter 0
             }
+          }
+        }
+
+        // Warm the comic page cache now that the resume page is known.
+        // Page 0 + `startPage` are extracted eagerly; the rest stream in the
+        // background (surfaced via the comic-extract-progress bar). Navigation
+        // to any not-yet-extracted page still works — the backend serves it
+        // on demand — so this is purely an open-latency optimization.
+        if (bookInfo.format === "cbz" || bookInfo.format === "cbr") {
+          try {
+            await invoke("prepare_comic", { bookId, startPage: resumePage });
+          } catch (e) {
+            console.warn("Cache preparation failed, falling back to direct read:", e);
           }
         }
       } catch (err) {
@@ -536,6 +565,42 @@ export default function ReaderPane({
       if (unlisten) unlisten();
     };
   }, [bookId, loading, isContinuous, chapterRetryCount]);
+
+  // ---- Listen for background comic page-extraction progress (F-4-1) ----
+  // Mirrors the `chapter-load-progress` lifecycle above: register the
+  // listener before any extraction can matter, reset the bar on book
+  // change, and unlisten on unmount/book change. The reducer scopes events
+  // to the bound book, so a stale event from a previous book is ignored.
+  useEffect(() => {
+    if (!bookId || !isComic) return;
+    let cancelled = false;
+    let unlisten: (() => void) | null = null;
+    dispatchComicProgress({ type: "reset", bookId });
+
+    async function subscribe() {
+      const fn = await listen<{ bookId: string; loaded: number; total: number }>(
+        "comic-extract-progress",
+        (event) => {
+          if (!cancelled) {
+            dispatchComicProgress({ type: "progress", ...event.payload });
+          }
+        },
+      );
+      // Torn down while listen() was registering — clean up the late
+      // listener instead of leaking it (same guard as chapter-load-progress).
+      if (cancelled) {
+        fn();
+        return;
+      }
+      unlisten = fn;
+    }
+
+    subscribe();
+    return () => {
+      cancelled = true;
+      if (unlisten) unlisten();
+    };
+  }, [bookId, isComic]);
 
   // ---- Scroll to saved chapter after all chapters load (continuous mode) ----
 
@@ -2299,7 +2364,7 @@ export default function ReaderPane({
         {/* Content area — chapter HTML (EPUB/MOBI) or page-based viewer */}
         {!isHtmlBook ? (
           pageCount > 0 ? (
-            <>
+            <div className="relative flex flex-col flex-1 min-h-0">
               <PageViewer
                 bookId={bookId!}
                 format={bookFormat}
@@ -2312,6 +2377,15 @@ export default function ReaderPane({
                 pageAnimation={pageAnimation}
                 keyboardEnabled={effectiveActive && !infoOpen}
               />
+              {/* F-4-1: non-blocking, dismissible background-extraction bar.
+                  Floats over the page viewer; never gates reading. */}
+              {isComic && isComicExtractProgressVisible(comicProgress) && (
+                <ComicExtractProgress
+                  loaded={comicProgress.loaded}
+                  total={comicProgress.total}
+                  onDismiss={() => dispatchComicProgress({ type: "dismiss" })}
+                />
+              )}
               {thumbStripOpen && (bookFormat === "cbz" || bookFormat === "cbr" || bookFormat === "pdf") && (
                 <PageThumbnailStrip
                   bookId={bookId!}
@@ -2324,7 +2398,7 @@ export default function ReaderPane({
                   }}
                 />
               )}
-            </>
+            </div>
           ) : (
             <div className="flex-1 flex items-center justify-center">
               <p className="text-sm text-ink-muted">{t("reader.loadingPages")}</p>

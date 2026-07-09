@@ -182,6 +182,7 @@
     "removeFromLibrary": "Remove from library",
     "preparingPages": "Preparing pages...",
     "preparingPagesDetail": "Extracting pages for faster reading",
+    "preparingPagesProgress": "Preparing pages {{loaded}} / {{total}}",
     "thumbnailStripLabel": "Page thumbnails",
     "thumbnailGoTo": "Go to page {{number}}",
     "thumbnailRetry": "Retry loading page {{number}}",
