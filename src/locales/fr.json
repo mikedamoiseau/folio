@@ -182,6 +182,7 @@
     "preparingPages": "Pr\u00e9paration des pages...",
     "preparingPagesDetail": "Extraction des pages pour une lecture plus rapide",
     "preparingPagesProgress": "Pr\u00e9paration des pages {{loaded}} / {{total}}",
+    "cachingPagesProgress": "Mise en cache des pages {{loaded}} / {{total}}",
     "thumbnailStripLabel": "Vignettes de pages",
     "thumbnailGoTo": "Aller \u00e0 la page {{number}}",
     "thumbnailRetry": "R\u00e9essayer le chargement de la page {{number}}",

@@ -14,6 +14,7 @@ describe("initialComicExtractProgress", () => {
     expect(s.loaded).toBe(0);
     expect(s.total).toBe(0);
     expect(s.dismissed).toBe(false);
+    expect(s.settled).toBe(false);
     expect(isComicExtractProgressVisible(s)).toBe(false);
   });
 });
@@ -27,6 +28,15 @@ describe("reducer: reset", () => {
     expect(s.loaded).toBe(0);
     expect(s.total).toBe(0);
     expect(s.dismissed).toBe(false);
+    expect(s.settled).toBe(false);
+  });
+
+  it("clears a prior settle when re-binding to a book", () => {
+    let s = initialComicExtractProgress();
+    s = comicExtractProgressReducer(s, { type: "reset", bookId: "book-a" });
+    s = comicExtractProgressReducer(s, { type: "settle" });
+    s = comicExtractProgressReducer(s, { type: "reset", bookId: "book-b" });
+    expect(s.settled).toBe(false);
   });
 
   it("clears prior counts when switching books", () => {
@@ -159,6 +169,65 @@ describe("visibility lifecycle", () => {
     const s = run([
       { type: "reset", bookId: "b" },
       { type: "dismiss" },
+      { type: "reset", bookId: "c" },
+      { type: "progress", bookId: "c", loaded: 1, total: 50 },
+    ]);
+    expect(isComicExtractProgressVisible(s)).toBe(true);
+  });
+});
+
+// The PDF background prerender (F-4-5) fires a guaranteed terminal event at
+// pass end. When the whole-cache size bound stopped the pass early that event
+// carries honest PARTIAL coverage (`loaded < total`) — which the `loaded <
+// total` visibility rule would otherwise leave stuck on screen. `settle`
+// forces the shared bar hidden for that (and the private-mode no-event) case.
+describe("reducer: settle (PDF partial-coverage terminal)", () => {
+  const run = (
+    steps: Parameters<typeof comicExtractProgressReducer>[1][],
+  ): ComicExtractProgressState =>
+    steps.reduce(comicExtractProgressReducer, initialComicExtractProgress());
+
+  it("hides the bar at partial coverage (loaded < total)", () => {
+    const s = run([
+      { type: "reset", bookId: "b" },
+      { type: "progress", bookId: "b", loaded: 1950, total: 2000 },
+      { type: "settle" },
+    ]);
+    expect(s.settled).toBe(true);
+    // counts preserved — the settle only affects visibility
+    expect(s.loaded).toBe(1950);
+    expect(s.total).toBe(2000);
+    expect(isComicExtractProgressVisible(s)).toBe(false);
+  });
+
+  it("self-heals: a later progress event re-shows the bar (premature settle)", () => {
+    // If the idle timer settles mid-pass (e.g. a slow PDF whose throttled
+    // events fell >idle-window apart), the next live event must re-show the
+    // bar — the pass was not actually over. Contrast with `dismiss`, which
+    // stays hidden across further progress (asserted in the lifecycle suite).
+    const s = run([
+      { type: "reset", bookId: "b" },
+      { type: "progress", bookId: "b", loaded: 500, total: 2000 },
+      { type: "settle" },
+      { type: "progress", bookId: "b", loaded: 520, total: 2000 },
+    ]);
+    expect(s.settled).toBe(false);
+    expect(isComicExtractProgressVisible(s)).toBe(true);
+  });
+
+  it("is a harmless no-op after a full-coverage completion", () => {
+    const s = run([
+      { type: "reset", bookId: "b" },
+      { type: "progress", bookId: "b", loaded: 2000, total: 2000 },
+      { type: "settle" },
+    ]);
+    expect(isComicExtractProgressVisible(s)).toBe(false);
+  });
+
+  it("re-shows for a new book after a prior settle", () => {
+    const s = run([
+      { type: "reset", bookId: "b" },
+      { type: "settle" },
       { type: "reset", bookId: "c" },
       { type: "progress", bookId: "c", loaded: 1, total: 50 },
     ]);

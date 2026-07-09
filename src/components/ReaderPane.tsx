@@ -83,6 +83,13 @@ interface ReadingProgress {
 // milestone. Today the Reader screen mounts exactly one ReaderPane, so
 // behavior is identical to before the extraction.
 
+// Idle window after the last `pdf-prerender-progress` event before the shared
+// bar is `settle`d hidden (F-4-5). Comfortably larger than the gap between the
+// backend's ~1%-throttled events so it fires only after the pass truly ends
+// (incl. an honest partial-coverage terminal that settles below 100%); a rare
+// false mid-pass settle is benign (see the PDF prerender listener effect).
+const PDF_PRERENDER_SETTLE_MS = 4000;
+
 interface ReaderPaneProps {
   bookId: string;
   onOpenSettings: () => void;
@@ -267,11 +274,15 @@ export default function ReaderPane({
   const isHtmlBook = bookFormat === "epub" || bookFormat === "mobi";
   const isContinuous = scrollMode === "continuous" && isHtmlBook;
   // Comic formats extract their pages in the background after prepare_comic
-  // returns (F-4-1); PDF has its own warm pass and doesn't stream progress.
+  // returns (F-4-1); PDF runs a background prerender pass after prepare_pdf
+  // returns (F-4-5). Both stream throttled progress and share the bar below.
   const isComic = bookFormat === "cbz" || bookFormat === "cbr";
+  const isPdf = bookFormat === "pdf";
 
-  // Progressive comic-open progress bar (F-4-1). Driven by the
-  // `comic-extract-progress` event; pure state lives in ../lib.
+  // Background page-prerender progress bar. Driven by `comic-extract-progress`
+  // (F-4-1) for comics and `pdf-prerender-progress` (F-4-5) for PDFs — a book
+  // is exactly one format, so a single shared reducer/component instance backs
+  // both. Pure state lives in ../lib.
   const [comicProgress, dispatchComicProgress] = useReducer(
     comicExtractProgressReducer,
     undefined,
@@ -601,6 +612,65 @@ export default function ReaderPane({
       if (unlisten) unlisten();
     };
   }, [bookId, isComic]);
+
+  // ---- Listen for background PDF prerender progress (F-4-5) ----
+  // Reuses the shared comic-progress reducer/bar (approach b): `prepare_pdf`
+  // (invoked in the init effect) kicks off a background pass that emits
+  // throttled `pdf-prerender-progress` events, then a guaranteed terminal
+  // event at pass end. That terminal event carries only {loaded,total} — no
+  // "done" flag — and on honest PARTIAL coverage settles below 100% (the size
+  // bound stopped the pass early). Since the bar's `loaded < total` visibility
+  // rule can't tell a partial terminal from a mid-pass step, an idle timer
+  // dispatches `settle` once events stop, hiding the bar. A false mid-pass
+  // settle self-heals: the next progress event clears `settled` and re-shows
+  // the bar (the genuine terminal event is the last, so its settle stays).
+  // Private mode emits no events, so the timer is never armed and the bar
+  // simply never shows (no hang).
+  useEffect(() => {
+    if (!bookId || !isPdf) return;
+    let cancelled = false;
+    let unlisten: (() => void) | null = null;
+    let settleTimer: ReturnType<typeof setTimeout> | null = null;
+    dispatchComicProgress({ type: "reset", bookId });
+
+    const armSettle = () => {
+      if (settleTimer) clearTimeout(settleTimer);
+      settleTimer = setTimeout(() => {
+        if (!cancelled) dispatchComicProgress({ type: "settle" });
+      }, PDF_PRERENDER_SETTLE_MS);
+    };
+
+    async function subscribe() {
+      const fn = await listen<{ bookId: string; loaded: number; total: number }>(
+        "pdf-prerender-progress",
+        (event) => {
+          // Scope to THIS pane's book before arming the settle timer: a stale
+          // pass from a just-closed book (or the other pane's book in split
+          // mode) still emits globally, and while the reducer ignores its
+          // counts, an unguarded `armSettle()` could settle/hide this book's
+          // live bar. Mirrors the `chapter-load-progress` bookId filter.
+          if (!cancelled && event.payload.bookId === bookId) {
+            dispatchComicProgress({ type: "progress", ...event.payload });
+            armSettle();
+          }
+        },
+      );
+      // Torn down while listen() was registering — clean up the late listener
+      // instead of leaking it (same guard as comic-extract-progress).
+      if (cancelled) {
+        fn();
+        return;
+      }
+      unlisten = fn;
+    }
+
+    subscribe();
+    return () => {
+      cancelled = true;
+      if (settleTimer) clearTimeout(settleTimer);
+      if (unlisten) unlisten();
+    };
+  }, [bookId, isPdf]);
 
   // ---- Scroll to saved chapter after all chapters load (continuous mode) ----
 
@@ -2377,12 +2447,15 @@ export default function ReaderPane({
                 pageAnimation={pageAnimation}
                 keyboardEnabled={effectiveActive && !infoOpen}
               />
-              {/* F-4-1: non-blocking, dismissible background-extraction bar.
-                  Floats over the page viewer; never gates reading. */}
-              {isComic && isComicExtractProgressVisible(comicProgress) && (
+              {/* Non-blocking, dismissible background page-prerender bar.
+                  Floats over the page viewer; never gates reading. Shared by
+                  comic extraction (F-4-1) and PDF prerender (F-4-5) — same bar,
+                  format-appropriate label. */}
+              {(isComic || isPdf) && isComicExtractProgressVisible(comicProgress) && (
                 <ComicExtractProgress
                   loaded={comicProgress.loaded}
                   total={comicProgress.total}
+                  labelKey={isPdf ? "reader.cachingPagesProgress" : undefined}
                   onDismiss={() => dispatchComicProgress({ type: "dismiss" })}
                 />
               )}
