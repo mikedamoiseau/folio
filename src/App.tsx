@@ -109,9 +109,10 @@ function AppShell() {
 
   // Vocabulary nav button visibility (F-1-5): shown when the setting is on
   // OR the list is non-empty — so words saved before the user disables the
-  // toggle stay reachable. Re-checked on mount and whenever the Settings or
-  // Vocabulary overlay closes, since those are the only ways the toggle or
-  // the list's emptiness can change while this component stays mounted.
+  // toggle stay reachable. Re-checked on mount, whenever the Settings or
+  // Vocabulary overlay closes, and on profile-identity changes (`profileKey`
+  // bumps on switch, `lockedProfile` clears on unlock) — otherwise the
+  // button can reflect a previous or still-locked profile's state.
   const loadVocabState = useCallback(async () => {
     try {
       const [enabledVal, words] = await Promise.all([
@@ -126,7 +127,7 @@ function AppShell() {
 
   useEffect(() => {
     loadVocabState();
-  }, [settingsOpen, vocabularyOpen, loadVocabState]);
+  }, [settingsOpen, vocabularyOpen, profileKey, lockedProfile, loadVocabState]);
 
   // Soft-lock startup gate (A-M3): don't render the library — or even the
   // brief unstyled flash of it — until we know whether the active profile

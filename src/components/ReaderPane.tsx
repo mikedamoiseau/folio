@@ -27,7 +27,7 @@ import { getVolatilePosition, setVolatilePosition } from "../lib/volatileResume"
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { friendlyError, isBookFileMissing, toFolioError } from "../lib/errors";
 import { extractLookupWord, groupSensesByPos, POS_LABEL_KEYS, type DictionaryEntry, type DictionaryStatus } from "../lib/dictionary";
-import { extractContextSentence, formatDefinitionSnapshot } from "../lib/vocabulary";
+import { extractContextSentence, formatDefinitionSnapshot, primarySense } from "../lib/vocabulary";
 import { useToast } from "./Toast";
 import { resolveBookmarkScrollTop, isExternalUrl } from "../lib/utils";
 import {
@@ -1157,7 +1157,7 @@ export default function ReaderPane({
           invoke("log_vocabulary_word", {
             word,
             lemma: entry.matchedWord,
-            pos: entry.senses[0]?.pos ?? null,
+            pos: primarySense(entry)?.pos ?? null,
             definition: formatDefinitionSnapshot(entry),
             bookId,
             bookTitle: bookTitle || null,

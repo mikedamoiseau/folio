@@ -12,7 +12,7 @@
 //   - `boxIntervalDays` / `vocabularyPosLabelKey` — small display helpers for
 //     the Vocabulary screen.
 
-import { POS_LABEL_KEYS, type DictionaryEntry } from "./dictionary";
+import { groupSensesByPos, POS_LABEL_KEYS, type DictionaryEntry, type DictionarySense } from "./dictionary";
 
 /**
  * A saved vocabulary row, as returned by `list_vocabulary` / `get_due_vocabulary`
@@ -132,14 +132,27 @@ export function extractContextSentence(
 }
 
 /**
- * Render a `DictionaryEntry`'s primary sense (the first entry in `senses`,
- * mirroring the reader's definition card) into the single string stored as
+ * The sense the reader's definition card shows first: the first sense of
+ * `groupSensesByPos(entry.senses)`'s first (POS-ordered) group. This can
+ * differ from raw `entry.senses[0]` when that sense's POS isn't first in
+ * the card's fixed n/v/a/r display order — callers that need to mirror what
+ * the user actually sees as the "primary" sense (the vocabulary snapshot,
+ * its logged `pos`) should derive it from here rather than indexing
+ * `entry.senses` directly.
+ */
+export function primarySense(entry: DictionaryEntry): DictionarySense | undefined {
+  return groupSensesByPos(entry.senses)[0]?.senses[0];
+}
+
+/**
+ * Render a `DictionaryEntry`'s primary sense (see `primarySense`, which
+ * mirrors the reader's definition card) into the single string stored as
  * the vocabulary row's `definition` snapshot: the gloss, plus up to a small
  * number of synonyms. Self-contained — no live re-lookup is needed to
  * review a saved word later.
  */
 export function formatDefinitionSnapshot(entry: DictionaryEntry): string {
-  const primary = entry.senses[0];
+  const primary = primarySense(entry);
   if (!primary) return "";
   if (primary.synonyms.length === 0) return primary.gloss;
   const synonyms = primary.synonyms.slice(0, MAX_SNAPSHOT_SYNONYMS).join(", ");

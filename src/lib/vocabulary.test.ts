@@ -136,6 +136,22 @@ describe("formatDefinitionSnapshot", () => {
     const entry: DictionaryEntry = { word: "x", matchedWord: "x", senses: [] };
     expect(formatDefinitionSnapshot(entry)).toBe("");
   });
+
+  it("uses the grouped-primary sense (fixed n/v/a/r order), not raw senses[0], when they differ", () => {
+    // senses[0] is a "v" sense, but groupSensesByPos orders "n" before "v" —
+    // so the card (and the snapshot) should show the noun sense first.
+    const entry: DictionaryEntry = {
+      word: "cat",
+      matchedWord: "cat",
+      senses: [
+        { pos: "v", senseNum: 1, gloss: "to cat around", examples: [], synonyms: [] },
+        { pos: "n", senseNum: 1, gloss: "feline mammal", examples: [], synonyms: ["feline"] },
+      ],
+    };
+    const result = formatDefinitionSnapshot(entry);
+    expect(result).toContain("feline mammal");
+    expect(result).not.toContain("to cat around");
+  });
 });
 
 describe("boxIntervalDays", () => {

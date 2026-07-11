@@ -71,6 +71,7 @@ export default function VocabularyPanel({ onClose }: VocabularyPanelProps) {
   const [reviewQueue, setReviewQueue] = useState<VocabularyWord[]>([]);
   const [reviewTotal, setReviewTotal] = useState(0);
   const [flipped, setFlipped] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
 
   const startReview = () => {
     setReviewQueue(dueWords);
@@ -87,7 +88,8 @@ export default function VocabularyPanel({ onClose }: VocabularyPanelProps) {
   const currentCard = reviewQueue[0] ?? null;
 
   const handleAnswer = async (correct: boolean) => {
-    if (!currentCard) return;
+    if (!currentCard || submitting) return;
+    setSubmitting(true);
     try {
       await invoke("record_vocabulary_review", { id: currentCard.id, correct });
     } catch {
@@ -95,6 +97,7 @@ export default function VocabularyPanel({ onClose }: VocabularyPanelProps) {
     }
     setReviewQueue((q) => q.slice(1));
     setFlipped(false);
+    setSubmitting(false);
     loadWords(); // keep seenCount/box in sync for when the user returns to the list
   };
 
@@ -133,6 +136,7 @@ export default function VocabularyPanel({ onClose }: VocabularyPanelProps) {
               progressCurrent={progressCurrent}
               reviewTotal={reviewTotal}
               flipped={flipped}
+              submitting={submitting}
               onFlip={() => setFlipped(true)}
               onAnswer={handleAnswer}
               onBackToList={backToList}
@@ -232,6 +236,7 @@ interface ReviewViewProps {
   progressCurrent: number;
   reviewTotal: number;
   flipped: boolean;
+  submitting: boolean;
   onFlip: () => void;
   onAnswer: (correct: boolean) => void;
   onBackToList: () => void;
@@ -242,6 +247,7 @@ function ReviewView({
   progressCurrent,
   reviewTotal,
   flipped,
+  submitting,
   onFlip,
   onAnswer,
   onBackToList,
@@ -298,14 +304,16 @@ function ReviewView({
         <div className="flex gap-3 justify-center">
           <button
             onClick={() => onAnswer(false)}
-            className="flex flex-col items-center px-4 py-2 text-sm font-medium bg-warm-subtle text-ink rounded-lg hover:bg-warm-border transition-colors"
+            disabled={submitting}
+            className="flex flex-col items-center px-4 py-2 text-sm font-medium bg-warm-subtle text-ink rounded-lg hover:bg-warm-border transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
           >
             {t("vocabulary.missed")}
             <span className="text-[10px] text-ink-muted font-normal">{t("vocabulary.nextInDays", { count: missedInDays })}</span>
           </button>
           <button
             onClick={() => onAnswer(true)}
-            className="flex flex-col items-center px-4 py-2 text-sm font-medium bg-accent text-white rounded-lg hover:bg-accent-hover transition-colors"
+            disabled={submitting}
+            className="flex flex-col items-center px-4 py-2 text-sm font-medium bg-accent text-white rounded-lg hover:bg-accent-hover transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
           >
             {t("vocabulary.gotIt")}
             <span className="text-[10px] text-white/80 font-normal">{t("vocabulary.nextInDays", { count: correctInDays })}</span>
