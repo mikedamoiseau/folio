@@ -16,6 +16,17 @@ This project adheres to [Semantic Versioning](https://semver.org/).
   resolve to their base word (e.g. selecting "running" defines "run"). This is
   the offline v1; an online fallback and user-loaded dictionaries remain on the
   roadmap.
+- **Build a vocabulary list from the words you look up.** Opt in from
+  **Settings → Dictionary** ("Build my vocabulary list", off by default) and
+  every word you Define is saved to a personal, per-profile list — with its
+  definition, the book it came from, and the sentence you found it in. A new
+  **Vocabulary** screen lists your saved words and offers a lightweight
+  flashcard review: words come up when they're due, and marking "Got it" or
+  "Missed" schedules the next review using spaced-repetition boxes. Delete
+  words individually or clear the whole list. Everything stays on your device;
+  the saved words keep their definitions even if you later delete the
+  dictionary or the source book. Turning the setting off stops saving but keeps
+  what you've collected.
 
 ### Changed
 - **Comics open instantly, even large ones.** Opening a CBZ/CBR now paints the

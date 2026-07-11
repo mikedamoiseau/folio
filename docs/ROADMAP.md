@@ -648,11 +648,17 @@ Lower priority features — high effort, niche audience, or dependent on other w
   Dictionary API) and user-loaded StarDict dictionaries. Web reader has no
   selection popup, so it has no Define action (no parity gap).
 
-### 42. Vocabulary Builder
-- Log every word looked up via the dictionary into a personal word list
-- Record the word, definition, and source sentence/book
-- Review screen with flashcard-style quizzing
-- *Depends on: Dictionary (#41)*
+### 42. Vocabulary Builder — **Done (2026-07-11)**
+- Opt-in ("Build my vocabulary list", off by default); every word Defined is
+  logged to a personal, per-profile word list — **done**
+- Record the word, its definition snapshot, the source book, and the sentence
+  it was found in — definitions and source survive deleting the dictionary or
+  the book — **done**
+- Vocabulary screen with per-word delete + clear-all, and a lightweight
+  Leitner-box (5 boxes) flashcard review that schedules words by due date —
+  **done**
+- Disabling the setting stops logging but keeps saved words — **done**
+- *Depends on: Dictionary (#41)* — satisfied
 
 ### 43. Text-to-Speech
 - Read current chapter aloud using system TTS

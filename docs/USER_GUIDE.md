@@ -335,6 +335,32 @@ the Define button doesn't appear.
 > fallback and custom dictionaries may come later). The Define action is
 > available in the desktop reader only.
 
+### Vocabulary builder
+
+Turn the words you look up into a study list. This is off by default and builds
+on the dictionary above.
+
+**Enable it once:** in **Settings → Dictionary**, turn on **Build my vocabulary
+list**. From then on, every word you **Define** in the reader is saved to a
+personal list for the current profile — along with its definition, the book you
+were reading, and the sentence the word appeared in. Nothing is saved until you
+turn this on, and past lookups aren't backfilled.
+
+**Your list:** open the **Vocabulary** screen from the top navigation (it
+appears once the feature is on, or whenever you have saved words). Each entry
+shows the word, its definition, the sentence and book it came from, and how many
+times you've looked it up. You can delete a word, or clear the whole list.
+
+**Review with flashcards:** click **Review** to quiz yourself on the words that
+are due. Each card shows the word first; reveal the definition, then mark
+**Got it** or **Missed**. Getting a word right moves it up a box so it comes back
+less often; missing it sends it back to daily review (a five-box
+spaced-repetition schedule of roughly 1, 3, 7, 14, and 30 days).
+
+> Notes: saved words keep their definitions even if you later delete the
+> dictionary or the source book. Turning the setting back off stops saving new
+> words but keeps everything you've already collected.
+
 ### Returning to the library
 
 Click the back arrow in the top-left corner or press `Escape`. Your progress is saved when you exit, unless "Don't track this session" is on.
