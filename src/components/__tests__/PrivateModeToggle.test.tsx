@@ -47,10 +47,13 @@ describe("PrivateModeToggle", () => {
   it("opens an info popover enumerating what pauses and what still saves", async () => {
     invoke.mockResolvedValue(false);
     render(<PrivateModeToggle />);
-    await waitFor(() => expect(invoke).toHaveBeenCalledWith("get_private_mode"));
+    const button = screen.getByRole("button", { name: "privateMode.buttonLabel" });
+    // Wait for the initial get_private_mode read to settle: until it does,
+    // `loading` keeps the button disabled and the click below is a no-op.
+    await waitFor(() => expect(button).toBeEnabled());
 
     await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: "privateMode.buttonLabel" }));
+      fireEvent.click(button);
     });
 
     const dialog = screen.getByRole("dialog", { name: "privateMode.title" });
@@ -68,10 +71,13 @@ describe("PrivateModeToggle", () => {
   it("the popover's switch calls set_private_mode to turn tracking off", async () => {
     invoke.mockResolvedValue(false);
     render(<PrivateModeToggle />);
-    await waitFor(() => expect(invoke).toHaveBeenCalledWith("get_private_mode"));
+    const button = screen.getByRole("button", { name: "privateMode.buttonLabel" });
+    // Wait for the initial get_private_mode read to settle: until it does,
+    // `loading` keeps the button disabled and the click below is a no-op.
+    await waitFor(() => expect(button).toBeEnabled());
 
     await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: "privateMode.buttonLabel" }));
+      fireEvent.click(button);
     });
 
     invoke.mockResolvedValue(true);
