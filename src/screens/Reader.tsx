@@ -37,20 +37,34 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
   const incomingChapter = locState?.chapterIndex ?? undefined;
   const incomingOffset = locState?.offset ?? null;
   const autoFocus = locState?.autoFocus ?? false;
-  const consumedForBook = useRef<string | null>(null);
+  // Tracks the `location.key` of the last-consumed navigation (rather than
+  // `bookId`) so a jump to a book that's *already open* — same pathname, no
+  // remount, `bookId` unchanged — still gets applied. Each `navigate()` call
+  // (including the state-clearing one below) mints a fresh `location.key`,
+  // so this correctly fires once per distinct navigation regardless of
+  // whether the target book changed.
+  const lastConsumedKey = useRef<string | null>(null);
+  const isFreshJump = incomingChapter !== undefined && lastConsumedKey.current !== location.key;
 
   useEffect(() => {
-    if (incomingChapter !== undefined && consumedForBook.current !== bookId) {
-      consumedForBook.current = bookId ?? null;
+    if (isFreshJump) {
+      lastConsumedKey.current = location.key;
       navigate(location.pathname, { replace: true, state: {} });
     }
-  }, [incomingChapter, bookId, navigate, location.pathname]);
+  }, [isFreshJump, location.key, navigate, location.pathname]);
 
-  const initialChapterIndex = consumedForBook.current !== bookId ? incomingChapter : undefined;
-  // Same first-navigation gate as initialChapterIndex — only fed to
-  // ReaderPane on the render where the navigation state is still live, so
-  // it's consumed once and doesn't re-fire on subsequent renders.
-  const initialScrollOffset = consumedForBook.current !== bookId ? incomingOffset : undefined;
+  const initialChapterIndex = isFreshJump ? incomingChapter : undefined;
+  // Same freshness gate as initialChapterIndex — only fed to ReaderPane on
+  // the render where the navigation state is still live, so it's consumed
+  // once and doesn't re-fire on subsequent renders.
+  const initialScrollOffset = isFreshJump ? incomingOffset : undefined;
+  // Identity of this jump for ReaderPane, which stays mounted across
+  // same-book jumps: `location.key` on the render that consumes a fresh
+  // jump, held stable otherwise so ReaderPane's jump effect doesn't re-fire
+  // on ordinary re-renders (e.g. the state-clearing navigate above, or any
+  // unrelated re-render — `lastConsumedKey.current` only changes when a new
+  // jump is consumed).
+  const jumpToken = isFreshJump ? location.key : (lastConsumedKey.current ?? undefined);
 
   const [splitMode, setSplitMode] = useState(() => {
     if (!bookId) return false;
@@ -139,6 +153,7 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
         onToggleSplit={toggleSplit}
         initialChapterIndex={initialChapterIndex}
         initialScrollOffset={initialScrollOffset}
+        jumpToken={jumpToken}
         autoFocus={autoFocus}
       />
     );
@@ -161,6 +176,7 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
             onSwapPanes={!sameBook ? swapPanes : undefined}
             initialChapterIndex={initialChapterIndex}
             initialScrollOffset={initialScrollOffset}
+            jumpToken={jumpToken}
           />
         </div>
         <div className="flex-1 min-w-0">

@@ -241,6 +241,10 @@ function WordRow({ word, onDelete, onJump }: { word: VocabularyWord; onDelete: (
       onKeyDown={
         jumpable
           ? (e) => {
+              // Ignore keydowns that bubbled up from the nested delete
+              // button (e.g. Enter/Space while it's focused) — those
+              // should only delete, not also jump.
+              if (e.target !== e.currentTarget) return;
               if (e.key === "Enter" || e.key === " ") {
                 e.preventDefault();
                 onJump?.();

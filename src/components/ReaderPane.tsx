@@ -152,6 +152,15 @@ interface ReaderPaneProps {
    * no flash).
    */
   initialScrollOffset?: number | null;
+  /**
+   * Identity of the current jump request (F-1-5 vocabulary "jump to
+   * source"). Reader.tsx keeps this pane mounted across same-book
+   * navigations, so `bookId` alone can't signal "a new jump arrived while
+   * already reading this book" — `jumpToken` changes on every distinct
+   * navigation (Reader.tsx derives it from `location.key`) even when
+   * `initialChapterIndex`/`initialScrollOffset` repeat a previous value.
+   */
+  jumpToken?: string;
   autoFocus?: boolean;
 }
 
@@ -170,6 +179,7 @@ export default function ReaderPane({
   onCloseThisPane,
   initialChapterIndex,
   initialScrollOffset,
+  jumpToken,
   autoFocus = false,
 }: ReaderPaneProps) {
   const effectiveActive = isActive ?? isPrimary;
@@ -338,6 +348,25 @@ export default function ReaderPane({
   // and consumed by the same scroll-restore effects that handle
   // `savedScrollPosition`, below.
   const pendingScrollOffset = useRef<number | null>(null);
+  // Bumped by `applyJumpTarget` below so the scroll-restore effects re-run
+  // even when neither `chapterIndex` nor `chapterHtml` actually changes
+  // (e.g. a same-book jump that targets the chapter already being viewed —
+  // those effects otherwise only fire off of state/prop changes, not ref
+  // writes).
+  const [jumpNonce, setJumpNonce] = useState(0);
+  // Shared by the mount-time init effect and the same-book jump effect
+  // further down (F-1-5 vocabulary "jump to source"): switches to
+  // `targetChapter` and arranges for the scroll-restore effects to land at
+  // chapter-local plain-text `offset` once that chapter's content is
+  // rendered. `offset === null` degrades to chapter-only (no scroll, no
+  // flash) — same as an ordinary chapter switch.
+  const applyJumpTarget = useCallback((targetChapter: number, offset: number | null) => {
+    setChapterIndex(targetChapter);
+    restoringScroll.current = targetChapter;
+    savedScrollPosition.current = null;
+    pendingScrollOffset.current = offset;
+    setJumpNonce((n) => n + 1);
+  }, []);
   // Source capture for search jumps — committed to history once the
   // destination scroll is resolved (either synchronously for same-chapter or
   // after the chapter renders for cross-chapter paginated search).
@@ -442,12 +471,8 @@ export default function ReaderPane({
         // paints instantly instead of waiting for the background pass.
         let resumePage = 0;
         if (initialChapterIndex !== undefined) {
-          setChapterIndex(initialChapterIndex);
-          restoringScroll.current = initialChapterIndex;
+          applyJumpTarget(initialChapterIndex, typeof initialScrollOffset === "number" ? initialScrollOffset : null);
           resumePage = initialChapterIndex;
-          if (typeof initialScrollOffset === "number") {
-            pendingScrollOffset.current = initialScrollOffset;
-          }
         } else {
           // Volatile in-session resume (D-5): while private, the backend
           // never wrote the DB row below for anything read after private
@@ -525,6 +550,23 @@ export default function ReaderPane({
       cancelled = true;
     };
   }, [bookId]);
+
+  // ---- Apply a same-book jump while already mounted (F-1-5) ----
+  // The mount-time init effect above only consumes `initialChapterIndex`/
+  // `initialScrollOffset` once, on `bookId` change. Reader.tsx keeps this
+  // pane mounted across a jump to a book that's already open (no `bookId`
+  // change, no remount), so a second jump needs its own trigger: `jumpToken`
+  // changes on every distinct navigation (see its prop doc), even when the
+  // target chapter/offset repeats a previous value. Skips on the initial
+  // mount — the ref starts equal to the first-seen `jumpToken`, so the
+  // mount effect's own application above isn't duplicated here.
+  const appliedJumpToken = useRef(jumpToken);
+  useEffect(() => {
+    if (jumpToken === undefined || jumpToken === appliedJumpToken.current) return;
+    appliedJumpToken.current = jumpToken;
+    if (initialChapterIndex === undefined) return; // navigation carried no jump target
+    applyJumpTarget(initialChapterIndex, typeof initialScrollOffset === "number" ? initialScrollOffset : null);
+  }, [jumpToken, initialChapterIndex, initialScrollOffset, applyJumpTarget]);
 
   // ---- Seed navigation history with the initial chapter ----
   // Fires once after the initial load so the user's starting position is the
@@ -742,9 +784,11 @@ export default function ReaderPane({
         restoringScroll.current = null;
       });
     });
-  }, [allChaptersLoaded, isContinuous]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [allChaptersLoaded, isContinuous, jumpNonce]); // eslint-disable-line react-hooks/exhaustive-deps
   // Note: chapterIndex intentionally excluded — including it would re-fire
   // the restore effect when chapterIndex changes from scroll tracking.
+  // jumpNonce included so a same-book jump (F-1-5) that targets the chapter
+  // already being viewed still re-applies the new pendingScrollOffset.
 
   // ---- Track visible chapter in continuous scroll mode ----
 
@@ -928,7 +972,9 @@ export default function ReaderPane({
       savedScrollPosition.current = null;
       pendingScrollOffset.current = null;
     }
-  }, [chapterHtml, bookId, chapterIndex]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [chapterHtml, bookId, chapterIndex, jumpNonce]); // eslint-disable-line react-hooks/exhaustive-deps
+  // jumpNonce included so a same-book jump (F-1-5) that targets the chapter
+  // already being viewed still re-applies the new pendingScrollOffset.
 
   // ---- Scroll to search match after chapter loads ----
   useEffect(() => {
@@ -1241,6 +1287,8 @@ export default function ReaderPane({
             bookTitle: bookTitle || null,
             chapterIndex,
             contextSentence,
+            startOffset,
+            endOffset,
           }).catch((e) => console.error("vocab log failed", e));
         }
       } catch (e) {

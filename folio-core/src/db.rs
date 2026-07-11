@@ -340,6 +340,12 @@ fn run_schema(conn: &Connection) -> Result<()> {
     // `last_read_at`, which re-opening a book bumps into the current year.
     let _ = conn.execute_batch("ALTER TABLE reading_progress ADD COLUMN finished_at INTEGER;");
 
+    // F-1-5: vocabulary jump — offset columns for DBs whose `vocabulary`
+    // table predates them (CREATE TABLE IF NOT EXISTS above only covers
+    // fresh installs).
+    let _ = conn.execute_batch("ALTER TABLE vocabulary ADD COLUMN start_offset INTEGER;");
+    let _ = conn.execute_batch("ALTER TABLE vocabulary ADD COLUMN end_offset INTEGER;");
+
     // Backfill: set updated_at = added_at or created_at for existing rows
     let _ = conn.execute_batch("UPDATE books SET updated_at = added_at WHERE updated_at = 0;");
     let _ =
@@ -5667,6 +5673,47 @@ mod tests {
             last_seen_at: 1_700_000_000,
             created_at: 1_700_000_000,
         }
+    }
+
+    // F-1-5 fix: a `vocabulary` table created before start_offset/end_offset
+    // existed must gain them via the additive-ALTER block in run_schema,
+    // not just CREATE TABLE IF NOT EXISTS (a no-op once the table exists).
+    #[test]
+    fn run_schema_adds_offset_columns_to_pre_existing_vocabulary_table() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("test.db");
+        let conn = Connection::open(&db_path).unwrap();
+
+        // Simulate a pre-F-1-5 database: `vocabulary` exists without the
+        // offset columns.
+        conn.execute_batch(
+            "CREATE TABLE vocabulary (
+                id             TEXT PRIMARY KEY,
+                lemma          TEXT NOT NULL UNIQUE,
+                word           TEXT NOT NULL,
+                pos            TEXT,
+                definition     TEXT NOT NULL,
+                book_id        TEXT,
+                book_title     TEXT,
+                chapter_index  INTEGER,
+                context_sentence TEXT,
+                seen_count     INTEGER NOT NULL DEFAULT 1,
+                box            INTEGER NOT NULL DEFAULT 1,
+                last_reviewed_at INTEGER,
+                next_due_at    INTEGER,
+                last_seen_at   INTEGER NOT NULL,
+                created_at     INTEGER NOT NULL
+            );",
+        )
+        .unwrap();
+
+        run_schema(&conn).unwrap();
+
+        let word = sample_vocabulary_word("v1", "run");
+        upsert_vocabulary_word(&conn, &word).unwrap();
+        let all = list_vocabulary(&conn).unwrap();
+        assert_eq!(all[0].start_offset, Some(10));
+        assert_eq!(all[0].end_offset, Some(20));
     }
 
     #[test]
