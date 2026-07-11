@@ -15,7 +15,7 @@ use crate::models::{
     AutoBackup, Book, BookFormat, BookGridItem, Bookmark, ChapterMeta, CleanupEntry,
     CleanupProgress, CleanupResult, Collection, CollectionRule, CollectionSuggestion,
     CollectionType, CustomFont, FeatureFlag, Highlight, HighlightSearchResult, NewRuleInput,
-    ReadingProgress, SeriesInfo,
+    ReadingProgress, SeriesInfo, VocabularyWord,
 };
 use crate::opds;
 use crate::openlibrary;
@@ -6075,6 +6075,136 @@ pub async fn lookup_word(
     folio_core::dictionary::lookup(&conn, &word)
 }
 
+// ---- Vocabulary builder (F-1-5) ----
+
+/// Core logic behind `log_vocabulary_word`: re-checks `vocabulary_enabled`
+/// server-side (defense in depth — the frontend already gates the call) and
+/// no-ops without writing when it's off. Free function taking `&Connection`
+/// directly (mirrors `apply_reading_progress` above) so it's unit-testable
+/// without a full `AppState`.
+#[allow(clippy::too_many_arguments)]
+fn log_vocabulary_word_entry(
+    conn: &rusqlite::Connection,
+    word: String,
+    lemma: String,
+    pos: Option<String>,
+    definition: String,
+    book_id: Option<String>,
+    book_title: Option<String>,
+    chapter_index: Option<i64>,
+    context_sentence: Option<String>,
+) -> FolioResult<()> {
+    if db::get_setting(conn, "vocabulary_enabled")?.as_deref() != Some("true") {
+        return Ok(());
+    }
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64;
+    let entry = VocabularyWord {
+        id: Uuid::new_v4().to_string(),
+        lemma,
+        word,
+        pos,
+        definition,
+        book_id,
+        book_title,
+        chapter_index,
+        context_sentence,
+        seen_count: 1,
+        box_num: 1,
+        last_reviewed_at: None,
+        next_due_at: None,
+        last_seen_at: now,
+        created_at: now,
+    };
+    db::upsert_vocabulary_word(conn, &entry)?;
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+#[tauri::command]
+pub async fn log_vocabulary_word(
+    word: String,
+    lemma: String,
+    pos: Option<String>,
+    definition: String,
+    book_id: Option<String>,
+    book_title: Option<String>,
+    chapter_index: Option<i64>,
+    context_sentence: Option<String>,
+    state: State<'_, AppState>,
+) -> FolioResult<()> {
+    let conn = state.active_db()?.get()?;
+    log_vocabulary_word_entry(
+        &conn,
+        word,
+        lemma,
+        pos,
+        definition,
+        book_id,
+        book_title,
+        chapter_index,
+        context_sentence,
+    )
+}
+
+#[tauri::command]
+pub async fn list_vocabulary(state: State<'_, AppState>) -> FolioResult<Vec<VocabularyWord>> {
+    let conn = state.active_db()?.get()?;
+    db::list_vocabulary(&conn)
+}
+
+#[tauri::command]
+pub async fn delete_vocabulary_word(id: String, state: State<'_, AppState>) -> FolioResult<()> {
+    let conn = state.active_db()?.get()?;
+    db::delete_vocabulary_word(&conn, &id)
+}
+
+#[tauri::command]
+pub async fn clear_vocabulary(state: State<'_, AppState>) -> FolioResult<()> {
+    let conn = state.active_db()?.get()?;
+    db::clear_vocabulary(&conn)
+}
+
+#[tauri::command]
+pub async fn get_due_vocabulary(
+    limit: i64,
+    state: State<'_, AppState>,
+) -> FolioResult<Vec<VocabularyWord>> {
+    let conn = state.active_db()?.get()?;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64;
+    db::due_vocabulary(&conn, now, limit)
+}
+
+/// Core logic behind `record_vocabulary_review`: stamps `now` and forwards to
+/// `db::record_vocabulary_review`. Free function so it's unit-testable
+/// without a full `AppState` (mirrors `log_vocabulary_word_entry` above).
+fn record_vocabulary_review_now(
+    conn: &rusqlite::Connection,
+    id: &str,
+    correct: bool,
+) -> FolioResult<()> {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64;
+    db::record_vocabulary_review(conn, id, correct, now)
+}
+
+#[tauri::command]
+pub async fn record_vocabulary_review(
+    id: String,
+    correct: bool,
+    state: State<'_, AppState>,
+) -> FolioResult<()> {
+    let conn = state.active_db()?.get()?;
+    record_vocabulary_review_now(&conn, &id, correct)
+}
+
 #[tauri::command]
 pub async fn get_feature_flags(state: State<'_, AppState>) -> FolioResult<Vec<FeatureFlag>> {
     let conn = state.active_db()?.get()?;
@@ -9224,6 +9354,98 @@ mod tests {
             .unwrap()
             .pools
             .contains_key("carol"));
+    }
+
+    // --- Vocabulary builder IPC (F-1-5 M2) ---
+
+    #[test]
+    fn log_vocabulary_word_entry_noops_when_setting_unset_or_false() {
+        let dir = tempfile::tempdir().unwrap();
+        let conn = db::init_db(&dir.path().join("t.db")).unwrap();
+
+        // `vocabulary_enabled` unset.
+        log_vocabulary_word_entry(
+            &conn,
+            "running".to_string(),
+            "run".to_string(),
+            Some("verb".to_string()),
+            "to move fast on foot".to_string(),
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(db::list_vocabulary(&conn).unwrap().len(), 0);
+
+        // Explicitly disabled.
+        db::set_setting(&conn, "vocabulary_enabled", "false").unwrap();
+        log_vocabulary_word_entry(
+            &conn,
+            "running".to_string(),
+            "run".to_string(),
+            Some("verb".to_string()),
+            "to move fast on foot".to_string(),
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(db::list_vocabulary(&conn).unwrap().len(), 0);
+    }
+
+    #[test]
+    fn log_vocabulary_word_entry_inserts_when_enabled() {
+        let dir = tempfile::tempdir().unwrap();
+        let conn = db::init_db(&dir.path().join("t.db")).unwrap();
+        db::set_setting(&conn, "vocabulary_enabled", "true").unwrap();
+
+        log_vocabulary_word_entry(
+            &conn,
+            "running".to_string(),
+            "run".to_string(),
+            Some("verb".to_string()),
+            "to move fast on foot".to_string(),
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+
+        let words = db::list_vocabulary(&conn).unwrap();
+        assert_eq!(words.len(), 1);
+        assert_eq!(words[0].box_num, 1);
+        assert!(words[0].next_due_at.is_none());
+        assert_eq!(words[0].seen_count, 1);
+    }
+
+    #[test]
+    fn record_vocabulary_review_now_advances_box_and_sets_next_due() {
+        let dir = tempfile::tempdir().unwrap();
+        let conn = db::init_db(&dir.path().join("t.db")).unwrap();
+        db::set_setting(&conn, "vocabulary_enabled", "true").unwrap();
+        log_vocabulary_word_entry(
+            &conn,
+            "running".to_string(),
+            "run".to_string(),
+            None,
+            "to move fast on foot".to_string(),
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        let id = db::list_vocabulary(&conn).unwrap()[0].id.clone();
+
+        record_vocabulary_review_now(&conn, &id, true).unwrap();
+
+        let words = db::list_vocabulary(&conn).unwrap();
+        assert_eq!(words[0].box_num, 2);
+        assert!(words[0].next_due_at.is_some());
+        assert!(words[0].last_reviewed_at.is_some());
     }
 }
 
