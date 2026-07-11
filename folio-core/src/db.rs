@@ -1979,6 +1979,132 @@ pub fn upsert_highlight_from_sync(conn: &Connection, h: &crate::models::Highligh
     Ok(())
 }
 
+// --- Vocabulary CRUD (F-1-5) ---
+
+/// Insert a new vocabulary row, or — on `lemma` UNIQUE conflict — bump
+/// `seen_count` and touch `last_seen_at` only, leaving context, box, and
+/// review state untouched. Returns `true` if a new row was inserted, `false`
+/// if an existing lemma was touched instead.
+pub fn upsert_vocabulary_word(
+    conn: &Connection,
+    w: &crate::models::VocabularyWord,
+) -> crate::error::FolioResult<bool> {
+    use rusqlite::OptionalExtension;
+    let existed: bool = conn
+        .query_row(
+            "SELECT 1 FROM vocabulary WHERE lemma = ?1",
+            params![w.lemma],
+            |_| Ok(true),
+        )
+        .optional()?
+        .unwrap_or(false);
+
+    conn.execute(
+        "INSERT INTO vocabulary (id, lemma, word, pos, definition, book_id, book_title, chapter_index, context_sentence, seen_count, box, last_reviewed_at, next_due_at, last_seen_at, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
+         ON CONFLICT(lemma) DO UPDATE SET
+           seen_count = seen_count + 1,
+           last_seen_at = excluded.last_seen_at",
+        params![
+            w.id,
+            w.lemma,
+            w.word,
+            w.pos,
+            w.definition,
+            w.book_id,
+            w.book_title,
+            w.chapter_index,
+            w.context_sentence,
+            w.seen_count,
+            w.box_num,
+            w.last_reviewed_at,
+            w.next_due_at,
+            w.last_seen_at,
+            w.created_at,
+        ],
+    )?;
+
+    Ok(!existed)
+}
+
+pub fn list_vocabulary(
+    conn: &Connection,
+) -> crate::error::FolioResult<Vec<crate::models::VocabularyWord>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, lemma, word, pos, definition, book_id, book_title, chapter_index, context_sentence, seen_count, box, last_reviewed_at, next_due_at, last_seen_at, created_at
+         FROM vocabulary ORDER BY created_at DESC",
+    )?;
+    let rows = stmt.query_map([], vocabulary_row)?;
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
+pub fn delete_vocabulary_word(conn: &Connection, id: &str) -> crate::error::FolioResult<()> {
+    conn.execute("DELETE FROM vocabulary WHERE id = ?1", params![id])?;
+    Ok(())
+}
+
+pub fn clear_vocabulary(conn: &Connection) -> crate::error::FolioResult<()> {
+    conn.execute("DELETE FROM vocabulary", [])?;
+    Ok(())
+}
+
+/// Rows due for review: `next_due_at IS NULL` (never reviewed) or already
+/// past due, soonest-due first (SQLite sorts NULL as the smallest value in
+/// `ASC`, so never-reviewed rows sort first), then oldest-added first.
+pub fn due_vocabulary(
+    conn: &Connection,
+    now: i64,
+    limit: i64,
+) -> crate::error::FolioResult<Vec<crate::models::VocabularyWord>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, lemma, word, pos, definition, book_id, book_title, chapter_index, context_sentence, seen_count, box, last_reviewed_at, next_due_at, last_seen_at, created_at
+         FROM vocabulary WHERE next_due_at IS NULL OR next_due_at <= ?1
+         ORDER BY next_due_at ASC, created_at ASC LIMIT ?2",
+    )?;
+    let rows = stmt.query_map(params![now, limit], vocabulary_row)?;
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
+/// Score a review with the pure Leitner scheduler and persist the result.
+pub fn record_vocabulary_review(
+    conn: &Connection,
+    id: &str,
+    correct: bool,
+    now: i64,
+) -> crate::error::FolioResult<()> {
+    let box_num: i64 = conn.query_row(
+        "SELECT box FROM vocabulary WHERE id = ?1",
+        params![id],
+        |row| row.get(0),
+    )?;
+    let (new_box, next_due_at) = crate::vocabulary::next_review(box_num, correct, now);
+    conn.execute(
+        "UPDATE vocabulary SET box = ?1, last_reviewed_at = ?2, next_due_at = ?3 WHERE id = ?4",
+        params![new_box, now, next_due_at, id],
+    )?;
+    Ok(())
+}
+
+fn vocabulary_row(row: &rusqlite::Row) -> rusqlite::Result<crate::models::VocabularyWord> {
+    Ok(crate::models::VocabularyWord {
+        id: row.get(0)?,
+        lemma: row.get(1)?,
+        word: row.get(2)?,
+        pos: row.get(3)?,
+        definition: row.get(4)?,
+        book_id: row.get(5)?,
+        book_title: row.get(6)?,
+        chapter_index: row.get(7)?,
+        context_sentence: row.get(8)?,
+        seen_count: row.get(9)?,
+        box_num: row.get(10)?,
+        last_reviewed_at: row.get(11)?,
+        next_due_at: row.get(12)?,
+        last_seen_at: row.get(13)?,
+        created_at: row.get(14)?,
+    })
+}
+
 // --- Tags CRUD ---
 
 pub fn list_tags(conn: &Connection) -> Result<Vec<(String, String)>> {
@@ -5513,5 +5639,189 @@ mod tests {
             .expect("book has sessions");
         assert_eq!(stats.session_count, 1);
         assert_eq!(stats.finished_at, Some(5_000));
+    }
+
+    fn sample_vocabulary_word(id: &str, lemma: &str) -> crate::models::VocabularyWord {
+        crate::models::VocabularyWord {
+            id: id.to_string(),
+            lemma: lemma.to_string(),
+            word: lemma.to_string(),
+            pos: Some("n".to_string()),
+            definition: "a test definition".to_string(),
+            book_id: None,
+            book_title: None,
+            chapter_index: None,
+            context_sentence: Some("A sentence with the word in it.".to_string()),
+            seen_count: 1,
+            box_num: 1,
+            last_reviewed_at: None,
+            next_due_at: None,
+            last_seen_at: 1_700_000_000,
+            created_at: 1_700_000_000,
+        }
+    }
+
+    #[test]
+    fn upsert_vocabulary_word_inserts_new_row() {
+        let (_dir, conn) = setup();
+        let word = sample_vocabulary_word("v1", "run");
+        let inserted = upsert_vocabulary_word(&conn, &word).unwrap();
+        assert!(inserted, "first upsert of a lemma should insert");
+
+        let all = list_vocabulary(&conn).unwrap();
+        assert_eq!(all.len(), 1);
+        assert_eq!(all[0].seen_count, 1);
+    }
+
+    #[test]
+    fn upsert_vocabulary_word_dedups_by_lemma() {
+        let (_dir, conn) = setup();
+        let word = sample_vocabulary_word("v1", "run");
+        upsert_vocabulary_word(&conn, &word).unwrap();
+
+        // Second lookup of the same lemma: different id/context/box would-be
+        // values must NOT overwrite context/box/created_at — only
+        // seen_count/last_seen_at.
+        let mut repeat = sample_vocabulary_word("v2", "run");
+        repeat.context_sentence = Some("A totally different sentence.".to_string());
+        repeat.box_num = 4;
+        repeat.last_seen_at = 1_700_000_500;
+        let inserted = upsert_vocabulary_word(&conn, &repeat).unwrap();
+        assert!(
+            !inserted,
+            "second upsert of same lemma should touch, not insert"
+        );
+
+        let all = list_vocabulary(&conn).unwrap();
+        assert_eq!(all.len(), 1, "still exactly one row for the lemma");
+        let row = &all[0];
+        assert_eq!(row.id, "v1", "original id preserved");
+        assert_eq!(row.seen_count, 2, "seen_count bumped");
+        assert_eq!(row.last_seen_at, 1_700_000_500, "last_seen_at touched");
+        assert_eq!(row.box_num, 1, "box untouched by repeat lookup");
+        assert_eq!(
+            row.context_sentence.as_deref(),
+            Some("A sentence with the word in it."),
+            "original context preserved"
+        );
+        assert_eq!(row.created_at, 1_700_000_000, "created_at untouched");
+    }
+
+    #[test]
+    fn list_vocabulary_is_newest_first() {
+        let (_dir, conn) = setup();
+        let mut older = sample_vocabulary_word("v1", "alpha");
+        older.created_at = 1_000;
+        let mut newer = sample_vocabulary_word("v2", "beta");
+        newer.created_at = 2_000;
+        upsert_vocabulary_word(&conn, &older).unwrap();
+        upsert_vocabulary_word(&conn, &newer).unwrap();
+
+        let all = list_vocabulary(&conn).unwrap();
+        assert_eq!(
+            all.iter().map(|w| w.id.as_str()).collect::<Vec<_>>(),
+            vec!["v2", "v1"]
+        );
+    }
+
+    #[test]
+    fn delete_and_clear_vocabulary() {
+        let (_dir, conn) = setup();
+        upsert_vocabulary_word(&conn, &sample_vocabulary_word("v1", "alpha")).unwrap();
+        upsert_vocabulary_word(&conn, &sample_vocabulary_word("v2", "beta")).unwrap();
+
+        delete_vocabulary_word(&conn, "v1").unwrap();
+        let after_delete = list_vocabulary(&conn).unwrap();
+        assert_eq!(after_delete.len(), 1);
+        assert_eq!(after_delete[0].id, "v2");
+
+        clear_vocabulary(&conn).unwrap();
+        assert!(list_vocabulary(&conn).unwrap().is_empty());
+    }
+
+    #[test]
+    fn due_vocabulary_respects_null_and_now_and_limit() {
+        let (_dir, conn) = setup();
+        let mut never_reviewed = sample_vocabulary_word("v1", "alpha");
+        never_reviewed.next_due_at = None;
+        never_reviewed.created_at = 100;
+
+        let mut due_now = sample_vocabulary_word("v2", "beta");
+        due_now.next_due_at = Some(500);
+        due_now.created_at = 200;
+
+        let mut not_due = sample_vocabulary_word("v3", "gamma");
+        not_due.next_due_at = Some(10_000);
+        not_due.created_at = 300;
+
+        upsert_vocabulary_word(&conn, &never_reviewed).unwrap();
+        upsert_vocabulary_word(&conn, &due_now).unwrap();
+        upsert_vocabulary_word(&conn, &not_due).unwrap();
+
+        let due = due_vocabulary(&conn, 1_000, 10).unwrap();
+        let ids: Vec<&str> = due.iter().map(|w| w.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            vec!["v1", "v2"],
+            "NULL due sorts before due<=now; not-due excluded"
+        );
+
+        let limited = due_vocabulary(&conn, 1_000, 1).unwrap();
+        assert_eq!(limited.len(), 1);
+        assert_eq!(limited[0].id, "v1");
+    }
+
+    #[test]
+    fn record_vocabulary_review_correct_advances_box() {
+        let (_dir, conn) = setup();
+        let mut word = sample_vocabulary_word("v1", "alpha");
+        word.box_num = 1;
+        upsert_vocabulary_word(&conn, &word).unwrap();
+
+        record_vocabulary_review(&conn, "v1", true, 1_000).unwrap();
+
+        let row = list_vocabulary(&conn).unwrap().into_iter().next().unwrap();
+        assert_eq!(row.box_num, 2);
+        assert_eq!(row.next_due_at, Some(1_000 + 3 * 86_400));
+        assert_eq!(row.last_reviewed_at, Some(1_000));
+    }
+
+    #[test]
+    fn record_vocabulary_review_wrong_resets_box() {
+        let (_dir, conn) = setup();
+        let mut word = sample_vocabulary_word("v1", "alpha");
+        word.box_num = 3;
+        upsert_vocabulary_word(&conn, &word).unwrap();
+
+        record_vocabulary_review(&conn, "v1", false, 2_000).unwrap();
+
+        let row = list_vocabulary(&conn).unwrap().into_iter().next().unwrap();
+        assert_eq!(row.box_num, 1);
+        assert_eq!(row.next_due_at, Some(2_000 + 86_400));
+    }
+
+    #[test]
+    fn vocabulary_book_id_set_null_on_book_delete() {
+        let (_dir, conn) = setup();
+        let book = sample_book("book-voc-1");
+        insert_book(&conn, &book).unwrap();
+
+        let mut word = sample_vocabulary_word("v1", "alpha");
+        word.book_id = Some("book-voc-1".to_string());
+        word.book_title = Some("Test Book".to_string());
+        upsert_vocabulary_word(&conn, &word).unwrap();
+
+        delete_book(&conn, "book-voc-1").unwrap();
+
+        let row = list_vocabulary(&conn).unwrap().into_iter().next().unwrap();
+        assert_eq!(
+            row.book_id, None,
+            "FK ON DELETE SET NULL should clear book_id when the book is deleted"
+        );
+        assert_eq!(
+            row.book_title.as_deref(),
+            Some("Test Book"),
+            "title snapshot survives book deletion"
+        );
     }
 }
