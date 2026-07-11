@@ -973,7 +973,10 @@
     "missed": "Raté",
     "nextInDays": "dans {{count}}j",
     "reviewDone": "Tout est fait pour l’instant !",
-    "backToList": "Retour à la liste"
+    "backToList": "Retour à la liste",
+    "filterPlaceholder": "Filtrer les mots…",
+    "noMatches": "Aucun mot ne correspond à votre recherche.",
+    "sourceBookGone": "Le livre source n’est plus dans votre bibliothèque"
   },
 
   "privateMode": {

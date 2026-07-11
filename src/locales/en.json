@@ -1001,7 +1001,10 @@
     "missed": "Missed",
     "nextInDays": "in {{count}}d",
     "reviewDone": "All done for now!",
-    "backToList": "Back to list"
+    "backToList": "Back to list",
+    "filterPlaceholder": "Filter words…",
+    "noMatches": "No words match your search.",
+    "sourceBookGone": "Source book no longer in your library"
   },
 
   "privateMode": {

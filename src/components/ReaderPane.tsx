@@ -144,6 +144,14 @@ interface ReaderPaneProps {
    */
   onCloseThisPane?: () => void;
   initialChapterIndex?: number;
+  /**
+   * Character offset into the target chapter's plain text to precisely
+   * scroll to on first open (e.g. a vocabulary-word "jump to source").
+   * Consumed once alongside `initialChapterIndex` — `null`/`undefined`
+   * degrades to the current chapter-only behavior (no scroll-to-offset,
+   * no flash).
+   */
+  initialScrollOffset?: number | null;
   autoFocus?: boolean;
 }
 
@@ -161,6 +169,7 @@ export default function ReaderPane({
   onChangeBook,
   onCloseThisPane,
   initialChapterIndex,
+  initialScrollOffset,
   autoFocus = false,
 }: ReaderPaneProps) {
   const effectiveActive = isActive ?? isPrimary;
@@ -324,6 +333,11 @@ export default function ReaderPane({
   const restoringScroll = useRef<number | null>(null);
   const savedScrollPosition = useRef<number | null>(null);
   const targetMatchOffset = useRef<number | null>(null);
+  // Pending character-offset jump (F-1-5 vocabulary "jump to source"),
+  // set once alongside `restoringScroll`/`resumePage` in the init effect
+  // and consumed by the same scroll-restore effects that handle
+  // `savedScrollPosition`, below.
+  const pendingScrollOffset = useRef<number | null>(null);
   // Source capture for search jumps — committed to history once the
   // destination scroll is resolved (either synchronously for same-chapter or
   // after the chapter renders for cross-chapter paginated search).
@@ -345,6 +359,7 @@ export default function ReaderPane({
     historyInitialized.current = false;
     pendingSearchHistory.current = null;
     targetMatchOffset.current = null;
+    pendingScrollOffset.current = null;
     // F-4-3: drop the previous book's prefetched chapters so a stale entry
     // can never be served for the newly-switched book.
     chapterCacheRef.current = createChapterCache();
@@ -430,6 +445,9 @@ export default function ReaderPane({
           setChapterIndex(initialChapterIndex);
           restoringScroll.current = initialChapterIndex;
           resumePage = initialChapterIndex;
+          if (typeof initialScrollOffset === "number") {
+            pendingScrollOffset.current = initialScrollOffset;
+          }
         } else {
           // Volatile in-session resume (D-5): while private, the backend
           // never wrote the DB row below for anything read after private
@@ -691,18 +709,32 @@ export default function ReaderPane({
 
     const targetChapter = restoringScroll.current;
     const scrollPos = savedScrollPosition.current;
+    const offset = pendingScrollOffset.current;
 
     // Wait for DOM to render all chapter divs
     requestAnimationFrame(() => {
       const chapterDiv = chapterDivRefs.current[targetChapter];
       const container = scrollContainerRef.current;
       if (chapterDiv && container) {
-        // Scroll to the target chapter div, then offset within it
-        const chapterTop = chapterDiv.offsetTop;
-        const chapterHeight = chapterDiv.offsetHeight;
-        container.scrollTop = chapterTop + (scrollPos ?? 0) * chapterHeight;
+        if (offset !== null) {
+          // F-1-5 vocabulary jump: chapter-local char-offset fraction through
+          // the same resolveBookmarkScrollTop math the bookmark restore path
+          // uses for continuous mode (chapterOffsetTop + fraction * chapterHeight).
+          const textLen = chapterDiv.textContent?.length || 1;
+          container.scrollTop = resolveBookmarkScrollTop(true, offset / textLen, {
+            chapterOffsetTop: chapterDiv.offsetTop,
+            chapterHeight: chapterDiv.offsetHeight,
+            containerScrollHeight: container.scrollHeight,
+          });
+        } else {
+          // Scroll to the target chapter div, then offset within it
+          const chapterTop = chapterDiv.offsetTop;
+          const chapterHeight = chapterDiv.offsetHeight;
+          container.scrollTop = chapterTop + (scrollPos ?? 0) * chapterHeight;
+        }
       }
       savedScrollPosition.current = null;
+      pendingScrollOffset.current = null;
       // Defer clearing restoringScroll until after the scroll event from the
       // programmatic scrollTop has been dispatched, so the continuous-scroll
       // listener sees restoringScroll !== null and skips setting userHasInteracted.
@@ -828,6 +860,41 @@ export default function ReaderPane({
     };
   }, [bookId, chapterHtml, chapterIndex, totalChapters, loading, isContinuous, isHtmlBook]);
 
+  // ---- Flash the jumped-to word (F-1-5 vocabulary "jump to source") ----
+  // Best-effort, paginated mode only: the highlight-injection pipeline below
+  // (`highlightedHtml`) only runs for the single-chapter paginated render;
+  // continuous mode renders each chapter's raw HTML directly (`allChaptersHtml`),
+  // so it isn't wired into that pipeline and doesn't get a flash — precise
+  // scroll still lands correctly there, per the effect above.
+  const [flashRange, setFlashRange] = useState<{ chapterIndex: number; start: number; end: number } | null>(null);
+  const flashTimeoutRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (flashTimeoutRef.current !== null) window.clearTimeout(flashTimeoutRef.current);
+    };
+  }, []);
+
+  // The nav-state contract only carries a single start offset (no end), so
+  // the flashed range is approximated as the contiguous non-whitespace run
+  // containing it — "the word" at that position in the same contentRef-ish
+  // text the offset was computed against.
+  const triggerFlash = useCallback(
+    (offset: number) => {
+      const text = scrollContainerRef.current?.textContent ?? "";
+      if (offset < 0 || offset >= text.length) return;
+      let start = offset;
+      let end = offset;
+      while (start > 0 && !/\s/.test(text[start - 1])) start--;
+      while (end < text.length && !/\s/.test(text[end])) end++;
+      if (end <= start) return;
+      if (flashTimeoutRef.current !== null) window.clearTimeout(flashTimeoutRef.current);
+      setFlashRange({ chapterIndex, start, end });
+      flashTimeoutRef.current = window.setTimeout(() => setFlashRange(null), 1800);
+    },
+    [chapterIndex]
+  );
+
   // ---- Restore scroll position after chapter HTML renders ----
 
   useEffect(() => {
@@ -835,22 +902,33 @@ export default function ReaderPane({
     if (restoringScroll.current !== chapterIndex || !chapterHtml || !bookId) return;
 
     const scrollPos = savedScrollPosition.current;
-    if (scrollPos !== null && scrollContainerRef.current) {
+    const offset = pendingScrollOffset.current;
+    if ((scrollPos !== null || offset !== null) && scrollContainerRef.current) {
       const container = scrollContainerRef.current;
       requestAnimationFrame(() => {
-        // Match the save-side denominator: scrollProgress is computed as
-        // scrollTop / (scrollHeight - clientHeight). Restore must invert
-        // that, otherwise long chapters drift towards the bottom.
-        const max = Math.max(0, container.scrollHeight - container.clientHeight);
-        container.scrollTop = scrollPos * max;
+        if (offset !== null) {
+          // F-1-5 vocabulary jump: same offset→scroll approach the search
+          // "scroll to match" effect uses below.
+          const textLen = container.textContent?.length || 1;
+          container.scrollTop = (offset / textLen) * container.scrollHeight;
+          triggerFlash(offset);
+        } else if (scrollPos !== null) {
+          // Match the save-side denominator: scrollProgress is computed as
+          // scrollTop / (scrollHeight - clientHeight). Restore must invert
+          // that, otherwise long chapters drift towards the bottom.
+          const max = Math.max(0, container.scrollHeight - container.clientHeight);
+          container.scrollTop = scrollPos * max;
+        }
         restoringScroll.current = null;
         savedScrollPosition.current = null;
+        pendingScrollOffset.current = null;
       });
     } else {
       restoringScroll.current = null;
       savedScrollPosition.current = null;
+      pendingScrollOffset.current = null;
     }
-  }, [chapterHtml, bookId, chapterIndex]);
+  }, [chapterHtml, bookId, chapterIndex]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ---- Scroll to search match after chapter loads ----
   useEffect(() => {
@@ -1249,9 +1327,11 @@ export default function ReaderPane({
 
   // Inject highlight <mark> tags into the sanitized HTML string.
   // This survives React re-renders (unlike DOM manipulation).
+  const activeFlash = flashRange && flashRange.chapterIndex === chapterIndex ? flashRange : null;
+
   const highlightedHtml = useMemo(() => {
     const html = chapterHtml;
-    if (highlights.length === 0) return html;
+    if (highlights.length === 0 && !activeFlash) return html;
 
     // Walk the HTML string, tracking text offset (skip inside tags).
     // Build a map: textOffset -> htmlIndex for insertion points.
@@ -1290,6 +1370,18 @@ export default function ReaderPane({
       });
     }
 
+    // F-1-5 vocabulary jump: a transient pulse over the jumped-to word,
+    // reusing the same textOffset -> htmlIndex map as the persisted
+    // highlights above.
+    if (activeFlash) {
+      const startIdx = textToHtml[activeFlash.start];
+      const endIdx = textToHtml[activeFlash.end];
+      if (startIdx != null && endIdx != null) {
+        insertions.push({ htmlIdx: startIdx, tag: `<mark class="vj-flash-target">`, priority: 0 });
+        insertions.push({ htmlIdx: endIdx, tag: "</mark>", priority: 1 });
+      }
+    }
+
     // Sort by position (descending) so we insert from end to start without shifting indices
     insertions.sort((a, b) => b.htmlIdx - a.htmlIdx || b.priority - a.priority);
 
@@ -1298,7 +1390,7 @@ export default function ReaderPane({
       result = result.slice(0, ins.htmlIdx) + ins.tag + result.slice(ins.htmlIdx);
     }
     return result;
-  }, [chapterHtml, highlights]);
+  }, [chapterHtml, highlights, activeFlash]);
 
   // ---- Intercept clicks on links inside chapter HTML ----
   // The chapter content is sanitized but anchors survive — left to the

@@ -4,6 +4,8 @@ import {
   formatDefinitionSnapshot,
   boxIntervalDays,
   vocabularyPosLabelKey,
+  matchesVocabularyQuery,
+  type VocabularyWord,
 } from "./vocabulary";
 import type { DictionaryEntry } from "./dictionary";
 
@@ -178,5 +180,61 @@ describe("vocabularyPosLabelKey", () => {
   it("returns null for null or unknown POS", () => {
     expect(vocabularyPosLabelKey(null)).toBeNull();
     expect(vocabularyPosLabelKey("xyz")).toBeNull();
+  });
+});
+
+describe("matchesVocabularyQuery", () => {
+  const word: VocabularyWord = {
+    id: "1",
+    lemma: "ephemeral",
+    word: "ephemerally",
+    pos: "r",
+    definition: "lasting for a very short time",
+    bookId: "book-1",
+    bookTitle: "The Great Gatsby",
+    chapterIndex: 2,
+    contextSentence: "It was ephemerally beautiful.",
+    startOffset: 10,
+    endOffset: 23,
+    seenCount: 1,
+    box: 1,
+    lastReviewedAt: null,
+    nextDueAt: null,
+    lastSeenAt: 0,
+    createdAt: 0,
+  };
+
+  it("matches on the surface word, case-insensitively", () => {
+    expect(matchesVocabularyQuery(word, "Ephemerally")).toBe(true);
+    expect(matchesVocabularyQuery(word, "EPHEM")).toBe(true);
+  });
+
+  it("matches on the lemma", () => {
+    expect(matchesVocabularyQuery(word, "ephemeral")).toBe(true);
+  });
+
+  it("matches on the definition", () => {
+    expect(matchesVocabularyQuery(word, "short time")).toBe(true);
+  });
+
+  it("matches on the book title", () => {
+    expect(matchesVocabularyQuery(word, "gatsby")).toBe(true);
+    expect(matchesVocabularyQuery(word, "great")).toBe(true);
+  });
+
+  it("returns true for an empty (or whitespace-only) query", () => {
+    expect(matchesVocabularyQuery(word, "")).toBe(true);
+    expect(matchesVocabularyQuery(word, "   ")).toBe(true);
+  });
+
+  it("returns false when nothing matches", () => {
+    expect(matchesVocabularyQuery(word, "xyzzy")).toBe(false);
+  });
+
+  it("does not match on the book title when bookTitle is null (deleted source book)", () => {
+    const orphan: VocabularyWord = { ...word, bookId: null, bookTitle: null };
+    expect(matchesVocabularyQuery(orphan, "gatsby")).toBe(false);
+    // still matches on the word itself
+    expect(matchesVocabularyQuery(orphan, "ephemerally")).toBe(true);
   });
 });

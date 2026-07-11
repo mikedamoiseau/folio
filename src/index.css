@@ -157,6 +157,20 @@
   100% { transform: translateX(300%); }
 }
 
+/* F-1-5 vocabulary "jump to source" — briefly pulses the word the reader
+   just scrolled to, then fades out on its own (no JS class removal needed;
+   ReaderPane clears the flash from state after the same ~1.8s). */
+@keyframes vj-flash {
+  0%, 55% { background-color: rgba(194, 113, 78, 0.5); }
+  100%    { background-color: rgba(194, 113, 78, 0); }
+}
+
+.vj-flash-target {
+  border-radius: 2px;
+  padding: 1px 0;
+  animation: vj-flash 1.8s ease-out forwards;
+}
+
 /* Strip edge mask — fades thumbs into the surface at the left/right
    gutters so panned content does not collide with hard edges. Pulled
    out into a class so we can keep the inline style block lean and

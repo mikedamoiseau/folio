@@ -1,8 +1,9 @@
 import { useState, useEffect, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useTranslation } from "react-i18next";
+import { useNavigate } from "react-router-dom";
 import { useFocusTrap } from "../lib/useFocusTrap";
-import { boxIntervalDays, vocabularyPosLabelKey, type VocabularyWord } from "../lib/vocabulary";
+import { boxIntervalDays, matchesVocabularyQuery, vocabularyPosLabelKey, type VocabularyWord } from "../lib/vocabulary";
 import ConfirmDialog from "./ConfirmDialog";
 
 // A generous cap on how many due cards one review session pulls at once —
@@ -16,12 +17,14 @@ interface VocabularyPanelProps {
 
 export default function VocabularyPanel({ onClose }: VocabularyPanelProps) {
   const { t } = useTranslation();
+  const navigate = useNavigate();
   const panelRef = useFocusTrap(onClose);
 
   const [words, setWords] = useState<VocabularyWord[] | null>(null);
   const [dueWords, setDueWords] = useState<VocabularyWord[]>([]);
   const [view, setView] = useState<"list" | "review">("list");
   const [confirmClearAll, setConfirmClearAll] = useState(false);
+  const [query, setQuery] = useState("");
 
   const loadWords = useCallback(async () => {
     try {
@@ -66,6 +69,19 @@ export default function VocabularyPanel({ onClose }: VocabularyPanelProps) {
     loadWords();
     loadDue();
   };
+
+  // Jump to a word's source location in the reader. Omitted entirely for
+  // rows whose source book was deleted (word.bookId === null) — the caller
+  // only wires onJump when a bookId is present.
+  const handleJump = (word: VocabularyWord) => {
+    if (!word.bookId) return;
+    navigate(`/reader/${word.bookId}`, {
+      state: { chapterIndex: word.chapterIndex ?? 0, offset: word.startOffset ?? null },
+    });
+    onClose();
+  };
+
+  const filteredWords = words?.filter((w) => matchesVocabularyQuery(w, query)) ?? null;
 
   // ---- Review session ----
   const [reviewQueue, setReviewQueue] = useState<VocabularyWord[]>([]);
@@ -161,17 +177,39 @@ export default function VocabularyPanel({ onClose }: VocabularyPanelProps) {
                 )}
               </div>
 
-              <div className="flex-1 overflow-y-auto">
-                {words.length === 0 ? (
+              {words.length === 0 ? (
+                <div className="flex-1 overflow-y-auto">
                   <p className="px-5 py-8 text-sm text-ink-muted text-center">{t("vocabulary.empty")}</p>
-                ) : (
-                  <div className="divide-y divide-warm-border">
-                    {words.map((w) => (
-                      <WordRow key={w.id} word={w} onDelete={() => handleDelete(w.id)} />
-                    ))}
+                </div>
+              ) : (
+                <>
+                  <div className="px-5 py-2.5 border-b border-warm-border shrink-0">
+                    <input
+                      type="text"
+                      value={query}
+                      onChange={(e) => setQuery(e.target.value)}
+                      placeholder={t("vocabulary.filterPlaceholder")}
+                      className="w-full px-3 py-1.5 text-sm bg-warm-subtle border border-warm-border rounded-lg text-ink placeholder:text-ink-muted focus:outline-none focus:ring-2 focus:ring-accent/40"
+                    />
                   </div>
-                )}
-              </div>
+                  <div className="flex-1 overflow-y-auto">
+                    {filteredWords && filteredWords.length === 0 ? (
+                      <p className="px-5 py-8 text-sm text-ink-muted text-center">{t("vocabulary.noMatches")}</p>
+                    ) : (
+                      <div className="divide-y divide-warm-border">
+                        {filteredWords?.map((w) => (
+                          <WordRow
+                            key={w.id}
+                            word={w}
+                            onDelete={() => handleDelete(w.id)}
+                            onJump={w.bookId ? () => handleJump(w) : undefined}
+                          />
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </>
+              )}
             </>
           )}
         </div>
@@ -190,12 +228,29 @@ export default function VocabularyPanel({ onClose }: VocabularyPanelProps) {
   );
 }
 
-function WordRow({ word, onDelete }: { word: VocabularyWord; onDelete: () => void }) {
+function WordRow({ word, onDelete, onJump }: { word: VocabularyWord; onDelete: () => void; onJump?: () => void }) {
   const { t } = useTranslation();
   const posKey = vocabularyPosLabelKey(word.pos);
+  const jumpable = Boolean(onJump);
 
   return (
-    <div className="group px-5 py-3 hover:bg-warm-subtle transition-colors">
+    <div
+      role={jumpable ? "button" : undefined}
+      tabIndex={jumpable ? 0 : undefined}
+      onClick={jumpable ? onJump : undefined}
+      onKeyDown={
+        jumpable
+          ? (e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                onJump?.();
+              }
+            }
+          : undefined
+      }
+      title={!jumpable ? t("vocabulary.sourceBookGone") : undefined}
+      className={`group px-5 py-3 hover:bg-warm-subtle transition-colors ${jumpable ? "cursor-pointer focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-1 focus:outline-none" : ""}`}
+    >
       <div className="flex items-start gap-2">
         <div className="flex-1 min-w-0">
           <div className="flex items-baseline gap-1.5 flex-wrap">
@@ -212,7 +267,10 @@ function WordRow({ word, onDelete }: { word: VocabularyWord; onDelete: () => voi
           <p className="text-[10px] text-ink-muted/60 mt-0.5">{t("vocabulary.seenCount", { count: word.seenCount })}</p>
         </div>
         <button
-          onClick={onDelete}
+          onClick={(e) => {
+            e.stopPropagation();
+            onDelete();
+          }}
           className="opacity-0 group-hover:opacity-100 p-1 text-ink-muted hover:text-red-500 transition-all shrink-0"
           aria-label={t("vocabulary.deleteLabel", { word: word.word })}
         >

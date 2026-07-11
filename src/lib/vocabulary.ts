@@ -28,6 +28,8 @@ export interface VocabularyWord {
   bookTitle: string | null;
   chapterIndex: number | null;
   contextSentence: string | null;
+  startOffset: number | null;
+  endOffset: number | null;
   seenCount: number;
   box: number;
   lastReviewedAt: number | null;
@@ -172,4 +174,22 @@ export function boxIntervalDays(box: number): number {
 export function vocabularyPosLabelKey(pos: string | null): string | null {
   if (!pos) return null;
   return POS_LABEL_KEYS[pos] ?? null;
+}
+
+/**
+ * Client-side filter predicate for the vocabulary list's search box.
+ *
+ * Case-insensitive substring match across `word`, `lemma`, `definition`, and
+ * `bookTitle`. An empty (or whitespace-only) query matches everything, so
+ * clearing the search box restores the full list.
+ */
+export function matchesVocabularyQuery(word: VocabularyWord, query: string): boolean {
+  const needle = query.trim().toLowerCase();
+  if (needle === "") return true;
+  return (
+    word.word.toLowerCase().includes(needle) ||
+    word.lemma.toLowerCase().includes(needle) ||
+    word.definition.toLowerCase().includes(needle) ||
+    (word.bookTitle?.toLowerCase().includes(needle) ?? false)
+  );
 }

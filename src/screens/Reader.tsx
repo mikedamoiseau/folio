@@ -33,8 +33,9 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
   const { bookId } = useParams<{ bookId: string }>();
   const navigate = useNavigate();
   const location = useLocation();
-  const locState = location.state as { chapterIndex?: number; autoFocus?: boolean } | null;
+  const locState = location.state as { chapterIndex?: number; autoFocus?: boolean; offset?: number | null } | null;
   const incomingChapter = locState?.chapterIndex ?? undefined;
+  const incomingOffset = locState?.offset ?? null;
   const autoFocus = locState?.autoFocus ?? false;
   const consumedForBook = useRef<string | null>(null);
 
@@ -46,6 +47,10 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
   }, [incomingChapter, bookId, navigate, location.pathname]);
 
   const initialChapterIndex = consumedForBook.current !== bookId ? incomingChapter : undefined;
+  // Same first-navigation gate as initialChapterIndex — only fed to
+  // ReaderPane on the render where the navigation state is still live, so
+  // it's consumed once and doesn't re-fire on subsequent renders.
+  const initialScrollOffset = consumedForBook.current !== bookId ? incomingOffset : undefined;
 
   const [splitMode, setSplitMode] = useState(() => {
     if (!bookId) return false;
@@ -133,6 +138,7 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
         isPrimary
         onToggleSplit={toggleSplit}
         initialChapterIndex={initialChapterIndex}
+        initialScrollOffset={initialScrollOffset}
         autoFocus={autoFocus}
       />
     );
@@ -154,6 +160,7 @@ export default function Reader({ onOpenSettings, settingsOpen = false }: ReaderP
             onToggleSplit={toggleSplit}
             onSwapPanes={!sameBook ? swapPanes : undefined}
             initialChapterIndex={initialChapterIndex}
+            initialScrollOffset={initialScrollOffset}
           />
         </div>
         <div className="flex-1 min-w-0">
