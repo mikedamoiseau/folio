@@ -5954,12 +5954,11 @@ pub async fn set_setting_value(
 const DICTIONARY_URL: &str =
     "https://github.com/mikedamoiseau/folio/releases/download/dictionary-v1/dictionary-v1.db.gz";
 
-/// SHA-256 of the gzipped artifact. Placeholder until the asset is built and
-/// uploaded (see [`DICTIONARY_URL`]). A checksum mismatch aborts the install
-/// and leaves no artifact, so shipping the placeholder is safe — downloads
-/// simply fail verification until the real value (printed by
-/// `scripts/build-dictionary-artifact.sh`) is filled in here.
-const DICTIONARY_SHA256: &str = "0000000000000000000000000000000000000000000000000000000000000000";
+/// SHA-256 of the gzipped artifact (`dictionary-v1.db.gz`), verified against the
+/// live `dictionary-v1` release asset (see [`DICTIONARY_URL`]). A checksum
+/// mismatch aborts the install and leaves no artifact. Regenerate with
+/// `scripts/build-dictionary-artifact.sh` if the artifact is ever rebuilt.
+const DICTIONARY_SHA256: &str = "1f75f5410c8fd9e7d133c3cc344a64701346a9575dfa48c8cec499f4b1b6505e";
 
 /// Progress payload for `"dictionary-download-progress"`. Byte counts of the
 /// compressed stream; `total` is `0` when the server sends no Content-Length.

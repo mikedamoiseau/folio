@@ -39,7 +39,12 @@ mkdir -p "${BUILD_DIR}"
 # and print the hash, verify it against Princeton's published checksum, then
 # paste it here). The script refuses to build until it is set.
 WNDB_URL="https://wordnetcode.princeton.edu/wn3.1.dict.tar.gz"
-WNDB_SHA256=""
+# Pinned 2026-07-11. Verified via: canonical HTTPS host (wordnetcode.princeton.edu),
+# genuine WNdb-3.1 tarball structure (dict/data.*, index.*, *.exc, dbfiles/), and
+# expected ~16.36 MB size. Princeton publishes no per-file digest to compare against
+# (their site is a plain directory index), so this is a reviewed pin-on-first-fetch,
+# same policy as the pdfium/libmobi pins.
+WNDB_SHA256="3f7d8be8ef6ecc7167d39b10d66954ec734280b5bdcd57f7d9eafe429d11c22a"
 
 TARBALL="${BUILD_DIR}/wn3.1.dict.tar.gz"
 OUT_DB="${BUILD_DIR}/dictionary-v1.db"
