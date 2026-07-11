@@ -54,6 +54,7 @@ import {
   comicExtractProgressReducer,
   isComicExtractProgressVisible,
 } from "../lib/comicExtractProgress";
+import { resolveJumpTokenGate } from "../lib/jumpTokenGate";
 
 // ---- Types matching Rust backend ----
 
@@ -375,6 +376,11 @@ export default function ReaderPane({
     destChapter: number;
   } | null>(null);
   const userHasInteracted = useRef(false);
+  // Last `jumpToken` applied by the same-book jump effect further down
+  // (F-1-5 vocabulary "jump to source"). Declared here (rather than next to
+  // that effect) so the `[bookId]` reset effect below can reset it — see
+  // that effect's comment for why.
+  const appliedJumpToken = useRef(jumpToken);
 
   const isFileNotFound = isBookFileMissing;
 
@@ -396,6 +402,27 @@ export default function ReaderPane({
     // flash stale content over the newly-switched book before get_book resolves.
     setInfoOpen(false);
     setBookDetail(null);
+    // F-1-5: re-baseline the same-book jump token to whatever arrived on
+    // this commit. A vocabulary "jump to source" into a book that isn't
+    // already open changes `bookId` and `jumpToken` together — without this
+    // reset, the jumpToken effect below would see a jumpToken it hasn't
+    // applied yet and re-apply the (already-handled-by-mount) target while
+    // the previous book's `chapterHtml` is still on screen, causing a
+    // transient wrong-scroll flash. Resetting here means the jumpToken
+    // effect always sees `jumpToken === appliedJumpToken.current` on a
+    // cross-book jump and skips — the mount effect below owns that case
+    // exclusively. A same-book jump (bookId unchanged) never runs this
+    // effect, so the jumpToken effect's own gating is unaffected.
+    //
+    // `jumpToken` is deliberately NOT a dependency below: adding it would
+    // re-run this whole reset (history, search state, chapter cache) on
+    // every same-book jump too, which is wrong — this effect must fire on
+    // `bookId` change only. The closure still reads the current render's
+    // `jumpToken` because React re-creates it every render; only *which*
+    // deps trigger invocation is affected by the deps array, not which
+    // values a firing invocation closes over.
+    appliedJumpToken.current = jumpToken;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bookId]);
 
   // ---- Load book info, TOC, and saved progress on mount ----
@@ -558,12 +585,20 @@ export default function ReaderPane({
   // change, no remount), so a second jump needs its own trigger: `jumpToken`
   // changes on every distinct navigation (see its prop doc), even when the
   // target chapter/offset repeats a previous value. Skips on the initial
-  // mount — the ref starts equal to the first-seen `jumpToken`, so the
-  // mount effect's own application above isn't duplicated here.
-  const appliedJumpToken = useRef(jumpToken);
+  // mount and on a cross-book jump — in both cases the `[bookId]` reset
+  // effect above has already re-baselined `appliedJumpToken.current` to the
+  // current `jumpToken`, so `resolveJumpTokenGate` (`bookIdChanged: false`
+  // here — this effect only ever observes the ref's already-settled value)
+  // sees them equal and reports `shouldApply: false`; the mount effect owns
+  // applying the target in that case.
   useEffect(() => {
-    if (jumpToken === undefined || jumpToken === appliedJumpToken.current) return;
-    appliedJumpToken.current = jumpToken;
+    const { shouldApply, nextApplied } = resolveJumpTokenGate(
+      jumpToken,
+      appliedJumpToken.current,
+      false,
+    );
+    appliedJumpToken.current = nextApplied;
+    if (!shouldApply) return;
     if (initialChapterIndex === undefined) return; // navigation carried no jump target
     applyJumpTarget(initialChapterIndex, typeof initialScrollOffset === "number" ? initialScrollOffset : null);
   }, [jumpToken, initialChapterIndex, initialScrollOffset, applyJumpTarget]);
