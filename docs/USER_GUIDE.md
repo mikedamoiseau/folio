@@ -349,7 +349,11 @@ turn this on, and past lookups aren't backfilled.
 **Your list:** open the **Vocabulary** screen from the top navigation (it
 appears once the feature is on, or whenever you have saved words). Each entry
 shows the word, its definition, the sentence and book it came from, and how many
-times you've looked it up. You can delete a word, or clear the whole list.
+times you've looked it up. You can delete a word, or clear the whole list. A
+search box filters the list as you type (by word, definition, or book). Click a
+saved word to reopen its book and jump to the spot where you looked it up — the
+word briefly flashes so it's easy to find (jumping is unavailable once the source
+book has been removed from your library).
 
 **Review with flashcards:** click **Review** to quiz yourself on the words that
 are due. Each card shows the word first; reveal the definition, then mark

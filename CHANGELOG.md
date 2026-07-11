@@ -26,7 +26,8 @@ This project adheres to [Semantic Versioning](https://semver.org/).
   words individually or clear the whole list. Everything stays on your device;
   the saved words keep their definitions even if you later delete the
   dictionary or the source book. Turning the setting off stops saving but keeps
-  what you've collected.
+  what you've collected. Filter the list as you type, and click any saved word to
+  jump straight back to the book at the spot where you looked it up.
 
 ### Changed
 - **Comics open instantly, even large ones.** Opening a CBZ/CBR now paints the
