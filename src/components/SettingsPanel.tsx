@@ -489,6 +489,9 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
   const [dictState, dictDispatch] = useReducer(dictionaryReducer, undefined, initialDictionaryState);
   const [dictDeleteConfirm, setDictDeleteConfirm] = useState(false);
 
+  // Vocabulary builder (F-1-5)
+  const [vocabEnabled, setVocabEnabled] = useState(false);
+
   // Enrichment providers
   const [enrichmentProviders, setEnrichmentProviders] = useState<EnrichmentProviderInfo[]>([]);
 
@@ -822,6 +825,8 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
         setDictEnabled(dictEnabledVal === "true");
         const dictStatus = await invoke<DictionaryStatus>("get_dictionary_status");
         dictDispatch({ type: "statusLoaded", status: dictStatus });
+        const vocabEnabledVal = await invoke<string | null>("get_setting_value", { key: "vocabulary_enabled" });
+        setVocabEnabled(vocabEnabledVal === "true");
         await loadServerStatus();
       })().catch(() => {});
     }
@@ -1173,6 +1178,16 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
       }
     } catch (err) {
       setDictEnabled(!val); // revert — the setting did not persist
+      addToast(friendlyError(err, t), "error");
+    }
+  };
+
+  const handleToggleVocabulary = async (val: boolean) => {
+    setVocabEnabled(val); // optimistic
+    try {
+      await invoke("set_setting_value", { key: "vocabulary_enabled", value: val ? "true" : "false" });
+    } catch (err) {
+      setVocabEnabled(!val); // revert — the setting did not persist
       addToast(friendlyError(err, t), "error");
     }
   };
@@ -2245,6 +2260,16 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                   <p className="text-[10px] text-ink-muted">{t("settings.dictionaryAttribution")}</p>
                 </div>
               )}
+
+              <label className="flex items-start gap-2.5 cursor-pointer px-1 pt-1">
+                <input type="checkbox" checked={vocabEnabled}
+                  onChange={(e) => handleToggleVocabulary(e.target.checked)}
+                  className="mt-0.5 accent-accent" />
+                <span className="text-sm text-ink leading-snug">
+                  {t("settings.vocabularyEnable")}
+                  <span className="block text-xs text-ink-muted mt-0.5">{t("settings.vocabularyEnableHint")}</span>
+                </span>
+              </label>
 
               {dictDeleteConfirm && (
                 <ConfirmDialog

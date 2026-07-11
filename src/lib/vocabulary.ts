@@ -14,6 +14,28 @@
 
 import { POS_LABEL_KEYS, type DictionaryEntry } from "./dictionary";
 
+/**
+ * A saved vocabulary row, as returned by `list_vocabulary` / `get_due_vocabulary`
+ * (JSON keys match the backend's `VocabularyWord` serialization exactly).
+ */
+export interface VocabularyWord {
+  id: string;
+  lemma: string;
+  word: string;
+  pos: string | null;
+  definition: string;
+  bookId: string | null;
+  bookTitle: string | null;
+  chapterIndex: number | null;
+  contextSentence: string | null;
+  seenCount: number;
+  box: number;
+  lastReviewedAt: number | null;
+  nextDueAt: number | null;
+  lastSeenAt: number;
+  createdAt: number;
+}
+
 /** Max length (roughly, pre-collapse) of the stored context sentence. */
 const MAX_CONTEXT_CHARS = 300;
 

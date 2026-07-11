@@ -9,6 +9,7 @@ import { OnboardingProvider } from "./context/OnboardingContext";
 import { ToastProvider, useToast } from "./components/Toast";
 import SettingsPanel from "./components/SettingsPanel";
 import ReadingStats from "./components/ReadingStats";
+import VocabularyPanel from "./components/VocabularyPanel";
 import ProfileSwitcher from "./components/ProfileSwitcher";
 import ProfileUnlockDialog from "./components/ProfileUnlockDialog";
 import CatalogBrowser from "./components/CatalogBrowser";
@@ -78,6 +79,8 @@ const Reader = lazy(() => import("./screens/Reader"));
 function AppShell() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [statsOpen, setStatsOpen] = useState(false);
+  const [vocabularyOpen, setVocabularyOpen] = useState(false);
+  const [vocabState, setVocabState] = useState({ enabled: false, count: 0 });
   const [profileKey, setProfileKey] = useState(0);
   const [catalogOpen, setCatalogOpen] = useState(false);
   const [catalogImportedBookIds, setCatalogImportedBookIds] = useState<string[]>([]);
@@ -103,6 +106,27 @@ function AppShell() {
     setCatalogImportedBookIds([]);
     setProfileKey((k) => k + 1); // force Library remount
   }, [navigate]);
+
+  // Vocabulary nav button visibility (F-1-5): shown when the setting is on
+  // OR the list is non-empty — so words saved before the user disables the
+  // toggle stay reachable. Re-checked on mount and whenever the Settings or
+  // Vocabulary overlay closes, since those are the only ways the toggle or
+  // the list's emptiness can change while this component stays mounted.
+  const loadVocabState = useCallback(async () => {
+    try {
+      const [enabledVal, words] = await Promise.all([
+        invoke<string | null>("get_setting_value", { key: "vocabulary_enabled" }),
+        invoke<unknown[]>("list_vocabulary"),
+      ]);
+      setVocabState({ enabled: enabledVal === "true", count: words.length });
+    } catch {
+      // ignore — nav button just keeps its last known state until next refresh
+    }
+  }, []);
+
+  useEffect(() => {
+    loadVocabState();
+  }, [settingsOpen, vocabularyOpen, loadVocabState]);
 
   // Soft-lock startup gate (A-M3): don't render the library — or even the
   // brief unstyled flash of it — until we know whether the active profile
@@ -143,6 +167,20 @@ function AppShell() {
               <path d="M3 17V9h3v8H3zM8.5 17V5h3v12h-3zM14 17V1h3v16h-3z" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" />
             </svg>
           </button>
+          {(vocabState.enabled || vocabState.count > 0) && (
+            <button
+              onClick={() => setVocabularyOpen(true)}
+              className="p-2 text-ink-muted hover:text-ink transition-colors duration-150 rounded-lg hover:bg-warm-subtle focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2"
+              aria-label={t("vocabulary.title")}
+              title={t("vocabulary.title")}
+            >
+              <svg width="18" height="18" viewBox="0 0 20 20" fill="none">
+                <rect x="3" y="5" width="12" height="9" rx="1.5" stroke="currentColor" strokeWidth="1.5" />
+                <path d="M6 9h6M6 11.5h4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+                <path d="M17 7v7a1.5 1.5 0 01-1.5 1.5H7" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+              </svg>
+            </button>
+          )}
           <button
             onClick={() => setCatalogOpen(true)}
             className="p-2 text-ink-muted hover:text-ink transition-colors duration-150 rounded-lg hover:bg-warm-subtle focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2"
@@ -200,6 +238,7 @@ function AppShell() {
       </main>
 
       {statsOpen && <ReadingStats onClose={() => setStatsOpen(false)} />}
+      {vocabularyOpen && <VocabularyPanel onClose={() => setVocabularyOpen(false)} />}
       {catalogOpen && (
         <CatalogBrowser
           onClose={() => { setCatalogOpen(false); setCatalogImportedBookIds([]); }}

@@ -430,6 +430,8 @@
     "dictionaryDeleteConfirmTitle": "Supprimer le dictionnaire ?",
     "dictionaryDeleteConfirmMessage": "Cela supprime le dictionnaire t\u00e9l\u00e9charg\u00e9 et lib\u00e8re l'espace disque. Vous pouvez le t\u00e9l\u00e9charger \u00e0 nouveau \u00e0 tout moment.",
     "dictionaryAttribution": "D\u00e9finitions issues de Princeton WordNet 3.1, \u00a9 Princeton University.",
+    "vocabularyEnable": "Constituer ma liste de vocabulaire",
+    "vocabularyEnableHint": "Enregistrez les mots que vous recherchez, avec leur source, et r\u00e9visez-les sous forme de cartes m\u00e9moire.",
     "metadataScan": "Scan des m\u00e9tadonn\u00e9es",
     "autoScanImport": "Scan automatique \u00e0 l\u2019import",
     "autoScanImportHint": "Rechercher automatiquement les m\u00e9tadonn\u00e9es lors de l\u2019importation de nouveaux livres",
@@ -952,6 +954,26 @@
 
   "toast": {
     "backupAuthFailed": "Backup authentication failed \u2014 check credentials in Settings"
+  },
+
+  "vocabulary": {
+    "title": "Vocabulaire",
+    "empty": "Aucun mot enregistré pour l’instant. Recherchez un mot pendant la lecture pour l’ajouter ici.",
+    "lemmaNote": "{{word}} → {{lemma}}",
+    "fromBook": "de {{book}}",
+    "seenCount": "Vu {{count}} fois",
+    "deleteLabel": "Supprimer « {{word}} »",
+    "clearAll": "Effacer tous les mots",
+    "clearAllConfirmTitle": "Effacer tout le vocabulaire ?",
+    "clearAllConfirmMessage": "Cela supprime définitivement tous les mots enregistrés et leur progression de révision. Cette action est irréversible.",
+    "reviewDue": "Réviser ({{count}})",
+    "reviewProgress": "{{current}} / {{total}}",
+    "flip": "Retourner",
+    "gotIt": "Je savais",
+    "missed": "Raté",
+    "nextInDays": "dans {{count}}j",
+    "reviewDone": "Tout est fait pour l’instant !",
+    "backToList": "Retour à la liste"
   },
 
   "privateMode": {

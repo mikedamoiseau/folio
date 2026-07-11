@@ -431,6 +431,8 @@
     "dictionaryDeleteConfirmTitle": "Delete dictionary?",
     "dictionaryDeleteConfirmMessage": "This removes the downloaded dictionary and frees the disk space. You can download it again anytime.",
     "dictionaryAttribution": "Definitions from Princeton WordNet 3.1, © Princeton University.",
+    "vocabularyEnable": "Build my vocabulary list",
+    "vocabularyEnableHint": "Save words you look up, with their source, and review them as flashcards.",
     "metadataScan": "Metadata Scan",
     "autoScanImport": "Auto-scan on import",
     "autoScanImportHint": "Automatically look up metadata when importing new books",
@@ -980,6 +982,26 @@
 
   "toast": {
     "backupAuthFailed": "Backup authentication failed — check credentials in Settings"
+  },
+
+  "vocabulary": {
+    "title": "Vocabulary",
+    "empty": "No words saved yet. Look up a word while reading to add it here.",
+    "lemmaNote": "{{word}} → {{lemma}}",
+    "fromBook": "from {{book}}",
+    "seenCount": "Seen {{count}}×",
+    "deleteLabel": "Delete “{{word}}”",
+    "clearAll": "Clear all words",
+    "clearAllConfirmTitle": "Clear all vocabulary?",
+    "clearAllConfirmMessage": "This permanently deletes every saved word and its review progress. This can’t be undone.",
+    "reviewDue": "Review due ({{count}})",
+    "reviewProgress": "{{current}} / {{total}}",
+    "flip": "Flip",
+    "gotIt": "Got it",
+    "missed": "Missed",
+    "nextInDays": "in {{count}}d",
+    "reviewDone": "All done for now!",
+    "backToList": "Back to list"
   },
 
   "privateMode": {

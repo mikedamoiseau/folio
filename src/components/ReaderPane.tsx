@@ -27,6 +27,7 @@ import { getVolatilePosition, setVolatilePosition } from "../lib/volatileResume"
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { friendlyError, isBookFileMissing, toFolioError } from "../lib/errors";
 import { extractLookupWord, groupSensesByPos, POS_LABEL_KEYS, type DictionaryEntry, type DictionaryStatus } from "../lib/dictionary";
+import { extractContextSentence, formatDefinitionSnapshot } from "../lib/vocabulary";
 import { useToast } from "./Toast";
 import { resolveBookmarkScrollTop, isExternalUrl } from "../lib/utils";
 import {
@@ -198,6 +199,9 @@ export default function ReaderPane({
   // Offline dictionary (F-1-1): whether the artifact is ready gates the
   // "Define" action; the card holds the anchored lookup result.
   const [dictionaryReady, setDictionaryReady] = useState(false);
+  // Vocabulary builder (F-1-5): whether auto-logging looked-up words is
+  // enabled. Gated the same way as `dictionaryReady` above.
+  const [vocabularyEnabled, setVocabularyEnabled] = useState(false);
   const [definitionCard, setDefinitionCard] = useState<
     { x: number; y: number; word: string; entry: DictionaryEntry | null; loading: boolean; error: string | null } | null
   >(null);
@@ -1106,11 +1110,33 @@ export default function ReaderPane({
     };
   }, [bookId, settingsOpen]);
 
+  // Vocabulary builder auto-log readiness (F-1-5): re-checked per book open
+  // and whenever `settingsOpen` toggles, same rationale as `dictionaryReady`
+  // above — the Settings overlay is what flips this setting while the
+  // reader stays mounted underneath it.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const enabled = await invoke<string | null>("get_setting_value", { key: "vocabulary_enabled" });
+        if (!cancelled) setVocabularyEnabled(enabled === "true");
+      } catch {
+        if (!cancelled) setVocabularyEnabled(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [bookId, settingsOpen]);
+
   const handleDefine = useCallback(async () => {
     if (!selectionPopup) return;
     const word = extractLookupWord(selectionPopup.text);
     if (!word) return;
     const anchor = { x: selectionPopup.x, y: selectionPopup.y };
+    // Capture the offsets before the popup is cleared below, so a vocabulary
+    // log call after the lookup resolves still has the real selection range.
+    const { startOffset, endOffset } = selectionPopup;
     // Opening the card supersedes the selection popup (mirrors dismiss).
     setSelectionPopup(null);
     window.getSelection()?.removeAllRanges();
@@ -1118,6 +1144,24 @@ export default function ReaderPane({
     try {
       const entry = await invoke<DictionaryEntry | null>("lookup_word", { word });
       setDefinitionCard((c) => (c && c.word === word ? { ...c, loading: false, entry } : c));
+      // Auto-log (F-1-5): fire-and-forget, only when the user opted in.
+      // Never blocks or throws into the Define UX — failures are swallowed.
+      if (entry && vocabularyEnabled && contentRef.current) {
+        const full = document.createRange();
+        full.selectNodeContents(contentRef.current);
+        const chapterText = full.toString();
+        const contextSentence = extractContextSentence(chapterText, startOffset, endOffset);
+        invoke("log_vocabulary_word", {
+          word,
+          lemma: entry.matchedWord,
+          pos: entry.senses[0]?.pos ?? null,
+          definition: formatDefinitionSnapshot(entry),
+          bookId,
+          bookTitle: bookTitle || null,
+          chapterIndex,
+          contextSentence,
+        }).catch((e) => console.error("vocab log failed", e));
+      }
     } catch (err) {
       const { kind } = toFolioError(err);
       const notReady = kind === "NotFound";
@@ -1128,7 +1172,7 @@ export default function ReaderPane({
           : c,
       );
     }
-  }, [selectionPopup, t]);
+  }, [selectionPopup, t, vocabularyEnabled, bookId, bookTitle, chapterIndex]);
 
   // ---- Highlights ----
   interface ChapterHighlight { id: string; startOffset: number; endOffset: number; color: string }
