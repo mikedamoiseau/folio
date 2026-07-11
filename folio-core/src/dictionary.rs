@@ -445,7 +445,15 @@ fn install_inner(
         None => return Err(FolioError::invalid("dictionary artifact is not valid")),
     }
 
-    // 5. Atomically move into place.
+    // 5. Move into place. `fs::rename` fails on Windows if the destination
+    // already exists (repair / re-download over a bad artifact), so remove any
+    // existing file first. Only the verified `.tmp` reaches this point, so the
+    // window between removal and rename never leaves a partial artifact behind.
+    match std::fs::remove_file(final_path) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(e.into()),
+    }
     std::fs::rename(tmp_path, final_path)?;
     Ok(())
 }
@@ -728,6 +736,32 @@ mod tests {
         assert_eq!(inspect(dest.path()).state, DictionaryState::Ready);
         assert_eq!(last, (gz.len() as u64, gz.len() as u64));
         // The installed artifact is queryable.
+        let pool = open_readonly_pool(dest.path()).unwrap();
+        assert!(lookup(&pool.get().unwrap(), "cat").unwrap().is_some());
+    }
+
+    #[test]
+    fn install_overwrites_existing_artifact() {
+        // Repair / re-download case: a dictionary.db already exists at the
+        // destination. On Windows `fs::rename` fails if the destination exists,
+        // so install must remove it first.
+        let dest = tempdir().unwrap();
+        write_test_artifact(dest.path()).unwrap();
+        assert_eq!(inspect(dest.path()).state, DictionaryState::Ready);
+
+        let src = tempdir().unwrap();
+        let gz = gzip_bytes(&artifact_bytes(src.path()));
+        let sha = sha256_hex(&gz);
+        install_from_gz_reader(
+            &mut gz.as_slice(),
+            &sha,
+            dest.path(),
+            &mut |_, _| {},
+            gz.len() as u64,
+        )
+        .unwrap();
+
+        assert_eq!(inspect(dest.path()).state, DictionaryState::Ready);
         let pool = open_readonly_pool(dest.path()).unwrap();
         assert!(lookup(&pool.get().unwrap(), "cat").unwrap().is_some());
     }

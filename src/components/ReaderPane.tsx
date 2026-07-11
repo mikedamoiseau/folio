@@ -1030,7 +1030,14 @@ export default function ReaderPane({
         return;
       }
       const text = selection.toString().trim();
-      if (!text || text.length < 3) return;
+      // The popup drives two actions with different minimums: highlight creation
+      // keeps its 3-char floor, while "Define" follows extractLookupWord's 2-char
+      // rule. Show the popup when either is possible so 2-letter words (go/be/ax)
+      // can be defined without loosening highlight creation.
+      if (!text) return;
+      const canHighlight = text.length >= 3;
+      const canDefine = dictionaryReady && extractLookupWord(text) !== null;
+      if (!canHighlight && !canDefine) return;
 
       const range = selection.getRangeAt(0);
       if (!contentRef.current.contains(range.commonAncestorContainer)) return;
@@ -1072,11 +1079,13 @@ export default function ReaderPane({
       document.removeEventListener("mouseup", handleMouseUp);
       document.removeEventListener("mousedown", handleMouseDown);
     };
-  }, [chapterHtml]);
+  }, [chapterHtml, dictionaryReady]);
 
   // Offline dictionary readiness (F-1-1): only when the feature is enabled and
   // the artifact is installed does the "Define" action appear. Re-checked per
-  // book open so a mid-session download/delete in settings is reflected.
+  // book open and whenever `settingsOpen` toggles — the settings panel is an
+  // overlay that keeps the reader mounted, so enabling/downloading/deleting the
+  // dictionary there must refresh the Define gate when the panel closes.
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -1095,7 +1104,7 @@ export default function ReaderPane({
     return () => {
       cancelled = true;
     };
-  }, [bookId]);
+  }, [bookId, settingsOpen]);
 
   const handleDefine = useCallback(async () => {
     if (!selectionPopup) return;
@@ -2618,7 +2627,9 @@ export default function ReaderPane({
                     maxWidth: `${containerW - 16}px`,
                   }}
                 >
-                  {HIGHLIGHT_COLORS.map((c) => (
+                  {/* Highlight colors keep the 3-char floor; a 2-char selection
+                      only reaches the popup for a dictionary lookup. */}
+                  {selectionPopup.text.length >= 3 && HIGHLIGHT_COLORS.map((c) => (
                     <button
                       key={c.value}
                       onClick={() => handleCreateHighlight(c.value)}

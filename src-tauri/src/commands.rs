@@ -6034,7 +6034,16 @@ pub async fn download_dictionary<R: tauri::Runtime>(
     .map_err(|e| FolioError::internal(format!("download task failed: {e}")));
     // Clear the guard regardless of outcome (join error or install result).
     state.dictionary_downloading.store(false, Ordering::SeqCst);
-    result?
+    let install = result?;
+    // The install replaced the artifact file in place; the cached pool (if any)
+    // still holds connections to the OLD inode. Invalidate it so the next
+    // `lookup_word` lazily rebuilds it against the new file. Leaf lock — held
+    // alone, mirroring `delete_dictionary`.
+    if install.is_ok() {
+        let mut pool = state.dictionary_pool.lock()?;
+        *pool = None;
+    }
+    install
 }
 
 /// Delete the installed artifact, first dropping the cached pool so the file

@@ -43,6 +43,12 @@ describe("extractLookupWord", () => {
     expect(extractLookupWord("I")).toBeNull();
   });
 
+  it("accepts 2-letter words", () => {
+    expect(extractLookupWord("go")).toBe("go");
+    expect(extractLookupWord("Be")).toBe("be");
+    expect(extractLookupWord("ax")).toBe("ax");
+  });
+
   it("rejects non-Latin scripts", () => {
     expect(extractLookupWord("привет")).toBeNull();
     expect(extractLookupWord("日本語")).toBeNull();
