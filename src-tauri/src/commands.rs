@@ -5946,11 +5946,9 @@ pub async fn set_setting_value(
 
 /// GitHub release asset URL for the gzipped WordNet 3.1 dictionary artifact.
 ///
-/// NOTE: the `dictionary-v1` release asset is not published yet — building it
-/// requires fetching the WordNet tarball and `gh release create`, a
-/// network-gated manual step (see `scripts/build-dictionary-artifact.sh`).
-/// This is the canonical URL the asset will occupy; downloads succeed once it
-/// is live and `DICTIONARY_SHA256` holds the artifact's real `.gz` checksum.
+/// The `dictionary-v1` release asset is published and live; its `.gz` checksum
+/// is pinned in [`DICTIONARY_SHA256`]. Rebuild the artifact with
+/// `scripts/build-dictionary-artifact.sh` if it ever needs regenerating.
 const DICTIONARY_URL: &str =
     "https://github.com/mikedamoiseau/folio/releases/download/dictionary-v1/dictionary-v1.db.gz";
 
