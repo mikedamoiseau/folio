@@ -1145,22 +1145,28 @@ export default function ReaderPane({
       const entry = await invoke<DictionaryEntry | null>("lookup_word", { word });
       setDefinitionCard((c) => (c && c.word === word ? { ...c, loading: false, entry } : c));
       // Auto-log (F-1-5): fire-and-forget, only when the user opted in.
-      // Never blocks or throws into the Define UX — failures are swallowed.
-      if (entry && vocabularyEnabled && contentRef.current) {
-        const full = document.createRange();
-        full.selectNodeContents(contentRef.current);
-        const chapterText = full.toString();
-        const contextSentence = extractContextSentence(chapterText, startOffset, endOffset);
-        invoke("log_vocabulary_word", {
-          word,
-          lemma: entry.matchedWord,
-          pos: entry.senses[0]?.pos ?? null,
-          definition: formatDefinitionSnapshot(entry),
-          bookId,
-          bookTitle: bookTitle || null,
-          chapterIndex,
-          contextSentence,
-        }).catch((e) => console.error("vocab log failed", e));
+      // Never blocks or throws into the Define UX — failures are swallowed by
+      // this dedicated try/catch, kept separate from the lookup's own so a
+      // logging failure can never paint over an already-successful lookup.
+      try {
+        if (entry && vocabularyEnabled && contentRef.current) {
+          const full = document.createRange();
+          full.selectNodeContents(contentRef.current);
+          const chapterText = full.toString();
+          const contextSentence = extractContextSentence(chapterText, startOffset, endOffset);
+          invoke("log_vocabulary_word", {
+            word,
+            lemma: entry.matchedWord,
+            pos: entry.senses[0]?.pos ?? null,
+            definition: formatDefinitionSnapshot(entry),
+            bookId,
+            bookTitle: bookTitle || null,
+            chapterIndex,
+            contextSentence,
+          }).catch((e) => console.error("vocab log failed", e));
+        }
+      } catch (e) {
+        console.error("vocab log failed", e);
       }
     } catch (err) {
       const { kind } = toFolioError(err);

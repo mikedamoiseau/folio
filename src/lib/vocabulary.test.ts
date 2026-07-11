@@ -39,14 +39,19 @@ describe("extractContextSentence", () => {
   });
 
   it("returns the whole text (capped) when there is no punctuation at all", () => {
-    const text = "a".repeat(500);
+    // Use a unique marker at the selection offsets (rather than a uniform
+    // filler character) so the assertion below actually proves the window
+    // is centered on the selection — with an "a".repeat() fixture, any
+    // window at all would trivially contain the selected slice.
+    const marker = "MARKER1";
     const start = 250;
-    const end = 253;
+    const end = start + marker.length;
+    const text = "a".repeat(start) + marker + "a".repeat(500 - end);
     const result = extractContextSentence(text, start, end);
     expect(result.length).toBeLessThanOrEqual(300);
     expect(result.length).toBeGreaterThan(0);
     // The selection itself must still be inside the returned window.
-    expect(result).toContain(text.slice(start, end));
+    expect(result).toContain(marker);
   });
 
   it("returns '' for empty chapter text", () => {
