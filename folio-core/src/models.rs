@@ -122,6 +122,32 @@ pub struct Highlight {
     pub deleted_at: Option<i64>,
 }
 
+/// F-1-5 vocabulary builder: one row per looked-up lemma, with a snapshot of
+/// the definition and Leitner-box review state. See
+/// `docs/superpowers/specs/2026-07-11-vocabulary-builder-design.md`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VocabularyWord {
+    pub id: String,
+    pub lemma: String,
+    pub word: String,
+    pub pos: Option<String>,
+    pub definition: String,
+    pub book_id: Option<String>,
+    pub book_title: Option<String>,
+    pub chapter_index: Option<i64>,
+    pub context_sentence: Option<String>,
+    pub seen_count: i64,
+    /// SQL column is `box` (Leitner box 1..5); `box` is a Rust keyword, so the
+    /// field is `box_num` and renamed back to `box` on the wire.
+    #[serde(rename = "box")]
+    pub box_num: i64,
+    pub last_reviewed_at: Option<i64>,
+    pub next_due_at: Option<i64>,
+    pub last_seen_at: i64,
+    pub created_at: i64,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub enum CollectionType {

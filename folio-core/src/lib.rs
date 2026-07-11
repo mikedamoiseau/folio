@@ -36,6 +36,7 @@ pub mod providers;
 pub mod search;
 pub mod storage;
 pub mod sync;
+pub mod vocabulary;
 
 // Flat re-exports for common types so consumers can write
 // `use folio_core::{FolioError, FolioResult, Book}` without the extra

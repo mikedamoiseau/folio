@@ -255,6 +255,25 @@ fn run_schema(conn: &Connection) -> Result<()> {
             changed_at INTEGER NOT NULL,
             source TEXT NOT NULL DEFAULT 'desktop'
         );
+
+        CREATE TABLE IF NOT EXISTS vocabulary (
+            id             TEXT PRIMARY KEY,
+            lemma          TEXT NOT NULL UNIQUE,
+            word           TEXT NOT NULL,
+            pos            TEXT,
+            definition     TEXT NOT NULL,
+            book_id        TEXT REFERENCES books(id) ON DELETE SET NULL,
+            book_title     TEXT,
+            chapter_index  INTEGER,
+            context_sentence TEXT,
+            seen_count     INTEGER NOT NULL DEFAULT 1,
+            box            INTEGER NOT NULL DEFAULT 1,
+            last_reviewed_at INTEGER,
+            next_due_at    INTEGER,
+            last_seen_at   INTEGER NOT NULL,
+            created_at     INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_vocabulary_due ON vocabulary(next_due_at);
     ",
     )?;
 
