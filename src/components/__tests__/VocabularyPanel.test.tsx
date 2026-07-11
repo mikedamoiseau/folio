@@ -50,7 +50,7 @@ const sampleWord: VocabularyWord = {
   createdAt: 1_700_000_000,
 };
 
-const invokeMock = vi.fn((cmd: string) => {
+const invokeMock = vi.fn((cmd: string, ..._args: unknown[]) => {
   if (cmd === "list_vocabulary") return Promise.resolve([sampleWord]);
   if (cmd === "get_due_vocabulary") return Promise.resolve([]);
   if (cmd === "delete_vocabulary_word") return Promise.resolve(undefined);
