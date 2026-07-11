@@ -131,6 +131,24 @@ paths satisfy the *relinking* obligation differently; both are addressed.
 
 ---
 
+## Princeton WordNet 3.1 (in-reader dictionary)
+
+- **Upstream:** <https://wordnet.princeton.edu/> (WNdb-3.1 database)
+- **License:** The **WordNet License** — a permissive BSD-style license that
+  allows use, copying, modification, and distribution (including commercial)
+  provided the copyright notice and license text are retained. See
+  <https://wordnet.princeton.edu/license-and-commercial-use>.
+- **Copyright:** WordNet 3.1 Copyright 2011 by Princeton University. All
+  rights reserved.
+- **How Folio uses it:** The optional offline dictionary artifact (feature
+  F-1-1) is a prebuilt SQLite database derived from WordNet 3.1 — single-word
+  lemmas, parts of speech, glosses, examples, and morphological exception
+  tables. It is downloaded on demand when the reader dictionary is enabled;
+  the full license text is embedded in the artifact's `meta` table, and the
+  attribution is shown in Settings.
+
+---
+
 ## Other notable Rust crates
 
 The following crates ship compiled code in the Folio binary. Full license

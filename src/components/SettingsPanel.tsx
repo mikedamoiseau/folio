@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback, type ReactNode } from "react";
+import { useEffect, useRef, useState, useCallback, useReducer, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getVersion } from "@tauri-apps/api/app";
 import { listen } from "@tauri-apps/api/event";
@@ -7,6 +7,13 @@ import { useTranslation } from "react-i18next";
 import { useTheme, MIN_FONT_SIZE, MAX_FONT_SIZE, type ColorTokens } from "../context/ThemeContext";
 import { friendlyError } from "../lib/errors";
 import { missingRequiredFields, connectionResultFeedback } from "../lib/backupConnection";
+import type { DictionaryStatus } from "../lib/dictionary";
+import {
+  dictionaryReducer,
+  initialDictionaryState,
+  downloadPercent,
+  isVerifying,
+} from "../lib/dictionaryState";
 import { isPinUnsaved, shouldSaveOnBlur } from "../lib/pinSaveState";
 import { validateWebServerPort, WEB_SERVER_PORT_MIN, WEB_SERVER_PORT_MAX, formatBytes } from "../lib/utils";
 import { useOnboardingContext } from "../context/OnboardingContext";
@@ -477,6 +484,11 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
   const [autoScanImport, setAutoScanImport] = useState(true);
   const [autoScanStartup, setAutoScanStartup] = useState(false);
 
+  // Offline dictionary (F-1-1)
+  const [dictEnabled, setDictEnabled] = useState(false);
+  const [dictState, dictDispatch] = useReducer(dictionaryReducer, undefined, initialDictionaryState);
+  const [dictDeleteConfirm, setDictDeleteConfirm] = useState(false);
+
   // Enrichment providers
   const [enrichmentProviders, setEnrichmentProviders] = useState<EnrichmentProviderInfo[]>([]);
 
@@ -806,6 +818,10 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
         setAutoScanStartup(scanStartup === "true");
         const importModeVal = await invoke<string | null>("get_setting_value", { key: "import_mode" });
         if (importModeVal) setImportMode(importModeVal);
+        const dictEnabledVal = await invoke<string | null>("get_setting_value", { key: "dictionary_enabled" });
+        setDictEnabled(dictEnabledVal === "true");
+        const dictStatus = await invoke<DictionaryStatus>("get_dictionary_status");
+        dictDispatch({ type: "statusLoaded", status: dictStatus });
         await loadServerStatus();
       })().catch(() => {});
     }
@@ -1144,6 +1160,51 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
       await invoke("set_setting_value", { key: "sync_enabled", value: enabled ? "true" : "false" });
     } catch {
       setSyncEnabled(prev);
+    }
+  };
+
+  const handleToggleDictionary = async (val: boolean) => {
+    setDictEnabled(val); // optimistic
+    try {
+      await invoke("set_setting_value", { key: "dictionary_enabled", value: val ? "true" : "false" });
+      if (val && dictState.phase === "unknown") {
+        const status = await invoke<DictionaryStatus>("get_dictionary_status");
+        dictDispatch({ type: "statusLoaded", status });
+      }
+    } catch (err) {
+      setDictEnabled(!val); // revert — the setting did not persist
+      addToast(friendlyError(err, t), "error");
+    }
+  };
+
+  const handleDownloadDictionary = async () => {
+    dictDispatch({ type: "downloadStarted" });
+    // Listener lifecycle mirrors the backup flow: subscribe, await the invoke,
+    // always unlisten in finally.
+    const unlisten = await listen<{ loaded: number; total: number }>(
+      "dictionary-download-progress",
+      (event) => {
+        dictDispatch({ type: "downloadProgress", loaded: event.payload.loaded, total: event.payload.total });
+      },
+    );
+    try {
+      await invoke("download_dictionary");
+      const status = await invoke<DictionaryStatus>("get_dictionary_status");
+      dictDispatch({ type: "downloadSucceeded", status });
+    } catch (err) {
+      dictDispatch({ type: "downloadFailed", error: friendlyError(err, t) });
+    } finally {
+      unlisten();
+    }
+  };
+
+  const handleDeleteDictionary = async () => {
+    setDictDeleteConfirm(false);
+    try {
+      await invoke("delete_dictionary");
+      dictDispatch({ type: "deleted" });
+    } catch (err) {
+      addToast(friendlyError(err, t), "error");
     }
   };
 
@@ -2104,6 +2165,95 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                     </div>
                   ))}
                 </div>
+              )}
+            </div>
+          </Accordion>
+
+          <Accordion title={t("settings.dictionarySection")} open={openSection === "dictionary"} onToggle={() => toggleSection("dictionary")} query={settingsQuery} keywords={t("settings.searchTermsDictionary")}>
+            <div className="space-y-3">
+              <label className="flex items-start gap-2.5 cursor-pointer px-1">
+                <input type="checkbox" checked={dictEnabled}
+                  onChange={(e) => handleToggleDictionary(e.target.checked)}
+                  className="mt-0.5 accent-accent" />
+                <span className="text-sm text-ink leading-snug">
+                  {t("settings.dictionaryEnable")}
+                  <span className="block text-xs text-ink-muted mt-0.5">{t("settings.dictionaryEnableHint")}</span>
+                </span>
+              </label>
+
+              {dictEnabled && (
+                <div className="px-1 space-y-2">
+                  {(dictState.phase === "missing" || dictState.phase === "corrupt" || dictState.phase === "unknown") && (
+                    <div className="flex items-center gap-2 flex-wrap">
+                      {dictState.phase === "corrupt" && (
+                        <p className="w-full text-xs text-red-500">{t("settings.dictionaryCorrupt")}</p>
+                      )}
+                      <button
+                        onClick={handleDownloadDictionary}
+                        disabled={dictState.phase === "unknown"}
+                        className="shrink-0 px-3 py-1.5 text-xs bg-accent text-white rounded-lg hover:bg-accent-hover transition-colors font-medium disabled:opacity-50"
+                      >
+                        {t("settings.dictionaryDownload")}
+                      </button>
+                      <span className="text-xs text-ink-muted">{t("settings.dictionaryDownloadHint")}</span>
+                    </div>
+                  )}
+
+                  {dictState.phase === "downloading" && (
+                    <div>
+                      <div className="h-2 bg-warm-border rounded overflow-hidden">
+                        <div
+                          className="h-full bg-accent transition-[width] duration-200"
+                          style={{ width: `${downloadPercent(dictState) ?? 15}%` }}
+                        />
+                      </div>
+                      <p className="text-xs text-ink-muted mt-1">
+                        {isVerifying(dictState) ? t("settings.dictionaryVerifying") : t("settings.dictionaryDownloading")}
+                      </p>
+                    </div>
+                  )}
+
+                  {dictState.phase === "error" && (
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <p className="w-full text-xs text-red-500">{dictState.error}</p>
+                      <button
+                        onClick={handleDownloadDictionary}
+                        className="shrink-0 px-3 py-1.5 text-xs bg-accent text-white rounded-lg hover:bg-accent-hover transition-colors font-medium"
+                      >
+                        {t("settings.dictionaryRetry")}
+                      </button>
+                    </div>
+                  )}
+
+                  {dictState.phase === "ready" && (
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-xs text-ink-muted">
+                        {t("settings.dictionaryReady", {
+                          version: dictState.wordnetVersion ?? "",
+                          size: formatBytes(dictState.sizeBytes),
+                        })}
+                      </span>
+                      <button
+                        onClick={() => setDictDeleteConfirm(true)}
+                        className="shrink-0 px-3 py-1.5 text-xs bg-warm-subtle text-ink rounded-lg hover:bg-warm-border transition-colors font-medium"
+                      >
+                        {t("settings.dictionaryDelete")}
+                      </button>
+                    </div>
+                  )}
+
+                  <p className="text-[10px] text-ink-muted">{t("settings.dictionaryAttribution")}</p>
+                </div>
+              )}
+
+              {dictDeleteConfirm && (
+                <ConfirmDialog
+                  title={t("settings.dictionaryDeleteConfirmTitle")}
+                  message={t("settings.dictionaryDeleteConfirmMessage")}
+                  confirmLabel={t("settings.dictionaryDelete")}
+                  onConfirm={handleDeleteDictionary}
+                  onCancel={() => setDictDeleteConfirm(false)}
+                />
               )}
             </div>
           </Accordion>

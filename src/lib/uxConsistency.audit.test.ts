@@ -229,6 +229,7 @@ describe("SettingsPanel section list", () => {
       "librarySection",
       "backupRestore",
       "metadataScan",
+      "dictionarySection",
       "remoteAccess",
       "profileLockSection",
       "remoteBackup",

@@ -25,7 +25,8 @@ import ReaderSkeleton from "./ReaderSkeleton";
 import { usePrivateMode } from "../hooks/usePrivateMode";
 import { getVolatilePosition, setVolatilePosition } from "../lib/volatileResume";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { friendlyError, isBookFileMissing } from "../lib/errors";
+import { friendlyError, isBookFileMissing, toFolioError } from "../lib/errors";
+import { extractLookupWord, groupSensesByPos, POS_LABEL_KEYS, type DictionaryEntry, type DictionaryStatus } from "../lib/dictionary";
 import { useToast } from "./Toast";
 import { resolveBookmarkScrollTop, isExternalUrl } from "../lib/utils";
 import {
@@ -193,6 +194,13 @@ export default function ReaderPane({
   const [saveIndicator, setSaveIndicator] = useState(false);
   const [saveError, setSaveError] = useState(false);
   const [selectionPopup, setSelectionPopup] = useState<{ x: number; y: number; text: string; startOffset: number; endOffset: number } | null>(null);
+
+  // Offline dictionary (F-1-1): whether the artifact is ready gates the
+  // "Define" action; the card holds the anchored lookup result.
+  const [dictionaryReady, setDictionaryReady] = useState(false);
+  const [definitionCard, setDefinitionCard] = useState<
+    { x: number; y: number; word: string; entry: DictionaryEntry | null; loading: boolean; error: string | null } | null
+  >(null);
 
   // Book search
   const [searchOpen, setSearchOpen] = useState(false);
@@ -1049,10 +1057,12 @@ export default function ReaderPane({
     }
 
     function handleMouseDown(e: MouseEvent) {
-      // Dismiss popup when clicking outside it
+      // Dismiss the selection popup and the definition card when clicking
+      // outside both.
       const target = e.target as HTMLElement;
-      if (!target.closest('[data-highlight-popup]')) {
+      if (!target.closest('[data-highlight-popup]') && !target.closest('[data-definition-card]')) {
         setSelectionPopup(null);
+        setDefinitionCard(null);
       }
     }
 
@@ -1063,6 +1073,53 @@ export default function ReaderPane({
       document.removeEventListener("mousedown", handleMouseDown);
     };
   }, [chapterHtml]);
+
+  // Offline dictionary readiness (F-1-1): only when the feature is enabled and
+  // the artifact is installed does the "Define" action appear. Re-checked per
+  // book open so a mid-session download/delete in settings is reflected.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const enabled = await invoke<string | null>("get_setting_value", { key: "dictionary_enabled" });
+        if (enabled !== "true") {
+          if (!cancelled) setDictionaryReady(false);
+          return;
+        }
+        const status = await invoke<DictionaryStatus>("get_dictionary_status");
+        if (!cancelled) setDictionaryReady(status.state === "ready");
+      } catch {
+        if (!cancelled) setDictionaryReady(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [bookId]);
+
+  const handleDefine = useCallback(async () => {
+    if (!selectionPopup) return;
+    const word = extractLookupWord(selectionPopup.text);
+    if (!word) return;
+    const anchor = { x: selectionPopup.x, y: selectionPopup.y };
+    // Opening the card supersedes the selection popup (mirrors dismiss).
+    setSelectionPopup(null);
+    window.getSelection()?.removeAllRanges();
+    setDefinitionCard({ x: anchor.x, y: anchor.y, word, entry: null, loading: true, error: null });
+    try {
+      const entry = await invoke<DictionaryEntry | null>("lookup_word", { word });
+      setDefinitionCard((c) => (c && c.word === word ? { ...c, loading: false, entry } : c));
+    } catch (err) {
+      const { kind } = toFolioError(err);
+      const notReady = kind === "NotFound";
+      if (notReady) setDictionaryReady(false); // artifact vanished — hide Define
+      setDefinitionCard((c) =>
+        c && c.word === word
+          ? { ...c, loading: false, error: notReady ? t("reader.dictionary.notReady") : t("reader.dictionary.lookupFailed") }
+          : c,
+      );
+    }
+  }, [selectionPopup, t]);
 
   // ---- Highlights ----
   interface ChapterHighlight { id: string; startOffset: number; endOffset: number; color: string }
@@ -2580,6 +2637,16 @@ export default function ReaderPane({
                       title={t("reader.clearHighlight")}
                     />
                   )}
+                  {/* Define — only when the dictionary is ready and the
+                      selection reduces to a single lookable word. */}
+                  {dictionaryReady && extractLookupWord(selectionPopup.text) !== null && (
+                    <button
+                      onClick={handleDefine}
+                      className="px-2 h-5 rounded text-xs font-medium text-white/90 hover:text-white hover:bg-white/10 transition-colors"
+                    >
+                      {t("reader.dictionary.define")}
+                    </button>
+                  )}
                   <div className="w-px h-4 bg-white/20 mx-0.5" />
                   <button
                     onClick={() => { setSelectionPopup(null); window.getSelection()?.removeAllRanges(); }}
@@ -2591,6 +2658,98 @@ export default function ReaderPane({
                     </svg>
                   </button>
                 </div>
+                );
+              })()}
+
+              {/* Definition card (F-1-1): anchored popover near the selection. */}
+              {definitionCard && (() => {
+                const containerW = contentRef.current?.clientWidth ?? 600;
+                const cardW = Math.min(320, containerW - 16);
+                const clampedX = Math.max(cardW / 2 + 8, Math.min(definitionCard.x, containerW - cardW / 2 - 8));
+                const scrollTop = scrollContainerRef.current?.scrollTop ?? 0;
+                const viewportH = scrollContainerRef.current?.clientHeight ?? window.innerHeight;
+                const cardH = 288; // ≈ max-h-72
+                const wouldClipBottom = definitionCard.y + 24 + cardH > scrollTop + viewportH;
+                const wouldClipTop = definitionCard.y - cardH < scrollTop;
+                const showBelow = !wouldClipBottom || wouldClipTop;
+                const yOffset = showBelow ? 24 : -8;
+                const transformY = showBelow ? "0%" : "-100%";
+                const entry = definitionCard.entry;
+                const groups = entry ? groupSensesByPos(entry.senses) : [];
+                return (
+                  <div
+                    data-definition-card
+                    className="absolute z-30 max-h-72 overflow-y-auto bg-surface text-ink rounded-xl shadow-xl border border-warm-border p-3.5"
+                    style={{
+                      left: `${clampedX}px`,
+                      top: `${definitionCard.y + yOffset}px`,
+                      transform: `translate(-50%, ${transformY})`,
+                      width: `${cardW}px`,
+                    }}
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <span className="text-base font-semibold break-words">
+                          {entry ? entry.matchedWord : definitionCard.word}
+                        </span>
+                        {entry && entry.matchedWord !== entry.word && (
+                          <span className="block text-[11px] text-ink-muted">
+                            {t("reader.dictionary.lemmaNote", { query: entry.word, lemma: entry.matchedWord })}
+                          </span>
+                        )}
+                      </div>
+                      <button
+                        onClick={() => setDefinitionCard(null)}
+                        className="shrink-0 w-5 h-5 rounded-full text-ink-muted hover:text-ink hover:bg-warm-subtle flex items-center justify-center"
+                        aria-label={t("reader.dismiss")}
+                      >
+                        <svg width="12" height="12" viewBox="0 0 16 16" fill="none">
+                          <path d="M12 4L4 12M4 4l8 8" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                        </svg>
+                      </button>
+                    </div>
+
+                    {definitionCard.loading && (
+                      <p className="text-xs text-ink-muted mt-2">{t("reader.loading")}</p>
+                    )}
+                    {definitionCard.error && (
+                      <p className="text-xs text-ink-muted mt-2">{definitionCard.error}</p>
+                    )}
+                    {!definitionCard.loading && !definitionCard.error && !entry && (
+                      <p className="text-xs text-ink-muted mt-2">
+                        {t("reader.dictionary.noMatch", { word: definitionCard.word })}
+                      </p>
+                    )}
+
+                    {entry && groups.length > 0 && (
+                      <div className="mt-2 space-y-3">
+                        {groups.map((group) => (
+                          <div key={group.pos}>
+                            <span className="text-[11px] italic text-ink-muted">
+                              {t(POS_LABEL_KEYS[group.pos] ?? "reader.dictionary.posNoun")}
+                            </span>
+                            <ol className="mt-1 space-y-1.5 list-decimal list-inside">
+                              {group.senses.map((sense) => (
+                                <li key={`${sense.pos}-${sense.senseNum}`} className="text-sm leading-snug">
+                                  <span>{sense.gloss}</span>
+                                  {sense.examples[0] && (
+                                    <span className="block text-xs italic text-ink-muted mt-0.5">
+                                      “{sense.examples[0]}”
+                                    </span>
+                                  )}
+                                  {sense.synonyms.length > 0 && (
+                                    <span className="block text-xs text-ink-muted mt-0.5">
+                                      {sense.synonyms.slice(0, 5).join(", ")}
+                                    </span>
+                                  )}
+                                </li>
+                              ))}
+                            </ol>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
                 );
               })()}
 
