@@ -6093,6 +6093,8 @@ fn log_vocabulary_word_entry(
     book_title: Option<String>,
     chapter_index: Option<i64>,
     context_sentence: Option<String>,
+    start_offset: Option<i64>,
+    end_offset: Option<i64>,
 ) -> FolioResult<()> {
     if db::get_setting(conn, "vocabulary_enabled")?.as_deref() != Some("true") {
         return Ok(());
@@ -6111,6 +6113,8 @@ fn log_vocabulary_word_entry(
         book_title,
         chapter_index,
         context_sentence,
+        start_offset,
+        end_offset,
         seen_count: 1,
         box_num: 1,
         last_reviewed_at: None,
@@ -6133,6 +6137,8 @@ pub async fn log_vocabulary_word(
     book_title: Option<String>,
     chapter_index: Option<i64>,
     context_sentence: Option<String>,
+    start_offset: Option<i64>,
+    end_offset: Option<i64>,
     state: State<'_, AppState>,
 ) -> FolioResult<()> {
     let conn = state.active_db()?.get()?;
@@ -6146,6 +6152,8 @@ pub async fn log_vocabulary_word(
         book_title,
         chapter_index,
         context_sentence,
+        start_offset,
+        end_offset,
     )
 }
 
@@ -9374,6 +9382,8 @@ mod tests {
             None,
             None,
             None,
+            None,
+            None,
         )
         .unwrap();
         assert_eq!(db::list_vocabulary(&conn).unwrap().len(), 0);
@@ -9386,6 +9396,8 @@ mod tests {
             "run".to_string(),
             Some("verb".to_string()),
             "to move fast on foot".to_string(),
+            None,
+            None,
             None,
             None,
             None,
@@ -9411,6 +9423,8 @@ mod tests {
             None,
             None,
             None,
+            Some(42),
+            Some(49),
         )
         .unwrap();
 
@@ -9419,6 +9433,8 @@ mod tests {
         assert_eq!(words[0].box_num, 1);
         assert!(words[0].next_due_at.is_none());
         assert_eq!(words[0].seen_count, 1);
+        assert_eq!(words[0].start_offset, Some(42));
+        assert_eq!(words[0].end_offset, Some(49));
     }
 
     #[test]
@@ -9432,6 +9448,8 @@ mod tests {
             "run".to_string(),
             None,
             "to move fast on foot".to_string(),
+            None,
+            None,
             None,
             None,
             None,

@@ -137,6 +137,11 @@ pub struct VocabularyWord {
     pub book_title: Option<String>,
     pub chapter_index: Option<i64>,
     pub context_sentence: Option<String>,
+    /// In-chapter character offsets of the looked-up selection, for
+    /// jump-to-source (VJ-M1). Nullable — a word may be logged without a
+    /// usable selection range.
+    pub start_offset: Option<i64>,
+    pub end_offset: Option<i64>,
     pub seen_count: i64,
     /// SQL column is `box` (Leitner box 1..5); `box` is a Rust keyword, so the
     /// field is `box_num` and renamed back to `box` on the wire.

@@ -266,6 +266,8 @@ fn run_schema(conn: &Connection) -> Result<()> {
             book_title     TEXT,
             chapter_index  INTEGER,
             context_sentence TEXT,
+            start_offset   INTEGER,
+            end_offset     INTEGER,
             seen_count     INTEGER NOT NULL DEFAULT 1,
             box            INTEGER NOT NULL DEFAULT 1,
             last_reviewed_at INTEGER,
@@ -2000,8 +2002,8 @@ pub fn upsert_vocabulary_word(
         .unwrap_or(false);
 
     conn.execute(
-        "INSERT INTO vocabulary (id, lemma, word, pos, definition, book_id, book_title, chapter_index, context_sentence, seen_count, box, last_reviewed_at, next_due_at, last_seen_at, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
+        "INSERT INTO vocabulary (id, lemma, word, pos, definition, book_id, book_title, chapter_index, context_sentence, start_offset, end_offset, seen_count, box, last_reviewed_at, next_due_at, last_seen_at, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)
          ON CONFLICT(lemma) DO UPDATE SET
            seen_count = seen_count + 1,
            last_seen_at = excluded.last_seen_at",
@@ -2015,6 +2017,8 @@ pub fn upsert_vocabulary_word(
             w.book_title,
             w.chapter_index,
             w.context_sentence,
+            w.start_offset,
+            w.end_offset,
             w.seen_count,
             w.box_num,
             w.last_reviewed_at,
@@ -2031,7 +2035,7 @@ pub fn list_vocabulary(
     conn: &Connection,
 ) -> crate::error::FolioResult<Vec<crate::models::VocabularyWord>> {
     let mut stmt = conn.prepare(
-        "SELECT id, lemma, word, pos, definition, book_id, book_title, chapter_index, context_sentence, seen_count, box, last_reviewed_at, next_due_at, last_seen_at, created_at
+        "SELECT id, lemma, word, pos, definition, book_id, book_title, chapter_index, context_sentence, start_offset, end_offset, seen_count, box, last_reviewed_at, next_due_at, last_seen_at, created_at
          FROM vocabulary ORDER BY created_at DESC",
     )?;
     let rows = stmt.query_map([], vocabulary_row)?;
@@ -2057,7 +2061,7 @@ pub fn due_vocabulary(
     limit: i64,
 ) -> crate::error::FolioResult<Vec<crate::models::VocabularyWord>> {
     let mut stmt = conn.prepare(
-        "SELECT id, lemma, word, pos, definition, book_id, book_title, chapter_index, context_sentence, seen_count, box, last_reviewed_at, next_due_at, last_seen_at, created_at
+        "SELECT id, lemma, word, pos, definition, book_id, book_title, chapter_index, context_sentence, start_offset, end_offset, seen_count, box, last_reviewed_at, next_due_at, last_seen_at, created_at
          FROM vocabulary WHERE next_due_at IS NULL OR next_due_at <= ?1
          ORDER BY next_due_at ASC, created_at ASC LIMIT ?2",
     )?;
@@ -2096,12 +2100,14 @@ fn vocabulary_row(row: &rusqlite::Row) -> rusqlite::Result<crate::models::Vocabu
         book_title: row.get(6)?,
         chapter_index: row.get(7)?,
         context_sentence: row.get(8)?,
-        seen_count: row.get(9)?,
-        box_num: row.get(10)?,
-        last_reviewed_at: row.get(11)?,
-        next_due_at: row.get(12)?,
-        last_seen_at: row.get(13)?,
-        created_at: row.get(14)?,
+        start_offset: row.get(9)?,
+        end_offset: row.get(10)?,
+        seen_count: row.get(11)?,
+        box_num: row.get(12)?,
+        last_reviewed_at: row.get(13)?,
+        next_due_at: row.get(14)?,
+        last_seen_at: row.get(15)?,
+        created_at: row.get(16)?,
     })
 }
 
@@ -5652,6 +5658,8 @@ mod tests {
             book_title: None,
             chapter_index: None,
             context_sentence: Some("A sentence with the word in it.".to_string()),
+            start_offset: Some(10),
+            end_offset: Some(20),
             seen_count: 1,
             box_num: 1,
             last_reviewed_at: None,
@@ -5671,6 +5679,8 @@ mod tests {
         let all = list_vocabulary(&conn).unwrap();
         assert_eq!(all.len(), 1);
         assert_eq!(all[0].seen_count, 1);
+        assert_eq!(all[0].start_offset, Some(10));
+        assert_eq!(all[0].end_offset, Some(20));
     }
 
     #[test]
@@ -5679,13 +5689,15 @@ mod tests {
         let word = sample_vocabulary_word("v1", "run");
         upsert_vocabulary_word(&conn, &word).unwrap();
 
-        // Second lookup of the same lemma: different id/context/box would-be
-        // values must NOT overwrite context/box/created_at — only
-        // seen_count/last_seen_at.
+        // Second lookup of the same lemma: different id/context/box/offset
+        // would-be values must NOT overwrite context/box/created_at/offsets —
+        // only seen_count/last_seen_at.
         let mut repeat = sample_vocabulary_word("v2", "run");
         repeat.context_sentence = Some("A totally different sentence.".to_string());
         repeat.box_num = 4;
         repeat.last_seen_at = 1_700_000_500;
+        repeat.start_offset = Some(99);
+        repeat.end_offset = Some(199);
         let inserted = upsert_vocabulary_word(&conn, &repeat).unwrap();
         assert!(
             !inserted,
@@ -5705,6 +5717,16 @@ mod tests {
             "original context preserved"
         );
         assert_eq!(row.created_at, 1_700_000_000, "created_at untouched");
+        assert_eq!(
+            row.start_offset,
+            Some(10),
+            "original start_offset preserved on repeat lookup"
+        );
+        assert_eq!(
+            row.end_offset,
+            Some(20),
+            "original end_offset preserved on repeat lookup"
+        );
     }
 
     #[test]
@@ -5759,6 +5781,16 @@ mod tests {
         upsert_vocabulary_word(&conn, &not_due).unwrap();
 
         let due = due_vocabulary(&conn, 1_000, 10).unwrap();
+        assert_eq!(
+            due[0].start_offset,
+            Some(10),
+            "due_vocabulary mapper wires up start_offset"
+        );
+        assert_eq!(
+            due[0].end_offset,
+            Some(20),
+            "due_vocabulary mapper wires up end_offset"
+        );
         let ids: Vec<&str> = due.iter().map(|w| w.id.as_str()).collect();
         assert_eq!(
             ids,
