@@ -13,6 +13,7 @@ pub mod cache;
 pub mod cbr;
 pub mod cbz;
 pub mod db;
+pub mod dictionary;
 pub mod enrichment;
 pub mod epub;
 pub mod error;

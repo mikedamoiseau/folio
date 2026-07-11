@@ -40,6 +40,9 @@ src-tauri/resources/*.dll
 # Test fixtures (not part of the repo; downloaded by developers as needed)
 src-tauri/test-fixtures/
 
+# Dictionary artifact build output (scripts/build-dictionary-artifact.sh)
+build/
+
 # Logs
 *.log
 npm-debug.log*
