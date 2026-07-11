@@ -116,6 +116,18 @@ pub struct AppState {
     /// lifetime so buffered log records flush on shutdown. Held only for
     /// its `Drop`; never read. `None` when logging to stderr (dev).
     pub _log_guard: Option<tracing_appender::non_blocking::WorkerGuard>,
+    /// Read-only connection pool over the offline dictionary artifact
+    /// (F-1-1). `None` until first lazily opened by `lookup_word`; reset to
+    /// `None` by `delete_dictionary` so the file can be removed. The artifact
+    /// lives at `{data_dir}/dictionary/` — profile-independent, one download
+    /// serves every profile. Leaf lock — never held with another `AppState`
+    /// mutex.
+    pub dictionary_pool: std::sync::Mutex<Option<DbPool>>,
+    /// Guards against concurrent dictionary downloads: `download_dictionary`
+    /// CAS-flips this to `true` for the duration of a download and clears it
+    /// when done, so a second invocation returns early instead of racing on
+    /// the staging files.
+    pub dictionary_downloading: std::sync::atomic::AtomicBool,
 }
 
 impl AppState {
@@ -187,6 +199,14 @@ impl AppState {
         Ok(std::sync::Arc::new(folio_core::storage::LocalStorage::new(
             root,
         )?))
+    }
+
+    /// Directory holding the offline dictionary artifact (F-1-1), at
+    /// `{data_dir}/dictionary`. Profile-independent: a single downloaded
+    /// artifact serves every profile (the `dictionary_enabled` *setting* is
+    /// still per-profile).
+    pub fn dictionary_dir(&self) -> std::path::PathBuf {
+        self.data_dir.join("dictionary")
     }
 
     /// Returns a `Storage` handle for EPUB inline chapter images, rooted at
@@ -5922,6 +5942,133 @@ pub async fn set_setting_value(
     Ok(db::set_setting(&conn, &key, &value)?)
 }
 
+// ---- Offline dictionary (F-1-1) ----
+
+/// GitHub release asset URL for the gzipped WordNet 3.1 dictionary artifact.
+///
+/// NOTE: the `dictionary-v1` release asset is not published yet — building it
+/// requires fetching the WordNet tarball and `gh release create`, a
+/// network-gated manual step (see `scripts/build-dictionary-artifact.sh`).
+/// This is the canonical URL the asset will occupy; downloads succeed once it
+/// is live and `DICTIONARY_SHA256` holds the artifact's real `.gz` checksum.
+const DICTIONARY_URL: &str =
+    "https://github.com/mikedamoiseau/folio/releases/download/dictionary-v1/dictionary-v1.db.gz";
+
+/// SHA-256 of the gzipped artifact. Placeholder until the asset is built and
+/// uploaded (see [`DICTIONARY_URL`]). A checksum mismatch aborts the install
+/// and leaves no artifact, so shipping the placeholder is safe — downloads
+/// simply fail verification until the real value (printed by
+/// `scripts/build-dictionary-artifact.sh`) is filled in here.
+const DICTIONARY_SHA256: &str = "0000000000000000000000000000000000000000000000000000000000000000";
+
+/// Progress payload for `"dictionary-download-progress"`. Byte counts of the
+/// compressed stream; `total` is `0` when the server sends no Content-Length.
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DictionaryDownloadProgress {
+    loaded: u64,
+    total: u64,
+}
+
+/// Throttle `dictionary-download-progress` emits: fire every ~256 KB and always
+/// on completion, so a multi-MB download doesn't flood the IPC bridge. `last`
+/// carries the last emitted byte count across calls.
+fn should_emit_download_progress(loaded: u64, total: u64, last: &mut u64) -> bool {
+    const STEP: u64 = 256 * 1024;
+    let done = total > 0 && loaded >= total;
+    if done || loaded.saturating_sub(*last) >= STEP {
+        *last = loaded;
+        true
+    } else {
+        false
+    }
+}
+
+/// Probe the installed dictionary artifact (missing / ready / corrupt).
+#[tauri::command]
+pub async fn get_dictionary_status(
+    state: State<'_, AppState>,
+) -> FolioResult<folio_core::dictionary::DictionaryStatus> {
+    Ok(folio_core::dictionary::inspect(&state.dictionary_dir()))
+}
+
+/// Download and install the dictionary artifact, emitting
+/// `dictionary-download-progress` as it streams. Resolves only when the install
+/// completes (verified + atomically in place) — the invoke resolution is the
+/// completion signal, so there is no separate "done" event. Guards against a
+/// second concurrent download.
+#[tauri::command]
+pub async fn download_dictionary<R: tauri::Runtime>(
+    state: State<'_, AppState>,
+    app: AppHandle<R>,
+) -> FolioResult<()> {
+    use std::sync::atomic::Ordering;
+    if state
+        .dictionary_downloading
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        return Err(FolioError::invalid(
+            "A dictionary download is already in progress.",
+        ));
+    }
+    let dir = state.dictionary_dir();
+    let emitter = app.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        let mut last: u64 = 0;
+        folio_core::dictionary::download_and_install(
+            DICTIONARY_URL,
+            DICTIONARY_SHA256,
+            &dir,
+            &mut |loaded, total| {
+                if should_emit_download_progress(loaded, total, &mut last) {
+                    let _ = emitter.emit(
+                        "dictionary-download-progress",
+                        DictionaryDownloadProgress { loaded, total },
+                    );
+                }
+            },
+        )
+    })
+    .await
+    .map_err(|e| FolioError::internal(format!("download task failed: {e}")));
+    // Clear the guard regardless of outcome (join error or install result).
+    state.dictionary_downloading.store(false, Ordering::SeqCst);
+    result?
+}
+
+/// Delete the installed artifact, first dropping the cached pool so the file
+/// handle is released before removal.
+#[tauri::command]
+pub async fn delete_dictionary(state: State<'_, AppState>) -> FolioResult<()> {
+    {
+        let mut pool = state.dictionary_pool.lock()?;
+        *pool = None;
+    }
+    folio_core::dictionary::delete(&state.dictionary_dir())
+}
+
+/// Look up a word against the installed artifact. A missing artifact surfaces
+/// as `NotFound` so the frontend can route the user to the settings download
+/// flow. The read-only pool is opened lazily and cached in `AppState`.
+#[tauri::command]
+pub async fn lookup_word(
+    word: String,
+    state: State<'_, AppState>,
+) -> FolioResult<Option<folio_core::dictionary::DictionaryEntry>> {
+    let pool = {
+        let mut guard = state.dictionary_pool.lock()?;
+        if guard.is_none() {
+            *guard = Some(folio_core::dictionary::open_readonly_pool(
+                &state.dictionary_dir(),
+            )?);
+        }
+        guard.as_ref().expect("pool populated above").clone()
+    };
+    let conn = pool.get()?;
+    folio_core::dictionary::lookup(&conn, &word)
+}
+
 #[tauri::command]
 pub async fn get_feature_flags(state: State<'_, AppState>) -> FolioResult<Vec<FeatureFlag>> {
     let conn = state.active_db()?.get()?;
@@ -8625,6 +8772,8 @@ mod tests {
             ipc_metrics: IpcMetrics::new(500, 500.0),
             plugin_manager: std::sync::Arc::new(std::sync::Mutex::new(None)),
             _log_guard: None,
+            dictionary_pool: std::sync::Mutex::new(None),
+            dictionary_downloading: std::sync::atomic::AtomicBool::new(false),
         });
         (app, dir)
     }
@@ -8822,6 +8971,78 @@ mod tests {
         let err = set_profile_lock("ghost".to_string(), "pw".to_string(), None, state)
             .await
             .expect_err("locking a non-existent profile must fail");
+        assert_eq!(err.kind(), "InvalidInput");
+    }
+
+    #[tokio::test]
+    async fn dictionary_status_missing_then_ready() {
+        let (app, _dir) = mock_app_with_state();
+        let handle = app.handle().clone();
+
+        let status = get_dictionary_status(handle.state::<AppState>())
+            .await
+            .unwrap();
+        assert_eq!(
+            status.state,
+            folio_core::dictionary::DictionaryState::Missing
+        );
+
+        folio_core::dictionary::write_test_artifact(&handle.state::<AppState>().dictionary_dir())
+            .unwrap();
+        let status = get_dictionary_status(handle.state::<AppState>())
+            .await
+            .unwrap();
+        assert_eq!(status.state, folio_core::dictionary::DictionaryState::Ready);
+    }
+
+    #[tokio::test]
+    async fn dictionary_lookup_notfound_resolves_and_delete_clears() {
+        let (app, _dir) = mock_app_with_state();
+        let handle = app.handle().clone();
+
+        // Missing artifact → NotFound so the frontend can route to settings.
+        let err = lookup_word("cat".to_string(), handle.state::<AppState>())
+            .await
+            .expect_err("lookup with no artifact must fail");
+        assert_eq!(err.kind(), "NotFound");
+
+        // Install a synthetic artifact; lookup resolves and caches the pool.
+        folio_core::dictionary::write_test_artifact(&handle.state::<AppState>().dictionary_dir())
+            .unwrap();
+        let entry = lookup_word("cat".to_string(), handle.state::<AppState>())
+            .await
+            .unwrap();
+        assert_eq!(entry.unwrap().matched_word, "cat");
+
+        // Delete drops the cached pool AND removes the file.
+        delete_dictionary(handle.state::<AppState>()).await.unwrap();
+        assert_eq!(
+            get_dictionary_status(handle.state::<AppState>())
+                .await
+                .unwrap()
+                .state,
+            folio_core::dictionary::DictionaryState::Missing
+        );
+        // With the pool cleared and the file gone, lookup is NotFound again.
+        let err = lookup_word("cat".to_string(), handle.state::<AppState>())
+            .await
+            .expect_err("lookup after delete must fail");
+        assert_eq!(err.kind(), "NotFound");
+    }
+
+    #[tokio::test]
+    async fn download_dictionary_rejects_concurrent() {
+        let (app, _dir) = mock_app_with_state();
+        let handle = app.handle().clone();
+        // Simulate an in-flight download; a second call must bail before any
+        // network work rather than racing on the staging files.
+        handle
+            .state::<AppState>()
+            .dictionary_downloading
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        let err = download_dictionary(handle.state::<AppState>(), handle.clone())
+            .await
+            .expect_err("second concurrent download must be refused");
         assert_eq!(err.kind(), "InvalidInput");
     }
 

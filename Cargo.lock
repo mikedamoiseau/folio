@@ -1884,6 +1884,7 @@ dependencies = [
  "bindgen",
  "chrono",
  "dirs 5.0.1",
+ "flate2",
  "image",
  "keyring",
  "log",

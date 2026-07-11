@@ -52,6 +52,9 @@ tracing = { workspace = true }
 # epub.rs — collision-safe key derivation for inline image storage
 sha2 = { workspace = true }
 
+# dictionary.rs (F-1-1) — decompress the gzipped WordNet artifact on install.
+flate2 = { workspace = true }
+
 # backup.rs (tokio runtime guarding for blocking opendal calls)
 tokio = { workspace = true }
 

@@ -21,9 +21,12 @@
 //! `examples` and `synonyms` are `\n`-joined lists (WordNet glosses/examples
 //! are single-line, so a newline separator is unambiguous).
 
+use flate2::read::GzDecoder;
 use r2d2_sqlite::SqliteConnectionManager;
 use rusqlite::{Connection, OpenFlags, OptionalExtension};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+use std::io::{Read, Write};
 use std::path::Path;
 use std::time::Duration;
 
@@ -331,6 +334,176 @@ fn load_senses(conn: &Connection, lemma: &str) -> FolioResult<Vec<DictionarySens
     Ok(senses)
 }
 
+/// Staging file name for the still-compressed download.
+const PART_FILE_NAME: &str = "dictionary.db.part";
+/// Staging file name for the decompressed-but-unverified artifact.
+const TMP_FILE_NAME: &str = "dictionary.db.tmp";
+/// Read/copy buffer size for streaming the download and decompression.
+const CHUNK_SIZE: usize = 64 * 1024;
+
+/// Install a gzipped artifact read from `src` into `dest_dir`. This is the
+/// testable core of the download flow (the network wrapper just supplies a
+/// streaming `src`):
+///
+/// 1. stream compressed bytes to a `.part` file while hashing them,
+/// 2. verify the SHA-256 of the compressed bytes against `expected_sha256`,
+/// 3. gunzip `.part` → `.tmp`,
+/// 4. check the decompressed DB's `meta.schema_version`,
+/// 5. atomically rename `.tmp` into place as `dictionary.db`.
+///
+/// `progress(loaded, total_hint)` is called after each chunk with the running
+/// compressed-byte count and the caller's size hint (`0` when unknown). Any
+/// failure removes both staging files, leaving the destination untouched (a
+/// prior good artifact, if present, is only replaced by the final rename).
+pub fn install_from_gz_reader(
+    src: &mut dyn Read,
+    expected_sha256: &str,
+    dest_dir: &Path,
+    progress: &mut dyn FnMut(u64, u64),
+    total_hint: u64,
+) -> FolioResult<()> {
+    std::fs::create_dir_all(dest_dir)?;
+    let part_path = dest_dir.join(PART_FILE_NAME);
+    let tmp_path = dest_dir.join(TMP_FILE_NAME);
+    let final_path = dest_dir.join(ARTIFACT_FILE_NAME);
+
+    // Clear any stragglers from a previously interrupted install.
+    let _ = std::fs::remove_file(&part_path);
+    let _ = std::fs::remove_file(&tmp_path);
+
+    let result = install_inner(
+        src,
+        expected_sha256,
+        &part_path,
+        &tmp_path,
+        &final_path,
+        progress,
+        total_hint,
+    );
+
+    // Always clean up staging files, success or failure.
+    let _ = std::fs::remove_file(&part_path);
+    let _ = std::fs::remove_file(&tmp_path);
+    result
+}
+
+fn install_inner(
+    src: &mut dyn Read,
+    expected_sha256: &str,
+    part_path: &Path,
+    tmp_path: &Path,
+    final_path: &Path,
+    progress: &mut dyn FnMut(u64, u64),
+    total_hint: u64,
+) -> FolioResult<()> {
+    // 1. Stream compressed bytes to `.part`, hashing as we go.
+    let mut hasher = Sha256::new();
+    {
+        let mut part = std::fs::File::create(part_path)?;
+        let mut buf = vec![0u8; CHUNK_SIZE];
+        let mut loaded: u64 = 0;
+        loop {
+            let n = src.read(&mut buf)?;
+            if n == 0 {
+                break;
+            }
+            hasher.update(&buf[..n]);
+            part.write_all(&buf[..n])?;
+            loaded += n as u64;
+            progress(loaded, total_hint);
+        }
+        part.flush()?;
+    }
+
+    // 2. Verify the compressed-bytes checksum.
+    let actual = format!("{:x}", hasher.finalize());
+    if !actual.eq_ignore_ascii_case(expected_sha256) {
+        return Err(FolioError::invalid(format!(
+            "dictionary checksum mismatch: expected {expected_sha256}, got {actual}"
+        )));
+    }
+
+    // 3. Decompress `.part` → `.tmp`.
+    {
+        let part = std::fs::File::open(part_path)?;
+        let mut decoder = GzDecoder::new(std::io::BufReader::new(part));
+        let mut tmp = std::fs::File::create(tmp_path)?;
+        std::io::copy(&mut decoder, &mut tmp)
+            .map_err(|e| FolioError::invalid(format!("dictionary decompression failed: {e}")))?;
+        tmp.flush()?;
+    }
+
+    // 4. Validate the decompressed artifact's schema version.
+    match read_meta(tmp_path)? {
+        Some(meta) if meta.schema_version == ARTIFACT_SCHEMA_VERSION => {}
+        Some(meta) => {
+            return Err(FolioError::invalid(format!(
+                "dictionary schema version {} unsupported (expected {ARTIFACT_SCHEMA_VERSION})",
+                meta.schema_version
+            )));
+        }
+        None => return Err(FolioError::invalid("dictionary artifact is not valid")),
+    }
+
+    // 5. Atomically move into place.
+    std::fs::rename(tmp_path, final_path)?;
+    Ok(())
+}
+
+/// Download the gzipped artifact from `url` and install it into `dest_dir` via
+/// [`install_from_gz_reader`]. Uses a blocking client with a 30s connect
+/// timeout but **no** total timeout (slow links must not be killed mid-stream),
+/// and re-applies the SSRF guard on every redirect hop so a public URL cannot
+/// 302 to a private target (GitHub's 302 to `objects.githubusercontent.com`
+/// passes; loopback/private redirects are refused).
+pub fn download_and_install(
+    url: &str,
+    expected_sha256: &str,
+    dest_dir: &Path,
+    progress: &mut dyn FnMut(u64, u64),
+) -> FolioResult<()> {
+    if !crate::opds::is_safe_url_with_trusted(url, &[]) {
+        return Err(FolioError::invalid(
+            "URL blocked: only public HTTP/HTTPS URLs are allowed.",
+        ));
+    }
+    let client = reqwest::blocking::Client::builder()
+        .connect_timeout(Duration::from_secs(30))
+        // No total timeout: a large artifact over a slow link must not be
+        // aborted mid-download (opds's 120s total would cut it off).
+        .redirect(crate::opds::ssrf_redirect_policy())
+        .build()
+        .map_err(|e| FolioError::network(format!("HTTP client error: {e}")))?;
+    let mut response = client
+        .get(url)
+        .send()
+        .map_err(|e| FolioError::network(format!("Download failed: {e}")))?;
+    if !response.status().is_success() {
+        return Err(FolioError::network(format!("HTTP {}", response.status())));
+    }
+    let total_hint = response.content_length().unwrap_or(0);
+    install_from_gz_reader(
+        &mut response,
+        expected_sha256,
+        dest_dir,
+        progress,
+        total_hint,
+    )
+}
+
+/// Remove the installed artifact and any staging stragglers from `dir`. Missing
+/// files are not an error (idempotent).
+pub fn delete(dir: &Path) -> FolioResult<()> {
+    for name in [ARTIFACT_FILE_NAME, PART_FILE_NAME, TMP_FILE_NAME] {
+        match std::fs::remove_file(dir.join(name)) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(FolioError::io(format!("failed to remove {name}: {e}"))),
+        }
+    }
+    Ok(())
+}
+
 /// Build a tiny synthetic artifact at `dir/dictionary.db` for tests. Contains a
 /// handful of words exercising every lookup path: exact match, an irregular
 /// exception (`mice` → `mouse`), and suffix rules (`cats` → `cat`,
@@ -498,5 +671,154 @@ mod tests {
         let dir = tempdir().unwrap();
         let err = open_readonly_pool(dir.path()).unwrap_err();
         assert_eq!(err.kind(), "NotFound");
+    }
+
+    // ---- install / download / delete ----
+
+    fn gzip_bytes(data: &[u8]) -> Vec<u8> {
+        use flate2::write::GzEncoder;
+        use flate2::Compression;
+        let mut enc = GzEncoder::new(Vec::new(), Compression::default());
+        enc.write_all(data).unwrap();
+        enc.finish().unwrap()
+    }
+
+    fn sha256_hex(data: &[u8]) -> String {
+        format!("{:x}", Sha256::digest(data))
+    }
+
+    /// Raw bytes of a freshly-built valid artifact.
+    fn artifact_bytes(dir: &Path) -> Vec<u8> {
+        write_test_artifact(dir).unwrap();
+        std::fs::read(dir.join(ARTIFACT_FILE_NAME)).unwrap()
+    }
+
+    /// Bytes of a minimal but valid SQLite DB carrying a chosen schema_version.
+    fn db_with_schema_version(dir: &Path, version: i64) -> Vec<u8> {
+        let path = dir.join("custom.db");
+        let conn = Connection::open(&path).unwrap();
+        conn.execute_batch("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);")
+            .unwrap();
+        conn.execute(
+            "INSERT INTO meta (key, value) VALUES ('schema_version', ?1), ('wordnet_version', '3.1')",
+            [version.to_string()],
+        )
+        .unwrap();
+        drop(conn);
+        std::fs::read(&path).unwrap()
+    }
+
+    #[test]
+    fn install_happy_path_produces_ready_artifact() {
+        let src = tempdir().unwrap();
+        let gz = gzip_bytes(&artifact_bytes(src.path()));
+        let sha = sha256_hex(&gz);
+
+        let dest = tempdir().unwrap();
+        let mut last = (0u64, 0u64);
+        install_from_gz_reader(
+            &mut gz.as_slice(),
+            &sha,
+            dest.path(),
+            &mut |loaded, total| last = (loaded, total),
+            gz.len() as u64,
+        )
+        .unwrap();
+
+        assert_eq!(inspect(dest.path()).state, DictionaryState::Ready);
+        assert_eq!(last, (gz.len() as u64, gz.len() as u64));
+        // The installed artifact is queryable.
+        let pool = open_readonly_pool(dest.path()).unwrap();
+        assert!(lookup(&pool.get().unwrap(), "cat").unwrap().is_some());
+    }
+
+    #[test]
+    fn install_bad_hash_leaves_no_artifact() {
+        let src = tempdir().unwrap();
+        let gz = gzip_bytes(&artifact_bytes(src.path()));
+        let dest = tempdir().unwrap();
+
+        let err = install_from_gz_reader(
+            &mut gz.as_slice(),
+            &"0".repeat(64),
+            dest.path(),
+            &mut |_, _| {},
+            0,
+        )
+        .unwrap_err();
+
+        assert_eq!(err.kind(), "InvalidInput");
+        assert_eq!(inspect(dest.path()).state, DictionaryState::Missing);
+        assert!(!dest.path().join(PART_FILE_NAME).exists());
+        assert!(!dest.path().join(TMP_FILE_NAME).exists());
+    }
+
+    #[test]
+    fn install_truncated_gz_fails_and_cleans_up() {
+        let src = tempdir().unwrap();
+        let gz = gzip_bytes(&artifact_bytes(src.path()));
+        // Hash the truncated bytes so the checksum passes and the failure
+        // surfaces at decompression, exercising that branch + its cleanup.
+        let truncated = &gz[..gz.len() / 2];
+        let sha = sha256_hex(truncated);
+        let dest = tempdir().unwrap();
+
+        let err = install_from_gz_reader(&mut &truncated[..], &sha, dest.path(), &mut |_, _| {}, 0)
+            .unwrap_err();
+
+        assert_eq!(err.kind(), "InvalidInput");
+        assert_eq!(inspect(dest.path()).state, DictionaryState::Missing);
+        assert!(!dest.path().join(TMP_FILE_NAME).exists());
+    }
+
+    #[test]
+    fn install_wrong_schema_version_rejected() {
+        let src = tempdir().unwrap();
+        let gz = gzip_bytes(&db_with_schema_version(src.path(), 999));
+        let sha = sha256_hex(&gz);
+        let dest = tempdir().unwrap();
+
+        let err = install_from_gz_reader(&mut gz.as_slice(), &sha, dest.path(), &mut |_, _| {}, 0)
+            .unwrap_err();
+
+        assert_eq!(err.kind(), "InvalidInput");
+        assert_eq!(inspect(dest.path()).state, DictionaryState::Missing);
+    }
+
+    #[test]
+    fn install_failure_preserves_existing_artifact() {
+        let dest = tempdir().unwrap();
+        write_test_artifact(dest.path()).unwrap();
+        assert_eq!(inspect(dest.path()).state, DictionaryState::Ready);
+
+        let src = tempdir().unwrap();
+        let gz = gzip_bytes(&artifact_bytes(src.path()));
+        let err = install_from_gz_reader(
+            &mut gz.as_slice(),
+            &"0".repeat(64),
+            dest.path(),
+            &mut |_, _| {},
+            0,
+        )
+        .unwrap_err();
+
+        assert_eq!(err.kind(), "InvalidInput");
+        // The prior good artifact is untouched by the failed install.
+        assert_eq!(inspect(dest.path()).state, DictionaryState::Ready);
+    }
+
+    #[test]
+    fn delete_removes_artifact_and_is_idempotent() {
+        let dir = tempdir().unwrap();
+        write_test_artifact(dir.path()).unwrap();
+        // Leave a staging straggler to confirm delete sweeps it too.
+        std::fs::write(dir.path().join(PART_FILE_NAME), b"x").unwrap();
+
+        delete(dir.path()).unwrap();
+        assert_eq!(inspect(dir.path()).state, DictionaryState::Missing);
+        assert!(!dir.path().join(PART_FILE_NAME).exists());
+
+        // Deleting again on an empty dir is not an error.
+        delete(dir.path()).unwrap();
     }
 }

@@ -558,6 +558,23 @@ pub fn download_file_with_trusted(url: &str, dest: &str, trusted: &[String]) -> 
     Ok(())
 }
 
+/// Redirect policy that re-applies the SSRF guard on EVERY hop (no trusted-host
+/// relaxation) and caps the hop count at 5. Shared by the plugin `import:books`
+/// download and the dictionary artifact download so a public URL can't 302 to a
+/// private/loopback target.
+pub fn ssrf_redirect_policy() -> reqwest::redirect::Policy {
+    reqwest::redirect::Policy::custom(|attempt| {
+        if attempt.previous().len() >= 5 {
+            return attempt.error("too many redirects");
+        }
+        if is_safe_url_with_trusted(attempt.url().as_str(), &[]) {
+            attempt.follow()
+        } else {
+            attempt.error("redirect to a blocked (private/non-HTTP) URL")
+        }
+    })
+}
+
 /// Download a file with the SSRF guard re-applied on EVERY redirect hop, not
 /// just the initial URL. Used by the plugin `import:books` path so a public
 /// URL can't 302 to a private/loopback target (no trusted-host relaxation).
@@ -567,21 +584,9 @@ pub fn download_file_ssrf_guarded(url: &str, dest: &str) -> FolioResult<()> {
             "URL blocked: only public HTTP/HTTPS URLs are allowed.",
         ));
     }
-    // Custom redirect policy: each hop must itself pass the SSRF guard, else
-    // the redirect is refused. Also caps hop count.
-    let policy = reqwest::redirect::Policy::custom(|attempt| {
-        if attempt.previous().len() >= 5 {
-            return attempt.error("too many redirects");
-        }
-        if is_safe_url_with_trusted(attempt.url().as_str(), &[]) {
-            attempt.follow()
-        } else {
-            attempt.error("redirect to a blocked (private/non-HTTP) URL")
-        }
-    });
     let client = reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(120))
-        .redirect(policy)
+        .redirect(ssrf_redirect_policy())
         .build()
         .map_err(|e| FolioError::network(format!("HTTP client error: {e}")))?;
     let response = client

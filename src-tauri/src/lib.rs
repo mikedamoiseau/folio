@@ -195,6 +195,8 @@ pub fn run() {
                 ipc_metrics: crate::ipc_metrics::IpcMetrics::new(500, 500.0),
                 plugin_manager: std::sync::Arc::new(std::sync::Mutex::new(None)),
                 _log_guard: log_guard,
+                dictionary_pool: std::sync::Mutex::new(None),
+                dictionary_downloading: std::sync::atomic::AtomicBool::new(false),
             });
 
             // Initialize system tray
@@ -490,6 +492,10 @@ pub fn run() {
             commands::queue_book_for_scan,
             commands::get_setting_value,
             commands::set_setting_value,
+            commands::get_dictionary_status,
+            commands::download_dictionary,
+            commands::delete_dictionary,
+            commands::lookup_word,
             commands::get_feature_flags,
             commands::set_feature_flag,
             commands::get_feature_flag_value,
