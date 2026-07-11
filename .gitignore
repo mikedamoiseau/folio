@@ -50,7 +50,12 @@ lerna-debug.log*
 
 # Claude Code config
 .claude-bw/
-.claude/
+.claude/*
+!.claude/skills/
+.claude/skills/*
+!.claude/skills/add-book-format/
+!.claude/skills/add-tauri-command/
+!.claude/skills/db-schema-migration/
 CLAUDE.local.md
 
 # E2E test artifacts
