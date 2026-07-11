@@ -305,6 +305,36 @@ When you reach the last page or chapter of any book, Folio shows a celebratory m
 
 Click **Continue** to dismiss. The celebration only appears once per book; reopening a finished book won't trigger it again. The event is logged in the activity log as "Book Finished," unless "Don't track this session" was on when you finished it.
 
+### Dictionary / word lookup (offline)
+
+Look up a word's definition without leaving the page. This is off by default and
+uses a one-time offline download — no network lookups once installed.
+
+**Enable it once:**
+
+1. Open **Settings → Dictionary** and turn on the in-reader dictionary.
+2. Click **Download dictionary** (~7 MB). A progress bar shows the download and
+   a short "Verifying…" step; when it finishes you'll see the WordNet version
+   and size, with a **Delete** button to remove it later and reclaim the space.
+
+The dictionary is a prebuilt database derived from Princeton WordNet 3.1. It is
+downloaded once and shared across all your profiles.
+
+**Look up a word:** in the desktop reader, select a single word and click
+**Define** in the selection popup. A card appears next to your selection
+showing the word's definitions grouped by part of speech (noun, verb,
+adjective, adverb), each with an example and synonyms where available.
+Inflected forms resolve to their base word — selecting "running" defines "run",
+and the card notes the "running → run" mapping. Click anywhere outside the card
+(or its ✕) to dismiss it.
+
+If a word isn't found, the card says so; if you never enabled the dictionary,
+the Define button doesn't appear.
+
+> Notes: the dictionary is English and offline-only in this version (an online
+> fallback and custom dictionaries may come later). The Define action is
+> available in the desktop reader only.
+
 ### Returning to the library
 
 Click the back arrow in the top-left corner or press `Escape`. Your progress is saved when you exit, unless "Don't track this session" is on.

@@ -635,11 +635,18 @@ Document this publicly (README, issue template) to set user expectations.
 
 Lower priority features — high effort, niche audience, or dependent on other work.
 
-### 41. Dictionary / Word Lookup
-- Select a word in the reader to get a definition
-- Hybrid approach: bundle lightweight offline dictionary (WordNet) + online API fallback (Wiktionary, Free Dictionary API)
-- Optional: let users load StarDict dictionary files for full multilingual offline support
-- Cross-platform — no dependency on OS-specific dictionary APIs
+### 41. Dictionary / Word Lookup — **Done (offline v1, 2026-07-11)**
+- Select a word in the desktop reader to get a definition (parts of speech,
+  senses, example, synonyms) in an anchored card — **done**
+- Offline dictionary = prebuilt SQLite artifact derived from Princeton WordNet
+  3.1, downloaded on demand from Settings (~7 MB, SHA-256 verified) and
+  deletable — **done**
+- Light morphological normalization (inflected forms → base lemma, e.g.
+  running → run) — **done**
+- Cross-platform — no dependency on OS-specific dictionary APIs — **done**
+- Deferred to a later version: online API fallback (Wiktionary / Free
+  Dictionary API) and user-loaded StarDict dictionaries. Web reader has no
+  selection popup, so it has no Define action (no parity gap).
 
 ### 42. Vocabulary Builder
 - Log every word looked up via the dictionary into a personal word list
@@ -726,5 +733,5 @@ Tauri v2 supports mobile targets. The React frontend renders in a mobile WebView
 | 8 | Sepia Theme, OpenDyslexic, Star Ratings, In-Book Search, Typography, Custom Fonts, Continuous Scroll, Time-to-Finish, Bookmark Naming, Series, Activity Log, MOBI, Nav History, Custom CSS, Dual-Page/Manga, Settings Reorg, i18n (EN+FR), PDF Zoom Quality, Go to Page, Animations, Comic Page Cache, Split View | 19 done | Reader & library enhancements |
 | 9 | DB Migration Versioning, Transaction Boundaries, Zip Bomb Protection, PDF Cache Memory Limits, Thread Pool, Backup Secret Atomicity, Screen Reader Live Regions, Loading Skeletons, Toast System, Search Nav, Bulk Actions, Highlight Positioning, Structured Errors | 12 done, 1 partial (#49 migration versioning: version table done; non-additive/rollback not) | Hardening & polish |
 | 10 | `folio-core` refactor, Storage trait, `folio-server` (private) | 2 done (#63, #64), `folio-server` in active development (private repo, axum + sqlx + auth scaffolding shipped, handlers WIP) | Open-core + paid server |
-| N/H | Dictionary, Vocabulary Builder, TTS, Library-Wide Search, Annotation Exports, Plugins/Hooks | Not started (User Themes done) | Nice to have |
+| N/H | Dictionary, Vocabulary Builder, TTS, Library-Wide Search, Annotation Exports, Plugins/Hooks | Dictionary (#41) done (offline v1), Plugins/Hooks done, User Themes done; rest not started | Nice to have |
 | Deferred | Android & iOS App (was Phase 7) | Deferred — web server covers the primary mobile use case | Mobile |

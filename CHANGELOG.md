@@ -5,6 +5,18 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- **Look up words while you read (offline).** Select a single word in the
+  desktop reader and hit **Define** to see its definition without leaving the
+  page — parts of speech, numbered senses, an example, and synonyms, in an
+  anchored card next to your selection. Definitions come from Princeton
+  WordNet 3.1, packaged as a ~7 MB offline dictionary you download once from
+  **Settings → Dictionary** (and can delete anytime to reclaim the space).
+  Everything runs locally — no network lookups, no accounts. Inflected forms
+  resolve to their base word (e.g. selecting "running" defines "run"). This is
+  the offline v1; an online fallback and user-loaded dictionaries remain on the
+  roadmap.
+
 ### Changed
 - **Comics open instantly, even large ones.** Opening a CBZ/CBR now paints the
   first page in tens of milliseconds instead of waiting seconds for the whole
