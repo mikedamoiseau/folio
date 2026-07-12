@@ -6,9 +6,14 @@
 
 // ── Card geometry ────────────────────────────────────────────
 
-/** Card size in CSS px; the backing store renders at `CARD_W*SCALE x CARD_H*SCALE`. */
+/**
+ * Card width in CSS px is fixed; height hugs its content (see
+ * `computeCardLayout`), floored at `MIN_CARD_H` so a short quote still gets a
+ * square-ish card instead of a sliver. The backing store renders at
+ * `CARD_W*SCALE x cardHeight*SCALE`.
+ */
 export const CARD_W = 1080;
-export const CARD_H = 1350;
+export const MIN_CARD_H = 1080;
 /** Backing-store scale factor for retina-crisp exports. */
 export const SCALE = 2;
 
@@ -20,9 +25,29 @@ export const QUOTE_BOX_WIDTH_PX = CARD_W - CONTENT_PADDING_X * 2;
 export const MIN_QUOTE_PX = 28;
 export const MAX_QUOTE_PX = 64;
 const FONT_STEP_PX = 2;
-export const MAX_LINES = 8;
+/**
+ * Generous line budget — real highlights routinely run 10-12 lines wrapped
+ * at a readable font size, and the content-hugging card height (see
+ * `computeCardLayout`) means a longer quote just makes a taller card instead
+ * of leaving whitespace. `MAX_QUOTE_CHARS` bounds the true worst case.
+ */
+export const MAX_LINES = 24;
 /** Hard cap on quote length before layout — a pathological selection can't blow up the fit loop. */
 export const MAX_QUOTE_CHARS = 600;
+
+// ── Content-hugging layout constants ─────────────────────────
+
+/** Space above the quote block. */
+const TOP_MARGIN = 110;
+/** Space between the end of the quote block and the footer row. */
+const QUOTE_FOOTER_GAP = 72;
+/** Space below the footer row (the wordmark, if shown, sits within this margin). */
+const BOTTOM_MARGIN = 84;
+/**
+ * Vertical space the footer row occupies: the cover thumb plus title/author
+ * text beside it, with room for the author line's descenders.
+ */
+const FOOTER_HEIGHT_PX = 132;
 
 // ── Style presets ────────────────────────────────────────────
 
@@ -211,13 +236,45 @@ export function fitQuote(quote: string, measureAt: MeasureAt, opts: FitQuoteOpti
   return { fontSize: MIN_QUOTE_PX, lines, truncated: true };
 }
 
+export interface CardLayout {
+  /** Final card height in CSS px — `MIN_CARD_H` or taller, hugging the content. */
+  cardHeight: number;
+  fontSize: number;
+  lines: string[];
+  truncated: boolean;
+  lineHeight: number;
+  /** Top y of the quote block (top-aligned text flow start). */
+  quoteTop: number;
+  /** Top y of the footer row (cover thumb top), directly below the quote block. */
+  footerTop: number;
+}
+
+/**
+ * Pure layout pass shared by measuring and drawing: fits the quote (via
+ * `fitQuote`), then lays out top-to-bottom with fixed margins — quote block,
+ * then a gap, then the footer row — and derives the card height from that
+ * flow (floored at `MIN_CARD_H`). When the floor kicks in (a short quote),
+ * the whole content group is centered in the extra vertical space rather
+ * than left pinned to the top, so short quotes don't leave a lopsided void.
+ */
+export function computeCardLayout(quote: string, measureAt: MeasureAt, opts: FitQuoteOptions = {}): CardLayout {
+  const { fontSize, lines, truncated } = fitQuote(quote, measureAt, opts);
+  const lineHeight = fontSize * 1.35;
+  const quoteBlockHeight = lines.length * lineHeight;
+  const contentHeight = TOP_MARGIN + quoteBlockHeight + QUOTE_FOOTER_GAP + FOOTER_HEIGHT_PX + BOTTOM_MARGIN;
+  const cardHeight = Math.max(MIN_CARD_H, contentHeight);
+  const centerOffset = Math.max(0, (cardHeight - contentHeight) / 2);
+  const quoteTop = TOP_MARGIN + centerOffset;
+  const footerTop = quoteTop + quoteBlockHeight + QUOTE_FOOTER_GAP;
+  return { cardHeight, fontSize, lines, truncated, lineHeight, quoteTop, footerTop };
+}
+
 // ── Canvas draw (impure — not unit-tested; canvas isn't available in jsdom) ──
 
 const QUOTE_FONT_STACK = "'Playfair Display Variable', Georgia, serif";
 const FOOTER_FONT_STACK = "'DM Sans Variable', system-ui, -apple-system, sans-serif";
 const COVER_BOX_SIZE = 108;
 const COVER_BOX_RADIUS = 10;
-const FOOTER_BOTTOM_Y = CARD_H - 90;
 const WORDMARK_TEXT = "Folio";
 
 function drawCoverThumb(ctx: CanvasRenderingContext2D, img: HTMLImageElement, x: number, y: number) {
@@ -244,30 +301,36 @@ function drawCoverThumb(ctx: CanvasRenderingContext2D, img: HTMLImageElement, x:
   ctx.restore();
 }
 
+function measureQuoteFont(ctx: CanvasRenderingContext2D): MeasureAt {
+  return (fontSize) => (s) => {
+    ctx.font = `italic 600 ${fontSize}px ${QUOTE_FONT_STACK}`;
+    return ctx.measureText(s).width;
+  };
+}
+
 /**
  * Fill background, draw the wrapped quote (sized via `fitQuote`), and the
  * footer: optional cover thumbnail, title, author (omitted entirely when
  * empty — no dangling "— , Title"), and an optional low-contrast wordmark.
+ * The footer flows directly below the quote block rather than being pinned
+ * to the card bottom — see `computeCardLayout` for the height/flow math.
  * Assumes fonts are already loaded (caller awaits `document.fonts.ready`).
+ * Returns the card height actually used (the canvas must already be sized to
+ * match — see `renderCardToCanvas`).
  */
-export function drawCard(ctx: CanvasRenderingContext2D, input: CardInput, coverImg: HTMLImageElement | null): void {
+export function drawCard(ctx: CanvasRenderingContext2D, input: CardInput, coverImg: HTMLImageElement | null): number {
   const palette = CARD_STYLES[input.style];
 
-  ctx.fillStyle = palette.bg;
-  ctx.fillRect(0, 0, CARD_W, CARD_H);
+  // Measure against the live ctx at each candidate font size so the lines
+  // fitQuote returns are the exact ones drawn below (real glyph widths, not
+  // a fixed-ratio estimate — matters for CJK, long uppercase runs, etc).
+  const { cardHeight, fontSize, lines, lineHeight, quoteTop, footerTop } = computeCardLayout(
+    input.quote,
+    measureQuoteFont(ctx),
+  );
 
-  // Quote — measure against the live ctx at each candidate font size so the
-  // lines fitQuote returns are the exact ones drawn below (real glyph
-  // widths, not a fixed-ratio estimate — matters for CJK, long uppercase
-  // runs, etc).
-  const measureQuoteAt: MeasureAt = (fontSize) => (s) => {
-    ctx.font = `italic 600 ${fontSize}px ${QUOTE_FONT_STACK}`;
-    return ctx.measureText(s).width;
-  };
-  const { fontSize, lines } = fitQuote(input.quote, measureQuoteAt);
-  const lineHeight = fontSize * 1.35;
-  const quoteBlockHeight = lines.length * lineHeight;
-  const quoteTop = Math.max(140, (CARD_H - 260 - quoteBlockHeight) / 2);
+  ctx.fillStyle = palette.bg;
+  ctx.fillRect(0, 0, CARD_W, cardHeight);
 
   ctx.fillStyle = palette.ink;
   ctx.font = `italic 600 ${fontSize}px ${QUOTE_FONT_STACK}`;
@@ -277,13 +340,17 @@ export function drawCard(ctx: CanvasRenderingContext2D, input: CardInput, coverI
     ctx.fillText(line, CONTENT_PADDING_X, quoteTop + (i + 1) * lineHeight - lineHeight * 0.25);
   });
 
-  // Footer
+  // Footer — cover thumb top-aligned to footerTop; title/author baselines
+  // anchored to a reference point 100px into the footer row (same relative
+  // offsets the card always used, just re-anchored to the flowed position
+  // instead of a fixed distance from the card bottom).
   const showCover = input.includeCover && coverImg !== null;
   const footerTextX = showCover ? CONTENT_PADDING_X + COVER_BOX_SIZE + 24 : CONTENT_PADDING_X;
   const footerTextMaxWidth = CARD_W - CONTENT_PADDING_X - footerTextX;
+  const footerAnchorY = footerTop + 100;
 
   if (showCover && coverImg) {
-    drawCoverThumb(ctx, coverImg, CONTENT_PADDING_X, FOOTER_BOTTOM_Y - COVER_BOX_SIZE + 8);
+    drawCoverThumb(ctx, coverImg, CONTENT_PADDING_X, footerTop);
   }
 
   const hasAuthor = input.author.trim().length > 0;
@@ -291,13 +358,13 @@ export function drawCard(ctx: CanvasRenderingContext2D, input: CardInput, coverI
   ctx.fillStyle = palette.ink;
   ctx.font = `700 30px ${FOOTER_FONT_STACK}`;
   const title = truncateToWidth(input.title, footerTextMaxWidth, (s) => ctx.measureText(s).width);
-  ctx.fillText(title, footerTextX, hasAuthor ? FOOTER_BOTTOM_Y - 14 : FOOTER_BOTTOM_Y);
+  ctx.fillText(title, footerTextX, hasAuthor ? footerAnchorY - 14 : footerAnchorY);
 
   if (hasAuthor) {
     ctx.fillStyle = palette.inkMuted;
     ctx.font = `400 24px ${FOOTER_FONT_STACK}`;
     const author = truncateToWidth(input.author, footerTextMaxWidth, (s) => ctx.measureText(s).width);
-    ctx.fillText(author, footerTextX, FOOTER_BOTTOM_Y + 24);
+    ctx.fillText(author, footerTextX, footerAnchorY + 24);
   }
 
   if (input.includeWordmark) {
@@ -305,21 +372,35 @@ export function drawCard(ctx: CanvasRenderingContext2D, input: CardInput, coverI
     ctx.fillStyle = palette.accent;
     ctx.globalAlpha = 0.55;
     ctx.font = `600 22px ${FOOTER_FONT_STACK}`;
-    ctx.fillText(WORDMARK_TEXT, CARD_W - CONTENT_PADDING_X, CARD_H - 40);
+    ctx.fillText(WORDMARK_TEXT, CARD_W - CONTENT_PADDING_X, cardHeight - 40);
     ctx.globalAlpha = 1;
   }
+
+  return cardHeight;
 }
 
 /**
  * Render a full quote card into a fresh offscreen canvas at `CARD_W*SCALE x
- * CARD_H*SCALE` (2x backing store for retina-crisp exports). Used for both
- * the dialog's live preview and the final export (`toBlob`/`getImageData`).
+ * cardHeight*SCALE` (2x backing store for retina-crisp exports; `cardHeight`
+ * hugs the content, see `computeCardLayout`). Used for both the dialog's
+ * live preview and the final export (`toBlob`/`getImageData`).
  */
 export function renderCardToCanvas(input: CardInput, coverImg: HTMLImageElement | null): HTMLCanvasElement {
   const canvas = document.createElement("canvas");
+  // Canvas pixel dimensions don't affect ctx.measureText, so it's safe to
+  // measure at a placeholder height before we know the final one.
   canvas.width = CARD_W * SCALE;
-  canvas.height = CARD_H * SCALE;
-  const ctx = canvas.getContext("2d");
+  canvas.height = MIN_CARD_H * SCALE;
+  let ctx = canvas.getContext("2d");
+  if (!ctx) return canvas;
+  ctx.scale(SCALE, SCALE);
+  const { cardHeight } = computeCardLayout(input.quote, measureQuoteFont(ctx));
+
+  // Resizing the canvas resets its 2D state (transform included), so
+  // re-fetch the context and re-apply the scale before drawing.
+  canvas.width = CARD_W * SCALE;
+  canvas.height = cardHeight * SCALE;
+  ctx = canvas.getContext("2d");
   if (!ctx) return canvas;
   ctx.scale(SCALE, SCALE);
   drawCard(ctx, input, coverImg);

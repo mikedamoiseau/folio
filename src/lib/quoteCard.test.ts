@@ -3,11 +3,13 @@ import {
   wrapTextByWidth,
   truncateToWidth,
   fitQuote,
+  computeCardLayout,
   sanitizeQuoteForCard,
   defaultStyleForMode,
   MAX_QUOTE_CHARS,
   MAX_LINES,
   MAX_QUOTE_PX,
+  MIN_CARD_H,
 } from "./quoteCard";
 
 // Stub measurer: each char is 10px wide, so widths are trivial to reason about.
@@ -90,11 +92,16 @@ describe("fitQuote", () => {
   });
 
   it("shrinks the font size for a long quote", () => {
-    const long = Array.from({ length: 3 }, () =>
+    // With the generous MAX_LINES budget (content-hugging card height means a
+    // longer quote just grows the card instead of needing to shrink), a
+    // quote needs to be long enough that even 24 wrapped lines overflow at
+    // the largest font size before shrinking kicks in.
+    const long = Array.from({ length: 4 }, () =>
       "This is a considerably longer quote that will need to wrap across several lines and should not fit at the largest font size available to the card layout engine."
     ).join(" ");
     const result = fitQuote(long, stubMeasureAt);
     expect(result.fontSize).toBeLessThan(MAX_QUOTE_PX);
+    expect(result.truncated).toBe(false);
   });
 
   it("truncates a pathologically long quote at MAX_LINES with a trailing ellipsis", () => {
@@ -108,6 +115,39 @@ describe("fitQuote", () => {
   it("is deterministic given the same input", () => {
     const quote = "Same input, same output, every time.";
     expect(fitQuote(quote, stubMeasureAt)).toEqual(fitQuote(quote, stubMeasureAt));
+  });
+});
+
+describe("computeCardLayout", () => {
+  it("floors a short quote at MIN_CARD_H and centers the content group", () => {
+    const short = computeCardLayout("Short and sweet.", stubMeasureAt);
+    expect(short.cardHeight).toBe(MIN_CARD_H);
+
+    // A quote long enough that the content itself exceeds MIN_CARD_H isn't
+    // floored, so its quoteTop sits at the flow's base top margin with no
+    // centering offset added. The short quote's quoteTop should sit strictly
+    // below that base — proof a positive centering offset was applied.
+    const longWords = Array.from({ length: 60 }, (_, i) => `word${i}`).join(" ");
+    const long = computeCardLayout(longWords, stubMeasureAt);
+    expect(long.cardHeight).toBeGreaterThan(MIN_CARD_H);
+    expect(short.quoteTop).toBeGreaterThan(long.quoteTop);
+  });
+
+  it("grows the card height for a long quote and does not truncate", () => {
+    // ~11 lines' worth of content, well over half the MIN_CARD_H square.
+    const longWords = Array.from({ length: 60 }, (_, i) => `word${i}`).join(" ");
+    const result = computeCardLayout(longWords, stubMeasureAt);
+    expect(result.cardHeight).toBeGreaterThan(MIN_CARD_H);
+    expect(result.truncated).toBe(false);
+    expect(result.lines.length).toBeGreaterThan(8); // would have overflowed the old MAX_LINES=8
+  });
+
+  it("still truncates a pathologically long quote at the generous maxLines", () => {
+    const pathological = Array.from({ length: 400 }, (_, i) => `word${i}`).join(" ");
+    const result = computeCardLayout(pathological, stubMeasureAt);
+    expect(result.truncated).toBe(true);
+    expect(result.lines.length).toBe(MAX_LINES);
+    expect(result.lines[result.lines.length - 1].endsWith("…")).toBe(true);
   });
 });
 

@@ -5,10 +5,9 @@ import { save } from "@tauri-apps/plugin-dialog";
 import { useFocusTrap } from "../lib/useFocusTrap";
 import { useToast } from "./Toast";
 import {
+  MIN_CARD_H,
   CARD_W,
-  CARD_H,
-  SCALE,
-  drawCard,
+  renderCardToCanvas,
   sanitizeQuoteForCard,
   defaultStyleForMode,
   type CardStyle,
@@ -55,6 +54,9 @@ export default function ShareCardDialog({ quote, title, author, coverPath, initi
   const [fontsReady, setFontsReady] = useState(false);
   const [copying, setCopying] = useState(false);
   const [saving, setSaving] = useState(false);
+  // Card height hugs its content (F-1-6 layout fix) — the preview's aspect
+  // ratio isn't known until the first render, so start at the square floor.
+  const [cardAspect, setCardAspect] = useState(MIN_CARD_H / CARD_W);
 
   // Load the cover once, if any. On failure, disable the cover toggle rather
   // than blocking the rest of the card.
@@ -100,20 +102,15 @@ export default function ShareCardDialog({ quote, title, author, coverPath, initi
     };
   }, []);
 
-  // Live preview: redraw on any control change. The canvas backing store
-  // stays at CARD_W*SCALE x CARD_H*SCALE; CSS sizes it down for display.
+  // Live preview: redraw on any control change. The canvas backing store's
+  // height hugs the content (F-1-6), so size it — and the CSS aspect ratio
+  // used to display it — from what renderCardToCanvas actually produced,
+  // rather than a fixed constant.
   useEffect(() => {
     if (!fontsReady) return;
     const canvas = canvasRef.current;
     if (!canvas) return;
-    canvas.width = CARD_W * SCALE;
-    canvas.height = CARD_H * SCALE;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-    ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.scale(SCALE, SCALE);
-    drawCard(
-      ctx,
+    const rendered = renderCardToCanvas(
       {
         quote: sanitizedQuote,
         title,
@@ -124,6 +121,12 @@ export default function ShareCardDialog({ quote, title, author, coverPath, initi
       },
       coverImg,
     );
+    canvas.width = rendered.width;
+    canvas.height = rendered.height;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    ctx.drawImage(rendered, 0, 0);
+    setCardAspect(rendered.height / rendered.width);
   }, [fontsReady, sanitizedQuote, title, author, style, includeCover, includeWordmark, coverImg]);
 
   const handleCopyImage = useCallback(async () => {
@@ -225,7 +228,7 @@ export default function ShareCardDialog({ quote, title, author, coverPath, initi
             <div className="flex justify-center">
               <canvas
                 ref={canvasRef}
-                style={{ width: 260, height: (260 * CARD_H) / CARD_W, borderRadius: 12 }}
+                style={{ width: 260, height: 260 * cardAspect, borderRadius: 12 }}
                 className="shadow-md border border-warm-border"
               />
             </div>
