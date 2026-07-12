@@ -355,11 +355,15 @@ saved word to reopen its book and jump to the spot where you looked it up — th
 word briefly flashes so it's easy to find (jumping is unavailable once the source
 book has been removed from your library).
 
-**Review with flashcards:** click **Review** to quiz yourself on the words that
-are due. Each card shows the word first; reveal the definition, then mark
-**Got it** or **Missed**. Getting a word right moves it up a box so it comes back
-less often; missing it sends it back to daily review (a five-box
-spaced-repetition schedule of roughly 1, 3, 7, 14, and 30 days).
+**Review with flashcards:** click **Review due (N)** at the top of the
+Vocabulary screen to quiz yourself on the words that are due (N is how many).
+Each card shows the word first; reveal the definition, then mark **Got it** or
+**Missed**, and the next due card follows. Getting a word right moves it up a
+box so it comes back less often; missing it sends it back to daily review (a
+five-box spaced-repetition schedule of roughly 1, 3, 7, 14, and 30 days). A word
+is due as soon as you save it, so newly added words are ready to review right
+away; once you've reviewed everything, the button shows **Review due (0)** and
+is disabled until a word's next review date comes around.
 
 > Notes: saved words keep their definitions even if you later delete the
 > dictionary or the source book. Turning the setting back off stops saving new
