@@ -28,6 +28,7 @@ Folio is for the opposite case: you already have the files, and you want a bette
 - Full-text search inside EPUB books (`⌘/Ctrl+F`)
 - Focus mode for distraction-free reading
 - Bookmarks, highlights, and highlight notes
+- Share a highlight as a styled quote-card image — copy to clipboard or save as PNG
 - Offline in-reader dictionary — select a word and Define it (Princeton WordNet 3.1, downloaded on demand)
 - Vocabulary builder — save the words you look up and review them with spaced-repetition flashcards
 - Time-to-finish estimate for EPUB books
