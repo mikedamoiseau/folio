@@ -28,6 +28,10 @@ vi.mock("../../lib/useFocusTrap", () => ({
   useFocusTrap: () => ({ current: null }),
 }));
 
+vi.mock("../../context/ThemeContext", () => ({
+  useTheme: () => ({ mode: "light" }),
+}));
+
 import { render, screen, cleanup, waitFor } from "@testing-library/react";
 import HighlightsPanel from "../HighlightsPanel";
 

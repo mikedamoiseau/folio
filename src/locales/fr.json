@@ -270,6 +270,25 @@
     "chapterLabel": "Chapitre {{number}}"
   },
 
+  "shareCard": {
+    "title": "Partager en image",
+    "entryLabel": "Partager en image",
+    "styles": {
+      "light": "Clair",
+      "sepia": "Sépia",
+      "dark": "Sombre"
+    },
+    "includeCover": "Inclure la couverture",
+    "includeWordmark": "Afficher le filigrane Folio",
+    "copyImage": "Copier l'image",
+    "savePng": "Enregistrer en PNG…",
+    "toasts": {
+      "copied": "Image copiée dans le presse-papiers",
+      "copyFailed": "Impossible de copier l'image",
+      "coverLoadFailed": "Impossible de charger la couverture"
+    }
+  },
+
   "highlightSearch": {
     "title": "Rechercher dans les surlignages",
     "buttonLabel": "Rechercher dans les surlignages",

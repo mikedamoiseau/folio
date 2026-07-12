@@ -2,6 +2,9 @@ import { useState, useEffect, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useTranslation } from "react-i18next";
 import { useFocusTrap } from "../lib/useFocusTrap";
+import { useTheme } from "../context/ThemeContext";
+import ShareCardDialog from "./ShareCardDialog";
+import type { Book } from "../types";
 
 interface Highlight {
   id: string;
@@ -34,11 +37,32 @@ export type { Highlight };
 
 export default function HighlightsPanel({ bookId, onClose, onGoToChapter }: HighlightsPanelProps) {
   const { t } = useTranslation();
+  const { mode } = useTheme();
   const panelRef = useFocusTrap(onClose);
   const [highlights, setHighlights] = useState<Highlight[]>([]);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [editingNote, setEditingNote] = useState<string | null>(null);
   const [noteText, setNoteText] = useState("");
+
+  // Share as image (F-1-6): the panel lacks title/author/cover, so fetch the
+  // book once (all highlights here are the same book) and cache it for
+  // subsequent shares within this panel session.
+  const [bookInfo, setBookInfo] = useState<{ title: string; author: string; coverPath: string | null } | null>(null);
+  const [shareCard, setShareCard] = useState<{ quote: string; title: string; author: string; coverPath: string | null; initialMode: string } | null>(null);
+
+  const handleShare = useCallback(async (highlight: Highlight) => {
+    let info = bookInfo;
+    if (!info) {
+      try {
+        const book = await invoke<Book | null>("get_book", { bookId });
+        info = { title: book?.title ?? "", author: book?.author ?? "", coverPath: book?.cover_path ?? null };
+      } catch {
+        info = { title: "", author: "", coverPath: null };
+      }
+      setBookInfo(info);
+    }
+    setShareCard({ quote: highlight.text, title: info.title, author: info.author, coverPath: info.coverPath, initialMode: mode });
+  }, [bookId, bookInfo, mode]);
 
   const loadHighlights = useCallback(async () => {
     try {
@@ -192,6 +216,17 @@ export default function HighlightsPanel({ bookId, onClose, onGoToChapter }: High
                         )}
                       </div>
                       <button
+                        onClick={() => handleShare(h)}
+                        className="opacity-0 group-hover:opacity-100 p-0.5 text-ink-muted hover:text-accent transition-all shrink-0"
+                        aria-label={t("shareCard.entryLabel")}
+                        title={t("shareCard.entryLabel")}
+                      >
+                        <svg width="12" height="12" viewBox="0 0 20 20" fill="none">
+                          <path d="M10 3v9M10 3l-3 3M10 3l3 3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                          <path d="M4 11v4a1 1 0 001 1h10a1 1 0 001-1v-4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                        </svg>
+                      </button>
+                      <button
                         onClick={() => handleDeleteHighlight(h.id)}
                         disabled={deletingId === h.id}
                         className="opacity-0 group-hover:opacity-100 p-0.5 text-ink-muted hover:text-red-500 transition-all shrink-0 disabled:opacity-50"
@@ -213,6 +248,17 @@ export default function HighlightsPanel({ bookId, onClose, onGoToChapter }: High
           )}
         </div>
       </aside>
+
+      {shareCard && (
+        <ShareCardDialog
+          quote={shareCard.quote}
+          title={shareCard.title}
+          author={shareCard.author}
+          coverPath={shareCard.coverPath}
+          initialMode={shareCard.initialMode}
+          onClose={() => setShareCard(null)}
+        />
+      )}
     </>
   );
 }

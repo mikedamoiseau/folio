@@ -11,6 +11,7 @@ import ComicExtractProgress from "./ComicExtractProgress";
 import PageThumbnailStrip from "./PageThumbnailStrip";
 import KeyboardShortcutsHelp from "./KeyboardShortcutsHelp";
 import HighlightsPanel, { HIGHLIGHT_COLORS } from "./HighlightsPanel";
+import ShareCardDialog from "./ShareCardDialog";
 import BookmarksPanel from "./BookmarksPanel";
 import BookmarkToast from "./BookmarkToast";
 import BookDetailModal from "./BookDetailModal";
@@ -188,7 +189,7 @@ export default function ReaderPane({
   const navigate = useNavigate();
   const { t } = useTranslation();
   const { addToast } = useToast();
-  const { fontSize, setFontSize, fontFamily, scrollMode, typography, customCss, dualPage, setDualPage, mangaMode, setMangaMode, pageAnimation } = useTheme();
+  const { mode, fontSize, setFontSize, fontFamily, scrollMode, typography, customCss, dualPage, setDualPage, mangaMode, setMangaMode, pageAnimation } = useTheme();
   // Read-only here regardless of pane role (both primary and companion
   // panes need it for the volatile-resume gate below); only the primary
   // pane renders the actual toggle control (see the header, further down).
@@ -215,6 +216,8 @@ export default function ReaderPane({
   const [saveIndicator, setSaveIndicator] = useState(false);
   const [saveError, setSaveError] = useState(false);
   const [selectionPopup, setSelectionPopup] = useState<{ x: number; y: number; text: string; startOffset: number; endOffset: number } | null>(null);
+  // Share as image (F-1-6): holds the ShareCardDialog's props while open, null otherwise.
+  const [shareCard, setShareCard] = useState<{ quote: string; title: string; author: string; coverPath: string | null; initialMode: string } | null>(null);
 
   // Offline dictionary (F-1-1): whether the artifact is ready gates the
   // "Define" action; the card holds the anchored lookup result.
@@ -1341,6 +1344,22 @@ export default function ReaderPane({
     }
   }, [selectionPopup, t, vocabularyEnabled, bookId, bookTitle, chapterIndex]);
 
+  // Share as image (F-1-6): opens ShareCardDialog with the current
+  // selection as the quote. Dismisses the selection popup, mirroring
+  // handleDefine above.
+  const handleShareAsImage = useCallback(() => {
+    if (!selectionPopup) return;
+    setShareCard({
+      quote: selectionPopup.text,
+      title: bookTitle,
+      author: bookDetail?.author ?? "",
+      coverPath: bookDetail?.cover_path ?? null,
+      initialMode: mode,
+    });
+    setSelectionPopup(null);
+    window.getSelection()?.removeAllRanges();
+  }, [selectionPopup, bookTitle, bookDetail, mode]);
+
   // ---- Highlights ----
   interface ChapterHighlight { id: string; startOffset: number; endOffset: number; color: string }
   const [highlights, setHighlights] = useState<ChapterHighlight[]>([]);
@@ -2222,6 +2241,18 @@ export default function ReaderPane({
         <BookDetailModal book={bookDetail} onClose={() => setInfoOpen(false)} />
       )}
 
+      {/* Share as image (F-1-6) */}
+      {shareCard && (
+        <ShareCardDialog
+          quote={shareCard.quote}
+          title={shareCard.title}
+          author={shareCard.author}
+          coverPath={shareCard.coverPath}
+          initialMode={shareCard.initialMode}
+          onClose={() => setShareCard(null)}
+        />
+      )}
+
       {/* Bookmark toast */}
       {toastBookmarkId && (
         <BookmarkToast
@@ -2881,6 +2912,16 @@ export default function ReaderPane({
                       className="px-2 h-5 rounded text-xs font-medium text-white/90 hover:text-white hover:bg-white/10 transition-colors"
                     >
                       {t("reader.dictionary.define")}
+                    </button>
+                  )}
+                  {/* Share as image (F-1-6) — same non-trivial-selection
+                      floor as the highlight colors above. */}
+                  {selectionPopup.text.trim().length >= 3 && (
+                    <button
+                      onClick={handleShareAsImage}
+                      className="px-2 h-5 rounded text-xs font-medium text-white/90 hover:text-white hover:bg-white/10 transition-colors"
+                    >
+                      {t("shareCard.entryLabel")}
                     </button>
                   )}
                   <div className="w-px h-4 bg-white/20 mx-0.5" />

@@ -271,6 +271,25 @@
     "chapterLabel": "Chapter {{number}}"
   },
 
+  "shareCard": {
+    "title": "Share as image",
+    "entryLabel": "Share as image",
+    "styles": {
+      "light": "Light",
+      "sepia": "Sepia",
+      "dark": "Dark"
+    },
+    "includeCover": "Include cover",
+    "includeWordmark": "Show Folio wordmark",
+    "copyImage": "Copy image",
+    "savePng": "Save as PNG…",
+    "toasts": {
+      "copied": "Image copied to clipboard",
+      "copyFailed": "Couldn’t copy the image",
+      "coverLoadFailed": "Couldn’t load the cover"
+    }
+  },
+
   "highlightSearch": {
     "title": "Search Highlights",
     "buttonLabel": "Search highlights",
