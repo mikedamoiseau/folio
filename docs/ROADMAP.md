@@ -670,6 +670,17 @@ Lower priority features — high effort, niche audience, or dependent on other w
 - Extends existing Markdown/plain text export with direct service integration
 - Readwise is a popular highlight aggregation service used by serious readers
 
+### Shareable Highlight Quote Cards — **Done (2026-07-12)**
+- ~~Render a highlight (or an in-reader selection) as a styled PNG quote card —
+  quote, book title, author, optional cover thumbnail, optional Folio wordmark~~
+- ~~Three style presets (Light / Sepia / Dark), defaulting to the current reader
+  theme; live preview~~
+- ~~Copy the card image to the clipboard or save it as a PNG file~~
+- ~~Available from the reader selection popup and per-highlight in the Highlights
+  panel; desktop reader only (the web reader has no selection popup)~~
+- Frontend Canvas 2D rendering (no server-side image work); design spec
+  `docs/superpowers/specs/2026-07-12-highlight-quote-cards-design.md`
+
 ### 47. Plugin / Hook System — **Done (2026-06-13)**
 - ~~Fire events at key points: book imported/opened/closed/finished, highlight created/updated/deleted, bookmark created, metadata enriched, backup/sync completed, app started~~
 - ~~Let user scripts (Rhai) react to events (similar to WordPress/Drupal hooks)~~

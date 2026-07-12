@@ -6,6 +6,15 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- **Share a highlight as an image.** Turn any highlight — or a fresh selection
+  while reading — into a styled quote card and share it. **Share as image** (in
+  the reader selection popup and per-highlight in the Highlights panel) opens a
+  dialog with a live preview: pick a style (Light, Sepia, or Dark), optionally
+  include the book's cover thumbnail and a small Folio wordmark, then **Copy
+  image** to your clipboard or **Save as PNG…** to a file. The card shows the
+  quote with the book title and author; long quotes are trimmed to fit, and a
+  missing cover or author is simply left off. Rendered locally on the desktop
+  reader.
 - **Look up words while you read (offline).** Select a single word in the
   desktop reader and hit **Define** to see its definition without leaving the
   page — parts of speech, numbered senses, an example, and synonyms, in an

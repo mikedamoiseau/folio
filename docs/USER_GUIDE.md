@@ -388,8 +388,18 @@ Open the highlights panel (pen icon in the reader header) to:
 - Click a highlight to jump to that chapter
 - Delete individual highlights
 - Export all highlights as Markdown (copied to clipboard)
+- **Share a highlight as an image** — see below
 
 ![Highlights panel](../screenshots/12-reader-highlights.png)
+
+**Share as image:** turn a highlight into a shareable quote card. Use **Share as
+image** either from the selection popup while reading, or per-highlight in the
+Highlights panel. A dialog shows a live preview with a few choices — a **style**
+(Light, Sepia, or Dark), whether to **include the book's cover**, and whether to
+show a small **Folio** wordmark. Then **Copy image** to put the card on your
+clipboard (paste it into Messages, Slack, etc.) or **Save as PNG…** to write it
+to a file. Long quotes are trimmed to fit; books without a cover or author just
+omit those bits.
 
 ### Cross-Book Highlight Search
 
