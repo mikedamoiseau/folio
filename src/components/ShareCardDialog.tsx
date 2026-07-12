@@ -141,9 +141,22 @@ export default function ShareCardDialog({ quote, title, author, coverPath, initi
       // already has via getImageData) with no such feature requirement.
       const { Image } = await import("@tauri-apps/api/image");
       const { writeImage } = await import("@tauri-apps/plugin-clipboard-manager");
-      const image = await Image.new(new Uint8Array(data), width, height);
-      await writeImage(image);
-      addToast(t("shareCard.toasts.copied"), "success");
+      let image: Awaited<ReturnType<typeof Image.new>> | null = null;
+      try {
+        image = await Image.new(new Uint8Array(data), width, height);
+        await writeImage(image);
+        addToast(t("shareCard.toasts.copied"), "success");
+      } finally {
+        // Image.new() allocates a backend-side resource (~23MB for a card
+        // this size) that isn't freed by GC — close it explicitly or repeated
+        // Copy image presses leak memory. A close() failure shouldn't mask
+        // whatever copy outcome was already toasted above.
+        try {
+          await image?.close();
+        } catch {
+          // ignore — best-effort cleanup
+        }
+      }
     } catch {
       addToast(t("shareCard.toasts.copyFailed"), "error");
     } finally {

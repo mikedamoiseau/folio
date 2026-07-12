@@ -38,7 +38,6 @@ export type { Highlight };
 export default function HighlightsPanel({ bookId, onClose, onGoToChapter }: HighlightsPanelProps) {
   const { t } = useTranslation();
   const { mode } = useTheme();
-  const panelRef = useFocusTrap(onClose);
   const [highlights, setHighlights] = useState<Highlight[]>([]);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [editingNote, setEditingNote] = useState<string | null>(null);
@@ -49,6 +48,11 @@ export default function HighlightsPanel({ bookId, onClose, onGoToChapter }: High
   // subsequent shares within this panel session.
   const [bookInfo, setBookInfo] = useState<{ title: string; author: string; coverPath: string | null } | null>(null);
   const [shareCard, setShareCard] = useState<{ quote: string; title: string; author: string; coverPath: string | null; initialMode: string } | null>(null);
+
+  // Suspend this panel's own focus trap while ShareCardDialog is open — both
+  // trap Escape on `document`, and stopPropagation in one doesn't stop the
+  // sibling's listener, so a single Escape would otherwise close both.
+  const panelRef = useFocusTrap(onClose, !shareCard);
 
   const handleShare = useCallback(async (highlight: Highlight) => {
     let info = bookInfo;

@@ -23,8 +23,6 @@ const FONT_STEP_PX = 2;
 export const MAX_LINES = 8;
 /** Hard cap on quote length before layout — a pathological selection can't blow up the fit loop. */
 export const MAX_QUOTE_CHARS = 600;
-/** Rough average glyph width as a fraction of font size, used only to pick a font size — `ctx.measureText` does the precise draw-time positioning. */
-const AVG_GLYPH_RATIO = 0.55;
 
 // ── Style presets ────────────────────────────────────────────
 
@@ -78,14 +76,36 @@ export function sanitizeQuoteForCard(raw: string): string {
   return collapsed.length > MAX_QUOTE_CHARS ? collapsed.slice(0, MAX_QUOTE_CHARS) : collapsed;
 }
 
+/** Measures the pixel width of a string at whatever font is currently set. */
+export type Measure = (text: string) => number;
+
+/**
+ * Split `word` into chunks that each fit within `maxWidthPx`, per `measure`
+ * (no hyphenation — layout approximation, not typography). Always makes
+ * progress (each chunk is at least one character) even if a single character
+ * alone exceeds `maxWidthPx`.
+ */
+function hardSplitByWidth(word: string, maxWidthPx: number, measure: Measure): string[] {
+  const parts: string[] = [];
+  let start = 0;
+  while (start < word.length) {
+    let end = start + 1;
+    while (end < word.length && measure(word.slice(start, end + 1)) <= maxWidthPx) {
+      end++;
+    }
+    parts.push(word.slice(start, end));
+    start = end;
+  }
+  return parts;
+}
+
 /**
  * Greedy word-wrap: pack as many whitespace-separated words per line as fit
- * within `maxCharsPerLine`. A single word longer than the line budget is
- * hard-split across multiple lines (no hyphenation — layout approximation,
- * not typography).
+ * within `maxWidthPx`, using real measured widths via `measure` (e.g.
+ * `ctx.measureText`). A single word wider than `maxWidthPx` is hard-split
+ * across multiple lines.
  */
-export function wrapText(text: string, maxCharsPerLine: number): string[] {
-  const budget = Math.max(1, Math.floor(maxCharsPerLine));
+export function wrapTextByWidth(text: string, maxWidthPx: number, measure: Measure): string[] {
   const words = text.trim().split(/\s+/).filter((w) => w.length > 0);
   if (words.length === 0) return [];
 
@@ -93,22 +113,19 @@ export function wrapText(text: string, maxCharsPerLine: number): string[] {
   let current = "";
 
   for (const word of words) {
-    if (word.length > budget) {
+    if (measure(word) > maxWidthPx) {
       if (current) {
         lines.push(current);
         current = "";
       }
-      let remaining = word;
-      while (remaining.length > budget) {
-        lines.push(remaining.slice(0, budget));
-        remaining = remaining.slice(budget);
-      }
-      current = remaining;
+      const parts = hardSplitByWidth(word, maxWidthPx, measure);
+      for (let i = 0; i < parts.length - 1; i++) lines.push(parts[i]);
+      current = parts[parts.length - 1] ?? "";
       continue;
     }
 
     const candidate = current ? `${current} ${word}` : word;
-    if (candidate.length <= budget) {
+    if (measure(candidate) <= maxWidthPx) {
       current = candidate;
     } else {
       lines.push(current);
@@ -118,6 +135,31 @@ export function wrapText(text: string, maxCharsPerLine: number): string[] {
   if (current) lines.push(current);
 
   return lines;
+}
+
+/**
+ * Return `text` unchanged if it already fits within `maxWidthPx` (per
+ * `measure`); otherwise trim it and append "…" so the result fits.
+ */
+export function truncateToWidth(text: string, maxWidthPx: number, measure: Measure): string {
+  if (text.length === 0 || measure(text) <= maxWidthPx) return text;
+
+  const ellipsis = "…";
+  if (measure(ellipsis) > maxWidthPx) return ellipsis;
+
+  // Binary search for the longest prefix such that `prefix + "…"` fits.
+  let lo = 0;
+  let hi = text.length;
+  while (lo < hi) {
+    const mid = Math.ceil((lo + hi) / 2);
+    const candidate = `${text.slice(0, mid).trimEnd()}${ellipsis}`;
+    if (measure(candidate) <= maxWidthPx) {
+      lo = mid;
+    } else {
+      hi = mid - 1;
+    }
+  }
+  return `${text.slice(0, lo).trimEnd()}${ellipsis}`;
 }
 
 export interface FitQuoteResult {
@@ -133,34 +175,35 @@ export interface FitQuoteOptions {
   maxLines?: number;
 }
 
+/** Builds a `Measure` for a given font size (e.g. sets `ctx.font` then measures). */
+export type MeasureAt = (fontSize: number) => Measure;
+
 /**
  * Choose the largest font size in `[MIN_QUOTE_PX, MAX_QUOTE_PX]` (stepping
- * down) whose wrapped quote fits within `maxLines`. Chars-per-line at a
- * given size is derived from `boxWidthPx / (fontSize * AVG_GLYPH_RATIO)` —
- * an approximation good enough to pick a size; `drawCard` uses
- * `ctx.measureText` for the actual draw-time positioning.
+ * down) whose wrapped quote — wrapped via `wrapTextByWidth` using real
+ * measured widths from `measureAt(fontSize)` — fits within `maxLines`.
+ * Measuring per font size (rather than a single measurer) is necessary
+ * because a string's pixel width depends on the font size it's drawn at.
  *
  * If even `MIN_QUOTE_PX` overflows `maxLines`, keep the first `maxLines`
  * lines, append "…" to the last one, and set `truncated: true`.
  *
- * Deterministic: same inputs always produce the same output.
+ * Deterministic: same inputs (and same `measureAt`) always produce the same
+ * output.
  */
-export function fitQuote(quote: string, opts: FitQuoteOptions = {}): FitQuoteResult {
+export function fitQuote(quote: string, measureAt: MeasureAt, opts: FitQuoteOptions = {}): FitQuoteResult {
   const boxWidthPx = opts.boxWidthPx ?? QUOTE_BOX_WIDTH_PX;
   const maxLines = opts.maxLines ?? MAX_LINES;
 
-  const charsPerLineAt = (fontSize: number) =>
-    Math.max(1, Math.floor(boxWidthPx / (fontSize * AVG_GLYPH_RATIO)));
-
   for (let fontSize = MAX_QUOTE_PX; fontSize >= MIN_QUOTE_PX; fontSize -= FONT_STEP_PX) {
-    const lines = wrapText(quote, charsPerLineAt(fontSize));
+    const lines = wrapTextByWidth(quote, boxWidthPx, measureAt(fontSize));
     if (lines.length <= maxLines) {
       return { fontSize, lines, truncated: false };
     }
   }
 
   // Still overflows at MIN_QUOTE_PX: hard-truncate with a trailing ellipsis.
-  const lines = wrapText(quote, charsPerLineAt(MIN_QUOTE_PX)).slice(0, maxLines);
+  const lines = wrapTextByWidth(quote, boxWidthPx, measureAt(MIN_QUOTE_PX)).slice(0, maxLines);
   const lastIndex = lines.length - 1;
   if (lastIndex >= 0) {
     lines[lastIndex] = `${lines[lastIndex].trimEnd()}…`;
@@ -213,8 +256,15 @@ export function drawCard(ctx: CanvasRenderingContext2D, input: CardInput, coverI
   ctx.fillStyle = palette.bg;
   ctx.fillRect(0, 0, CARD_W, CARD_H);
 
-  // Quote
-  const { fontSize, lines } = fitQuote(input.quote);
+  // Quote — measure against the live ctx at each candidate font size so the
+  // lines fitQuote returns are the exact ones drawn below (real glyph
+  // widths, not a fixed-ratio estimate — matters for CJK, long uppercase
+  // runs, etc).
+  const measureQuoteAt: MeasureAt = (fontSize) => (s) => {
+    ctx.font = `italic 600 ${fontSize}px ${QUOTE_FONT_STACK}`;
+    return ctx.measureText(s).width;
+  };
+  const { fontSize, lines } = fitQuote(input.quote, measureQuoteAt);
   const lineHeight = fontSize * 1.35;
   const quoteBlockHeight = lines.length * lineHeight;
   const quoteTop = Math.max(140, (CARD_H - 260 - quoteBlockHeight) / 2);
@@ -230,6 +280,7 @@ export function drawCard(ctx: CanvasRenderingContext2D, input: CardInput, coverI
   // Footer
   const showCover = input.includeCover && coverImg !== null;
   const footerTextX = showCover ? CONTENT_PADDING_X + COVER_BOX_SIZE + 24 : CONTENT_PADDING_X;
+  const footerTextMaxWidth = CARD_W - CONTENT_PADDING_X - footerTextX;
 
   if (showCover && coverImg) {
     drawCoverThumb(ctx, coverImg, CONTENT_PADDING_X, FOOTER_BOTTOM_Y - COVER_BOX_SIZE + 8);
@@ -239,12 +290,14 @@ export function drawCard(ctx: CanvasRenderingContext2D, input: CardInput, coverI
   ctx.textAlign = "left";
   ctx.fillStyle = palette.ink;
   ctx.font = `700 30px ${FOOTER_FONT_STACK}`;
-  ctx.fillText(input.title, footerTextX, hasAuthor ? FOOTER_BOTTOM_Y - 14 : FOOTER_BOTTOM_Y);
+  const title = truncateToWidth(input.title, footerTextMaxWidth, (s) => ctx.measureText(s).width);
+  ctx.fillText(title, footerTextX, hasAuthor ? FOOTER_BOTTOM_Y - 14 : FOOTER_BOTTOM_Y);
 
   if (hasAuthor) {
     ctx.fillStyle = palette.inkMuted;
     ctx.font = `400 24px ${FOOTER_FONT_STACK}`;
-    ctx.fillText(input.author, footerTextX, FOOTER_BOTTOM_Y + 24);
+    const author = truncateToWidth(input.author, footerTextMaxWidth, (s) => ctx.measureText(s).width);
+    ctx.fillText(author, footerTextX, FOOTER_BOTTOM_Y + 24);
   }
 
   if (input.includeWordmark) {

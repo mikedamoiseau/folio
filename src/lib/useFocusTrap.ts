@@ -8,13 +8,21 @@ const FOCUSABLE =
  * - Tab / Shift+Tab cycling within the dialog
  * - Escape key to call onClose
  * - Auto-focus the first focusable element on mount
+ *
+ * `enabled` (default `true`) lets a caller suspend the trap — e.g. a panel
+ * that hosts a nested modal should disable its own trap while the nested
+ * modal is open, so a single Escape only closes the topmost one instead of
+ * both (document-level keydown listeners don't respect stopPropagation
+ * across separate useFocusTrap instances).
  */
 export function useFocusTrap(
   onClose: () => void,
+  enabled = true,
 ): RefObject<HTMLDivElement | null> {
   const ref = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
+    if (!enabled) return;
     const el = ref.current;
     if (!el) return;
 
@@ -46,7 +54,7 @@ export function useFocusTrap(
     first?.focus();
 
     return () => document.removeEventListener("keydown", handleKeyDown);
-  }, [onClose]);
+  }, [onClose, enabled]);
 
   return ref;
 }
