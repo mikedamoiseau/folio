@@ -1559,38 +1559,44 @@ pub struct ReadingStats {
     pub daily_reading_year: Vec<(String, i64)>, // (date_str, seconds), last 365 days — for the heatmap (F-5-4)
 }
 
-/// Unix timestamp of local 00:00 for `date`. `None` only in the (practically
-/// impossible) case that local midnight is skipped by a DST transition.
-fn local_day_start_unix(date: chrono::NaiveDate) -> Option<i64> {
-    use chrono::TimeZone;
-    date.and_hms_opt(0, 0, 0)
-        .and_then(|dt| chrono::Local.from_local_datetime(&dt).earliest())
-        .map(|dt| dt.timestamp())
+/// Unix timestamp of the first instant of calendar day `date` in zone `tz` —
+/// normally local 00:00. If that midnight is skipped by a DST spring-forward
+/// (a zone that jumps 00:00 -> 01:00), returns the transition instant instead:
+/// the first wall-clock time that actually exists on `date`. `None` only if no
+/// time in the first few hours of the date exists, which no real zone does.
+fn local_day_start_unix<Tz: chrono::TimeZone>(tz: &Tz, date: chrono::NaiveDate) -> Option<i64> {
+    (0..4).find_map(|hour| {
+        date.and_hms_opt(hour, 0, 0)
+            .and_then(|dt| tz.from_local_datetime(&dt).earliest())
+            .map(|dt| dt.timestamp())
+    })
 }
 
-/// Credit a session's `duration_secs` to the local calendar days it spans,
-/// splitting at each local-midnight boundary so a session that crosses
+/// Credit a session's `duration_secs` to the calendar days (in zone `tz`) it
+/// spans, splitting at each midnight boundary so a session that crosses
 /// midnight (or a DST transition) adds to each day only the seconds actually
-/// elapsed on it. Keys are `YYYY-MM-DD` local dates (F-5-2).
-fn accumulate_session_by_local_day(
+/// elapsed on it. Keys are `YYYY-MM-DD` dates (F-5-2).
+fn accumulate_session_by_local_day<Tz: chrono::TimeZone>(
+    tz: &Tz,
     started_at: i64,
     duration_secs: i64,
     buckets: &mut std::collections::BTreeMap<String, i64>,
 ) {
-    use chrono::TimeZone;
     if duration_secs <= 0 {
         return;
     }
     let end = started_at + duration_secs;
     let mut cursor = started_at;
     while cursor < end {
-        let Some(dt) = chrono::Local.timestamp_opt(cursor, 0).single() else {
+        let Some(dt) = tz.timestamp_opt(cursor, 0).single() else {
             return;
         };
         let day = dt.date_naive();
-        // Start of the next local day; fall back to `end` if that midnight is
-        // skipped by a DST transition (crediting the remainder to this day).
-        let next_day_start = local_day_start_unix(day + chrono::Duration::days(1)).unwrap_or(end);
+        // Start of the next calendar day (the transition instant when that
+        // midnight is skipped by DST); fall back to `end` only in the
+        // impossible case no early-hour time on that date exists.
+        let next_day_start =
+            local_day_start_unix(tz, day + chrono::Duration::days(1)).unwrap_or(end);
         let segment_end = next_day_start.min(end);
         if segment_end <= cursor {
             return; // guard against a non-advancing cursor
@@ -1654,8 +1660,9 @@ pub fn get_reading_stats(conn: &Connection) -> Result<ReadingStats> {
     // midnight must not count against today's total.
     let today = chrono::Local::now().date_naive();
     let cutoff_day = today - chrono::Duration::days(364);
-    let cutoff_start = local_day_start_unix(cutoff_day).unwrap_or(0);
-    let window_end = local_day_start_unix(today + chrono::Duration::days(1)).unwrap_or(i64::MAX);
+    let cutoff_start = local_day_start_unix(&chrono::Local, cutoff_day).unwrap_or(0);
+    let window_end =
+        local_day_start_unix(&chrono::Local, today + chrono::Duration::days(1)).unwrap_or(i64::MAX);
     let mut stmt = conn.prepare(
         "SELECT started_at, duration_secs FROM reading_sessions
          WHERE started_at < ?1 AND started_at + duration_secs > ?2",
@@ -1666,7 +1673,12 @@ pub fn get_reading_stats(conn: &Connection) -> Result<ReadingStats> {
         Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?))
     })?;
     for (started_at, duration_secs) in rows.flatten() {
-        accumulate_session_by_local_day(started_at, duration_secs, &mut year_buckets);
+        accumulate_session_by_local_day(
+            &chrono::Local,
+            started_at,
+            duration_secs,
+            &mut year_buckets,
+        );
     }
     // Drop any pre-window slivers a boundary-crossing session contributed
     // (BTreeMap keeps keys sorted ascending, matching the old ORDER BY day).
@@ -3069,6 +3081,31 @@ mod tests {
         };
         assert_eq!(secs_on(&today_str), 1200);
         assert_eq!(secs_on(&yesterday_str), 600);
+    }
+
+    // F-5-2: a session spanning a DST spring-forward that skips local midnight
+    // (America/Havana jumps 00:00 -> 01:00 on 2024-03-10) must still credit the
+    // seconds that fall on the new day to the new day, not dump the remainder on
+    // the previous day. Uses a fixed IANA zone so the result is independent of
+    // the host's local timezone. Regression for the `unwrap_or(end)` fallback.
+    #[test]
+    fn test_accumulate_splits_across_skipped_midnight_dst() {
+        use chrono::TimeZone;
+        let tz = chrono_tz::America::Havana;
+        // 23:30 local the day before the transition; runs 60 real minutes:
+        // 30 min to reach the 01:00 transition (start of 2024-03-10), then
+        // 30 min into 2024-03-10.
+        let started_at = tz
+            .with_ymd_and_hms(2024, 3, 9, 23, 30, 0)
+            .single()
+            .unwrap()
+            .timestamp();
+        let mut buckets: std::collections::BTreeMap<String, i64> =
+            std::collections::BTreeMap::new();
+        accumulate_session_by_local_day(&tz, started_at, 3600, &mut buckets);
+
+        assert_eq!(buckets.get("2024-03-09").copied().unwrap_or(0), 1800);
+        assert_eq!(buckets.get("2024-03-10").copied().unwrap_or(0), 1800);
     }
 
     // F-1-3: `books_finished_this_year` must only count books whose

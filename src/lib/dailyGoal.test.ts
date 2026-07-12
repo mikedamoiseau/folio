@@ -1,5 +1,31 @@
 import { describe, it, expect } from "vitest";
-import { secsReadOn, computeDailyGoalProgress } from "./dailyGoal";
+import { secsReadOn, computeDailyGoalProgress, parseDailyGoalMinutes } from "./dailyGoal";
+
+describe("parseDailyGoalMinutes", () => {
+  it("accepts a plain positive integer", () => {
+    expect(parseDailyGoalMinutes("30")).toBe(30);
+  });
+
+  it("accepts exponent notation that is a safe integer (2e2 -> 200)", () => {
+    expect(parseDailyGoalMinutes("2e2")).toBe(200);
+  });
+
+  it("rejects fractional input rather than truncating (1.5 -> null)", () => {
+    expect(parseDailyGoalMinutes("1.5")).toBeNull();
+  });
+
+  it("rejects an unsafe integer that would reload as a different value", () => {
+    // Number("1e21") is an integer but not safe; String() -> "1e+21" -> parses back as 1.
+    expect(parseDailyGoalMinutes("1000000000000000000000")).toBeNull();
+  });
+
+  it("rejects zero, negatives, blank, and null", () => {
+    expect(parseDailyGoalMinutes("0")).toBeNull();
+    expect(parseDailyGoalMinutes("-5")).toBeNull();
+    expect(parseDailyGoalMinutes("  ")).toBeNull();
+    expect(parseDailyGoalMinutes(null)).toBeNull();
+  });
+});
 
 describe("secsReadOn", () => {
   it("returns the seconds for a matching date", () => {

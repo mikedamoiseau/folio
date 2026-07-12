@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useTranslation } from "react-i18next";
 import { toDateKey } from "../lib/utils";
-import { secsReadOn, computeDailyGoalProgress } from "../lib/dailyGoal";
+import { secsReadOn, computeDailyGoalProgress, parseDailyGoalMinutes } from "../lib/dailyGoal";
 import { friendlyError } from "../lib/errors";
 import { useToast } from "./Toast";
 import ReadingGoalRing from "./ReadingGoalRing";
@@ -46,16 +46,15 @@ function DailyGoalBar({ dailyReadingYear }: { dailyReadingYear: [string, number]
   const [editing, setEditing] = useState(false);
   const [inputValue, setInputValue] = useState("");
 
-  const parsedInput = Number(inputValue);
-  const inputIsValid = Number.isInteger(parsedInput) && parsedInput >= 1;
+  const parsedInput = parseDailyGoalMinutes(inputValue);
+  const inputIsValid = parsedInput !== null;
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
         const value = await invoke<string | null>("get_setting_value", { key: DAILY_GOAL_SETTING_KEY });
-        const parsed = value ? parseInt(value, 10) : NaN;
-        if (!cancelled) setGoal(Number.isFinite(parsed) && parsed > 0 ? parsed : null);
+        if (!cancelled) setGoal(parseDailyGoalMinutes(value));
       } catch {
         // No goal set yet (or the read failed) — fall back to the empty state.
       } finally {
@@ -73,7 +72,7 @@ function DailyGoalBar({ dailyReadingYear }: { dailyReadingYear: [string, number]
   };
 
   const saveGoal = async () => {
-    if (!inputIsValid) return;
+    if (parsedInput === null) return;
     try {
       await invoke("set_setting_value", { key: DAILY_GOAL_SETTING_KEY, value: String(parsedInput) });
       setGoal(parsedInput);

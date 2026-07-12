@@ -81,3 +81,6 @@ pkg-config = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+# Fixed IANA zones for deterministic DST-boundary tests (no reliance on the
+# host's local timezone). Test-only.
+chrono-tz = "0.10"
