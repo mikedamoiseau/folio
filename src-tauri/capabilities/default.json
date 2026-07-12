@@ -7,6 +7,7 @@
     "core:default",
     "opener:default",
     "dialog:default",
+    "dialog:allow-save",
     "clipboard-manager:allow-write-text",
     "clipboard-manager:allow-write-image",
     "notification:default"

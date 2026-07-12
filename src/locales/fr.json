@@ -285,7 +285,9 @@
     "toasts": {
       "copied": "Image copiée dans le presse-papiers",
       "copyFailed": "Impossible de copier l'image",
-      "coverLoadFailed": "Impossible de charger la couverture"
+      "coverLoadFailed": "Impossible de charger la couverture",
+      "saved": "Image enregistrée",
+      "saveFailed": "Impossible d'enregistrer l'image"
     }
   },
 

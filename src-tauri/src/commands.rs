@@ -9495,3 +9495,32 @@ pub async fn set_autostart_enabled(app: AppHandle, enabled: bool) -> FolioResult
 
     Ok(())
 }
+
+// ── Quote Cards (F-1-6) ────────────────────────────────────────────────────
+
+/// Writes an already-encoded PNG (from the frontend canvas's `toBlob`) to a
+/// user-chosen path. No image decoding/encoding happens on the Rust side.
+#[tauri::command]
+pub async fn save_quote_card_png(path: String, bytes: Vec<u8>) -> FolioResult<()> {
+    std::fs::write(&path, &bytes)?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod quote_card_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn save_quote_card_png_writes_bytes_to_path() {
+        let path = std::env::temp_dir().join(format!("folio-test-{}.png", Uuid::new_v4()));
+        let path_str = path.to_string_lossy().to_string();
+        let bytes = vec![137, 80, 78, 71, 1, 2, 3];
+
+        save_quote_card_png(path_str, bytes.clone()).await.unwrap();
+
+        let written = std::fs::read(&path).unwrap();
+        assert_eq!(written, bytes);
+
+        std::fs::remove_file(&path).unwrap();
+    }
+}

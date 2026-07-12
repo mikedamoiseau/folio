@@ -286,7 +286,9 @@
     "toasts": {
       "copied": "Image copied to clipboard",
       "copyFailed": "Couldn’t copy the image",
-      "coverLoadFailed": "Couldn’t load the cover"
+      "coverLoadFailed": "Couldn’t load the cover",
+      "saved": "Image saved",
+      "saveFailed": "Couldn’t save the image"
     }
   },
 

@@ -540,6 +540,7 @@ pub fn run() {
             commands::get_autostart_enabled,
             commands::set_autostart_enabled,
             commands::get_ipc_metrics,
+            commands::save_quote_card_png,
         ])
         .on_window_event(|window, event| {
             match event {

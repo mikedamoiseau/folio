@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { useTranslation } from "react-i18next";
-import { convertFileSrc } from "@tauri-apps/api/core";
+import { convertFileSrc, invoke } from "@tauri-apps/api/core";
+import { save } from "@tauri-apps/plugin-dialog";
 import { useFocusTrap } from "../lib/useFocusTrap";
 import { useToast } from "./Toast";
 import {
@@ -24,11 +25,20 @@ interface ShareCardDialogProps {
 
 const STYLES: CardStyle[] = ["light", "sepia", "dark"];
 
+// Strips characters that are illegal (or awkward) in filenames across
+// Windows/macOS/Linux, collapsing whitespace along the way.
+function sanitizeFilename(raw: string): string {
+  const cleaned = raw
+    .replace(/[/\\?%*:|"<>]/g, "")
+    .trim()
+    .replace(/\s+/g, " ");
+  return cleaned.length > 0 ? cleaned : "quote";
+}
+
 /**
  * Modal for rendering a highlight/selection as a shareable "quote card" PNG
- * (F-1-6). Live canvas preview + style/cover/wordmark controls + Copy image.
- * Save PNG… ships in M2 (kept out entirely here per the milestone split, so
- * nothing is half-wired).
+ * (F-1-6). Live canvas preview + style/cover/wordmark controls + Copy image
+ * and Save PNG….
  */
 export default function ShareCardDialog({ quote, title, author, coverPath, initialMode, onClose }: ShareCardDialogProps) {
   const { t } = useTranslation();
@@ -44,6 +54,7 @@ export default function ShareCardDialog({ quote, title, author, coverPath, initi
   const [includeWordmark, setIncludeWordmark] = useState(false);
   const [fontsReady, setFontsReady] = useState(false);
   const [copying, setCopying] = useState(false);
+  const [saving, setSaving] = useState(false);
 
   // Load the cover once, if any. On failure, disable the cover toggle rather
   // than blocking the rest of the card.
@@ -140,6 +151,38 @@ export default function ShareCardDialog({ quote, title, author, coverPath, initi
     }
   }, [copying, addToast, t]);
 
+  const handleSavePng = useCallback(async () => {
+    const canvas = canvasRef.current;
+    if (!canvas || saving) return;
+    try {
+      const safeName = sanitizeFilename(title);
+      const path = await save({
+        defaultPath: `${safeName} — highlight.png`,
+        filters: [{ name: "PNG", extensions: ["png"] }],
+      });
+      if (!path) return;
+      setSaving(true);
+      canvas.toBlob(async (blob) => {
+        try {
+          if (!blob) {
+            addToast(t("shareCard.toasts.saveFailed"), "error");
+            return;
+          }
+          const buf = await blob.arrayBuffer();
+          await invoke("save_quote_card_png", { path, bytes: Array.from(new Uint8Array(buf)) });
+          addToast(t("shareCard.toasts.saved"), "success");
+        } catch {
+          addToast(t("shareCard.toasts.saveFailed"), "error");
+        } finally {
+          setSaving(false);
+        }
+      }, "image/png");
+    } catch {
+      addToast(t("shareCard.toasts.saveFailed"), "error");
+      setSaving(false);
+    }
+  }, [saving, title, addToast, t]);
+
   return (
     <>
       <div className="fixed inset-0 bg-ink/40 backdrop-blur-sm z-[90] animate-fade-in" onClick={onClose} />
@@ -229,6 +272,13 @@ export default function ShareCardDialog({ quote, title, author, coverPath, initi
               className="px-4 py-1.5 text-sm font-medium text-ink-muted hover:text-ink hover:bg-warm-subtle rounded-lg transition-colors duration-150"
             >
               {t("common.close")}
+            </button>
+            <button
+              onClick={handleSavePng}
+              disabled={saving || !fontsReady}
+              className="px-4 py-1.5 text-sm font-medium text-ink bg-warm-subtle rounded-lg hover:bg-warm-border transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              {t("shareCard.savePng")}
             </button>
             <button
               onClick={handleCopyImage}
