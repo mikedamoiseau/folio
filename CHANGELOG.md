@@ -6,6 +6,11 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- **Set a daily reading-minutes goal.** Alongside the yearly books goal, the
+  Reading Stats screen now has a "Reading goals" card where you can set how many
+  minutes you want to read each day. A slim progress bar fills as you read and
+  shows a "Goal met!" note once you reach it, resetting each day. It reads from
+  reading time already tracked — no extra setup, and nothing leaves your device.
 - **Share a highlight as an image.** Turn any highlight — or a fresh selection
   while reading — into a styled quote card and share it. **Share as image** (in
   the reader selection popup and per-highlight in the Highlights panel) opens a

@@ -61,7 +61,7 @@ Folio is for the opposite case: you already have the files, and you want a bette
 - Library export and backup
 - Restore from backup archive
 - Activity log for imports, edits, deletes, collection changes, and more
-- Reading stats dashboard, including a year-long reading heatmap and a yearly reading goal with a progress ring and pace
+- Reading stats dashboard, including a year-long reading heatmap, a yearly reading goal with a progress ring and pace, and a daily reading-minutes goal
 
 ### Remote access
 - Read your library from any device on the same WiFi — phone, tablet, or another computer, no install required

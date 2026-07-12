@@ -75,7 +75,7 @@ export default function ReadingGoalRing({ finishedThisYear }: ReadingGoalRingPro
 
   if (editing) {
     return (
-      <div className="bg-warm-subtle rounded-xl px-4 py-4">
+      <div>
         <label htmlFor="reading-goal-input" className="text-xs text-ink-muted mb-2 block">
           {t("stats.goal.inputLabel")}
         </label>
@@ -121,7 +121,7 @@ export default function ReadingGoalRing({ finishedThisYear }: ReadingGoalRingPro
       <button
         type="button"
         onClick={startEditing}
-        className="w-full bg-warm-subtle hover:bg-warm-border/40 rounded-xl px-4 py-5 text-center transition-colors"
+        className="w-full hover:bg-warm-border/40 rounded-xl px-4 py-5 text-center transition-colors"
       >
         <p className="text-sm font-medium text-ink">{t("stats.goal.setGoal")}</p>
         <p className="text-xs text-ink-muted mt-1">{t("stats.goal.setGoalHint")}</p>
@@ -143,7 +143,7 @@ export default function ReadingGoalRing({ finishedThisYear }: ReadingGoalRingPro
         : t("stats.goal.behindSchedule", { count: pace.count });
 
   return (
-    <div className="bg-warm-subtle rounded-xl px-4 py-4">
+    <div>
       <div className="flex items-center gap-4">
         <div
           className="relative w-24 h-24 shrink-0"

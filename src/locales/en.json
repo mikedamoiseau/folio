@@ -854,6 +854,16 @@
       "behindSchedule": "{{count}} behind schedule",
       "completed": "Goal reached!",
       "ringAriaLabel": "{{finished}} of {{goal}} books finished this year, {{percent}}%"
+    },
+    "dailyGoal": {
+      "sectionTitle": "Reading goals",
+      "setGoal": "Set a daily goal",
+      "setGoalHint": "Track how many minutes you read each day",
+      "inputLabel": "Minutes to read each day",
+      "today": "Today",
+      "progress": "{{minutes}} / {{goal}} min",
+      "met": "Goal met!",
+      "barAriaLabel": "{{minutes}} of {{goal}} minutes read today, {{percent}}%"
     }
   },
 

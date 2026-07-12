@@ -809,6 +809,8 @@ Open the reading stats dashboard from the library toolbar (bar chart icon).
 
 A **30-day bar chart** shows your daily reading time over the past month.
 
+**Reading goals** — a "Reading goals" card lets you set two targets: a **yearly goal** for how many books you want to finish (shown as a progress ring with an ahead/behind-schedule pace indicator), and a **daily goal** for how many minutes you want to read each day (shown as a progress bar that fills through the day and marks "Goal met!" once you reach it). Both are optional — set either from the card — and are computed from data Folio already tracks.
+
 Stats are tracked automatically — reading sessions are recorded when you open and close a book, unless "Don't track this session" is on (see [Don't track this session](#dont-track-this-session)), in which case that session's time simply isn't recorded.
 
 ---

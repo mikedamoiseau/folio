@@ -839,6 +839,16 @@
       "behindSchedule": "{{count}} de retard",
       "completed": "Objectif atteint !",
       "ringAriaLabel": "{{finished}} livre(s) sur {{goal}} terminés cette année, {{percent}} %"
+    },
+    "dailyGoal": {
+      "sectionTitle": "Objectifs de lecture",
+      "setGoal": "Définir un objectif quotidien",
+      "setGoalHint": "Suivez le nombre de minutes lues chaque jour",
+      "inputLabel": "Minutes à lire chaque jour",
+      "today": "Aujourd'hui",
+      "progress": "{{minutes}} / {{goal}} min",
+      "met": "Objectif atteint !",
+      "barAriaLabel": "{{minutes}} minute(s) sur {{goal}} lues aujourd'hui, {{percent}} %"
     }
   },
 
