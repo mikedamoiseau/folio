@@ -64,6 +64,11 @@ export default function ShareCardDialog({ quote, title, author, coverPath, initi
       setCoverImg(null);
       addToast(t("shareCard.toasts.coverLoadFailed"), "error");
     };
+    // Anonymous CORS mode keeps the canvas origin-clean when we later draw
+    // this image — Tauri's asset protocol serves permissive CORS headers,
+    // so this succeeds. Without it, getImageData() in handleCopyImage
+    // throws SecurityError (canvas taint).
+    img.crossOrigin = "anonymous";
     img.src = convertFileSrc(coverPath);
     return () => {
       cancelled = true;

@@ -2916,7 +2916,7 @@ export default function ReaderPane({
                   )}
                   {/* Share as image (F-1-6) — same non-trivial-selection
                       floor as the highlight colors above. */}
-                  {selectionPopup.text.trim().length >= 3 && (
+                  {selectionPopup.text.length >= 3 && (
                     <button
                       onClick={handleShareAsImage}
                       className="px-2 h-5 rounded text-xs font-medium text-white/90 hover:text-white hover:bg-white/10 transition-colors"
