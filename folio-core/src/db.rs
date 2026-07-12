@@ -1559,6 +1559,49 @@ pub struct ReadingStats {
     pub daily_reading_year: Vec<(String, i64)>, // (date_str, seconds), last 365 days — for the heatmap (F-5-4)
 }
 
+/// Unix timestamp of local 00:00 for `date`. `None` only in the (practically
+/// impossible) case that local midnight is skipped by a DST transition.
+fn local_day_start_unix(date: chrono::NaiveDate) -> Option<i64> {
+    use chrono::TimeZone;
+    date.and_hms_opt(0, 0, 0)
+        .and_then(|dt| chrono::Local.from_local_datetime(&dt).earliest())
+        .map(|dt| dt.timestamp())
+}
+
+/// Credit a session's `duration_secs` to the local calendar days it spans,
+/// splitting at each local-midnight boundary so a session that crosses
+/// midnight (or a DST transition) adds to each day only the seconds actually
+/// elapsed on it. Keys are `YYYY-MM-DD` local dates (F-5-2).
+fn accumulate_session_by_local_day(
+    started_at: i64,
+    duration_secs: i64,
+    buckets: &mut std::collections::BTreeMap<String, i64>,
+) {
+    use chrono::TimeZone;
+    if duration_secs <= 0 {
+        return;
+    }
+    let end = started_at + duration_secs;
+    let mut cursor = started_at;
+    while cursor < end {
+        let Some(dt) = chrono::Local.timestamp_opt(cursor, 0).single() else {
+            return;
+        };
+        let day = dt.date_naive();
+        // Start of the next local day; fall back to `end` if that midnight is
+        // skipped by a DST transition (crediting the remainder to this day).
+        let next_day_start = local_day_start_unix(day + chrono::Duration::days(1)).unwrap_or(end);
+        let segment_end = next_day_start.min(end);
+        if segment_end <= cursor {
+            return; // guard against a non-advancing cursor
+        }
+        *buckets
+            .entry(day.format("%Y-%m-%d").to_string())
+            .or_insert(0) += segment_end - cursor;
+        cursor = segment_end;
+    }
+}
+
 pub fn get_reading_stats(conn: &Connection) -> Result<ReadingStats> {
     let total_reading_time_secs: i64 = conn.query_row(
         "SELECT COALESCE(SUM(duration_secs), 0) FROM reading_sessions",
@@ -1602,17 +1645,35 @@ pub fn get_reading_stats(conn: &Connection) -> Result<ReadingStats> {
     // matches the frontend grid, which covers exactly the last 365 local
     // calendar dates (today-364 .. today). A rolling-timestamp cutoff would
     // let the oldest day get partially summed or fall outside the grid.
+    //
+    // Each session's duration is split across the local calendar days it
+    // actually spans (F-5-2): a session crossing local midnight (or a DST
+    // transition) credits each day only the seconds elapsed on it, instead of
+    // dumping the whole duration on its start day. The daily-minutes goal
+    // reads today's bucket from this series, so a session that began before
+    // midnight must not count against today's total.
+    let today = chrono::Local::now().date_naive();
+    let cutoff_day = today - chrono::Duration::days(364);
+    let cutoff_start = local_day_start_unix(cutoff_day).unwrap_or(0);
+    let window_end = local_day_start_unix(today + chrono::Duration::days(1)).unwrap_or(i64::MAX);
     let mut stmt = conn.prepare(
-        "SELECT date(started_at, 'unixepoch', 'localtime') as day, SUM(duration_secs)
-         FROM reading_sessions
-         WHERE date(started_at, 'unixepoch', 'localtime') >= date('now', 'localtime', '-364 days')
-         GROUP BY day ORDER BY day ASC",
+        "SELECT started_at, duration_secs FROM reading_sessions
+         WHERE started_at < ?1 AND started_at + duration_secs > ?2",
     )?;
-    let daily_reading_year: Vec<(String, i64)> = stmt
-        .query_map([], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
-        })?
-        .filter_map(|r| r.ok())
+    let mut year_buckets: std::collections::BTreeMap<String, i64> =
+        std::collections::BTreeMap::new();
+    let rows = stmt.query_map(params![window_end, cutoff_start], |row| {
+        Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?))
+    })?;
+    for (started_at, duration_secs) in rows.flatten() {
+        accumulate_session_by_local_day(started_at, duration_secs, &mut year_buckets);
+    }
+    // Drop any pre-window slivers a boundary-crossing session contributed
+    // (BTreeMap keeps keys sorted ascending, matching the old ORDER BY day).
+    let cutoff_str = cutoff_day.format("%Y-%m-%d").to_string();
+    let daily_reading_year: Vec<(String, i64)> = year_buckets
+        .into_iter()
+        .filter(|(day, _)| *day >= cutoff_str)
         .collect();
 
     // Daily reading for last 30 days (the existing bar chart), derived from
@@ -2970,6 +3031,44 @@ mod tests {
             .daily_reading_year
             .iter()
             .any(|(_, secs)| *secs == 450));
+    }
+
+    // F-5-2: a session crossing local midnight must credit each calendar day
+    // only the seconds elapsed on it — not dump the whole duration on its
+    // start day. Otherwise the daily-minutes goal reads 0 for "today" after
+    // midnight even though reading continued into today.
+    #[test]
+    fn test_daily_reading_year_splits_across_local_midnight() {
+        use chrono::TimeZone;
+        let (_dir, conn) = setup();
+        let book = sample_book("book-mid");
+        insert_book(&conn, &book).unwrap();
+
+        let today = chrono::Local::now().date_naive();
+        let today_midnight = chrono::Local
+            .from_local_datetime(&today.and_hms_opt(0, 0, 0).unwrap())
+            .earliest()
+            .unwrap()
+            .timestamp();
+        // 30-min session from 23:50 yesterday to 00:20 today: 10 min yesterday,
+        // 20 min today.
+        insert_reading_session(&conn, "s-mid", "book-mid", today_midnight - 600, 1800, 1).unwrap();
+
+        let stats = get_reading_stats(&conn).unwrap();
+        let today_str = today.format("%Y-%m-%d").to_string();
+        let yesterday_str = (today - chrono::Duration::days(1))
+            .format("%Y-%m-%d")
+            .to_string();
+        let secs_on = |day: &str| {
+            stats
+                .daily_reading_year
+                .iter()
+                .find(|(d, _)| d == day)
+                .map(|(_, s)| *s)
+                .unwrap_or(0)
+        };
+        assert_eq!(secs_on(&today_str), 1200);
+        assert_eq!(secs_on(&yesterday_str), 600);
     }
 
     // F-1-3: `books_finished_this_year` must only count books whose

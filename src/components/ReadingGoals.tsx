@@ -46,8 +46,8 @@ function DailyGoalBar({ dailyReadingYear }: { dailyReadingYear: [string, number]
   const [editing, setEditing] = useState(false);
   const [inputValue, setInputValue] = useState("");
 
-  const parsedInput = parseInt(inputValue, 10);
-  const inputIsValid = Number.isFinite(parsedInput) && parsedInput >= 1;
+  const parsedInput = Number(inputValue);
+  const inputIsValid = Number.isInteger(parsedInput) && parsedInput >= 1;
 
   useEffect(() => {
     let cancelled = false;
@@ -97,6 +97,7 @@ function DailyGoalBar({ dailyReadingYear }: { dailyReadingYear: [string, number]
             id="daily-goal-input"
             type="number"
             min={1}
+            step={1}
             autoFocus
             value={inputValue}
             onChange={(e) => setInputValue(e.target.value)}
