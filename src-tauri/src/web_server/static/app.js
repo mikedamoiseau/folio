@@ -2294,6 +2294,8 @@
     let inGesture = false;
     let gestureAt = 0; // last gesture activity — staleness backstop below
     let gestureBaseScale = 1;
+    let gestureEpoch = 0; // zoomEpoch at (re)base — see the mismatch check
+    let gestureBaseFactor = 1; // e.scale at (re)base; e.scale is cumulative
     stage.addEventListener("gesturestart", (e) => {
       if (!readerState || readerState.mode !== "page") return;
       e.preventDefault();
@@ -2301,6 +2303,8 @@
       inGesture = true;
       gestureAt = Date.now();
       gestureBaseScale = readerState.zoom.scale;
+      gestureEpoch = zoomEpoch;
+      gestureBaseFactor = 1;
     });
     stage.addEventListener("gesturechange", (e) => {
       if (!readerState || readerState.mode !== "page") return;
@@ -2308,9 +2312,18 @@
       if (touchPinchActive) return; // touch pinch owns this physical gesture
       inGesture = true;
       gestureAt = Date.now();
-      if (typeof e.scale === "number") {
-        zoomAtPoint(gestureBaseScale * e.scale, e.clientX, e.clientY);
+      if (typeof e.scale !== "number") return;
+      if (gestureEpoch !== zoomEpoch) {
+        // A page turn reset the zoom mid-gesture — re-base on the fresh
+        // scale instead of re-applying the previous page's. e.scale is
+        // cumulative since gesturestart, so remember the factor at the
+        // re-base point and zoom by the ratio from here on.
+        gestureBaseScale = readerState.zoom.scale;
+        gestureEpoch = zoomEpoch;
+        gestureBaseFactor = e.scale;
+        return;
       }
+      zoomAtPoint(gestureBaseScale * (e.scale / gestureBaseFactor), e.clientX, e.clientY);
     });
     stage.addEventListener("gestureend", (e) => {
       e.preventDefault();
@@ -2490,7 +2503,7 @@
         // One finger while zoomed pans — never a swipe (a swipe would stomp
         // the zoom transform with translateX and turn pages under a user
         // trying to pan).
-        pan = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+        pan = { x: e.touches[0].clientX, y: e.touches[0].clientY, epoch: zoomEpoch };
         return;
       }
       pan = null;
@@ -2531,17 +2544,19 @@
         return;
       }
       if (pan && e.touches.length === 1) {
-        if (!isZoomed()) {
+        if (!isZoomed() || pan.epoch !== zoomEpoch) {
           // Zoom reset mid-gesture (e.g. a keyboard page turn while the
-          // finger is down) — stop claiming the touch so native scrolling
-          // isn't blocked for nothing.
+          // finger is down) — stop claiming the touch. The epoch check
+          // also catches a reset-then-rezoom on a new page before the
+          // finger's next move: the old pan's deltas belong to the
+          // previous page.
           pan = null;
           return;
         }
         e.preventDefault();
         const t = e.touches[0];
         panZoomBy(t.clientX - pan.x, t.clientY - pan.y);
-        pan = { x: t.clientX, y: t.clientY };
+        pan = { x: t.clientX, y: t.clientY, epoch: pan.epoch };
         return;
       }
       if (!tracking) return;
@@ -2582,7 +2597,7 @@
           pinch = null;
           touchPinchActive = false;
           pan = e.touches.length === 1 && isZoomed()
-            ? { x: e.touches[0].clientX, y: e.touches[0].clientY }
+            ? { x: e.touches[0].clientX, y: e.touches[0].clientY, epoch: zoomEpoch }
             : null;
         }
         return;
