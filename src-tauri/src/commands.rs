@@ -2796,20 +2796,28 @@ pub async fn prepare_pdf(
                         match pdf::resolve_page_texts(&bg_path, &bg_storage, &bg_hash) {
                             Ok(pages) => {
                                 let page_count = pages.len();
-                                // Persist only if STILL safe at write time:
-                                //  - not private (live re-check: a mid-
-                                //    extraction "don't track this session"
-                                //    toggle must stop the write)
-                                //  - the book's manifest still exists, i.e.
-                                //    the book wasn't deleted/evicted during
-                                //    extraction (deletion removes the whole
-                                //    page-cache/{hash}/ prefix incl.
-                                //    manifest). Writing text-index.json
-                                //    without a manifest creates an orphan
-                                //    that escapes cache eviction.
-                                let persist_ok = !bg_private.load(Ordering::SeqCst)
-                                    && page_cache::read_manifest(&bg_storage, &bg_hash).is_some();
-                                if persist_ok {
+                                // Handle a delete/evict that landed DURING
+                                // extraction FIRST, independently of whether
+                                // we'd persist: resolve_page_texts just
+                                // repopulated the in-memory PDF_TEXT_CACHE
+                                // entry that remove_book had cleared, so if
+                                // the manifest is gone (book removed) we must
+                                // drop both the cache entry and the resident
+                                // text. This covers the whole extraction
+                                // window, not just the post-write race.
+                                let persisted;
+                                if page_cache::read_manifest(&bg_storage, &bg_hash).is_none() {
+                                    let _ = page_cache::evict_book(&bg_storage, &bg_hash);
+                                    pdf::evict_memory_cache(&bg_path);
+                                    persisted = false;
+                                } else if bg_private.load(Ordering::SeqCst) {
+                                    // Private mode ("don't track this
+                                    // session"): never persist to disk. The
+                                    // in-memory text is session-only and
+                                    // cleared on restart, so it may stay this
+                                    // session.
+                                    persisted = false;
+                                } else {
                                     let index = pdf::PdfTextIndex {
                                         version: pdf::TEXT_INDEX_VERSION,
                                         page_count: page_count as u32,
@@ -2818,28 +2826,23 @@ pub async fn prepare_pdf(
                                     let _ =
                                         page_cache::write_text_index(&bg_storage, &bg_hash, &index);
                                     // Serializing + writing a large index
-                                    // takes time, so a delete or a "don't
-                                    // track this session" toggle can land
-                                    // during the write. Re-check AFTER it and
-                                    // undo, so neither a disk artifact nor a
-                                    // resident in-memory copy survives the
-                                    // cutoff:
+                                    // takes time, so a delete or a private
+                                    // toggle can land DURING the write.
+                                    // Re-check after and undo:
                                     //  - deleted (manifest gone): drop the
-                                    //    whole cache entry + the in-memory
-                                    //    text (which extraction just
-                                    //    repopulated after remove_book
-                                    //    cleared it).
-                                    //  - private toggled on (book still
-                                    //    present): drop only the text index
-                                    //    we wrote, leaving the page cache
-                                    //    intact. The in-memory text is
-                                    //    session-only and cleared on restart,
-                                    //    so it may stay for this session.
+                                    //    whole entry + the resident text.
+                                    //  - private toggled on: drop only the
+                                    //    text index we wrote, leaving the
+                                    //    page cache intact.
                                     if page_cache::read_manifest(&bg_storage, &bg_hash).is_none() {
                                         let _ = page_cache::evict_book(&bg_storage, &bg_hash);
                                         pdf::evict_memory_cache(&bg_path);
+                                        persisted = false;
                                     } else if bg_private.load(Ordering::SeqCst) {
                                         let _ = page_cache::evict_text_index(&bg_storage, &bg_hash);
+                                        persisted = false;
+                                    } else {
+                                        persisted = true;
                                     }
                                 }
                                 page_cache::page_dbg!(
@@ -2847,7 +2850,7 @@ pub async fn prepare_pdf(
                                     page_count,
                                     bg_hash,
                                     build_start.elapsed(),
-                                    persist_ok
+                                    persisted
                                 );
                             }
                             Err(e) => page_cache::page_dbg!(
@@ -7186,14 +7189,21 @@ pub async fn bulk_delete_books(
     // Capture each book's file_hash + resolved path before the DB delete so
     // the page cache (page-cache/{hash}/, incl. the persisted PDF text
     // index) can be evicted afterward — mirrors remove_book's cleanup.
+    // A DB lookup error must NOT be silently collapsed into "skip" — that
+    // would delete the book below while never evicting its cache/text-index
+    // (which keeps a valid manifest, so the orphan sweep won't reclaim it).
+    // Propagate the error before mutating; skip only a genuinely absent row.
     let evict_targets: Vec<(Option<String>, Option<String>)> = book_ids
         .iter()
-        .filter_map(|id| db::get_book(&conn, id).ok().flatten())
-        .map(|b| {
-            let resolved = state.resolve_book_path(&b).ok();
-            (b.file_hash.clone(), resolved)
+        .filter_map(|id| match db::get_book(&conn, id) {
+            Ok(Some(b)) => {
+                let resolved = state.resolve_book_path(&b).ok();
+                Some(Ok((b.file_hash.clone(), resolved)))
+            }
+            Ok(None) => None,
+            Err(e) => Some(Err(e.into())),
         })
-        .collect();
+        .collect::<FolioResult<Vec<_>>>()?;
 
     let ids_ref: Vec<&str> = book_ids.iter().map(|s| s.as_str()).collect();
     db::bulk_delete_books(&conn, &ids_ref)?;
