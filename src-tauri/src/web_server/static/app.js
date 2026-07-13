@@ -2356,6 +2356,16 @@
     }, { passive: false });
   }
 
+  // Pending deferred tap-zone action (see bindClickZones). Module-scope so
+  // the gesture controller can cancel it: a pinch or pan starting inside
+  // the defer window means the taps were gesture noise, not intent.
+  let pendingTap = null; // { x, y, zone, epoch, timer }
+  function cancelPendingTap() {
+    if (!pendingTap) return;
+    clearTimeout(pendingTap.timer);
+    pendingTap = null;
+  }
+
   // Left third = prev, right third = next, middle third = toggle chrome —
   // but deferred DOUBLE_TAP_WINDOW_MS so a second tap can turn the pair
   // into a double-tap zoom toggle instead. Browsers synthesize click events
@@ -2363,15 +2373,20 @@
   // double-click alike. While zoomed, prev/next zones stay inert (panning
   // is the only navigation) and the center zone still toggles chrome.
   function bindClickZones(el) {
-    let pendingTap = null; // { x, y, timer } awaiting double-tap or expiry
-
-    function zoneAction(x) {
-      if (!readerState) return;
+    // Zone is classified at click time — measuring the rect when the timer
+    // fires would misclassify if the layout changed inside the window
+    // (rotation, fit toggle, page turn to a different aspect).
+    function zoneAt(clientX) {
       const rect = el.getBoundingClientRect();
       const third = rect.width / 3;
-      const rel = x - rect.left;
-      if (rel < third) { if (!isZoomed()) readerState.handlers.prev(); }
-      else if (rel > third * 2) { if (!isZoomed()) readerState.handlers.next(); }
+      const rel = clientX - rect.left;
+      return rel < third ? "prev" : rel > third * 2 ? "next" : "chrome";
+    }
+
+    function runZone(zone) {
+      if (!readerState) return;
+      if (zone === "prev") { if (!isZoomed()) readerState.handlers.prev(); }
+      else if (zone === "next") { if (!isZoomed()) readerState.handlers.next(); }
       else readerState.handlers.toggleChrome();
     }
 
@@ -2381,20 +2396,39 @@
           && Math.abs(e.clientY - pendingTap.y) < DOUBLE_TAP_SLOP_PX) {
         // Second tap in time and in place: double-tap. Cancel the pending
         // single-tap action and toggle zoom at the tap point.
-        clearTimeout(pendingTap.timer);
-        pendingTap = null;
+        cancelPendingTap();
         if (isZoomed()) resetZoom();
         else zoomAtPoint(ZOOM_DOUBLE_TAP_SCALE, e.clientX, e.clientY);
         return;
       }
-      // A second tap far away just restarts the window at the new spot.
-      if (pendingTap) clearTimeout(pendingTap.timer);
-      const x = e.clientX, y = e.clientY;
+      if (pendingTap) {
+        // A second tap far away is not a double-tap — run the first tap's
+        // action NOW rather than dropping it (rapid taps across zones, e.g.
+        // two quick right-third taps landing >30px apart, must not lose a
+        // page turn), then defer the new tap as usual.
+        const prev = pendingTap;
+        cancelPendingTap();
+        if (prev.zone === "chrome" || prev.epoch === zoomEpoch) runZone(prev.zone);
+      }
+      // Zone and staleness epoch are captured now — after any immediate
+      // action above, which may itself have turned the page (epoch bump).
+      const zone = zoneAt(e.clientX);
+      const epoch = zoomEpoch;
       pendingTap = {
-        x, y,
+        x: e.clientX,
+        y: e.clientY,
+        zone,
+        epoch,
         timer: setTimeout(() => {
           pendingTap = null;
-          zoneAction(x);
+          // prev/next are stale if anything reset the zoom since the tap —
+          // page turn (any means), fit toggle, reader exit/re-entry.
+          // Without this, a tap immediately followed by a keyboard turn
+          // would fire a second turn 275ms later. The chrome toggle is
+          // pure UI, valid on whatever page is showing — never stale (and
+          // a turn queued by a rapid earlier tap in another zone must not
+          // swallow it).
+          if (zone === "chrome" || epoch === zoomEpoch) runZone(zone);
         }, DOUBLE_TAP_WINDOW_MS),
       };
     });
@@ -2504,6 +2538,7 @@
         // abort). Swipe tracking must die first so its touchend can't fire.
         abortDrag();
         pan = null;
+        cancelPendingTap(); // a tap right before a pinch was gesture noise
         const t0 = e.touches[0], t1 = e.touches[1];
         const midX = (t0.clientX + t1.clientX) / 2;
         const midY = (t0.clientY + t1.clientY) / 2;
@@ -2535,6 +2570,7 @@
         // One finger while zoomed pans — never a swipe (a swipe would stomp
         // the zoom transform with translateX and turn pages under a user
         // trying to pan).
+        cancelPendingTap(); // a tap right before a pan was gesture noise
         pan = { x: e.touches[0].clientX, y: e.touches[0].clientY, epoch: zoomEpoch };
         return;
       }

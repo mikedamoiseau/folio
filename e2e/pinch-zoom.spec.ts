@@ -357,6 +357,59 @@ test.describe("Reader zoom: double-tap + tap zones (M3)", () => {
     await expect(page).toHaveURL(new RegExp(`#/book/${READER_BOOK_ID}/0/read`));
   });
 
+  test("a tap followed by a keyboard turn doesn't fire a second turn", async ({ page }) => {
+    await openCbzReader(page);
+    const img = page.locator("#page-img");
+    const box = (await img.boundingBox())!;
+    // Right-third tap (deferred), then ArrowRight lands first: page 0 -> 1.
+    await page.mouse.click(box.x + box.width * 0.9, box.y + box.height / 2);
+    await page.keyboard.press("ArrowRight");
+    await expect(page).toHaveURL(new RegExp(`#/book/${READER_BOOK_ID}/1/read`), { timeout: 10_000 });
+    // The stale deferred tap must NOT advance to page 2 when it expires.
+    await page.waitForTimeout(500);
+    await expect(page).toHaveURL(new RegExp(`#/book/${READER_BOOK_ID}/1/read`));
+  });
+
+  test("rapid taps in different zones keep the first tap's action", async ({ page }) => {
+    await openCbzReader(page);
+    // fit-width: the harness page is a 4px-wide PNG in fit-height, so two
+    // "different zone" clicks would land inside the 30px double-tap slop.
+    await page.click("#fit-toggle-btn");
+    const img = page.locator("#page-img");
+    const box = (await img.boundingBox())!;
+    const y = box.y + 20; // near the top — the image is viewport-tall in fit-width
+    // Right-third tap then center tap inside the window: the page turn
+    // must fire (immediately, on the second click) and the chrome toggle
+    // must still run when its own window expires.
+    await page.mouse.click(box.x + box.width * 0.9, y);
+    await page.mouse.click(box.x + box.width / 2, y);
+    await expect(page).toHaveURL(new RegExp(`#/book/${READER_BOOK_ID}/1/read`), { timeout: 5_000 });
+    await expect
+      .poll(async () => page.$eval("#reader-root", (el) => el.classList.contains("chrome-hidden")))
+      .toBe(true);
+  });
+
+  test("double-tap zooms about the tap point", async ({ page }) => {
+    await openCbzReader(page);
+    await page.click("#fit-toggle-btn"); // fit-width: image spans the stage
+    const before = await page.$eval("#page-img", (el) => {
+      const r = el.getBoundingClientRect();
+      return { left: r.left, top: r.top, width: r.width, height: r.height };
+    });
+    // Near the top: in fit-width the (square) image is viewport-tall, so a
+    // mid-height point would fall on the toolbar below the visible stage.
+    const px = before.left + before.width * 0.25;
+    const py = before.top + 20;
+    await page.mouse.dblclick(px, py);
+    expect(await getScale(page)).toBe(2.5);
+    const afterLeft = await page.$eval("#page-img", (el) => el.getBoundingClientRect().left);
+    // Anchor invariant (same as the wheel test): the image-local point
+    // under the taps stays under them.
+    const localBefore = px - before.left; // scale was 1
+    const localAfter = (px - afterLeft) / 2.5;
+    expect(Math.abs(localAfter - localBefore)).toBeLessThan(1);
+  });
+
   test("while zoomed, center tap still toggles chrome (deferred)", async ({ page }) => {
     await openCbzReader(page);
     // fit-width + ~2x: the image box extends past the viewport, so click
