@@ -370,11 +370,24 @@ export default function PageViewer({
     let timeoutId: ReturnType<typeof setTimeout> | undefined;
     setLoading(true);
     setError(null);
-    // A new spread is being fetched: the currently displayed bitmap is now
-    // stale, so clear its loaded identity until the new image's onLoad
-    // re-records it. Keeps the text layer inert during the swap.
-    setLeftDisplayedId(null);
-    setRightDisplayedId(null);
+    // NOTE: we deliberately do NOT clear leftDisplayedId/rightDisplayedId here.
+    // The `imageLayerActive` identity predicate already deactivates the text
+    // layer whenever the displayed bitmap's identity doesn't match the target
+    // page/book, so an explicit reset is redundant — and harmful: navigating
+    // A -> uncached B -> back to A resolves A from the URL cache to the SAME
+    // src, which fires no new <img> load event, so a reset would strand
+    // displayedId at null and leave A's text layer permanently inert. Keeping
+    // the last-loaded identity means the still-visible A bitmap stays
+    // selectable.
+    //
+    // Known limitation (accepted): because a reused <img> element's load
+    // handler reads the current identity, an already-decoded page's queued
+    // load event could, in a sub-frame window during very rapid multi-page
+    // navigation, record the newer page's identity over a not-yet-repainted
+    // bitmap. Mis-attribution would require the user to also complete a text
+    // selection within that same ~millisecond window, so it is left as a
+    // documented edge rather than re-keying the <img> (which would ripple into
+    // the shared measure/ResizeObserver/animation logic).
 
     // Clear stale in-flight entries for pages we no longer need.
     // This prevents abandoned renders from blocking the pdfium queue.
