@@ -314,3 +314,62 @@ test.describe("Reader zoom: touch (M2)", () => {
     expect(await getScale(page)).toBeGreaterThan(1.8);
   });
 });
+
+// ── M3: double-tap / deferred tap zones ────────────────────────────────
+// locator.dblclick() fires two click events within the double-tap window —
+// the same event stream a fast touch double-tap produces through the
+// browser's synthesized clicks.
+test.describe("Reader zoom: double-tap + tap zones (M3)", () => {
+  test("double-click toggles 2.5x and back, without firing the tap-zone action", async ({ page }) => {
+    await openCbzReader(page);
+    const chromeHiddenBefore = await page.$eval("#reader-root", (el) => el.classList.contains("chrome-hidden"));
+
+    await page.locator("#page-img").dblclick(); // center zone = chrome toggle if it leaked through
+    expect(await getScale(page)).toBe(2.5);
+    // Still on page 0 and chrome state untouched — the deferred single-tap
+    // action was cancelled by the second tap.
+    await expect(page).toHaveURL(new RegExp(`#/book/${READER_BOOK_ID}/0/read`));
+    await page.waitForTimeout(400); // outlive the defer window before checking
+    const chromeHiddenAfter = await page.$eval("#reader-root", (el) => el.classList.contains("chrome-hidden"));
+    expect(chromeHiddenAfter).toBe(chromeHiddenBefore);
+
+    await page.locator("#page-img").dblclick();
+    expect(await getScale(page)).toBe(1);
+  });
+
+  test("single tap still fires its zone action, after the defer window", async ({ page }) => {
+    await openCbzReader(page);
+    // Right-third click = next page. Deferred ~275ms, so poll the URL.
+    const img = page.locator("#page-img");
+    const box = (await img.boundingBox())!;
+    await page.mouse.click(box.x + box.width * 0.9, box.y + box.height / 2);
+    await expect(page).toHaveURL(new RegExp(`#/book/${READER_BOOK_ID}/1/read`), { timeout: 5_000 });
+  });
+
+  test("double-click on the right third zooms instead of turning two pages", async ({ page }) => {
+    await openCbzReader(page);
+    const img = page.locator("#page-img");
+    const box = (await img.boundingBox())!;
+    await page.mouse.dblclick(box.x + box.width * 0.9, box.y + box.height / 2);
+    expect(await getScale(page)).toBe(2.5);
+    // Wait out the defer window, then confirm no page turn ever fired.
+    await page.waitForTimeout(500);
+    await expect(page).toHaveURL(new RegExp(`#/book/${READER_BOOK_ID}/0/read`));
+  });
+
+  test("while zoomed, center tap still toggles chrome (deferred)", async ({ page }) => {
+    await openCbzReader(page);
+    // fit-width + ~2x: the image box extends past the viewport, so click
+    // coordinates must come from the (viewport-sized) stage box — zone
+    // thirds are computed against the image rect, so the stage center lands
+    // in the image's middle third.
+    await page.click("#fit-toggle-btn");
+    await ctrlWheel(page, -70); // ~2x
+    const stage = (await page.locator("#reader-stage").boundingBox())!;
+    await page.mouse.click(stage.x + stage.width / 2, stage.y + stage.height / 2);
+    await expect
+      .poll(async () => page.$eval("#reader-root", (el) => el.classList.contains("chrome-hidden")))
+      .toBe(true);
+    expect(await getScale(page)).toBeGreaterThan(1.5); // zoom kept
+  });
+});
