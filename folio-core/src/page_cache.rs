@@ -1133,15 +1133,13 @@ where
 // Eviction
 // ---------------------------------------------------------------------------
 
-/// Enumerate every `{hash}` directly under `CACHE_PREFIX`, then read each
-/// book's manifest. Books whose manifest is missing or corrupt are skipped
-/// — they remain as dead keys until `clear_cache` or another eviction pass
-/// wipes them, but their absence from this result set means they won't be
-/// counted toward LRU / size / age budgets.
-fn collect_cached_books(storage: &dyn Storage) -> Vec<CacheManifest> {
+/// Every distinct `{hash}` directly under `CACHE_PREFIX`, manifested or not.
+/// Shared by [`collect_cached_books`] (manifested only) and
+/// [`evict_orphan_prefixes`] (the complement: no valid manifest).
+fn all_cache_hashes(storage: &dyn Storage) -> HashSet<String> {
     let keys = match storage.list(CACHE_PREFIX) {
         Ok(k) => k,
-        Err(_) => return Vec::new(),
+        Err(_) => return HashSet::new(),
     };
     let mut hashes: HashSet<String> = HashSet::new();
     for key in keys {
@@ -1154,9 +1152,37 @@ fn collect_cached_books(storage: &dyn Storage) -> Vec<CacheManifest> {
         }
     }
     hashes
+}
+
+/// Read the manifest for every hash from [`all_cache_hashes`]. Books whose
+/// manifest is missing or corrupt are skipped — they remain as dead keys
+/// until `clear_cache` or [`evict_orphan_prefixes`] wipes them, but their
+/// absence from this result set means they won't be counted toward LRU /
+/// size / age budgets.
+fn collect_cached_books(storage: &dyn Storage) -> Vec<CacheManifest> {
+    all_cache_hashes(storage)
         .into_iter()
         .filter_map(|h| read_manifest(storage, &h))
         .collect()
+}
+
+/// Evict every `page-cache/{hash}/` prefix that has files on disk but no
+/// valid manifest — an orphan. `collect_cached_books` skips these (it only
+/// counts manifested books), so without this pass they would sit outside
+/// the LRU/size/age budgets forever.
+///
+/// This is the backstop for Finding F2b: the PDF text-index background
+/// build (command layer) re-checks the manifest right before writing
+/// `text-index.json` and self-cleans if the book was deleted in that tiny
+/// window, but this sweep covers whatever slips through that race, plus any
+/// other orphaned prefix left by an interrupted write.
+fn evict_orphan_prefixes(storage: &dyn Storage) -> FolioResult<()> {
+    for hash in all_cache_hashes(storage) {
+        if read_manifest(storage, &hash).is_none() {
+            evict_book(storage, &hash)?;
+        }
+    }
+    Ok(())
 }
 
 /// Remove every cache artifact for a book — the whole `page-cache/{hash}/`
@@ -1198,6 +1224,11 @@ fn book_disk_size_bytes(storage: &dyn Storage, book_hash: &str) -> u64 {
 }
 
 pub fn run_eviction(storage: &dyn Storage, max_size_mb: u64) -> FolioResult<()> {
+    // Orphan prefixes (no valid manifest) are invisible to `collect_cached_books`
+    // below, so sweep them unconditionally first — not gated by the size/LRU/age
+    // budgets, since an orphan is never counted toward them in the first place.
+    evict_orphan_prefixes(storage)?;
+
     let mut books = collect_cached_books(storage);
     books.sort_by(|a, b| a.last_accessed.cmp(&b.last_accessed));
 
@@ -1402,6 +1433,40 @@ mod tests {
     fn test_read_text_index_missing_is_none() {
         let (_d, storage) = temp_storage();
         assert!(read_text_index(&storage, "nonexistent").is_none());
+    }
+
+    /// F2b backstop: a `page-cache/{hash}/` prefix containing only a stray
+    /// `text-index.json` (no manifest) — e.g. a raced background build that
+    /// slipped past its own manifest re-check — is invisible to
+    /// `collect_cached_books` and so would otherwise never be reclaimed.
+    /// `run_eviction` must sweep it unconditionally, while leaving a normal
+    /// manifested book (recent, well under the size cap) untouched.
+    #[test]
+    fn run_eviction_removes_orphan_text_index_prefix() {
+        let (_d, storage) = temp_storage();
+
+        let orphan_hash = "orphan-hash";
+        let index = crate::pdf::PdfTextIndex {
+            version: crate::pdf::TEXT_INDEX_VERSION,
+            page_count: 1,
+            pages: vec!["stray".to_string()],
+        };
+        write_text_index(&storage, orphan_hash, &index).unwrap();
+        assert!(read_manifest(&storage, orphan_hash).is_none());
+
+        create_fake_cache(&storage, "book1", "hash1", 2, 100, &now_iso());
+
+        run_eviction(&storage, DEFAULT_MAX_CACHE_SIZE_MB).unwrap();
+
+        let leftovers: Vec<String> = storage.list(&book_prefix(orphan_hash)).unwrap();
+        assert!(
+            leftovers.is_empty(),
+            "orphan text-index-only prefix must be evicted; leftovers: {leftovers:?}"
+        );
+        assert!(
+            read_manifest(&storage, "hash1").is_some(),
+            "normal manifested book must be untouched"
+        );
     }
 
     #[test]

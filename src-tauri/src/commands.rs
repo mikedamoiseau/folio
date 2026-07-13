@@ -1812,17 +1812,13 @@ pub async fn search_book_content(
             // still gets an instant search when the index already exists.
             // Without a hash (shouldn't happen for imported books, but
             // degrade gracefully rather than fail search), fall back to
-            // the memory-only path.
-            // Snapshot private mode once for this request (D-1): a miss must
-            // not persist the text index to disk while "don't track this
-            // session" is on.
-            let priv_now = state.is_private();
+            // the memory-only path. Search never persists to disk — the
+            // background build in `prepare_pdf` is the single, guarded
+            // writer of `text-index.json` (see its doc comment).
             let results = match book.file_hash.as_deref() {
                 Some(book_hash) => {
                     let storage = page_cache_storage(&app)?;
-                    pdf::search_pdf_with_storage(&file_path, &query, &storage, book_hash, &|| {
-                        !priv_now
-                    })?
+                    pdf::search_pdf_with_storage(&file_path, &query, &storage, book_hash)?
                 }
                 None => pdf::search_pdf(&file_path, &query)?,
             };
@@ -2783,30 +2779,60 @@ pub async fn prepare_pdf(
 
             // F-4-6: build + persist the PDF text index after the prewarm/
             // prerender pass, so extraction never contends with the user's
-            // first page render. Skipped when already indexed on disk, while
-            // private (mirrors the prerender pass above — no extra book-tied
-            // artifact written behind a "don't track this session" toggle),
-            // or when another build is already in flight for this hash (e.g.
-            // a rapid reopen).
+            // first page render. This is the ONLY place `text-index.json` is
+            // written — search (`search_pdf_with_storage`) resolves through
+            // memory/disk but never persists, so persistence is safe by
+            // construction (single guarded writer, no racing writes from the
+            // foreground search path).
+            //
+            // Skipped when already indexed on disk, or when another build is
+            // already in flight for this hash (e.g. a rapid reopen).
             if !bg_private.load(Ordering::SeqCst)
                 && page_cache::read_text_index(&bg_storage, &bg_hash).is_none()
             {
                 if let Some(_guard) = TextIndexBuildGuard::acquire(bg_hash.clone()) {
                     if page_cache::read_text_index(&bg_storage, &bg_hash).is_none() {
                         let build_start = std::time::Instant::now();
-                        // Live check at write time (not just the outer
-                        // pre-extraction skip above): a "don't track this
-                        // session" toggle mid-extraction must still stop the
-                        // index from being persisted.
-                        match pdf::resolve_page_texts(&bg_path, &bg_storage, &bg_hash, &|| {
-                            !bg_private.load(Ordering::SeqCst)
-                        }) {
-                            Ok(pages) => page_cache::page_dbg!(
-                                "text-index: built {} pages for {} in {:?}",
-                                pages.len(),
-                                bg_hash,
-                                build_start.elapsed()
-                            ),
+                        match pdf::resolve_page_texts(&bg_path, &bg_storage, &bg_hash) {
+                            Ok(pages) => {
+                                let page_count = pages.len();
+                                // Persist only if STILL safe at write time:
+                                //  - not private (live re-check: a mid-
+                                //    extraction "don't track this session"
+                                //    toggle must stop the write)
+                                //  - the book's manifest still exists, i.e.
+                                //    the book wasn't deleted/evicted during
+                                //    extraction (deletion removes the whole
+                                //    page-cache/{hash}/ prefix incl.
+                                //    manifest). Writing text-index.json
+                                //    without a manifest creates an orphan
+                                //    that escapes cache eviction.
+                                let persist_ok = !bg_private.load(Ordering::SeqCst)
+                                    && page_cache::read_manifest(&bg_storage, &bg_hash).is_some();
+                                if persist_ok {
+                                    let index = pdf::PdfTextIndex {
+                                        version: pdf::TEXT_INDEX_VERSION,
+                                        page_count: page_count as u32,
+                                        pages,
+                                    };
+                                    let _ =
+                                        page_cache::write_text_index(&bg_storage, &bg_hash, &index);
+                                    // If the book was deleted in the tiny
+                                    // window between the manifest check and
+                                    // the write, self-clean the orphan we
+                                    // just created.
+                                    if page_cache::read_manifest(&bg_storage, &bg_hash).is_none() {
+                                        let _ = page_cache::evict_book(&bg_storage, &bg_hash);
+                                    }
+                                }
+                                page_cache::page_dbg!(
+                                    "text-index: built {} pages for {} in {:?} (persisted={})",
+                                    page_count,
+                                    bg_hash,
+                                    build_start.elapsed(),
+                                    persist_ok
+                                );
+                            }
                             Err(e) => page_cache::page_dbg!(
                                 "text-index: build failed for {}: {}",
                                 bg_hash,

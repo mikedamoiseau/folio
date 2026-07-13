@@ -345,20 +345,19 @@ fn get_cached_page_texts(path: &str) -> FolioResult<Vec<String>> {
 
 /// Text resolution order backing [`search_pdf_with_storage`] (F-4-6):
 /// in-memory `PDF_TEXT_CACHE` → persisted `text-index.json` (populating the
-/// in-memory layer on hit) → `extract` + persist on miss. The extractor is
+/// in-memory layer on hit) → `extract` (memory-only). The extractor is
 /// injected so tests can stub pdfium out and assert it's never called on a
 /// disk-index hit.
 ///
-/// `should_persist` gates ONLY the disk write on a miss (private mode,
-/// B-M1/OQ-3/SB-9): the in-memory cache is always populated so search still
-/// works this session, but a "don't track this session" toggle must not
-/// leave a `text-index.json` behind. It's evaluated right before the write
-/// (not once at the top) so a mid-build private toggle is still caught.
+/// Read-only with respect to disk: this never writes `text-index.json`.
+/// Persisting the index is the background build's job alone (`prepare_pdf`
+/// in the command layer), which is the single guarded writer — see that
+/// function's doc comment for why the search/resolve path must not also
+/// write.
 fn resolve_page_texts_with_extractor<F>(
     path: &str,
     storage: &dyn Storage,
     book_hash: &str,
-    should_persist: &dyn Fn() -> bool,
     extract: F,
 ) -> FolioResult<Vec<String>>
 where
@@ -376,18 +375,6 @@ where
     let texts = extract(path)?;
     store_cached_page_texts(path, &texts)?;
 
-    // Persisting the index is best-effort (a write failure just means this
-    // session re-extracts next time) AND gated on `should_persist` — private
-    // mode must never write this to disk.
-    if should_persist() {
-        let index = PdfTextIndex {
-            version: TEXT_INDEX_VERSION,
-            page_count: texts.len() as u32,
-            pages: texts.clone(),
-        };
-        let _ = page_cache::write_text_index(storage, book_hash, &index);
-    }
-
     Ok(texts)
 }
 
@@ -397,15 +384,8 @@ pub fn resolve_page_texts(
     path: &str,
     storage: &dyn Storage,
     book_hash: &str,
-    should_persist: &dyn Fn() -> bool,
 ) -> FolioResult<Vec<String>> {
-    resolve_page_texts_with_extractor(
-        path,
-        storage,
-        book_hash,
-        should_persist,
-        extract_all_page_texts,
-    )
+    resolve_page_texts_with_extractor(path, storage, book_hash, extract_all_page_texts)
 }
 
 /// Case-insensitive substring search across already-resolved page texts.
@@ -480,16 +460,15 @@ pub fn search_pdf(path: &str, query: &str) -> FolioResult<Vec<PdfSearchResult>> 
 /// Search all pages of a PDF for a query string (case-insensitive), resolving
 /// page text via [`resolve_page_texts`] (memory → disk index → extract).
 /// A cold session with a persisted `text-index.json` hits the disk layer
-/// instead of re-extracting. `should_persist` is forwarded to
-/// [`resolve_page_texts`] to gate a miss's disk write (private mode).
+/// instead of re-extracting. Never persists — search is read-only w.r.t.
+/// disk; see [`resolve_page_texts_with_extractor`].
 pub fn search_pdf_with_storage(
     path: &str,
     query: &str,
     storage: &dyn Storage,
     book_hash: &str,
-    should_persist: &dyn Fn() -> bool,
 ) -> FolioResult<Vec<PdfSearchResult>> {
-    let page_texts = resolve_page_texts(path, storage, book_hash, should_persist)?;
+    let page_texts = resolve_page_texts(path, storage, book_hash)?;
     Ok(search_in_texts(&page_texts, query))
 }
 
@@ -583,7 +562,6 @@ mod tests {
             "test_search_uses_disk_index_without_extracting.pdf",
             &storage,
             book_hash,
-            &|| true,
             extractor,
         )
         .expect("should resolve from the disk index");
@@ -597,61 +575,6 @@ mod tests {
         );
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].match_offset, texts[0].find("needle").unwrap());
-    }
-
-    /// Private mode (B-M1): on a cold miss, the extractor still runs (so the
-    /// caller gets a working search this session) but the index must NOT be
-    /// persisted to disk when `should_persist` says no.
-    #[test]
-    fn test_resolve_page_texts_private_mode_does_not_persist() {
-        let (_d, storage) = temp_storage();
-        let book_hash = "hash-private-miss";
-        let extractor_calls = AtomicUsize::new(0);
-        let extractor = |_path: &str| -> FolioResult<Vec<String>> {
-            extractor_calls.fetch_add(1, Ordering::SeqCst);
-            Ok(vec!["needle in a haystack".to_string()])
-        };
-
-        let texts = resolve_page_texts_with_extractor(
-            "test_resolve_page_texts_private_mode_does_not_persist.pdf",
-            &storage,
-            book_hash,
-            &|| false,
-            extractor,
-        )
-        .expect("extractor should still run and return text");
-
-        assert_eq!(extractor_calls.load(Ordering::SeqCst), 1);
-        assert_eq!(texts, vec!["needle in a haystack".to_string()]);
-        assert!(
-            page_cache::read_text_index(&storage, book_hash).is_none(),
-            "private mode must not persist the text index"
-        );
-    }
-
-    /// Mirror of the private-mode test above with `should_persist = true`:
-    /// the miss path DOES persist the index to disk.
-    #[test]
-    fn test_resolve_page_texts_non_private_persists_on_miss() {
-        let (_d, storage) = temp_storage();
-        let book_hash = "hash-normal-miss";
-        let extractor = |_path: &str| -> FolioResult<Vec<String>> {
-            Ok(vec!["needle in a haystack".to_string()])
-        };
-
-        let texts = resolve_page_texts_with_extractor(
-            "test_resolve_page_texts_non_private_persists_on_miss.pdf",
-            &storage,
-            book_hash,
-            &|| true,
-            extractor,
-        )
-        .expect("extractor should run and return text");
-
-        assert_eq!(texts, vec!["needle in a haystack".to_string()]);
-        let index = page_cache::read_text_index(&storage, book_hash)
-            .expect("non-private mode must persist the text index");
-        assert_eq!(index.pages, texts);
     }
 
     #[test]
