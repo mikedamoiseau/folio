@@ -2402,11 +2402,21 @@
   const AXIS_LOCK_PX = 10;
   function bindSwipe(el) {
     let startX = 0, startY = 0, tracking = false, axisLock = null;
+    // M2 pinch bookkeeping: finger distance & zoom scale captured when the
+    // second finger lands; null when not pinching. Pan bookkeeping: last
+    // single-finger position while zoomed; null when not panning.
+    let pinch = null;
+    let pan = null;
+
+    function touchDist(t0, t1) {
+      return Math.hypot(t1.clientX - t0.clientX, t1.clientY - t0.clientY);
+    }
 
     // F1/F2: shared abort path — stops tracking so a stray touchend (from
     // whichever finger lifts) can't commit a bogus swipe, and immediately
     // clears any drag-follow transform/will-change plus any in-flight
-    // snap-back so nothing is left stuck mid-gesture.
+    // snap-back so nothing is left stuck mid-gesture. resetDragStyles
+    // re-applies the zoom transform, so aborting never disturbs zoom state.
     function abortDrag() {
       tracking = false;
       axisLock = null;
@@ -2416,20 +2426,33 @@
     }
 
     el.addEventListener("touchstart", (e) => {
-      if (e.touches.length !== 1) {
-        // F2: a second finger present at touchstart (e.g. joining mid-drag,
-        // since touchstart re-fires with the full active touch list) — never
-        // (re)start tracking on multi-touch.
+      if (e.touches.length === 2) {
+        // Second finger down = pinch begins (this used to be a plain
+        // abort). Swipe tracking must die first so its touchend can't fire.
         abortDrag();
+        pan = null;
+        pinch = {
+          dist: touchDist(e.touches[0], e.touches[1]),
+          scale: readerState && readerState.zoom ? readerState.zoom.scale : 1,
+        };
         return;
       }
+      if (e.touches.length !== 1) {
+        // 3+ fingers: abort everything.
+        abortDrag();
+        pinch = null;
+        pan = null;
+        return;
+      }
+      pinch = null;
       if (isZoomed()) {
-        // While zoomed, a single-finger drag must never start a swipe (it
-        // would stomp the zoom transform with translateX and turn pages
-        // under a user trying to pan). Touch panning arrives with the M2
-        // gesture controller; until then a zoomed touch drag is inert.
+        // One finger while zoomed pans — never a swipe (a swipe would stomp
+        // the zoom transform with translateX and turn pages under a user
+        // trying to pan).
+        pan = { x: e.touches[0].clientX, y: e.touches[0].clientY };
         return;
       }
+      pan = null;
       cancelSnapBack($("#page-img")); // F6: a new drag interrupts any snap-back in flight
       startX = e.touches[0].clientX;
       startY = e.touches[0].clientY;
@@ -2437,21 +2460,43 @@
       axisLock = null;
     }, { passive: true });
 
-    // Registered non-passive so a horizontally-locked drag can
-    // preventDefault() to stop the page from also being scrolled/selected —
-    // but that call only happens once locked horizontal; a vertical drag
-    // returns immediately and never blocks the native scroll gesture.
+    // Registered non-passive: pinch and zoomed-pan preventDefault() to own
+    // the gesture, and a horizontally-locked drag preventDefault()s to stop
+    // the page from also being scrolled/selected — but a 1x vertical drag
+    // returns before any preventDefault, so native fit-width scrolling is
+    // never blocked.
     el.addEventListener("touchmove", (e) => {
+      if (pinch && e.touches.length === 2) {
+        e.preventDefault();
+        const t0 = e.touches[0], t1 = e.touches[1];
+        const dist = touchDist(t0, t1);
+        if (pinch.dist > 0) {
+          zoomAtPoint(
+            pinch.scale * (dist / pinch.dist),
+            (t0.clientX + t1.clientX) / 2,
+            (t0.clientY + t1.clientY) / 2,
+          );
+        }
+        return;
+      }
+      if (pan && e.touches.length === 1) {
+        e.preventDefault();
+        const t = e.touches[0];
+        panZoomBy(t.clientX - pan.x, t.clientY - pan.y);
+        pan = { x: t.clientX, y: t.clientY };
+        return;
+      }
       if (!tracking) return;
       if (e.touches.length !== 1) {
-        // F2: a second finger joined mid-drag — abort so a later touchend
-        // (computed from whichever finger lifts) can't commit a bogus turn.
+        // F2: a second finger joined mid-drag — the touchstart above has
+        // already flipped this into a pinch; just make sure swipe is dead.
         abortDrag();
         return;
       }
       if (isZoomed()) {
-        // Zoom engaged mid-drag (e.g. ctrl+wheel on a touchscreen laptop):
-        // kill the swipe rather than let translateX stomp the zoom.
+        // Zoom engaged mid-drag from outside the touch path (ctrl+wheel or
+        // Safari gesture on a touchscreen laptop): kill the swipe rather
+        // than let translateX stomp the zoom.
         abortDrag();
         return;
       }
@@ -2472,6 +2517,21 @@
     }, { passive: false });
 
     el.addEventListener("touchend", (e) => {
+      if (pinch) {
+        // Pinch ends when fewer than two fingers remain. If one finger
+        // stays down and we're zoomed, hand it to the pan branch.
+        if (e.touches.length < 2) {
+          pinch = null;
+          pan = e.touches.length === 1 && isZoomed()
+            ? { x: e.touches[0].clientX, y: e.touches[0].clientY }
+            : null;
+        }
+        return;
+      }
+      if (pan) {
+        if (e.touches.length === 0) pan = null;
+        return;
+      }
       if (!tracking) return; // only a clean single-touch drag reaches here
       tracking = false;
       if (isZoomed()) {
@@ -2508,8 +2568,12 @@
     // F1: a system-cancelled gesture (incoming call, notification shade,
     // browser edge-gesture) fires touchcancel instead of touchend — without
     // this, the drag-follow transform/will-change stays on #page-img
-    // indefinitely (only recovered by the next *committed* turn).
+    // indefinitely (only recovered by the next *committed* turn). A
+    // cancelled pinch/pan keeps the current zoom (platform convention) but
+    // stops all tracking.
     el.addEventListener("touchcancel", () => {
+      pinch = null;
+      pan = null;
       if (!tracking) return;
       abortDrag();
     }, { passive: true });
@@ -2565,7 +2629,10 @@
     if (mode === "page") {
       const img = $("#page-img");
       bindClickZones(img);
-      bindSwipe(img);
+      // M2: the gesture controller listens on the stage, not the image —
+      // a pinch finger landing in the gutter beside a narrow page still
+      // counts, and swipes keep working from the whole stage.
+      bindSwipe($("#reader-stage"));
       bindWheelZoom($("#reader-stage"));
       img.addEventListener("error", handlePageImageError);
       img.addEventListener("load", () => {
