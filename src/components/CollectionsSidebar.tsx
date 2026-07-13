@@ -659,7 +659,27 @@ export default function CollectionsSidebar({
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [loadingSuggestions, setLoadingSuggestions] = useState(false);
 
+  // The parent keeps this component mounted while the sidebar is closed
+  // (it renders `open={false}` rather than unmounting), so suggestion state
+  // would otherwise persist and reappear on reopen. Clear it on close.
+  useEffect(() => {
+    if (!open) {
+      setShowSuggestions(false);
+      setSuggestions([]);
+    }
+  }, [open]);
+
+  const dismissAllSuggestions = () => {
+    setShowSuggestions(false);
+    setSuggestions([]);
+  };
+
   const handleSuggest = async () => {
+    // Toggle: a second click hides the panel instead of re-fetching.
+    if (showSuggestions) {
+      dismissAllSuggestions();
+      return;
+    }
     setLoadingSuggestions(true);
     try {
       const result = await invoke<CollectionSuggestion[]>("get_collection_suggestions");
@@ -827,8 +847,20 @@ export default function CollectionsSidebar({
             {/* Suggestion cards */}
             {showSuggestions && suggestions.length > 0 && (
               <div className="px-3 py-2 border-t border-warm-border overflow-y-auto">
-                <div className="text-[10px] uppercase tracking-wider text-ink-muted/50 mb-2 font-medium">
-                  {t("collections.suggested", "Suggested")}
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-[10px] uppercase tracking-wider text-ink-muted/50 font-medium">
+                    {t("collections.suggested", "Suggested")}
+                  </span>
+                  <button
+                    onClick={dismissAllSuggestions}
+                    className="p-0.5 text-ink-muted/40 hover:text-ink-muted transition-colors"
+                    aria-label={t("collections.dismissSuggestions", "Dismiss suggestions")}
+                    title={t("collections.dismissSuggestions", "Dismiss suggestions")}
+                  >
+                    <svg width="14" height="14" viewBox="0 0 20 20" fill="none">
+                      <path d="M15 5L5 15M5 5l10 10" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                    </svg>
+                  </button>
                 </div>
                 <div className="space-y-2">
                   {suggestions.map((s, i) => (
