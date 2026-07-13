@@ -606,10 +606,12 @@ export default function PageViewer({
 
   const handleMouseDown = useCallback(
     (e: React.MouseEvent) => {
-      // Don't start a pan (or preventDefault) when the press lands on the PDF
-      // text layer — that would cancel native text selection at zoom > 1.
-      // Panning from empty page background still works.
-      if ((e.target as HTMLElement).closest("[data-pdf-text-layer]")) return;
+      // Don't start a pan (or preventDefault) when the press lands on a
+      // selectable glyph span or the selection popup — that would cancel
+      // native text selection at zoom > 1. Presses on the text layer's blank
+      // background (between glyphs) still fall through to panning, so a
+      // zoomed page can be panned from any empty area.
+      if ((e.target as HTMLElement).closest("[data-off], [data-pdf-selection-popup]")) return;
       if (!canPan()) return;
       e.preventDefault();
       isPanning.current = true;
