@@ -472,14 +472,17 @@ pub fn search_pdf_with_storage(
     Ok(search_in_texts(&page_texts, query))
 }
 
-/// Drop the in-memory `PDF_TEXT_CACHE` entry for `path`, if present.
-/// Used when a book is removed so a stale in-memory text cache can't
-/// resurrect a deleted book's page text (the disk-side
-/// `page-cache/{hash}/text-index.json` is cleared separately via
-/// [`crate::page_cache::evict_book`]).
+/// Drop the in-memory `PDF_TEXT_CACHE` entry and any `GLYPH_CACHE` entries
+/// for `path`, if present. Used when a book is removed so neither stale
+/// in-memory cache can resurrect a deleted/replaced book's page text or
+/// glyph rects (the disk-side `page-cache/{hash}/text-index.json` is
+/// cleared separately via [`crate::page_cache::evict_book`]).
 pub fn evict_memory_cache(path: &str) {
     if let Ok(mut cache) = PDF_TEXT_CACHE.lock() {
         cache.remove(path);
+    }
+    if let Ok(mut cache) = GLYPH_CACHE.lock() {
+        cache.retain(|((p, _), _)| p != path);
     }
 }
 
@@ -550,29 +553,104 @@ fn glyph_cache_put(path: &str, page_index: usize, glyphs: Vec<Glyph>) -> FolioRe
     Ok(())
 }
 
-/// Normalize one char's `loose_bounds()` (pdfium points, bottom-left
-/// origin) into a [`Glyph`] with 0..1 page-fraction coordinates, `y`
-/// converted to top-down (screen) orientation. Pure — no pdfium calls —
-/// so it's directly unit-testable without a real PDF.
+/// Reference render width used only to build the [`PdfRenderConfig`] passed
+/// to `PdfPage::points_to_pixels` in [`get_page_glyphs`]. Its exact value is
+/// irrelevant: the resulting 0..1 glyph fractions are invariant to it, since
+/// both the pixel numerator (`points_to_pixels`'s output) and the pixel
+/// denominator (this config's own aspect-locked output width/height) scale
+/// together. What matters is that the config is shaped the same way
+/// (`set_target_width`, no explicit rotation) as
+/// [`get_page_image_bytes`]'s — so `points_to_pixels`, which pdfium-render
+/// derives from the identical `PdfRenderConfig::apply_to_page` settings used
+/// by `render_with_config`, maps through the exact clipping/scale/rotate
+/// transform the rendered page image uses.
+const GLYPH_RENDER_REFERENCE_WIDTH: i32 = 1000;
+
+/// Normalize a device-PIXEL bounding box (as returned by
+/// `PdfPage::points_to_pixels`) into a [`Glyph`]'s 0..1 page-fraction rect.
+/// Pure — no pdfium calls — so it's directly unit-testable without a real
+/// PDF.
 ///
-/// Tiny negative results from float noise (e.g. a char box that's
-/// epsilon past a page edge) are clamped to 0.0.
-fn normalize_glyph(
+/// `points_to_pixels`'s output is already top-down/screen-oriented (device
+/// pixel (0,0) is the rendered bitmap's top-left corner), unlike raw PDF
+/// user-space (bottom-left origin) — so, unlike the old page-points-based
+/// normalization this replaces, no manual y-flip is needed here, and no
+/// assumption about the page's origin or rotation is baked in: both are
+/// already resolved by whatever pixel values the caller passed in.
+///
+/// Clamped on BOTH sides to `[0, 1]` — a glyph whose mapped pixels fall
+/// even partially outside the rendered bitmap (float noise, antialiasing
+/// overshoot) must not produce a rect that hangs off the page in either
+/// direction.
+fn normalize_glyph_pixels(
     off: u32,
-    left: f32,
-    bottom: f32,
-    right: f32,
-    top: f32,
-    page_w: f32,
-    page_h: f32,
+    min_x: f32,
+    min_y: f32,
+    max_x: f32,
+    max_y: f32,
+    out_w: f32,
+    out_h: f32,
 ) -> Glyph {
+    let x0 = (min_x / out_w).clamp(0.0, 1.0);
+    let y0 = (min_y / out_h).clamp(0.0, 1.0);
+    let x1 = (max_x / out_w).clamp(0.0, 1.0);
+    let y1 = (max_y / out_h).clamp(0.0, 1.0);
     Glyph {
         off,
-        x: (left / page_w).max(0.0),
-        y: ((page_h - top) / page_h).max(0.0),
-        w: ((right - left) / page_w).max(0.0),
-        h: ((top - bottom) / page_h).max(0.0),
+        x: x0,
+        y: y0,
+        w: (x1 - x0).max(0.0),
+        h: (y1 - y0).max(0.0),
     }
+}
+
+/// Map one char's `loose_bounds()` (PDF user-space points) through
+/// `PdfPage::points_to_pixels` and normalize the resulting device-pixel
+/// bounding box into a [`Glyph`]. Not pure — makes pdfium calls — see
+/// [`normalize_glyph_pixels`] for the pure, tested math.
+///
+/// A conversion failure on any corner (like a `loose_bounds()` failure)
+/// falls back to a zero-area glyph rather than propagating an error, so a
+/// single bad char can't fail the whole page's glyph list.
+fn glyph_from_bounds(
+    page: &PdfPage,
+    config: &PdfRenderConfig,
+    off: u32,
+    rect: PdfRect,
+    out_w: f32,
+    out_h: f32,
+) -> Glyph {
+    let corners = [
+        (rect.left(), rect.bottom()),
+        (rect.left(), rect.top()),
+        (rect.right(), rect.bottom()),
+        (rect.right(), rect.top()),
+    ];
+
+    let mut min_x = f32::INFINITY;
+    let mut max_x = f32::NEG_INFINITY;
+    let mut min_y = f32::INFINITY;
+    let mut max_y = f32::NEG_INFINITY;
+    for (x, y) in corners {
+        let (px, py) = match page.points_to_pixels(x, y, config) {
+            Ok(p) => p,
+            Err(_) => {
+                return Glyph {
+                    off,
+                    x: 0.0,
+                    y: 0.0,
+                    w: 0.0,
+                    h: 0.0,
+                }
+            }
+        };
+        min_x = min_x.min(px as f32);
+        max_x = max_x.max(px as f32);
+        min_y = min_y.min(py as f32);
+        max_y = max_y.max(py as f32);
+    }
+
+    normalize_glyph_pixels(off, min_x, min_y, max_x, max_y, out_w, out_h)
 }
 
 /// Return normalized, top-down glyph rectangles for one page of a PDF,
@@ -608,14 +686,25 @@ pub fn get_page_glyphs(path: &str, page_index: usize) -> FolioResult<Vec<Glyph>>
         .get(page_index as u16)
         .map_err(|e| FolioError::not_found(format!("page {page_index} not found: {e}")))?;
 
-    let page_w = page.width().value;
-    let page_h = page.height().value;
-
     let text = page.text().map_err(|e| {
         FolioError::internal(format!(
             "failed to extract text from page {page_index}: {e}"
         ))
     })?;
+
+    // Same config shape as `get_page_image_bytes` (see
+    // `GLYPH_RENDER_REFERENCE_WIDTH`'s doc comment) so `points_to_pixels`
+    // maps through the identical transform the rendered page image uses.
+    let config = PdfRenderConfig::new().set_target_width(GLYPH_RENDER_REFERENCE_WIDTH);
+    // `PdfRenderConfig::apply_to_page` (which computes the output bitmap's
+    // pixel dimensions) is private to pdfium-render, so replicate its
+    // aspect-locked, target-width-only scaling formula here to get the same
+    // output width/height that `points_to_pixels` maps into.
+    let page_w = page.width().value;
+    let page_h = page.height().value;
+    let scale = GLYPH_RENDER_REFERENCE_WIDTH as f32 / page_w;
+    let out_w = page_w * scale;
+    let out_h = page_h * scale;
 
     let mut glyphs = Vec::new();
     let mut counter: u32 = 0;
@@ -624,15 +713,7 @@ pub fn get_page_glyphs(path: &str, page_index: usize) -> FolioResult<Vec<Glyph>>
             continue;
         }
         let glyph = match ch.loose_bounds() {
-            Ok(rect) => normalize_glyph(
-                counter,
-                rect.left().value,
-                rect.bottom().value,
-                rect.right().value,
-                rect.top().value,
-                page_w,
-                page_h,
-            ),
+            Ok(rect) => glyph_from_bounds(&page, &config, counter, rect, out_w, out_h),
             Err(_) => Glyph {
                 off: counter,
                 x: 0.0,
@@ -798,17 +879,20 @@ mod tests {
         assert!(!looks_like_url(""));
     }
 
-    /// Guards the pdfium bottom-left -> screen top-down conversion: a char
-    /// near the visual TOP of the page (high `top`/`bottom` in points, close
-    /// to `page_h`) must yield a SMALLER `y` than one near the bottom (low
-    /// `top`/`bottom`, close to 0).
+    /// `points_to_pixels`'s output is already top-down (device pixel (0,0)
+    /// is the bitmap's top-left corner) — a glyph mapped to a SMALLER
+    /// device `y` must yield a smaller normalized `y` than one mapped to a
+    /// LARGER device `y`. Guards against reintroducing a manual bottom-left
+    /// -> top-down flip, which would invert this and, unlike the old
+    /// page-points-based version, would be wrong here since the input is
+    /// already screen-oriented.
     #[test]
-    fn test_normalize_glyph_top_down() {
-        let page_w = 600.0;
-        let page_h = 800.0;
+    fn test_normalize_glyph_pixels_top_down() {
+        let out_w = 600.0;
+        let out_h = 800.0;
 
-        let top_char = normalize_glyph(0, 50.0, 770.0, 60.0, 790.0, page_w, page_h);
-        let bottom_char = normalize_glyph(1, 50.0, 10.0, 60.0, 30.0, page_w, page_h);
+        let top_char = normalize_glyph_pixels(0, 50.0, 20.0, 60.0, 40.0, out_w, out_h);
+        let bottom_char = normalize_glyph_pixels(1, 50.0, 770.0, 60.0, 790.0, out_w, out_h);
 
         assert!(
             top_char.y < bottom_char.y,
@@ -819,17 +903,80 @@ mod tests {
     }
 
     #[test]
-    fn test_normalize_glyph_within_unit_range() {
-        let page_w = 600.0;
-        let page_h = 800.0;
+    fn test_normalize_glyph_pixels_within_unit_range() {
+        let out_w = 600.0;
+        let out_h = 800.0;
         let eps = 1e-4;
 
-        let glyph = normalize_glyph(0, 50.0, 700.0, 80.0, 720.0, page_w, page_h);
+        let glyph = normalize_glyph_pixels(0, 50.0, 700.0, 80.0, 720.0, out_w, out_h);
 
         assert!((0.0..=1.0).contains(&glyph.x), "x={}", glyph.x);
         assert!((0.0..=1.0).contains(&glyph.y), "y={}", glyph.y);
         assert!(glyph.x + glyph.w <= 1.0 + eps, "x+w={}", glyph.x + glyph.w);
         assert!(glyph.y + glyph.h <= 1.0 + eps, "y+h={}", glyph.y + glyph.h);
+    }
+
+    /// Regression for BLOCKING finding 1 (non-zero page origin): the old
+    /// code divided the raw PDF-point `left` by `page.width()`, which is
+    /// wrong whenever the visible box's origin isn't (0,0) — e.g. a
+    /// MediaBox/CropBox of `[100,100,500,700]` would place a box-left glyph
+    /// (PDF point x=100) at fraction 100/500=0.2 instead of 0. Here the
+    /// input is already a device-PIXEL bounding box (as `points_to_pixels`
+    /// would produce for such a page, since pdfium's page-to-device
+    /// transform maps the visible box's left edge to pixel 0 regardless of
+    /// its PDF-point origin), so a box-left glyph must map to x≈0.
+    #[test]
+    fn test_normalize_glyph_pixels_box_left_maps_to_zero() {
+        let out_w = 400.0;
+        let out_h = 600.0;
+
+        let glyph = normalize_glyph_pixels(0, 0.0, 100.0, 10.0, 120.0, out_w, out_h);
+
+        assert!(glyph.x.abs() < 1e-4, "x={} should be ≈0", glyph.x);
+    }
+
+    /// A glyph whose mapped pixels span the ENTIRE rendered box (or extend
+    /// past it, e.g. antialiasing/float noise) must clamp on BOTH sides —
+    /// the old `.max(0.0)`-only clamp left the upper side unbounded.
+    #[test]
+    fn test_normalize_glyph_pixels_clamps_both_sides() {
+        let out_w = 400.0;
+        let out_h = 600.0;
+
+        let glyph = normalize_glyph_pixels(0, -5.0, -3.0, 410.0, 605.0, out_w, out_h);
+
+        assert!((0.0..=1.0).contains(&glyph.x), "x={}", glyph.x);
+        assert!((0.0..=1.0).contains(&glyph.y), "y={}", glyph.y);
+        assert!((0.0..=1.0).contains(&glyph.w), "w={}", glyph.w);
+        assert!((0.0..=1.0).contains(&glyph.h), "h={}", glyph.h);
+        assert!(glyph.x + glyph.w <= 1.0 + 1e-4, "x+w={}", glyph.x + glyph.w);
+        assert!(glyph.y + glyph.h <= 1.0 + 1e-4, "y+h={}", glyph.y + glyph.h);
+    }
+
+    /// Rotation-adjacent case: the pure normalization step must not assume
+    /// a portrait aspect ratio — a rotated page renders into a bitmap whose
+    /// width/height are swapped relative to the page's own (unrotated)
+    /// `page.width()`/`page.height()`. Feeding swapped `out_w`/`out_h` must
+    /// still produce a correctly-proportioned, in-range rect: the function
+    /// has no orientation baked in, only whatever pixel dims it's given
+    /// (which, for a real rotated PDF, `points_to_pixels` — going through
+    /// pdfium's own page-to-device transform — would supply correctly; that
+    /// end-to-end behavior isn't testable here without a real pdfium
+    /// binary, see the M2 report).
+    #[test]
+    fn test_normalize_glyph_pixels_orientation_independent() {
+        // A landscape-rendered bitmap (e.g. a portrait page rotated 90°).
+        let out_w = 800.0;
+        let out_h = 600.0;
+
+        let glyph = normalize_glyph_pixels(0, 100.0, 50.0, 150.0, 80.0, out_w, out_h);
+
+        assert!((0.0..=1.0).contains(&glyph.x), "x={}", glyph.x);
+        assert!((0.0..=1.0).contains(&glyph.y), "y={}", glyph.y);
+        assert!((glyph.x - 100.0 / out_w).abs() < 1e-4);
+        assert!((glyph.y - 50.0 / out_h).abs() < 1e-4);
+        assert!((glyph.w - 50.0 / out_w).abs() < 1e-4);
+        assert!((glyph.h - 30.0 / out_h).abs() < 1e-4);
     }
 
     /// A bogus path can never resolve to a real PDF, so `get_page_glyphs`
@@ -840,5 +987,28 @@ mod tests {
     fn test_get_page_glyphs_nonexistent_file_errors() {
         let result = get_page_glyphs("test_get_page_glyphs_nonexistent_file_errors.pdf", 0);
         assert!(result.is_err());
+    }
+
+    /// Regression for BLOCKING finding 2: `evict_memory_cache` used to clear
+    /// only `PDF_TEXT_CACHE`, leaving `GLYPH_CACHE` entries for the evicted
+    /// path stale — a book re-imported/replaced at the same path could
+    /// serve glyph rects computed from the OLD file. `evict_memory_cache`
+    /// must also purge every `GLYPH_CACHE` entry for that path.
+    #[test]
+    fn test_evict_memory_cache_purges_glyph_cache() {
+        let path = "test_evict_memory_cache_purges_glyph_cache.pdf";
+        let glyphs = vec![Glyph {
+            off: 0,
+            x: 0.1,
+            y: 0.1,
+            w: 0.05,
+            h: 0.05,
+        }];
+        glyph_cache_put(path, 0, glyphs).unwrap();
+        assert!(glyph_cache_get(path, 0).unwrap().is_some());
+
+        evict_memory_cache(path);
+
+        assert!(glyph_cache_get(path, 0).unwrap().is_none());
     }
 }
