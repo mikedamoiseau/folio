@@ -2179,6 +2179,9 @@
   // scale before a page turn (or reader re-entry) is stale — without this
   // its next touchmove would re-apply the old scale to the new page.
   let zoomEpoch = 0;
+  const ZOOM_DOUBLE_TAP_SCALE = 2.5;
+  const DOUBLE_TAP_WINDOW_MS = 275; // also the single-tap defer window
+  const DOUBLE_TAP_SLOP_PX = 30;
 
   function isZoomed() {
     return !!(readerState && readerState.zoom && readerState.zoom.scale > 1);
@@ -2353,18 +2356,47 @@
     }, { passive: false });
   }
 
-  // Left third = prev, right third = next, middle third = toggle chrome.
+  // Left third = prev, right third = next, middle third = toggle chrome —
+  // but deferred DOUBLE_TAP_WINDOW_MS so a second tap can turn the pair
+  // into a double-tap zoom toggle instead. Browsers synthesize click events
+  // for taps, so one code path covers touch double-tap and desktop
+  // double-click alike. While zoomed, prev/next zones stay inert (panning
+  // is the only navigation) and the center zone still toggles chrome.
   function bindClickZones(el) {
-    el.addEventListener("click", (e) => {
+    let pendingTap = null; // { x, y, timer } awaiting double-tap or expiry
+
+    function zoneAction(x) {
+      if (!readerState) return;
       const rect = el.getBoundingClientRect();
-      const x = e.clientX - rect.left;
       const third = rect.width / 3;
-      // While zoomed, an edge tap must not turn the page (and silently wipe
-      // the zoom via renderPageTurn's reset) — prev/next go inert; the
-      // center chrome toggle stays available.
-      if (x < third) { if (!isZoomed()) readerState.handlers.prev(); }
-      else if (x > third * 2) { if (!isZoomed()) readerState.handlers.next(); }
+      const rel = x - rect.left;
+      if (rel < third) { if (!isZoomed()) readerState.handlers.prev(); }
+      else if (rel > third * 2) { if (!isZoomed()) readerState.handlers.next(); }
       else readerState.handlers.toggleChrome();
+    }
+
+    el.addEventListener("click", (e) => {
+      if (pendingTap
+          && Math.abs(e.clientX - pendingTap.x) < DOUBLE_TAP_SLOP_PX
+          && Math.abs(e.clientY - pendingTap.y) < DOUBLE_TAP_SLOP_PX) {
+        // Second tap in time and in place: double-tap. Cancel the pending
+        // single-tap action and toggle zoom at the tap point.
+        clearTimeout(pendingTap.timer);
+        pendingTap = null;
+        if (isZoomed()) resetZoom();
+        else zoomAtPoint(ZOOM_DOUBLE_TAP_SCALE, e.clientX, e.clientY);
+        return;
+      }
+      // A second tap far away just restarts the window at the new spot.
+      if (pendingTap) clearTimeout(pendingTap.timer);
+      const x = e.clientX, y = e.clientY;
+      pendingTap = {
+        x, y,
+        timer: setTimeout(() => {
+          pendingTap = null;
+          zoneAction(x);
+        }, DOUBLE_TAP_WINDOW_MS),
+      };
     });
   }
 
