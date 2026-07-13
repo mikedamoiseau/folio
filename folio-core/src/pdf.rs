@@ -482,7 +482,11 @@ pub fn evict_memory_cache(path: &str) {
         cache.remove(path);
     }
     if let Ok(mut cache) = GLYPH_CACHE.lock() {
-        cache.retain(|((p, _), _)| p != path);
+        cache.entries.retain(|((p, _), _)| p != path);
+        // Bump the generation so any in-flight `get_page_glyphs` extraction
+        // that missed the cache before this eviction refuses to insert its
+        // (now possibly stale, e.g. deleted-file) glyphs afterward.
+        cache.generation = cache.generation.wrapping_add(1);
     }
 }
 
@@ -523,34 +527,71 @@ type GlyphCacheKey = (String, usize);
 /// One [`GLYPH_CACHE`] entry: the page it belongs to, plus its glyphs.
 type GlyphCacheEntry = (GlyphCacheKey, Vec<Glyph>);
 
-/// In-memory-only LRU of recent pages' glyph rects, most-recently-used
-/// entry at the front. Never persisted — see [`Glyph`]'s doc comment.
-static GLYPH_CACHE: LazyLock<Mutex<VecDeque<GlyphCacheEntry>>> =
-    LazyLock::new(|| Mutex::new(VecDeque::new()));
+/// In-memory-only LRU of recent pages' glyph rects (most-recently-used at
+/// the front) plus a `generation` counter bumped on every eviction. The
+/// generation lets a `get_page_glyphs` call that missed the cache and then
+/// extracted detect an eviction (book removal) that raced its extraction,
+/// and refuse to insert glyphs that may belong to a now-deleted file under
+/// a path that could be reused. Never persisted — see [`Glyph`]'s doc.
+#[derive(Default)]
+struct GlyphCache {
+    entries: VecDeque<GlyphCacheEntry>,
+    generation: u64,
+}
 
-fn glyph_cache_get(path: &str, page_index: usize) -> FolioResult<Option<Vec<Glyph>>> {
+static GLYPH_CACHE: LazyLock<Mutex<GlyphCache>> =
+    LazyLock::new(|| Mutex::new(GlyphCache::default()));
+
+/// Look up a page's glyphs, moving it to the front (LRU touch) on a hit.
+/// Returns the cached glyphs (or `None`) AND the cache generation observed
+/// under the lock, so a caller that misses can pass it to
+/// [`glyph_cache_put`] to detect an eviction that raced its extraction.
+fn glyph_cache_get(path: &str, page_index: usize) -> FolioResult<(Option<Vec<Glyph>>, u64)> {
     let mut cache = GLYPH_CACHE.lock()?;
+    let generation = cache.generation;
     let Some(pos) = cache
+        .entries
         .iter()
         .position(|((p, idx), _)| p == path && *idx == page_index)
     else {
-        return Ok(None);
+        return Ok((None, generation));
     };
     // Safe: `pos` was just found by `position()` above.
-    let entry = cache.remove(pos).expect("position() found this index");
+    let entry = cache
+        .entries
+        .remove(pos)
+        .expect("position() found this index");
     let value = entry.1.clone();
-    cache.push_front(entry);
-    Ok(Some(value))
+    cache.entries.push_front(entry);
+    Ok((Some(value), generation))
 }
 
-fn glyph_cache_put(path: &str, page_index: usize, glyphs: Vec<Glyph>) -> FolioResult<()> {
+/// Insert (or refresh) a page's glyphs, evicting the LRU tail past
+/// [`GLYPH_CACHE_MAX_PAGES`]. Rejected (returns `false`, inserts nothing) if
+/// the cache generation changed since `expected_generation` was captured on
+/// the miss — i.e. an eviction (book removal) raced this extraction, so
+/// these glyphs may be from a now-deleted file and must not be cached under
+/// a path that could be reused.
+fn glyph_cache_put(
+    path: &str,
+    page_index: usize,
+    glyphs: Vec<Glyph>,
+    expected_generation: u64,
+) -> FolioResult<bool> {
     let mut cache = GLYPH_CACHE.lock()?;
-    cache.retain(|((p, idx), _)| !(p == path && *idx == page_index));
-    cache.push_front(((path.to_string(), page_index), glyphs));
-    while cache.len() > GLYPH_CACHE_MAX_PAGES {
-        cache.pop_back();
+    if cache.generation != expected_generation {
+        return Ok(false);
     }
-    Ok(())
+    cache
+        .entries
+        .retain(|((p, idx), _)| !(p == path && *idx == page_index));
+    cache
+        .entries
+        .push_front(((path.to_string(), page_index), glyphs));
+    while cache.entries.len() > GLYPH_CACHE_MAX_PAGES {
+        cache.entries.pop_back();
+    }
+    Ok(true)
 }
 
 /// Reference render width used only to build the [`PdfRenderConfig`] passed
@@ -666,7 +707,8 @@ fn glyph_from_bounds(
 /// fails still consumes an `off` slot (pushed as a zero-area glyph) so
 /// `off` never desyncs from the text.
 pub fn get_page_glyphs(path: &str, page_index: usize) -> FolioResult<Vec<Glyph>> {
-    if let Some(glyphs) = glyph_cache_get(path, page_index)? {
+    let (cached, generation) = glyph_cache_get(path, page_index)?;
+    if let Some(glyphs) = cached {
         return Ok(glyphs);
     }
 
@@ -726,7 +768,9 @@ pub fn get_page_glyphs(path: &str, page_index: usize) -> FolioResult<Vec<Glyph>>
         counter += 1;
     }
 
-    glyph_cache_put(path, page_index, glyphs.clone())?;
+    // Insert only if no eviction (book removal) raced this extraction; the
+    // freshly computed glyphs are still returned to this caller either way.
+    let _ = glyph_cache_put(path, page_index, glyphs.clone(), generation)?;
     Ok(glyphs)
 }
 
@@ -1004,11 +1048,40 @@ mod tests {
             w: 0.05,
             h: 0.05,
         }];
-        glyph_cache_put(path, 0, glyphs).unwrap();
-        assert!(glyph_cache_get(path, 0).unwrap().is_some());
+        let (_, gen) = glyph_cache_get(path, 0).unwrap();
+        assert!(glyph_cache_put(path, 0, glyphs, gen).unwrap());
+        assert!(glyph_cache_get(path, 0).unwrap().0.is_some());
 
         evict_memory_cache(path);
 
-        assert!(glyph_cache_get(path, 0).unwrap().is_none());
+        assert!(glyph_cache_get(path, 0).unwrap().0.is_none());
+    }
+
+    /// Race guard: if an eviction (book removal) lands between a
+    /// `get_page_glyphs` cache miss and its insert, the insert must be
+    /// rejected so glyphs from a now-deleted file can't be cached under a
+    /// path that may be reused. Simulated with the captured generation.
+    #[test]
+    fn test_glyph_cache_put_rejected_after_eviction_bumps_generation() {
+        let path = "test_glyph_cache_put_rejected_after_eviction.pdf";
+        let glyphs = vec![Glyph {
+            off: 0,
+            x: 0.1,
+            y: 0.1,
+            w: 0.05,
+            h: 0.05,
+        }];
+
+        // Miss: capture the generation, as get_page_glyphs does before it
+        // starts extracting.
+        let (miss, gen) = glyph_cache_get(path, 0).unwrap();
+        assert!(miss.is_none());
+
+        // An eviction races the (simulated) extraction, bumping generation.
+        evict_memory_cache(path);
+
+        // The stale insert is rejected; nothing is cached.
+        assert!(!glyph_cache_put(path, 0, glyphs, gen).unwrap());
+        assert!(glyph_cache_get(path, 0).unwrap().0.is_none());
     }
 }
