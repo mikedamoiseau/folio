@@ -6,6 +6,13 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- **Select, copy, and highlight text in PDFs.** PDFs now have a selectable
+  text layer in the desktop reader, just like EPUBs: drag to select, copy to
+  the clipboard, or highlight in any of the five colors. Highlights are saved
+  per page, reappear as colored bands when you return, and can be removed —
+  and they flow into the same Highlights panel, cross-book search, and
+  shareable quote cards as EPUB highlights. Selection stays within a single
+  page (each page of a two-page spread selects on its own).
 - **Faster PDF search, every session.** The text Folio extracts to search a
   PDF is now saved alongside the book's cached pages, so full-text search is
   instant from the very first search of a session — not just after the book

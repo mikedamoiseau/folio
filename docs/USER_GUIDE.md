@@ -377,9 +377,11 @@ Click the back arrow in the top-left corner or press `Escape`. Your progress is 
 
 ## 5. Highlights and Bookmarks
 
-### Highlights (EPUB only)
+### Highlights (EPUB and PDF)
 
 Select text while reading to see a color picker popup. Choose from five colors: yellow, green, blue, pink, or orange. The highlighted text is saved with its position.
+
+**PDFs (desktop reader):** PDF pages have a selectable text layer over the rendered page, so you can drag to select text and either **Copy** it to the clipboard or highlight it — exactly like EPUB. PDF highlights are saved per page, reappear as colored bands when you return to the page, and can be removed from the popup. They show up in the Highlights panel, cross-book highlight search, and shareable quote cards alongside your EPUB highlights. A selection stays within one page — on a two-page spread, each page selects on its own. (The web reader shows PDFs as page images only, without the text layer.)
 
 Open the highlights panel (pen icon in the reader header) to:
 

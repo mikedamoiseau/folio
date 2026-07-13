@@ -1,9 +1,20 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, type RefObject } from "react";
 import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
 import { getSpreadPages } from "../lib/utils";
 import { friendlyError } from "../lib/errors";
 import { blobUrlFromBytes } from "../lib/pageWire";
+import { glyphToPx, highlightBands, selectionOffsets, type Glyph } from "../lib/pdfText";
+import { HIGHLIGHT_COLORS } from "./HighlightsPanel";
+import { useToast } from "./Toast";
+
+/** A resolved PDF text selection, in the page's char-offset space. */
+export interface PdfSelection {
+  text: string;
+  startOffset: number;
+  endOffset: number;
+  pageIndex: number;
+}
 
 const MIN_ZOOM = 0.5;
 const MAX_ZOOM = 4;
@@ -36,6 +47,17 @@ interface PageViewerProps {
   pageAnimation?: boolean;
   /** When false, skip the window-level keydown listener (split-mode companion pane). */
   keyboardEnabled?: boolean;
+  /**
+   * PDF-only (F-1-4). Create a highlight from a text-layer selection.
+   * Provided by ReaderPane so PDF highlights run the same IPC + toast/undo
+   * path as the EPUB reader. Absent for comics.
+   */
+  onCreateHighlight?: (color: string, sel: PdfSelection) => Promise<unknown> | void;
+  /** PDF-only. Remove the given highlight ids (selection-overlap clear). */
+  onRemoveHighlights?: (ids: string[]) => Promise<void> | void;
+  /** PDF-only. Bumps whenever a highlight is created/removed elsewhere so the
+   *  visible page's saved-highlight bands re-fetch. */
+  highlightRefreshKey?: number;
 }
 
 export default function PageViewer({
@@ -49,6 +71,9 @@ export default function PageViewer({
   mangaMode = false,
   pageAnimation = true,
   keyboardEnabled = true,
+  onCreateHighlight,
+  onRemoveHighlights,
+  highlightRefreshKey = 0,
 }: PageViewerProps) {
   const [pageIndex, setPageIndex] = useState(initialPage);
 
@@ -110,6 +135,10 @@ export default function PageViewer({
   const panOffset = useRef({ x: 0, y: 0 });
   const containerRef = useRef<HTMLDivElement>(null);
   const spreadRef = useRef<HTMLDivElement>(null);
+  // Refs to the rendered page images — the PDF text layer measures each
+  // image's object-contain rendered box to position glyph spans/bands.
+  const leftImgRef = useRef<HTMLImageElement>(null);
+  const rightImgRef = useRef<HTMLImageElement>(null);
   const directionRef = useRef<"left" | "right">("right");
   const isInitialLoad = useRef(true);
   const animationRef = useRef<Animation | null>(null);
@@ -655,29 +684,78 @@ export default function PageViewer({
           className={`absolute top-1/2 left-1/2 flex items-center justify-center gap-1 will-change-transform ${mangaMode && dualPage ? "flex-row-reverse" : "flex-row"}`}
           style={{ width: `${zoom * 100}%`, height: `${zoom * 100}%`, transform: `translate(calc(-50% + ${panRef.current.x}px), calc(-50% + ${panRef.current.y}px))` }}
         >
+          {/* PDF pages wrap the image so the selectable text layer (F-1-4)
+              can overlay the object-contain rendered box. Comics keep the
+              bare-image markup unchanged — no text layer, no layout shift. */}
           {leftImageData && (
-            <img
-              src={leftImageData}
-              alt={`Page ${spread.left + 1} of ${totalPages}`}
-              className="max-h-full max-w-full object-contain rounded-sm shadow-[0_4px_24px_-4px_rgba(44,34,24,0.18)]"
-              style={dualPage && rightImageData ? { maxWidth: "50%" } : undefined}
-              draggable={false}
-              onError={() =>
-                setError(t("reader.failedToLoadPage", { error: t("reader.imageDecodeError") }))
-              }
-            />
+            isPdf ? (
+              <div className="relative flex-1 min-w-0 h-full flex items-center justify-center">
+                <img
+                  ref={leftImgRef}
+                  src={leftImageData}
+                  alt={`Page ${spread.left + 1} of ${totalPages}`}
+                  className="max-h-full max-w-full object-contain rounded-sm shadow-[0_4px_24px_-4px_rgba(44,34,24,0.18)]"
+                  draggable={false}
+                  onError={() =>
+                    setError(t("reader.failedToLoadPage", { error: t("reader.imageDecodeError") }))
+                  }
+                />
+                <PdfTextLayer
+                  bookId={bookId}
+                  pageIndex={spread.left}
+                  imgRef={leftImgRef}
+                  refreshKey={highlightRefreshKey}
+                  onCreateHighlight={onCreateHighlight}
+                  onRemoveHighlights={onRemoveHighlights}
+                />
+              </div>
+            ) : (
+              <img
+                src={leftImageData}
+                alt={`Page ${spread.left + 1} of ${totalPages}`}
+                className="max-h-full max-w-full object-contain rounded-sm shadow-[0_4px_24px_-4px_rgba(44,34,24,0.18)]"
+                style={dualPage && rightImageData ? { maxWidth: "50%" } : undefined}
+                draggable={false}
+                onError={() =>
+                  setError(t("reader.failedToLoadPage", { error: t("reader.imageDecodeError") }))
+                }
+              />
+            )
           )}
-          {rightImageData && (
-            <img
-              src={rightImageData}
-              alt={`Page ${(spread.right ?? 0) + 1} of ${totalPages}`}
-              className="max-h-full object-contain rounded-sm shadow-[0_4px_24px_-4px_rgba(44,34,24,0.18)]"
-              style={{ maxWidth: "50%" }}
-              draggable={false}
-              onError={() =>
-                setError(t("reader.failedToLoadPage", { error: t("reader.imageDecodeError") }))
-              }
-            />
+          {rightImageData && spread.right !== null && (
+            isPdf ? (
+              <div className="relative flex-1 min-w-0 h-full flex items-center justify-center">
+                <img
+                  ref={rightImgRef}
+                  src={rightImageData}
+                  alt={`Page ${(spread.right ?? 0) + 1} of ${totalPages}`}
+                  className="max-h-full max-w-full object-contain rounded-sm shadow-[0_4px_24px_-4px_rgba(44,34,24,0.18)]"
+                  draggable={false}
+                  onError={() =>
+                    setError(t("reader.failedToLoadPage", { error: t("reader.imageDecodeError") }))
+                  }
+                />
+                <PdfTextLayer
+                  bookId={bookId}
+                  pageIndex={spread.right}
+                  imgRef={rightImgRef}
+                  refreshKey={highlightRefreshKey}
+                  onCreateHighlight={onCreateHighlight}
+                  onRemoveHighlights={onRemoveHighlights}
+                />
+              </div>
+            ) : (
+              <img
+                src={rightImageData}
+                alt={`Page ${(spread.right ?? 0) + 1} of ${totalPages}`}
+                className="max-h-full object-contain rounded-sm shadow-[0_4px_24px_-4px_rgba(44,34,24,0.18)]"
+                style={{ maxWidth: "50%" }}
+                draggable={false}
+                onError={() =>
+                  setError(t("reader.failedToLoadPage", { error: t("reader.imageDecodeError") }))
+                }
+              />
+            )
           )}
         </div>
         {/* Overlay: loading spinner or error on top of previous/current page */}
@@ -809,5 +887,332 @@ export default function PageViewer({
         </button>
       </div>
     </div>
+  );
+}
+
+interface SavedHighlight {
+  id: string;
+  startOffset: number;
+  endOffset: number;
+  color: string;
+}
+
+interface PdfTextLayerProps {
+  bookId: string;
+  pageIndex: number;
+  imgRef: RefObject<HTMLImageElement | null>;
+  refreshKey: number;
+  onCreateHighlight?: (color: string, sel: PdfSelection) => Promise<unknown> | void;
+  onRemoveHighlights?: (ids: string[]) => Promise<void> | void;
+}
+
+/**
+ * Transparent, selectable text layer over one rendered PDF page image
+ * (F-1-4, desktop reader). Fetches the page's glyph rects + full text +
+ * saved highlights, then overlays:
+ *   - colored highlight bands (below, non-interactive), and
+ *   - one transparent `<span>` per glyph carrying its real character so the
+ *     browser's native selection + Cmd/Ctrl+C copies real text.
+ * On selection it surfaces a copy/highlight popup wired to ReaderPane's
+ * handlers. Glyph `off` values are Unicode-scalar (Rust `char`) offsets into
+ * the page text, so the text is indexed via `Array.from` (code points), never
+ * `pageText[off]` — see `get_pdf_page_text`'s doc comment on the backend.
+ */
+function PdfTextLayer({
+  bookId,
+  pageIndex,
+  imgRef,
+  refreshKey,
+  onCreateHighlight,
+  onRemoveHighlights,
+}: PdfTextLayerProps) {
+  const { t } = useTranslation();
+  const { addToast } = useToast();
+  const layerRef = useRef<HTMLDivElement>(null);
+  const [glyphs, setGlyphs] = useState<Glyph[]>([]);
+  const [chars, setChars] = useState<string[]>([]);
+  const [saved, setSaved] = useState<SavedHighlight[]>([]);
+  const [box, setBox] = useState<{ left: number; top: number; width: number; height: number } | null>(null);
+  const [popup, setPopup] = useState<
+    { x: number; y: number; sel: PdfSelection; overlapIds: string[] } | null
+  >(null);
+
+  // Glyph rects + page text — refetched per page (backend memory-cached).
+  useEffect(() => {
+    let cancelled = false;
+    setPopup(null);
+    (async () => {
+      try {
+        const [g, text] = await Promise.all([
+          invoke<Glyph[]>("get_pdf_page_glyphs", { bookId, pageIndex }),
+          invoke<string>("get_pdf_page_text", { bookId, pageIndex }),
+        ]);
+        if (cancelled) return;
+        setGlyphs(g);
+        setChars(Array.from(text));
+      } catch {
+        if (!cancelled) {
+          setGlyphs([]);
+          setChars([]);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [bookId, pageIndex]);
+
+  // Saved highlights — also refetched when a create/remove elsewhere bumps
+  // `refreshKey` so bands stay in sync after mutations (including undo).
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const hls = await invoke<SavedHighlight[]>("get_chapter_highlights", {
+          bookId,
+          chapterIndex: pageIndex,
+        });
+        if (!cancelled) setSaved(hls);
+      } catch {
+        if (!cancelled) setSaved([]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [bookId, pageIndex, refreshKey]);
+
+  // Measure the image's object-contain rendered box (the letterboxed content
+  // rect, not the element box) so glyph rects map onto the visible pixels.
+  const measure = useCallback(() => {
+    const img = imgRef.current;
+    if (!img) return;
+    const nw = img.naturalWidth;
+    const nh = img.naturalHeight;
+    const cw = img.clientWidth;
+    const ch = img.clientHeight;
+    if (!nw || !nh || !cw || !ch) {
+      setBox(null);
+      return;
+    }
+    const scale = Math.min(cw / nw, ch / nh);
+    const width = nw * scale;
+    const height = nh * scale;
+    setBox({
+      left: img.offsetLeft + (cw - width) / 2,
+      top: img.offsetTop + (ch - height) / 2,
+      width,
+      height,
+    });
+  }, [imgRef]);
+
+  useEffect(() => {
+    const img = imgRef.current;
+    if (!img) return;
+    measure();
+    const ro = new ResizeObserver(() => measure());
+    ro.observe(img);
+    img.addEventListener("load", measure);
+    window.addEventListener("resize", measure);
+    return () => {
+      ro.disconnect();
+      img.removeEventListener("load", measure);
+      window.removeEventListener("resize", measure);
+    };
+  }, [imgRef, measure]);
+
+  // Re-measure once new-page glyphs arrive (the image src has changed and its
+  // natural dimensions may only now be available).
+  useEffect(() => {
+    measure();
+  }, [glyphs, measure]);
+
+  // Selection → popup. A document-level mouseup lets a drag that ends outside
+  // the layer still resolve; each layer only claims selections that BEGAN
+  // inside it (anchorNode containment) so a two-page spread never produces two
+  // popups and selection never spans the two pages.
+  useEffect(() => {
+    const layer = layerRef.current;
+    if (!layer) return;
+    const glyphByOff = new Map(glyphs.map((g) => [g.off, g]));
+
+    function handleMouseUp() {
+      const sel = window.getSelection();
+      if (!sel || sel.isCollapsed || !sel.anchorNode) return;
+      if (!layer || !layer.contains(sel.anchorNode)) return;
+      const picked: Glyph[] = [];
+      layer.querySelectorAll<HTMLElement>("[data-off]").forEach((span) => {
+        if (sel.containsNode(span, true)) {
+          const g = glyphByOff.get(Number(span.dataset.off));
+          if (g) picked.push(g);
+        }
+      });
+      const offs = selectionOffsets(picked);
+      if (!offs) return;
+      const text = chars.slice(offs.startOffset, offs.endOffset).join("");
+      if (!text) return;
+      const wrap = layer.parentElement?.getBoundingClientRect();
+      if (!wrap) return;
+      const rangeRect = sel.getRangeAt(0).getBoundingClientRect();
+      const overlapIds = saved
+        .filter((h) => h.startOffset < offs.endOffset && h.endOffset > offs.startOffset)
+        .map((h) => h.id);
+      setPopup({
+        x: rangeRect.left + rangeRect.width / 2 - wrap.left,
+        y: rangeRect.top - wrap.top,
+        sel: { text, startOffset: offs.startOffset, endOffset: offs.endOffset, pageIndex },
+        overlapIds,
+      });
+    }
+
+    function handleMouseDown(e: MouseEvent) {
+      const target = e.target as HTMLElement;
+      if (!target.closest("[data-pdf-selection-popup]")) setPopup(null);
+    }
+
+    document.addEventListener("mouseup", handleMouseUp);
+    document.addEventListener("mousedown", handleMouseDown);
+    return () => {
+      document.removeEventListener("mouseup", handleMouseUp);
+      document.removeEventListener("mousedown", handleMouseDown);
+    };
+  }, [glyphs, chars, saved, pageIndex]);
+
+  const dismiss = useCallback(() => {
+    setPopup(null);
+    window.getSelection()?.removeAllRanges();
+  }, []);
+
+  const handleCopy = useCallback(
+    async (text: string) => {
+      try {
+        await navigator.clipboard.writeText(text);
+        addToast(t("reader.copied"), "success");
+      } catch {
+        addToast(t("reader.copyFailed"), "error");
+      }
+      dismiss();
+    },
+    [addToast, t, dismiss],
+  );
+
+  const handleHighlight = useCallback(
+    async (color: string) => {
+      if (!popup) return;
+      await onCreateHighlight?.(color, popup.sel);
+      dismiss();
+    },
+    [popup, onCreateHighlight, dismiss],
+  );
+
+  const handleClear = useCallback(async () => {
+    if (!popup || popup.overlapIds.length === 0) return;
+    await onRemoveHighlights?.(popup.overlapIds);
+    dismiss();
+  }, [popup, onRemoveHighlights, dismiss]);
+
+  if (!box) return null;
+
+  const showBelow = popup !== null && popup.y < 44;
+
+  return (
+    <>
+      <div
+        ref={layerRef}
+        className="absolute select-text"
+        style={{ left: box.left, top: box.top, width: box.width, height: box.height }}
+      >
+        {/* Saved-highlight bands — below the spans, non-interactive so
+            selection still hits the text layer. */}
+        {saved.flatMap((h) =>
+          highlightBands(glyphs, h.startOffset, h.endOffset, box.width, box.height).map((b, i) => (
+            <div
+              key={`${h.id}-${i}`}
+              className="absolute pointer-events-none rounded-[1px]"
+              style={{
+                left: b.left,
+                top: b.top,
+                width: b.width,
+                height: b.height,
+                backgroundColor: `${h.color}66`,
+              }}
+            />
+          )),
+        )}
+        {/* Transparent selectable glyph spans (every glyph, so native copy
+            keeps spaces/punctuation in reading order). */}
+        {glyphs.map((g) => {
+          const r = glyphToPx(g, box.width, box.height);
+          return (
+            <span
+              key={g.off}
+              data-off={g.off}
+              className="absolute overflow-hidden"
+              style={{
+                left: r.left,
+                top: r.top,
+                width: r.width,
+                height: r.height,
+                color: "transparent",
+                cursor: "text",
+                lineHeight: 1,
+                whiteSpace: "pre",
+                fontSize: r.height || 1,
+              }}
+            >
+              {chars[g.off] ?? ""}
+            </span>
+          );
+        })}
+      </div>
+
+      {popup && (
+        <div
+          data-pdf-selection-popup
+          className="absolute z-30 flex items-center gap-1 px-2 py-1.5 bg-ink/90 backdrop-blur-sm rounded-lg shadow-lg"
+          style={{
+            left: `${popup.x}px`,
+            top: `${popup.y}px`,
+            transform: showBelow ? "translate(-50%, 8px)" : "translate(-50%, calc(-100% - 8px))",
+          }}
+        >
+          {popup.sel.text.length >= 3 &&
+            HIGHLIGHT_COLORS.map((c) => (
+              <button
+                key={c.value}
+                onClick={() => handleHighlight(c.value)}
+                className="w-5 h-5 rounded-full hover:scale-125 transition-transform"
+                style={{ backgroundColor: c.value }}
+                aria-label={t("reader.highlightColor", { color: c.name })}
+              />
+            ))}
+          {popup.overlapIds.length > 0 && (
+            <button
+              onClick={handleClear}
+              className="w-5 h-5 rounded-full hover:scale-125 transition-transform border border-white/40 flex items-center justify-center"
+              style={{ background: "repeating-conic-gradient(#ccc 0% 25%, transparent 0% 50%) 50% / 6px 6px" }}
+              aria-label={t("reader.clearHighlight")}
+              title={t("reader.clearHighlight")}
+            />
+          )}
+          <button
+            onClick={() => handleCopy(popup.sel.text)}
+            className="px-2 h-5 rounded text-xs font-medium text-white/90 hover:text-white hover:bg-white/10 transition-colors"
+          >
+            {t("reader.copySelection")}
+          </button>
+          <div className="w-px h-4 bg-white/20 mx-0.5" />
+          <button
+            onClick={dismiss}
+            className="w-5 h-5 rounded-full hover:scale-125 transition-transform flex items-center justify-center text-white/60 hover:text-white"
+            aria-label={t("reader.dismiss")}
+          >
+            <svg width="12" height="12" viewBox="0 0 16 16" fill="none">
+              <path d="M12 4L4 12M4 4l8 8" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+            </svg>
+          </button>
+        </div>
+      )}
+    </>
   );
 }

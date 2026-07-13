@@ -25,9 +25,10 @@ Folio is for the opposite case: you already have the files, and you want a bette
 - CBZ and CBR comic reading
 - EPUB paginated mode and continuous scroll mode
 - Table of contents sidebar and chapter navigation
-- Full-text search inside EPUB books (`⌘/Ctrl+F`)
+- Full-text search inside EPUB and PDF books (`⌘/Ctrl+F`), with PDF text indexed on disk for instant search every session
 - Focus mode for distraction-free reading
 - Bookmarks, highlights, and highlight notes
+- Select, copy, and highlight text in PDFs too (desktop reader), sharing the same highlights panel and quote cards as EPUB
 - Share a highlight as a styled quote-card image — copy to clipboard or save as PNG
 - Offline in-reader dictionary — select a word and Define it (Princeton WordNet 3.1, downloaded on demand)
 - Vocabulary builder — save the words you look up and review them with spaced-repetition flashcards

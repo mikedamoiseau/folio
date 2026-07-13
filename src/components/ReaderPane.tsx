@@ -1624,6 +1624,60 @@ export default function ReaderPane({
     }
   }, [bookId, selectionPopup, highlights, loadHighlights, addToast, t]);
 
+  // ---- PDF highlight wiring (F-1-4) ----
+  // PageViewer owns PDF selection geometry + its own highlight-band rendering
+  // (it fetches per-page glyphs/text/highlights), so these handlers only run
+  // the same IPC + toast/undo path as the EPUB flow above. `pdfHighlightRefresh`
+  // is a monotonic signal PageViewer re-fetches its bands on after any mutation
+  // (including the undo-toast remove), mirroring `bookmarkRefreshKey`.
+  const [pdfHighlightRefresh, setPdfHighlightRefresh] = useState(0);
+  const handleCreatePdfHighlight = useCallback(
+    async (color: string, sel: { text: string; startOffset: number; endOffset: number; pageIndex: number }) => {
+      if (!bookId) return;
+      try {
+        const created = await invoke<{ id: string }>("add_highlight", {
+          bookId,
+          chapterIndex: sel.pageIndex,
+          text: sel.text,
+          color,
+          note: null,
+          startOffset: sel.startOffset,
+          endOffset: sel.endOffset,
+        });
+        setPdfHighlightRefresh((k) => k + 1);
+        addToast(t("reader.highlightCreated"), "success", {
+          action: {
+            label: t("common.remove"),
+            onClick: async () => {
+              try {
+                await invoke("remove_highlight", { highlightId: created.id });
+                setPdfHighlightRefresh((k) => k + 1);
+              } catch (err) {
+                addToast(friendlyError(err, t), "error");
+              }
+            },
+          },
+        });
+      } catch (err) {
+        addToast(friendlyError(err, t), "error");
+      }
+    },
+    [bookId, addToast, t],
+  );
+  const handleRemovePdfHighlights = useCallback(
+    async (ids: string[]) => {
+      try {
+        for (const id of ids) {
+          await invoke("remove_highlight", { highlightId: id });
+        }
+        setPdfHighlightRefresh((k) => k + 1);
+      } catch (err) {
+        addToast(friendlyError(err, t), "error");
+      }
+    },
+    [addToast, t],
+  );
+
   // ---- Navigation ----
 
   // Pure scroll/chapter restore — no history side effects. Shared by jump
@@ -2768,6 +2822,9 @@ export default function ReaderPane({
                 mangaMode={mangaMode}
                 pageAnimation={pageAnimation}
                 keyboardEnabled={effectiveActive && !infoOpen}
+                onCreateHighlight={handleCreatePdfHighlight}
+                onRemoveHighlights={handleRemovePdfHighlights}
+                highlightRefreshKey={pdfHighlightRefresh}
               />
               {/* Non-blocking, dismissible background page-prerender bar.
                   Floats over the page viewer; never gates reading. Shared by

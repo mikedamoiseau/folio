@@ -40,6 +40,7 @@ Improve the core activity — actually reading books.
 - ~~Notes attached to highlights~~
 - ~~Highlights panel/sidebar in reader~~
 - ~~Export annotations as Markdown or plain text~~
+- ~~PDF text selection, copy, and highlighting (desktop reader): a per-page selectable text layer over the rendered image, reusing the char-offset highlight model — PDF highlights share the same panel, cross-book search, and quote cards as EPUB~~
 
 ### 7. Book Metadata Editing — **Done**
 - ~~Edit title, author, and cover image for any book~~
@@ -335,6 +336,7 @@ Manual sharing via the existing Markdown / JSON export is sufficient.
 - ~~Works for EPUB (search chapter HTML); case-insensitive, 200 result cap~~
 - ~~Search term highlighted in chapter content~~
 - ~~PDF text search: uses pdfium text extraction, same UX as EPUB search (Cmd/Ctrl+F, snippets, click-to-navigate)~~
+- ~~Persisted PDF text index: extracted page text is cached on disk (keyed by file hash, built in the background on open), so the first search of every session is instant — not just after the book has been searched once~~
 
 #### 28. Advanced Typography Controls — **Done**
 - ~~Line height / line spacing (1.2-2.4)~~

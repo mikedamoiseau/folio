@@ -457,6 +457,16 @@ pub fn search_pdf(path: &str, query: &str) -> FolioResult<Vec<PdfSearchResult>> 
     Ok(search_in_texts(&page_texts, query))
 }
 
+/// Full per-page text via the memory-only path (no disk index) — the text
+/// equivalent of [`search_pdf`], for callers that don't have a storage
+/// handle / book hash. Resolution: in-memory `PDF_TEXT_CACHE` → extract +
+/// populate the cache on miss. Index into the returned `Vec<String>` by page,
+/// and index a page string by CHAR (Unicode scalar) offset — the same offset
+/// space as search's `match_offset` and glyph `off` (the epic offset invariant).
+pub fn page_texts_memory(path: &str) -> FolioResult<Vec<String>> {
+    get_cached_page_texts(path)
+}
+
 /// Search all pages of a PDF for a query string (case-insensitive), resolving
 /// page text via [`resolve_page_texts`] (memory → disk index → extract).
 /// A cold session with a persisted `text-index.json` hits the disk layer

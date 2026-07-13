@@ -438,6 +438,7 @@ pub fn run() {
             commands::get_pdf_page_count,
             commands::get_pdf_page_bytes,
             commands::get_pdf_page_glyphs,
+            commands::get_pdf_page_text,
             commands::prepare_pdf,
             commands::create_collection,
             commands::update_collection,

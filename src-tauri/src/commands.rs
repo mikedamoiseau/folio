@@ -5084,6 +5084,44 @@ pub async fn get_pdf_page_glyphs(
     pdf::get_page_glyphs(&file_path, page_index as usize)
 }
 
+/// Full text of one PDF page (F-1-4, desktop reader text-selection layer).
+/// The frontend pairs this with `get_pdf_page_glyphs`: glyph `off` values are
+/// CHAR (Unicode-scalar) offsets into this string, so the frontend indexes it
+/// via `Array.from(text)` to recover each glyph's character for native copy
+/// and for the highlight `text` payload. Resolution mirrors
+/// `search_book_content`'s PDF arm exactly (memory → disk index → extract when
+/// a hash + page cache are available; memory-only otherwise) so it shares the
+/// same offset space as search's `match_offset`.
+#[tauri::command]
+pub async fn get_pdf_page_text(
+    book_id: String,
+    page_index: u32,
+    state: State<'_, AppState>,
+    app: AppHandle,
+) -> FolioResult<String> {
+    let book = {
+        let conn = state.active_db()?.get()?;
+        db::get_book(&conn, &book_id)?
+            .ok_or_else(|| FolioError::not_found(format!("Book '{book_id}' not found")))?
+    };
+    if book.format != BookFormat::Pdf {
+        return Err(FolioError::invalid(
+            "get_pdf_page_text only supports PDF format",
+        ));
+    }
+    let file_path = state.resolve_book_path(&book)?;
+    validate_file_exists(&file_path)?;
+
+    let pages = match (book.file_hash.as_deref(), page_cache_storage(&app).ok()) {
+        (Some(hash), Some(storage)) => pdf::resolve_page_texts(&file_path, &storage, hash)?,
+        _ => pdf::page_texts_memory(&file_path)?,
+    };
+    pages
+        .get(page_index as usize)
+        .cloned()
+        .ok_or_else(|| FolioError::not_found(format!("page {page_index} not found")))
+}
+
 /// PDF page reader for the desktop frontend. Returns raw JPEG bytes
 /// plus a trailing mime tag (see `page_wire`); the frontend builds a
 /// `Blob` + `URL.createObjectURL` for `<img src>`.
