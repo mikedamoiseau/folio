@@ -348,10 +348,17 @@ fn get_cached_page_texts(path: &str) -> FolioResult<Vec<String>> {
 /// in-memory layer on hit) → `extract` + persist on miss. The extractor is
 /// injected so tests can stub pdfium out and assert it's never called on a
 /// disk-index hit.
+///
+/// `should_persist` gates ONLY the disk write on a miss (private mode,
+/// B-M1/OQ-3/SB-9): the in-memory cache is always populated so search still
+/// works this session, but a "don't track this session" toggle must not
+/// leave a `text-index.json` behind. It's evaluated right before the write
+/// (not once at the top) so a mid-build private toggle is still caught.
 fn resolve_page_texts_with_extractor<F>(
     path: &str,
     storage: &dyn Storage,
     book_hash: &str,
+    should_persist: &dyn Fn() -> bool,
     extract: F,
 ) -> FolioResult<Vec<String>>
 where
@@ -369,14 +376,17 @@ where
     let texts = extract(path)?;
     store_cached_page_texts(path, &texts)?;
 
-    // Persisting the index is best-effort: a write failure just means this
-    // session re-extracts next time rather than failing the search itself.
-    let index = PdfTextIndex {
-        version: TEXT_INDEX_VERSION,
-        page_count: texts.len() as u32,
-        pages: texts.clone(),
-    };
-    let _ = page_cache::write_text_index(storage, book_hash, &index);
+    // Persisting the index is best-effort (a write failure just means this
+    // session re-extracts next time) AND gated on `should_persist` — private
+    // mode must never write this to disk.
+    if should_persist() {
+        let index = PdfTextIndex {
+            version: TEXT_INDEX_VERSION,
+            page_count: texts.len() as u32,
+            pages: texts.clone(),
+        };
+        let _ = page_cache::write_text_index(storage, book_hash, &index);
+    }
 
     Ok(texts)
 }
@@ -387,8 +397,15 @@ pub fn resolve_page_texts(
     path: &str,
     storage: &dyn Storage,
     book_hash: &str,
+    should_persist: &dyn Fn() -> bool,
 ) -> FolioResult<Vec<String>> {
-    resolve_page_texts_with_extractor(path, storage, book_hash, extract_all_page_texts)
+    resolve_page_texts_with_extractor(
+        path,
+        storage,
+        book_hash,
+        should_persist,
+        extract_all_page_texts,
+    )
 }
 
 /// Case-insensitive substring search across already-resolved page texts.
@@ -397,22 +414,54 @@ pub fn resolve_page_texts(
 fn search_in_texts(page_texts: &[String], query: &str) -> Vec<PdfSearchResult> {
     let query_lower = query.to_lowercase();
     let mut results = Vec::new();
+    if query_lower.is_empty() {
+        return results;
+    }
 
     for (page_idx, text) in page_texts.iter().enumerate() {
-        let text_lower = text.to_lowercase();
-        let mut search_from = 0;
+        // Case-fold the page text char-by-char while recording, for every
+        // char of the LOWERED string, which original char ordinal / byte
+        // offset it came from. This is necessary because `to_lowercase()`
+        // is not always 1:1: some codepoints expand to multiple chars
+        // (İ -> "i̇"), which would otherwise disconnect a match position in
+        // the lowered string from the original text's char/byte offsets.
+        let mut lowered = String::new();
+        let mut lc_to_orig_char: Vec<usize> = Vec::new();
+        let mut lc_to_orig_byte: Vec<usize> = Vec::new();
+        for (orig_char_idx, (orig_byte, ch)) in text.char_indices().enumerate() {
+            for lc in ch.to_lowercase() {
+                lowered.push(lc);
+                lc_to_orig_char.push(orig_char_idx);
+                lc_to_orig_byte.push(orig_byte);
+            }
+        }
 
-        while let Some(pos) = text_lower[search_from..].find(&query_lower) {
-            let match_start = search_from + pos;
+        let mut from = 0usize;
+        while let Some(rel) = lowered[from..].find(&query_lower) {
+            let mb = from + rel; // byte offset of the match within `lowered`
+            let lc_idx = lowered[..mb].chars().count(); // lowered char index
+                                                        // The CHAR ordinal into the ORIGINAL text — the shared offset
+                                                        // space search, glyph bounds, and highlight anchors all index
+                                                        // into.
+            let match_offset = lc_to_orig_char[lc_idx];
+            let orig_byte = lc_to_orig_byte[lc_idx];
+            let end_lc = lc_idx + query_lower.chars().count();
+            let end_byte = if end_lc < lc_to_orig_byte.len() {
+                lc_to_orig_byte[end_lc]
+            } else {
+                text.len()
+            };
+            let snippet =
+                epub::extract_snippet(text, orig_byte, end_byte.saturating_sub(orig_byte), 40);
             results.push(PdfSearchResult {
                 chapter_index: page_idx,
-                snippet: epub::extract_snippet(text, match_start, query_lower.len(), 40),
-                match_offset: match_start,
+                snippet,
+                match_offset,
             });
             if results.len() >= MAX_SEARCH_RESULTS {
                 return results;
             }
-            search_from = match_start + query_lower.len();
+            from = mb + query_lower.len();
         }
     }
 
@@ -431,15 +480,28 @@ pub fn search_pdf(path: &str, query: &str) -> FolioResult<Vec<PdfSearchResult>> 
 /// Search all pages of a PDF for a query string (case-insensitive), resolving
 /// page text via [`resolve_page_texts`] (memory → disk index → extract).
 /// A cold session with a persisted `text-index.json` hits the disk layer
-/// instead of re-extracting.
+/// instead of re-extracting. `should_persist` is forwarded to
+/// [`resolve_page_texts`] to gate a miss's disk write (private mode).
 pub fn search_pdf_with_storage(
     path: &str,
     query: &str,
     storage: &dyn Storage,
     book_hash: &str,
+    should_persist: &dyn Fn() -> bool,
 ) -> FolioResult<Vec<PdfSearchResult>> {
-    let page_texts = resolve_page_texts(path, storage, book_hash)?;
+    let page_texts = resolve_page_texts(path, storage, book_hash, should_persist)?;
     Ok(search_in_texts(&page_texts, query))
+}
+
+/// Drop the in-memory `PDF_TEXT_CACHE` entry for `path`, if present.
+/// Used when a book is removed so a stale in-memory text cache can't
+/// resurrect a deleted book's page text (the disk-side
+/// `page-cache/{hash}/text-index.json` is cleared separately via
+/// [`crate::page_cache::evict_book`]).
+pub fn evict_memory_cache(path: &str) {
+    if let Ok(mut cache) = PDF_TEXT_CACHE.lock() {
+        cache.remove(path);
+    }
 }
 
 #[cfg(test)]
@@ -473,6 +535,33 @@ mod tests {
         assert_eq!(results[1].match_offset, pages[1].find("world").unwrap());
     }
 
+    /// Multibyte text before the match: `match_offset` must be the CHAR
+    /// ordinal (é=0, x=1, space=2, n=3), not the byte offset (which would be
+    /// 4, since é is 2 bytes in UTF-8).
+    #[test]
+    fn test_search_match_offset_is_char_ordinal_with_multibyte_prefix() {
+        let pages = vec!["éx needle".to_string()];
+
+        let results = search_in_texts(&pages, "needle");
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].match_offset, 3);
+    }
+
+    /// Case-folding a Turkish capital dotted I (İ) expands to two chars
+    /// ("i̇") under `to_lowercase()`. The lowered-string match position must
+    /// still be mapped back to the correct ORIGINAL char ordinal (İ=0, n=1),
+    /// not the (larger) lowered-string position.
+    #[test]
+    fn test_search_match_offset_survives_case_fold_expansion() {
+        let pages = vec!["İneedle".to_string()];
+
+        let results = search_in_texts(&pages, "needle");
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].match_offset, 1);
+    }
+
     #[test]
     fn test_search_uses_disk_index_without_extracting() {
         let (_d, storage) = temp_storage();
@@ -494,6 +583,7 @@ mod tests {
             "test_search_uses_disk_index_without_extracting.pdf",
             &storage,
             book_hash,
+            &|| true,
             extractor,
         )
         .expect("should resolve from the disk index");
@@ -507,6 +597,61 @@ mod tests {
         );
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].match_offset, texts[0].find("needle").unwrap());
+    }
+
+    /// Private mode (B-M1): on a cold miss, the extractor still runs (so the
+    /// caller gets a working search this session) but the index must NOT be
+    /// persisted to disk when `should_persist` says no.
+    #[test]
+    fn test_resolve_page_texts_private_mode_does_not_persist() {
+        let (_d, storage) = temp_storage();
+        let book_hash = "hash-private-miss";
+        let extractor_calls = AtomicUsize::new(0);
+        let extractor = |_path: &str| -> FolioResult<Vec<String>> {
+            extractor_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(vec!["needle in a haystack".to_string()])
+        };
+
+        let texts = resolve_page_texts_with_extractor(
+            "test_resolve_page_texts_private_mode_does_not_persist.pdf",
+            &storage,
+            book_hash,
+            &|| false,
+            extractor,
+        )
+        .expect("extractor should still run and return text");
+
+        assert_eq!(extractor_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(texts, vec!["needle in a haystack".to_string()]);
+        assert!(
+            page_cache::read_text_index(&storage, book_hash).is_none(),
+            "private mode must not persist the text index"
+        );
+    }
+
+    /// Mirror of the private-mode test above with `should_persist = true`:
+    /// the miss path DOES persist the index to disk.
+    #[test]
+    fn test_resolve_page_texts_non_private_persists_on_miss() {
+        let (_d, storage) = temp_storage();
+        let book_hash = "hash-normal-miss";
+        let extractor = |_path: &str| -> FolioResult<Vec<String>> {
+            Ok(vec!["needle in a haystack".to_string()])
+        };
+
+        let texts = resolve_page_texts_with_extractor(
+            "test_resolve_page_texts_non_private_persists_on_miss.pdf",
+            &storage,
+            book_hash,
+            &|| true,
+            extractor,
+        )
+        .expect("extractor should run and return text");
+
+        assert_eq!(texts, vec!["needle in a haystack".to_string()]);
+        let index = page_cache::read_text_index(&storage, book_hash)
+            .expect("non-private mode must persist the text index");
+        assert_eq!(index.pages, texts);
     }
 
     #[test]

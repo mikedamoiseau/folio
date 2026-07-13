@@ -584,7 +584,9 @@ fn delete_book_images(
 /// `page_cache::*` takes `&dyn Storage`; this helper keeps the `AppHandle`
 /// → cache-dir resolution in one place so every command site gets the same
 /// root.
-fn page_cache_storage(app: &AppHandle) -> FolioResult<folio_core::storage::LocalStorage> {
+fn page_cache_storage<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+) -> FolioResult<folio_core::storage::LocalStorage> {
     let dir = app
         .path()
         .app_cache_dir()
@@ -1362,12 +1364,24 @@ pub async fn get_library_grid(state: State<'_, AppState>) -> FolioResult<Vec<Boo
 }
 
 #[tauri::command]
-pub async fn remove_book(book_id: String, state: State<'_, AppState>) -> FolioResult<()> {
+pub async fn remove_book<R: tauri::Runtime>(
+    book_id: String,
+    state: State<'_, AppState>,
+    app: AppHandle<R>,
+) -> FolioResult<()> {
     let conn = state.active_db()?.get()?;
 
     // Fetch book before deleting so we can remove the library file and log.
     let existing_book = db::get_book(&conn, &book_id)?;
     let file_path = existing_book.as_ref().map(|b| b.file_path.clone());
+    // Captured before the DB delete (finding: deleting a book must clear its
+    // persisted page cache, incl. the PDF text index): `file_hash` keys
+    // `page-cache/{hash}/`, and the resolved path keys the in-memory
+    // `PDF_TEXT_CACHE`.
+    let book_hash = existing_book.as_ref().and_then(|b| b.file_hash.clone());
+    let resolved_path = existing_book
+        .as_ref()
+        .and_then(|b| state.resolve_book_path(b).ok());
 
     log_event(
         &conn,
@@ -1460,6 +1474,17 @@ pub async fn remove_book(book_id: String, state: State<'_, AppState>) -> FolioRe
     // Clean up extracted inline images for this book via the images storage.
     if let Ok(images) = state.images_storage() {
         let _ = delete_book_images(&*images, &book_id);
+    }
+
+    // Clear the page cache (rendered pages + the persisted PDF text index)
+    // for this book. Best-effort, like the covers/images cleanup above.
+    if let Some(ref hash) = book_hash {
+        if let Ok(storage) = page_cache_storage(&app) {
+            let _ = page_cache::evict_book(&storage, hash);
+        }
+    }
+    if let Some(ref path) = resolved_path {
+        pdf::evict_memory_cache(path);
     }
 
     Ok(())
@@ -1788,10 +1813,16 @@ pub async fn search_book_content(
             // Without a hash (shouldn't happen for imported books, but
             // degrade gracefully rather than fail search), fall back to
             // the memory-only path.
+            // Snapshot private mode once for this request (D-1): a miss must
+            // not persist the text index to disk while "don't track this
+            // session" is on.
+            let priv_now = state.is_private();
             let results = match book.file_hash.as_deref() {
                 Some(book_hash) => {
                     let storage = page_cache_storage(&app)?;
-                    pdf::search_pdf_with_storage(&file_path, &query, &storage, book_hash)?
+                    pdf::search_pdf_with_storage(&file_path, &query, &storage, book_hash, &|| {
+                        !priv_now
+                    })?
                 }
                 None => pdf::search_pdf(&file_path, &query)?,
             };
@@ -2763,7 +2794,13 @@ pub async fn prepare_pdf(
                 if let Some(_guard) = TextIndexBuildGuard::acquire(bg_hash.clone()) {
                     if page_cache::read_text_index(&bg_storage, &bg_hash).is_none() {
                         let build_start = std::time::Instant::now();
-                        match pdf::resolve_page_texts(&bg_path, &bg_storage, &bg_hash) {
+                        // Live check at write time (not just the outer
+                        // pre-extraction skip above): a "don't track this
+                        // session" toggle mid-extraction must still stop the
+                        // index from being persisted.
+                        match pdf::resolve_page_texts(&bg_path, &bg_storage, &bg_hash, &|| {
+                            !bg_private.load(Ordering::SeqCst)
+                        }) {
                             Ok(pages) => page_cache::page_dbg!(
                                 "text-index: built {} pages for {} in {:?}",
                                 pages.len(),
@@ -6665,6 +6702,15 @@ pub async fn cleanup_library(
             let _ = delete_book_images(&*images, &book.id);
         }
 
+        // Clear the page cache (rendered pages + persisted PDF text index)
+        // for this book.
+        if let Some(ref hash) = book.file_hash {
+            if let Ok(storage) = page_cache_storage(&app) {
+                let _ = page_cache::evict_book(&storage, hash);
+            }
+        }
+        pdf::evict_memory_cache(&resolved);
+
         log_event(
             &conn,
             ActivityEvent::BookRemovedCleanup {
@@ -7090,8 +7136,22 @@ pub async fn sync_push_book(book_id: String, state: State<'_, AppState>) -> Foli
 pub async fn bulk_delete_books(
     book_ids: Vec<String>,
     state: State<'_, AppState>,
+    app: AppHandle,
 ) -> FolioResult<u32> {
     let conn = state.active_db()?.get()?;
+
+    // Capture each book's file_hash + resolved path before the DB delete so
+    // the page cache (page-cache/{hash}/, incl. the persisted PDF text
+    // index) can be evicted afterward — mirrors remove_book's cleanup.
+    let evict_targets: Vec<(Option<String>, Option<String>)> = book_ids
+        .iter()
+        .filter_map(|id| db::get_book(&conn, id).ok().flatten())
+        .map(|b| {
+            let resolved = state.resolve_book_path(&b).ok();
+            (b.file_hash.clone(), resolved)
+        })
+        .collect();
+
     let ids_ref: Vec<&str> = book_ids.iter().map(|s| s.as_str()).collect();
     db::bulk_delete_books(&conn, &ids_ref)?;
     log_event(
@@ -7100,6 +7160,18 @@ pub async fn bulk_delete_books(
             count: book_ids.len(),
         },
     );
+
+    if let Ok(storage) = page_cache_storage(&app) {
+        for (hash, path) in evict_targets {
+            if let Some(ref h) = hash {
+                let _ = page_cache::evict_book(&storage, h);
+            }
+            if let Some(ref p) = path {
+                pdf::evict_memory_cache(p);
+            }
+        }
+    }
+
     Ok(book_ids.len() as u32)
 }
 
@@ -7496,6 +7568,50 @@ mod tests {
         apply_reading_progress(&conn, &book, "book-2", 2, 0.5, None, false).unwrap();
         let activity = db::get_all_activity(&conn).unwrap();
         assert!(activity.iter().all(|a| a.action != "book_completed"));
+    }
+
+    // --- Page cache eviction on book removal ---
+
+    /// Deleting a book must clear its persisted PDF text index (and the rest
+    /// of its `page-cache/{hash}/` entry), not just the DB row / covers /
+    /// images. Regression test for the CHANGELOG's "deleting the book clears
+    /// it" claim, which previously did not hold for the text index.
+    #[tokio::test]
+    async fn remove_book_evicts_page_cache_including_text_index() {
+        let (app, _dir) = mock_app_with_state();
+        let handle = app.handle().clone();
+        let state = handle.state::<AppState>();
+
+        let mut book = progress_test_book("pdf-book-1", 3);
+        book.format = BookFormat::Pdf;
+        book.file_hash = Some("hash-remove-test".to_string());
+        // Not imported: `resolve_book_path` returns `file_path` unchanged,
+        // so the test doesn't need a real library folder / file on disk.
+        book.is_imported = false;
+        {
+            let conn = state.active_db().unwrap().get().unwrap();
+            db::insert_book(&conn, &book).unwrap();
+        }
+
+        // Seed a page-cache text index for this book's hash, as prepare_pdf's
+        // background pass (or a search miss) would have written.
+        let storage = page_cache_storage(&handle).unwrap();
+        let index = folio_core::pdf::PdfTextIndex {
+            version: folio_core::pdf::TEXT_INDEX_VERSION,
+            page_count: 1,
+            pages: vec!["needle".to_string()],
+        };
+        page_cache::write_text_index(&storage, "hash-remove-test", &index).unwrap();
+        assert!(page_cache::read_text_index(&storage, "hash-remove-test").is_some());
+
+        remove_book("pdf-book-1".to_string(), state.clone(), handle.clone())
+            .await
+            .unwrap();
+
+        assert!(
+            page_cache::read_text_index(&storage, "hash-remove-test").is_none(),
+            "removing a book must evict its persisted page cache, including the text index"
+        );
     }
 
     // --- Private mode (B-M1): suppress_passive boundary ---

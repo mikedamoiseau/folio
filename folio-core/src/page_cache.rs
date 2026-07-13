@@ -1159,7 +1159,12 @@ fn collect_cached_books(storage: &dyn Storage) -> Vec<CacheManifest> {
         .collect()
 }
 
-fn evict_book(storage: &dyn Storage, book_hash: &str) -> FolioResult<()> {
+/// Remove every cache artifact for a book — the whole `page-cache/{hash}/`
+/// prefix, including cached page images and, if present, the persisted PDF
+/// `text-index.json` (both live under the same book-hash prefix). Public so
+/// callers that delete a book for good (`remove_book`, bulk delete, the
+/// missing-file cleanup pass) can evict its cache alongside the DB row.
+pub fn evict_book(storage: &dyn Storage, book_hash: &str) -> FolioResult<()> {
     let prefix = book_prefix(book_hash);
     let keys = storage
         .list(&prefix)
