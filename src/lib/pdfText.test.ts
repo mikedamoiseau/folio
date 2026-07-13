@@ -1,5 +1,29 @@
 import { describe, it, expect } from "vitest";
-import { glyphToPx, selectionOffsets, highlightBands, type Glyph } from "./pdfText";
+import { glyphToPx, selectionOffsets, highlightBands, imageLayerActive, type Glyph } from "./pdfText";
+
+describe("imageLayerActive", () => {
+  const id = { bookId: "book-1", page: 4 };
+
+  it("is active when book+page match and the box is measured", () => {
+    expect(imageLayerActive(id, "book-1", 4, true)).toBe(true);
+  });
+
+  it("is inactive when the box is not yet measured", () => {
+    expect(imageLayerActive(id, "book-1", 4, false)).toBe(false);
+  });
+
+  it("is inactive when the displayed page differs (page-turn race)", () => {
+    expect(imageLayerActive(id, "book-1", 5, true)).toBe(false);
+  });
+
+  it("is inactive when the displayed book differs (same-index book switch)", () => {
+    expect(imageLayerActive(id, "book-2", 4, true)).toBe(false);
+  });
+
+  it("is inactive when nothing has loaded yet", () => {
+    expect(imageLayerActive(null, "book-1", 4, true)).toBe(false);
+  });
+});
 
 describe("glyphToPx", () => {
   it("scales a normalized glyph rect to the rendered image box", () => {

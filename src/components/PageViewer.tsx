@@ -5,7 +5,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { getSpreadPages } from "../lib/utils";
 import { friendlyError } from "../lib/errors";
 import { blobUrlFromBytes } from "../lib/pageWire";
-import { glyphToPx, highlightBands, selectionOffsets, selectedOffsets, type Glyph } from "../lib/pdfText";
+import { glyphToPx, highlightBands, selectionOffsets, selectedOffsets, imageLayerActive, type Glyph, type ImageId } from "../lib/pdfText";
 import { HIGHLIGHT_COLORS } from "./HighlightsPanel";
 import { useToast } from "./Toast";
 
@@ -90,13 +90,22 @@ export default function PageViewer({
 
   const [leftImageData, setLeftImageData] = useState<string | null>(null);
   const [rightImageData, setRightImageData] = useState<string | null>(null);
-  // Which page index each rendered <img> currently DISPLAYS — set only once
-  // the browser has decoded+painted that page's bitmap (onLoad). The PDF text
-  // layer stays inert until this matches its pageIndex, so a page turn can't
-  // make the next page's glyphs selectable while the previous bitmap is still
-  // on screen (F-1-4 page-turn race).
-  const [leftLoadedPage, setLeftLoadedPage] = useState<number | null>(null);
-  const [rightLoadedPage, setRightLoadedPage] = useState<number | null>(null);
+  // Identity of the bitmap each <img>'s current src REPRESENTS ({bookId, page}),
+  // stored in lockstep with the blob URL (same update in the page-load effect).
+  // The <img>'s onLoad records this identity (via a ref, to avoid the
+  // stale-closure that binding to the nav target `spread.left` would cause)
+  // into leftDisplayedId/rightDisplayedId. The PDF text layer only activates
+  // when the on-screen bitmap is exactly its book+page, so a late load for a
+  // superseded page (rapid A→B→C nav) or a same-index book switch can't pair
+  // current-page text with a stale bitmap (F-1-4 page-turn race).
+  const [leftImageId, setLeftImageId] = useState<ImageId | null>(null);
+  const [rightImageId, setRightImageId] = useState<ImageId | null>(null);
+  const [leftDisplayedId, setLeftDisplayedId] = useState<ImageId | null>(null);
+  const [rightDisplayedId, setRightDisplayedId] = useState<ImageId | null>(null);
+  const leftImageIdRef = useRef<ImageId | null>(null);
+  const rightImageIdRef = useRef<ImageId | null>(null);
+  leftImageIdRef.current = leftImageId;
+  rightImageIdRef.current = rightImageId;
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [retryCount, setRetryCount] = useState(0);
@@ -361,6 +370,11 @@ export default function PageViewer({
     let timeoutId: ReturnType<typeof setTimeout> | undefined;
     setLoading(true);
     setError(null);
+    // A new spread is being fetched: the currently displayed bitmap is now
+    // stale, so clear its loaded identity until the new image's onLoad
+    // re-records it. Keeps the text layer inert during the swap.
+    setLeftDisplayedId(null);
+    setRightDisplayedId(null);
 
     // Clear stale in-flight entries for pages we no longer need.
     // This prevents abandoned renders from blocking the pdfium queue.
@@ -397,8 +411,17 @@ export default function PageViewer({
         dbg(`loadSpread complete in ${(performance.now() - t0).toFixed(0)}ms`);
         if (cancelled) return;
         setError(null);
+        // Store each image's identity in lockstep with its blob URL so the
+        // text layer can tell which book+page the on-screen bitmap represents.
         setLeftImageData(results[0]);
-        setRightImageData(results.length > 1 ? results[1] : null);
+        setLeftImageId({ bookId, page: spread.left });
+        if (results.length > 1 && spread.right !== null) {
+          setRightImageData(results[1]);
+          setRightImageId({ bookId, page: spread.right });
+        } else {
+          setRightImageData(null);
+          setRightImageId(null);
+        }
         // Slide in after new images are set — but only when the
         // page actually changed. A second loadSpread fire for the
         // same page (e.g. cache key churn after a sibling reflow)
@@ -714,7 +737,7 @@ export default function PageViewer({
                   alt={`Page ${spread.left + 1} of ${totalPages}`}
                   className="max-h-full max-w-full object-contain rounded-sm shadow-[0_4px_24px_-4px_rgba(44,34,24,0.18)]"
                   draggable={false}
-                  onLoad={() => setLeftLoadedPage(spread.left)}
+                  onLoad={() => setLeftDisplayedId(leftImageIdRef.current)}
                   onError={() =>
                     setError(t("reader.failedToLoadPage", { error: t("reader.imageDecodeError") }))
                   }
@@ -722,7 +745,7 @@ export default function PageViewer({
                 <PdfTextLayer
                   bookId={bookId}
                   pageIndex={spread.left}
-                  displayedPage={leftLoadedPage}
+                  displayedId={leftDisplayedId}
                   imgRef={leftImgRef}
                   containerRef={containerRef}
                   refreshKey={highlightRefreshKey}
@@ -752,7 +775,7 @@ export default function PageViewer({
                   alt={`Page ${(spread.right ?? 0) + 1} of ${totalPages}`}
                   className="max-h-full max-w-full object-contain rounded-sm shadow-[0_4px_24px_-4px_rgba(44,34,24,0.18)]"
                   draggable={false}
-                  onLoad={() => setRightLoadedPage(spread.right)}
+                  onLoad={() => setRightDisplayedId(rightImageIdRef.current)}
                   onError={() =>
                     setError(t("reader.failedToLoadPage", { error: t("reader.imageDecodeError") }))
                   }
@@ -760,7 +783,7 @@ export default function PageViewer({
                 <PdfTextLayer
                   bookId={bookId}
                   pageIndex={spread.right}
-                  displayedPage={rightLoadedPage}
+                  displayedId={rightDisplayedId}
                   imgRef={rightImgRef}
                   containerRef={containerRef}
                   refreshKey={highlightRefreshKey}
@@ -924,10 +947,11 @@ interface SavedHighlight {
 interface PdfTextLayerProps {
   bookId: string;
   pageIndex: number;
-  /** Which page the paired <img> currently displays (set on its onLoad). The
-   *  layer is inert until this equals `pageIndex`, so a page turn can't make
-   *  the next page's glyphs selectable over the previous page's bitmap. */
-  displayedPage: number | null;
+  /** Identity of the bitmap the paired <img> currently displays (set on its
+   *  onLoad from the src it represents). The layer is inert until this matches
+   *  this layer's book+page, so a late load for a superseded page or a
+   *  same-index book switch can't make stale text selectable. */
+  displayedId: ImageId | null;
   imgRef: RefObject<HTMLImageElement | null>;
   /** The reader's visible (overflow-hidden) viewport box, for popup clamping. */
   containerRef: RefObject<HTMLDivElement | null>;
@@ -951,7 +975,7 @@ interface PdfTextLayerProps {
 function PdfTextLayer({
   bookId,
   pageIndex,
-  displayedPage,
+  displayedId,
   imgRef,
   containerRef,
   refreshKey,
@@ -976,16 +1000,17 @@ function PdfTextLayer({
   >(null);
   const [popupPos, setPopupPos] = useState<{ left: number; top: number } | null>(null);
 
-  // The paired image must have loaded+measured for THIS page before the layer
-  // becomes interactive (F-1-4 page-turn race): otherwise the next page's
-  // glyphs could be selected over the previous page's still-visible bitmap.
-  const active = displayedPage === pageIndex && box !== null;
+  // The image ON SCREEN must be exactly this book+page and measured before the
+  // layer becomes interactive (F-1-4 page-turn race): otherwise a late load for
+  // a superseded page, or a same-index book switch, could pair current-page
+  // text with a stale bitmap.
+  const active = imageLayerActive(displayedId, bookId, pageIndex, box !== null);
 
   // Drop the previous page's glyphs/text/highlights/popup/box SYNCHRONOUSLY the
   // instant the page (or book) changes — before paint — so the freshly
   // rendered image never becomes interactive with stale data or a stale
   // measurement still live. `box` is reset here and only re-measured after the
-  // new image's load fires, which also flips `displayedPage` to this page.
+  // new image's load fires, which also records the on-screen bitmap's identity.
   useLayoutEffect(() => {
     setGlyphs([]);
     setChars([]);

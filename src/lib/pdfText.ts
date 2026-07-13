@@ -20,6 +20,36 @@ export interface PxRect {
   height: number;
 }
 
+/** Identity of the bitmap a rendered <img> actually displays: which book and
+ *  which page its current src represents (set atomically with the blob URL). */
+export interface ImageId {
+  bookId: string;
+  page: number;
+}
+
+/**
+ * Whether a PDF text layer may become interactive: the image currently ON
+ * SCREEN must be exactly this book+page AND the layer's box must be measured.
+ * `displayedId` reflects the loaded bitmap's identity (set on the <img>'s
+ * onLoad from the src it represents), NOT the navigation target — so a late
+ * load event for a superseded page, or a same-index book switch, can't pair
+ * current-page text with a stale bitmap. See PdfTextLayer / F-1-4 page-turn
+ * race.
+ */
+export function imageLayerActive(
+  displayedId: ImageId | null,
+  bookId: string,
+  pageIndex: number,
+  hasBox: boolean,
+): boolean {
+  return (
+    displayedId !== null &&
+    displayedId.bookId === bookId &&
+    displayedId.page === pageIndex &&
+    hasBox
+  );
+}
+
 /** Scale a normalized glyph rect to pixels within a `boxW`x`boxH` box (the rendered page image). */
 export function glyphToPx(g: Glyph, boxW: number, boxH: number): PxRect {
   return {
