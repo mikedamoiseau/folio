@@ -5060,6 +5060,30 @@ pub async fn get_pdf_page_count(book_id: String, state: State<'_, AppState>) -> 
     pdf::get_page_count(&file_path)
 }
 
+/// On-demand, normalized glyph rectangles for one PDF page (F-1-4,
+/// desktop reader text-selection layer). Bounds are never persisted —
+/// computed by `pdf::get_page_glyphs` and kept only in its in-memory LRU.
+#[tauri::command]
+pub async fn get_pdf_page_glyphs(
+    book_id: String,
+    page_index: u32,
+    state: State<'_, AppState>,
+) -> FolioResult<Vec<pdf::Glyph>> {
+    let book = {
+        let conn = state.active_db()?.get()?;
+        db::get_book(&conn, &book_id)?
+            .ok_or_else(|| FolioError::not_found(format!("Book '{book_id}' not found")))?
+    };
+    if book.format != BookFormat::Pdf {
+        return Err(FolioError::invalid(
+            "get_pdf_page_glyphs only supports PDF format",
+        ));
+    }
+    let file_path = state.resolve_book_path(&book)?;
+    validate_file_exists(&file_path)?;
+    pdf::get_page_glyphs(&file_path, page_index as usize)
+}
+
 /// PDF page reader for the desktop frontend. Returns raw JPEG bytes
 /// plus a trailing mime tag (see `page_wire`); the frontend builds a
 /// `Blob` + `URL.createObjectURL` for `<img src>`.

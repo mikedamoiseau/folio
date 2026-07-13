@@ -1,6 +1,6 @@
 use base64::Engine;
 use pdfium_render::prelude::*;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::{LazyLock, Mutex, OnceLock};
 
@@ -483,6 +483,172 @@ pub fn evict_memory_cache(path: &str) {
     }
 }
 
+// ---- Glyph bounds (F-1-4, M2) ----
+
+/// One character's normalized bounding rectangle on a single PDF page,
+/// returned on demand by [`get_page_glyphs`]. Never persisted to disk —
+/// only page TEXT is durable (see [`PdfTextIndex`]); bounds are cheap to
+/// recompute and kept in a small in-memory LRU instead.
+///
+/// `off` is the character's ordinal into the SAME `chars()`-built page
+/// text string produced by [`extract_all_page_texts`]/[`PdfTextIndex`] and
+/// consumed by search's `match_offset` — the shared offset space required
+/// by the epic's "Global Constraints", so a highlight's `start_offset`/
+/// `end_offset` line up with the glyph rects that render it.
+///
+/// `x`/`y`/`w`/`h` are fractions (0..1) of the page's width/height, with
+/// `y` measured top-down (screen orientation) even though pdfium's native
+/// origin is bottom-left.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Glyph {
+    pub off: u32,
+    pub x: f32,
+    pub y: f32,
+    pub w: f32,
+    pub h: f32,
+}
+
+/// Maximum number of `(path, page_index)` pages whose glyph rects are
+/// kept in memory at once. Small — the reader only ever needs the
+/// currently visible page(s) and maybe an adjacent prefetch.
+const GLYPH_CACHE_MAX_PAGES: usize = 4;
+
+/// Key identifying one page's glyph rects in [`GLYPH_CACHE`].
+type GlyphCacheKey = (String, usize);
+
+/// One [`GLYPH_CACHE`] entry: the page it belongs to, plus its glyphs.
+type GlyphCacheEntry = (GlyphCacheKey, Vec<Glyph>);
+
+/// In-memory-only LRU of recent pages' glyph rects, most-recently-used
+/// entry at the front. Never persisted — see [`Glyph`]'s doc comment.
+static GLYPH_CACHE: LazyLock<Mutex<VecDeque<GlyphCacheEntry>>> =
+    LazyLock::new(|| Mutex::new(VecDeque::new()));
+
+fn glyph_cache_get(path: &str, page_index: usize) -> FolioResult<Option<Vec<Glyph>>> {
+    let mut cache = GLYPH_CACHE.lock()?;
+    let Some(pos) = cache
+        .iter()
+        .position(|((p, idx), _)| p == path && *idx == page_index)
+    else {
+        return Ok(None);
+    };
+    // Safe: `pos` was just found by `position()` above.
+    let entry = cache.remove(pos).expect("position() found this index");
+    let value = entry.1.clone();
+    cache.push_front(entry);
+    Ok(Some(value))
+}
+
+fn glyph_cache_put(path: &str, page_index: usize, glyphs: Vec<Glyph>) -> FolioResult<()> {
+    let mut cache = GLYPH_CACHE.lock()?;
+    cache.retain(|((p, idx), _)| !(p == path && *idx == page_index));
+    cache.push_front(((path.to_string(), page_index), glyphs));
+    while cache.len() > GLYPH_CACHE_MAX_PAGES {
+        cache.pop_back();
+    }
+    Ok(())
+}
+
+/// Normalize one char's `loose_bounds()` (pdfium points, bottom-left
+/// origin) into a [`Glyph`] with 0..1 page-fraction coordinates, `y`
+/// converted to top-down (screen) orientation. Pure — no pdfium calls —
+/// so it's directly unit-testable without a real PDF.
+///
+/// Tiny negative results from float noise (e.g. a char box that's
+/// epsilon past a page edge) are clamped to 0.0.
+fn normalize_glyph(
+    off: u32,
+    left: f32,
+    bottom: f32,
+    right: f32,
+    top: f32,
+    page_w: f32,
+    page_h: f32,
+) -> Glyph {
+    Glyph {
+        off,
+        x: (left / page_w).max(0.0),
+        y: ((page_h - top) / page_h).max(0.0),
+        w: ((right - left) / page_w).max(0.0),
+        h: ((top - bottom) / page_h).max(0.0),
+    }
+}
+
+/// Return normalized, top-down glyph rectangles for one page of a PDF,
+/// keyed by `off` — the char ordinal into the SAME `chars()`-built text
+/// string as [`extract_all_page_texts`]/[`PdfTextIndex`]/search's
+/// `match_offset` (see the epic's offset invariant). Computed on demand;
+/// never persisted (see [`Glyph`]'s doc comment). Recent pages are kept
+/// in a small in-memory LRU ([`GLYPH_CACHE`]).
+///
+/// A char whose `unicode_char()` is `None` is skipped entirely — no
+/// glyph, no `off` slot — mirroring [`extract_all_page_texts`], which
+/// doesn't push it to the page text either. A char whose bounds lookup
+/// fails still consumes an `off` slot (pushed as a zero-area glyph) so
+/// `off` never desyncs from the text.
+pub fn get_page_glyphs(path: &str, page_index: usize) -> FolioResult<Vec<Glyph>> {
+    if let Some(glyphs) = glyph_cache_get(path, page_index)? {
+        return Ok(glyphs);
+    }
+
+    let pdfium = bind_pdfium()?;
+    let document = pdfium
+        .load_pdf_from_file(path, None)
+        .map_err(|e| FolioError::invalid(format!("failed to open PDF: {e}")))?;
+
+    if page_index > u16::MAX as usize {
+        return Err(FolioError::invalid(format!(
+            "page index {page_index} exceeds maximum supported ({})",
+            u16::MAX
+        )));
+    }
+    let pages = document.pages();
+    let page = pages
+        .get(page_index as u16)
+        .map_err(|e| FolioError::not_found(format!("page {page_index} not found: {e}")))?;
+
+    let page_w = page.width().value;
+    let page_h = page.height().value;
+
+    let text = page.text().map_err(|e| {
+        FolioError::internal(format!(
+            "failed to extract text from page {page_index}: {e}"
+        ))
+    })?;
+
+    let mut glyphs = Vec::new();
+    let mut counter: u32 = 0;
+    for ch in text.chars().iter() {
+        if ch.unicode_char().is_none() {
+            continue;
+        }
+        let glyph = match ch.loose_bounds() {
+            Ok(rect) => normalize_glyph(
+                counter,
+                rect.left().value,
+                rect.bottom().value,
+                rect.right().value,
+                rect.top().value,
+                page_w,
+                page_h,
+            ),
+            Err(_) => Glyph {
+                off: counter,
+                x: 0.0,
+                y: 0.0,
+                w: 0.0,
+                h: 0.0,
+            },
+        };
+        glyphs.push(glyph);
+        counter += 1;
+    }
+
+    glyph_cache_put(path, page_index, glyphs.clone())?;
+    Ok(glyphs)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -630,5 +796,49 @@ mod tests {
         assert!(!looks_like_url("Frank Herbert"));
         assert!(!looks_like_url("O'Reilly"));
         assert!(!looks_like_url(""));
+    }
+
+    /// Guards the pdfium bottom-left -> screen top-down conversion: a char
+    /// near the visual TOP of the page (high `top`/`bottom` in points, close
+    /// to `page_h`) must yield a SMALLER `y` than one near the bottom (low
+    /// `top`/`bottom`, close to 0).
+    #[test]
+    fn test_normalize_glyph_top_down() {
+        let page_w = 600.0;
+        let page_h = 800.0;
+
+        let top_char = normalize_glyph(0, 50.0, 770.0, 60.0, 790.0, page_w, page_h);
+        let bottom_char = normalize_glyph(1, 50.0, 10.0, 60.0, 30.0, page_w, page_h);
+
+        assert!(
+            top_char.y < bottom_char.y,
+            "top_char.y={} should be < bottom_char.y={}",
+            top_char.y,
+            bottom_char.y
+        );
+    }
+
+    #[test]
+    fn test_normalize_glyph_within_unit_range() {
+        let page_w = 600.0;
+        let page_h = 800.0;
+        let eps = 1e-4;
+
+        let glyph = normalize_glyph(0, 50.0, 700.0, 80.0, 720.0, page_w, page_h);
+
+        assert!((0.0..=1.0).contains(&glyph.x), "x={}", glyph.x);
+        assert!((0.0..=1.0).contains(&glyph.y), "y={}", glyph.y);
+        assert!(glyph.x + glyph.w <= 1.0 + eps, "x+w={}", glyph.x + glyph.w);
+        assert!(glyph.y + glyph.h <= 1.0 + eps, "y+h={}", glyph.y + glyph.h);
+    }
+
+    /// A bogus path can never resolve to a real PDF, so `get_page_glyphs`
+    /// must error rather than panic — covers the error-return path without
+    /// requiring a real pdfium binary (unavailable in this test
+    /// environment; see the M2 report for what this does/doesn't exercise).
+    #[test]
+    fn test_get_page_glyphs_nonexistent_file_errors() {
+        let result = get_page_glyphs("test_get_page_glyphs_nonexistent_file_errors.pdf", 0);
+        assert!(result.is_err());
     }
 }
