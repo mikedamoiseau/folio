@@ -2212,16 +2212,19 @@
     // Error state (#page-error visible, img hidden/collapsed): no-op.
     if (!img || !stage || !z || !img.clientWidth) return;
     const scale = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, newScale));
-    // Entering zoom from 1x in fit-width: the stage may be natively
-    // scrolled. Freeze that first (same trick as renderPageTurn's F5) —
-    // while zoomed, .zoom-active turns off native overflow entirely and
-    // our pan owns all movement, so offsetTop-based math stays valid.
-    if (scale > 1 && z.scale === 1 && stage.scrollTop > 0) stage.scrollTop = 0;
+    // Anchor math order matters: measure the rendered rect FIRST (it
+    // reflects any native fit-width scroll), derive the image-local coords
+    // of the anchor point from it, and only then zero the scroll — the
+    // tx/ty formula below assumes scrollTop 0 at apply time, and localX/Y
+    // keep the content the user actually pointed at under the cursor.
     const r = img.getBoundingClientRect(); // includes the current transform
-    // Image-local (unscaled) coords of the anchor point; keep that point
-    // under the cursor/fingers at the new scale.
     const localX = (clientX - r.left) / z.scale;
     const localY = (clientY - r.top) / z.scale;
+    // Entering zoom from 1x in fit-width: the stage may be natively
+    // scrolled. Freeze that (same trick as renderPageTurn's F5) — while
+    // zoomed, .zoom-active turns off native overflow entirely and our pan
+    // owns all movement, so offsetTop-based math stays valid.
+    if (scale > 1 && z.scale === 1 && stage.scrollTop > 0) stage.scrollTop = 0;
     const sr = stage.getBoundingClientRect();
     z.tx = clientX - localX * scale - (sr.left + img.offsetLeft);
     z.ty = clientY - localY * scale - (sr.top + img.offsetTop);
@@ -2240,18 +2243,52 @@
   }
 
   function bindWheelZoom(stage) {
+    // Firefox reports mouse-wheel deltas in lines (deltaMode 1, ±3/notch),
+    // not pixels — without normalization zoom/pan is ~30x too weak there.
+    function wheelPx(e, d) {
+      if (e.deltaMode === 1) return d * 33;
+      if (e.deltaMode === 2) return d * (stage.clientHeight || 400);
+      return d;
+    }
+
+    // Safari (macOS) fires proprietary GestureEvents for a trackpad pinch
+    // alongside/instead of ctrl+wheel. Handle the gesture directly and mute
+    // ctrl+wheel while one is active so browsers that emit both never apply
+    // the zoom twice; the preventDefault also stops Safari's native
+    // full-page zoom. No-ops on browsers without GestureEvent.
+    let inGesture = false;
+    let gestureBaseScale = 1;
+    stage.addEventListener("gesturestart", (e) => {
+      if (!readerState || readerState.mode !== "page") return;
+      e.preventDefault();
+      inGesture = true;
+      gestureBaseScale = readerState.zoom.scale;
+    });
+    stage.addEventListener("gesturechange", (e) => {
+      if (!readerState || readerState.mode !== "page") return;
+      e.preventDefault();
+      if (typeof e.scale === "number") {
+        zoomAtPoint(gestureBaseScale * e.scale, e.clientX, e.clientY);
+      }
+    });
+    stage.addEventListener("gestureend", (e) => {
+      e.preventDefault();
+      inGesture = false;
+    });
+
     stage.addEventListener("wheel", (e) => {
       if (!readerState || readerState.mode !== "page") return;
       if (e.ctrlKey) {
-        // ctrl+wheel (incl. macOS trackpad pinch, which the browser
-        // delivers as ctrl+wheel) — zoom about the cursor.
+        // ctrl+wheel (incl. trackpad pinch on Chrome/Edge/Firefox, which
+        // deliver it as ctrl+wheel) — zoom about the cursor.
         e.preventDefault();
-        zoomAtPoint(readerState.zoom.scale * Math.exp(-e.deltaY * 0.01), e.clientX, e.clientY);
+        if (inGesture) return; // Safari already handled via gesturechange
+        zoomAtPoint(readerState.zoom.scale * Math.exp(-wheelPx(e, e.deltaY) * 0.01), e.clientX, e.clientY);
       } else if (isZoomed()) {
         // Plain wheel while zoomed pans (content follows scroll direction);
         // at 1x native behavior (fit-width scroll) is untouched.
         e.preventDefault();
-        panZoomBy(-e.deltaX, -e.deltaY);
+        panZoomBy(-wheelPx(e, e.deltaX), -wheelPx(e, e.deltaY));
       }
     }, { passive: false });
   }
@@ -2364,6 +2401,13 @@
         abortDrag();
         return;
       }
+      if (isZoomed()) {
+        // While zoomed, a single-finger drag must never start a swipe (it
+        // would stomp the zoom transform with translateX and turn pages
+        // under a user trying to pan). Touch panning arrives with the M2
+        // gesture controller; until then a zoomed touch drag is inert.
+        return;
+      }
       cancelSnapBack($("#page-img")); // F6: a new drag interrupts any snap-back in flight
       startX = e.touches[0].clientX;
       startY = e.touches[0].clientY;
@@ -2380,6 +2424,12 @@
       if (e.touches.length !== 1) {
         // F2: a second finger joined mid-drag — abort so a later touchend
         // (computed from whichever finger lifts) can't commit a bogus turn.
+        abortDrag();
+        return;
+      }
+      if (isZoomed()) {
+        // Zoom engaged mid-drag (e.g. ctrl+wheel on a touchscreen laptop):
+        // kill the swipe rather than let translateX stomp the zoom.
         abortDrag();
         return;
       }
@@ -2836,6 +2886,10 @@
         incoming.removeEventListener("animationend", onAnimEnd);
         incoming.removeEventListener("animationcancel", onAnimEnd);
         clearTimeout(timer);
+        // A ctrl+wheel/pinch zoom landed during the ~280ms slide (on the
+        // covered outgoing img, clamped to its dimensions) must not leak
+        // onto the incoming page — re-assert "every turn lands unzoomed".
+        resetZoom();
         img.src = url;
         img.alt = alt;
         incoming.hidden = true;

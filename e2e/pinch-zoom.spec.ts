@@ -37,48 +37,30 @@ async function getScale(page: Page): Promise<number> {
   });
 }
 
-// ctrl+wheel with a real cursor position, dispatched straight at the image
-// (bubbles to the #reader-stage listener). page.mouse.wheel can't set
-// ctrlKey, so synthesize the event.
-async function ctrlWheel(page: Page, deltaY: number) {
+// Wheel event with a real cursor position (image center), dispatched
+// straight at the image (bubbles to the #reader-stage listener).
+// page.mouse.wheel can't set ctrlKey, so synthesize the event.
+async function wheel(page: Page, init: WheelEventInit) {
   await page.$eval(
     "#page-img",
-    (el, dy) => {
+    (el, eventInit) => {
       const r = el.getBoundingClientRect();
       el.dispatchEvent(
         new WheelEvent("wheel", {
-          ctrlKey: true,
-          deltaY: dy,
           clientX: r.left + r.width / 2,
           clientY: r.top + r.height / 2,
           bubbles: true,
           cancelable: true,
+          ...eventInit,
         }),
       );
     },
-    deltaY,
+    init,
   );
 }
 
-async function plainWheel(page: Page, deltaX: number, deltaY: number) {
-  await page.$eval(
-    "#page-img",
-    (el, d: { x: number; y: number }) => {
-      const r = el.getBoundingClientRect();
-      el.dispatchEvent(
-        new WheelEvent("wheel", {
-          deltaX: d.x,
-          deltaY: d.y,
-          clientX: r.left + r.width / 2,
-          clientY: r.top + r.height / 2,
-          bubbles: true,
-          cancelable: true,
-        }),
-      );
-    },
-    { x: deltaX, y: deltaY },
-  );
-}
+const ctrlWheel = (page: Page, deltaY: number) => wheel(page, { ctrlKey: true, deltaY });
+const plainWheel = (page: Page, deltaX: number, deltaY: number) => wheel(page, { deltaX, deltaY });
 
 test.describe("Reader zoom: wheel (M1)", () => {
   test("ctrl+wheel zooms in, clamps at 5x, and ctrl+wheel out clamps back to 1x", async ({ page }) => {
@@ -100,12 +82,23 @@ test.describe("Reader zoom: wheel (M1)", () => {
     expect(transform).toBe("");
   });
 
+  test("line-mode wheel deltas (Firefox mice) are normalized to pixels", async ({ page }) => {
+    await openCbzReader(page);
+    // 3 lines ≈ one Firefox wheel notch; must zoom meaningfully, not 3%.
+    await wheel(page, { ctrlKey: true, deltaY: -3, deltaMode: 1 });
+    expect(await getScale(page)).toBeGreaterThan(1.5);
+  });
+
   test("plain wheel pans while zoomed and pan clamps at image edges", async ({ page }) => {
     await openCbzReader(page);
     // fit-width so the scaled image genuinely overflows the stage.
     await page.click("#fit-toggle-btn");
     await ctrlWheel(page, -70); // ~2x
     expect(await getScale(page)).toBeGreaterThan(1.5);
+
+    // Review fix: .zoom-active must beat fit-width's overflow:auto — while
+    // zoomed the stage never scrolls natively (pan owns all movement).
+    expect(await page.$eval("#reader-stage", (el) => getComputedStyle(el).overflowY)).toBe("hidden");
 
     // Pan hard toward bottom-right content (positive deltas scroll content
     // up/left visually — direction spec: pan moves content opposite the
