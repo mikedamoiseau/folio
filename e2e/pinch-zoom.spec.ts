@@ -37,23 +37,26 @@ async function getScale(page: Page): Promise<number> {
   });
 }
 
-// Wheel event with a real cursor position (image center), dispatched
-// straight at the image (bubbles to the #reader-stage listener).
-// page.mouse.wheel can't set ctrlKey, so synthesize the event.
-async function wheel(page: Page, init: WheelEventInit) {
-  await page.$eval(
+// Wheel event with a real cursor position (image center unless clientX/Y
+// given), dispatched straight at the image (bubbles to the #reader-stage
+// listener). page.mouse.wheel can't set ctrlKey, so synthesize the event.
+// Returns defaultPrevented — the handler's contract is observable: it must
+// preventDefault when it consumes the wheel (zoom / zoomed pan) and must
+// NOT when native behavior should win (plain wheel at 1x).
+async function wheel(page: Page, init: WheelEventInit): Promise<boolean> {
+  return page.$eval(
     "#page-img",
     (el, eventInit) => {
       const r = el.getBoundingClientRect();
-      el.dispatchEvent(
-        new WheelEvent("wheel", {
-          clientX: r.left + r.width / 2,
-          clientY: r.top + r.height / 2,
-          bubbles: true,
-          cancelable: true,
-          ...eventInit,
-        }),
-      );
+      const ev = new WheelEvent("wheel", {
+        clientX: r.left + r.width / 2,
+        clientY: r.top + r.height / 2,
+        bubbles: true,
+        cancelable: true,
+        ...eventInit,
+      });
+      el.dispatchEvent(ev);
+      return ev.defaultPrevented;
     },
     init,
   );
@@ -67,7 +70,9 @@ test.describe("Reader zoom: wheel (M1)", () => {
     await openCbzReader(page);
     expect(await getScale(page)).toBe(1);
 
-    await ctrlWheel(page, -70); // exp(0.7) ≈ 2.01
+    // The handler must claim the event — a real ctrl+wheel would otherwise
+    // also zoom the whole browser viewport.
+    expect(await ctrlWheel(page, -70)).toBe(true); // exp(0.7) ≈ 2.01
     const zoomed = await getScale(page);
     expect(zoomed).toBeGreaterThan(1.5);
     expect(zoomed).toBeLessThan(3);
@@ -80,6 +85,28 @@ test.describe("Reader zoom: wheel (M1)", () => {
     // At 1x the transform is fully cleared, not translate(...) scale(1).
     const transform = await page.$eval("#page-img", (el) => el.style.transform);
     expect(transform).toBe("");
+  });
+
+  test("ctrl+wheel zoom anchors the image point under the cursor", async ({ page }) => {
+    await openCbzReader(page);
+    await page.click("#fit-toggle-btn"); // fit-width: image spans the stage
+    const before = await page.$eval("#page-img", (el) => {
+      const r = el.getBoundingClientRect();
+      return { left: r.left, top: r.top, width: r.width, height: r.height };
+    });
+    // Zoom about a point at 25% of the image's width (not the center) —
+    // an implementation that ignores the cursor entirely fails this.
+    const px = before.left + before.width * 0.25;
+    const py = before.top + before.height * 0.5;
+    await wheel(page, { ctrlKey: true, deltaY: -70, clientX: px, clientY: py });
+    const s = await getScale(page);
+    expect(s).toBeGreaterThan(1.5);
+    const afterLeft = await page.$eval("#page-img", (el) => el.getBoundingClientRect().left);
+    // Anchor invariant: the image-local point that was under the cursor
+    // stays under it — (px - left) / scale is constant.
+    const localBefore = px - before.left; // scale was 1
+    const localAfter = (px - afterLeft) / s;
+    expect(Math.abs(localAfter - localBefore)).toBeLessThan(1);
   });
 
   test("line-mode wheel deltas (Firefox mice) are normalized to pixels", async ({ page }) => {
@@ -100,17 +127,24 @@ test.describe("Reader zoom: wheel (M1)", () => {
     // zoomed the stage never scrolls natively (pan owns all movement).
     expect(await page.$eval("#reader-stage", (el) => getComputedStyle(el).overflowY)).toBe("hidden");
 
+    const leftBefore = await page.$eval("#page-img", (el) => el.getBoundingClientRect().left);
+
     // Pan hard toward bottom-right content (positive deltas scroll content
     // up/left visually — direction spec: pan moves content opposite the
-    // wheel deltas, like native scrolling).
-    await plainWheel(page, 2000, 2000);
+    // wheel deltas, like native scrolling). Must be a consumed event.
+    expect(await plainWheel(page, 2000, 2000)).toBe(true);
     const after = await page.$eval("#page-img", (el) => {
       const r = el.getBoundingClientRect();
       const s = document.querySelector("#reader-stage")!.getBoundingClientRect();
-      return { imgRight: r.right, stageRight: s.right, imgBottom: r.bottom, stageBottom: s.bottom };
+      return { imgLeft: r.left, imgRight: r.right, stageRight: s.right, imgBottom: r.bottom, stageBottom: s.bottom };
     });
+    // The pan actually moved the image (guards against an inert handler —
+    // the clamp inequalities below hold even for an untouched centered
+    // image, so on their own they prove nothing).
+    expect(after.imgLeft).toBeLessThan(leftBefore);
     // Clamped: the image's far edge never pulls inside the stage's far edge.
     expect(after.imgRight).toBeGreaterThanOrEqual(after.stageRight - 0.5);
+    expect(after.imgBottom).toBeGreaterThanOrEqual(after.stageBottom - 0.5);
 
     // Pan hard the other way: near edge clamps too.
     await plainWheel(page, -4000, -4000);
@@ -147,7 +181,9 @@ test.describe("Reader zoom: wheel (M1)", () => {
     await page.click("#fit-toggle-btn");
     expect(await getScale(page)).toBe(1);
 
-    await plainWheel(page, 0, -300);
+    // Plain wheel at 1x must be left to the browser (fit-width native
+    // scroll) — the handler must not claim it.
+    expect(await plainWheel(page, 0, -300)).toBe(false);
     expect(await getScale(page)).toBe(1);
   });
 });

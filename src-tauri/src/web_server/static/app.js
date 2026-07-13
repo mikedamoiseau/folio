@@ -2144,6 +2144,13 @@
   function applyChromeVisibility() {
     const root = $("#reader-root");
     if (root) root.classList.toggle("chrome-hidden", readerState.chromeHidden);
+    // Showing/hiding the chrome rows resizes the stage without a window
+    // resize event — re-clamp a zoomed pan against the new bounds so no
+    // gap opens at an edge.
+    if (readerState.mode === "page" && isZoomed()) {
+      clampZoomPan();
+      applyZoomTransform();
+    }
   }
 
   function applyFitMode() {
