@@ -2170,6 +2170,15 @@
   // leftovers so neither path can wipe the other's state.
   const ZOOM_MIN = 1;
   const ZOOM_MAX = 5;
+  // iOS Safari fires touch events AND proprietary GestureEvents for the
+  // same physical pinch. The touch pinch (bindSwipe) sets this so the
+  // gesture handlers (bindWheelZoom) stand down — otherwise both write the
+  // scale each frame from slightly different anchors and the zoom jitters.
+  let touchPinchActive = false;
+  // Bumped by resetZoom(): an in-flight gesture that captured its base
+  // scale before a page turn (or reader re-entry) is stale — without this
+  // its next touchmove would re-apply the old scale to the new page.
+  let zoomEpoch = 0;
 
   function isZoomed() {
     return !!(readerState && readerState.zoom && readerState.zoom.scale > 1);
@@ -2191,6 +2200,7 @@
 
   function resetZoom() {
     if (!readerState || !readerState.zoom) return;
+    zoomEpoch++;
     readerState.zoom = { scale: 1, tx: 0, ty: 0 };
     applyZoomTransform();
   }
@@ -2212,25 +2222,24 @@
     z.ty = clampZoomAxis(z.ty, img.offsetTop, img.clientHeight * z.scale, stage.clientHeight);
   }
 
-  function zoomAtPoint(newScale, clientX, clientY) {
+  // Core zoom apply: put the image-local point (localX, localY) under the
+  // client point (clientX, clientY) at `newScale`. Shared by zoomAtPoint
+  // (anchor = whatever is under the cursor right now) and the touch pinch
+  // (anchor captured once at pinch start, so the content that was between
+  // the fingers follows a moving midpoint — a constant-spread two-finger
+  // drag pans).
+  function zoomToAnchor(newScale, localX, localY, clientX, clientY) {
     const img = $("#page-img");
     const stage = $("#reader-stage");
     const z = readerState && readerState.zoom;
     // Error state (#page-error visible, img hidden/collapsed): no-op.
     if (!img || !stage || !z || !img.clientWidth) return;
     const scale = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, newScale));
-    // Anchor math order matters: measure the rendered rect FIRST (it
-    // reflects any native fit-width scroll), derive the image-local coords
-    // of the anchor point from it, and only then zero the scroll — the
-    // tx/ty formula below assumes scrollTop 0 at apply time, and localX/Y
-    // keep the content the user actually pointed at under the cursor.
-    const r = img.getBoundingClientRect(); // includes the current transform
-    const localX = (clientX - r.left) / z.scale;
-    const localY = (clientY - r.top) / z.scale;
     // Entering zoom from 1x in fit-width: the stage may be natively
     // scrolled. Freeze that (same trick as renderPageTurn's F5) — while
     // zoomed, .zoom-active turns off native overflow entirely and our pan
-    // owns all movement, so offsetTop-based math stays valid.
+    // owns all movement, so the offset-based math below stays valid (the
+    // tx/ty formula assumes scrollTop 0 at apply time).
     if (scale > 1 && z.scale === 1 && stage.scrollTop > 0) stage.scrollTop = 0;
     const sr = stage.getBoundingClientRect();
     z.tx = clientX - localX * scale - (sr.left + img.offsetLeft);
@@ -2238,6 +2247,23 @@
     z.scale = scale;
     clampZoomPan();
     applyZoomTransform();
+  }
+
+  // Image-local (unscaled) coords of a client point, measured from the
+  // CURRENT rendered rect — so it reflects any native fit-width scroll and
+  // the current transform. Must run before zoomToAnchor's scroll reset.
+  function imageLocalPoint(clientX, clientY) {
+    const img = $("#page-img");
+    const z = readerState && readerState.zoom;
+    if (!img || !z || !img.clientWidth) return null;
+    const r = img.getBoundingClientRect();
+    return { x: (clientX - r.left) / z.scale, y: (clientY - r.top) / z.scale };
+  }
+
+  function zoomAtPoint(newScale, clientX, clientY) {
+    const local = imageLocalPoint(clientX, clientY);
+    if (!local) return;
+    zoomToAnchor(newScale, local.x, local.y, clientX, clientY);
   }
 
   function panZoomBy(dx, dy) {
@@ -2271,6 +2297,7 @@
     stage.addEventListener("gesturestart", (e) => {
       if (!readerState || readerState.mode !== "page") return;
       e.preventDefault();
+      if (touchPinchActive) return; // touch pinch owns this physical gesture
       inGesture = true;
       gestureAt = Date.now();
       gestureBaseScale = readerState.zoom.scale;
@@ -2278,6 +2305,7 @@
     stage.addEventListener("gesturechange", (e) => {
       if (!readerState || readerState.mode !== "page") return;
       e.preventDefault();
+      if (touchPinchActive) return; // touch pinch owns this physical gesture
       inGesture = true;
       gestureAt = Date.now();
       if (typeof e.scale === "number") {
@@ -2431,10 +2459,21 @@
         // abort). Swipe tracking must die first so its touchend can't fire.
         abortDrag();
         pan = null;
-        pinch = {
-          dist: touchDist(e.touches[0], e.touches[1]),
+        const t0 = e.touches[0], t1 = e.touches[1];
+        const midX = (t0.clientX + t1.clientX) / 2;
+        const midY = (t0.clientY + t1.clientY) / 2;
+        // Anchor the image-local point under the starting midpoint for the
+        // whole pinch: zooming scales about it AND a moving midpoint drags
+        // it along (constant-spread two-finger drag = pan).
+        const local = imageLocalPoint(midX, midY);
+        pinch = local && {
+          dist: touchDist(t0, t1),
           scale: readerState && readerState.zoom ? readerState.zoom.scale : 1,
+          localX: local.x,
+          localY: local.y,
+          epoch: zoomEpoch,
         };
+        touchPinchActive = !!pinch;
         return;
       }
       if (e.touches.length !== 1) {
@@ -2442,9 +2481,11 @@
         abortDrag();
         pinch = null;
         pan = null;
+        touchPinchActive = false;
         return;
       }
       pinch = null;
+      touchPinchActive = false;
       if (isZoomed()) {
         // One finger while zoomed pans — never a swipe (a swipe would stomp
         // the zoom transform with translateX and turn pages under a user
@@ -2467,12 +2508,22 @@
     // never blocked.
     el.addEventListener("touchmove", (e) => {
       if (pinch && e.touches.length === 2) {
+        if (pinch.epoch !== zoomEpoch) {
+          // A page turn (resetZoom) happened mid-pinch — the captured base
+          // scale/anchor belong to the previous page. Drop the gesture
+          // before claiming the event.
+          pinch = null;
+          touchPinchActive = false;
+          return;
+        }
         e.preventDefault();
         const t0 = e.touches[0], t1 = e.touches[1];
         const dist = touchDist(t0, t1);
         if (pinch.dist > 0) {
-          zoomAtPoint(
+          zoomToAnchor(
             pinch.scale * (dist / pinch.dist),
+            pinch.localX,
+            pinch.localY,
             (t0.clientX + t1.clientX) / 2,
             (t0.clientY + t1.clientY) / 2,
           );
@@ -2480,6 +2531,13 @@
         return;
       }
       if (pan && e.touches.length === 1) {
+        if (!isZoomed()) {
+          // Zoom reset mid-gesture (e.g. a keyboard page turn while the
+          // finger is down) — stop claiming the touch so native scrolling
+          // isn't blocked for nothing.
+          pan = null;
+          return;
+        }
         e.preventDefault();
         const t = e.touches[0];
         panZoomBy(t.clientX - pan.x, t.clientY - pan.y);
@@ -2522,6 +2580,7 @@
         // stays down and we're zoomed, hand it to the pan branch.
         if (e.touches.length < 2) {
           pinch = null;
+          touchPinchActive = false;
           pan = e.touches.length === 1 && isZoomed()
             ? { x: e.touches[0].clientX, y: e.touches[0].clientY }
             : null;
@@ -2574,6 +2633,7 @@
     el.addEventListener("touchcancel", () => {
       pinch = null;
       pan = null;
+      touchPinchActive = false;
       if (!tracking) return;
       abortDrag();
     }, { passive: true });

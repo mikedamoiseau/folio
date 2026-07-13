@@ -197,26 +197,32 @@ test.describe("Reader zoom: wheel (M1)", () => {
 test.describe("Reader zoom: touch (M2)", () => {
   test.use({ hasTouch: true });
 
-  // Dispatch a touch event with the given client-coordinate points.
-  async function touch(page: Page, type: string, points: Array<{ x: number; y: number }>) {
-    await page.$eval(
+  type Pt = { x: number; y: number };
+
+  // Dispatch a touch event. `changed` = fingers this event is about;
+  // `active` = full touch list still on screen AFTER the event (defaults:
+  // [] for touchend/touchcancel, `changed` otherwise — pass it explicitly
+  // to model lifting one finger of a pinch). Returns defaultPrevented so
+  // tests can assert who claimed the event.
+  async function touch(page: Page, type: string, changed: Pt[], active?: Pt[]): Promise<boolean> {
+    return page.$eval(
       "#reader-stage",
-      (el, arg: { type: string; points: Array<{ x: number; y: number }> }) => {
+      (el, arg: { type: string; changed: Pt[]; active: Pt[] | null }) => {
         const ended = arg.type === "touchend" || arg.type === "touchcancel";
-        const touches = arg.points.map(
-          (p, i) => new Touch({ identifier: i, target: el, clientX: p.x, clientY: p.y }),
-        );
-        el.dispatchEvent(
-          new TouchEvent(arg.type, {
-            touches: ended ? [] : touches,
-            changedTouches: touches,
-            targetTouches: ended ? [] : touches,
-            bubbles: true,
-            cancelable: true,
-          }),
-        );
+        const mk = (points: Pt[], base: number) =>
+          points.map((p, i) => new Touch({ identifier: base + i, target: el, clientX: p.x, clientY: p.y }));
+        const activeTouches = arg.active !== null ? mk(arg.active, 100) : ended ? [] : mk(arg.changed, 0);
+        const ev = new TouchEvent(arg.type, {
+          touches: activeTouches,
+          changedTouches: mk(arg.changed, 0),
+          targetTouches: activeTouches,
+          bubbles: true,
+          cancelable: true,
+        });
+        el.dispatchEvent(ev);
+        return ev.defaultPrevented;
       },
-      { type, points },
+      { type, changed, active: active ?? null },
     );
   }
 
@@ -227,16 +233,44 @@ test.describe("Reader zoom: touch (M2)", () => {
     });
   }
 
-  test("two-finger pinch zooms in about the midpoint", async ({ page }) => {
+  test("two-finger pinch zooms about the midpoint; moving the midpoint pans", async ({ page }) => {
     await openCbzReader(page);
+    await page.click("#fit-toggle-btn"); // fit-width so a moving midpoint has clamp room
     const c = await stageCenter(page);
     await touch(page, "touchstart", [{ x: c.x - 50, y: c.y }, { x: c.x + 50, y: c.y }]);
-    await touch(page, "touchmove", [{ x: c.x - 100, y: c.y }, { x: c.x + 100, y: c.y }]);
-    await touch(page, "touchend", [{ x: c.x - 100, y: c.y }, { x: c.x + 100, y: c.y }]);
+    // Pinch moves must be claimed (preventDefault) or the browser would
+    // also scroll/zoom natively.
+    expect(await touch(page, "touchmove", [{ x: c.x - 100, y: c.y }, { x: c.x + 100, y: c.y }])).toBe(true);
     // Finger distance doubled: 100px -> 200px.
     const s = await getScale(page);
     expect(s).toBeGreaterThan(1.8);
     expect(s).toBeLessThan(2.2);
+
+    // Constant-spread two-finger drag: the content anchored between the
+    // fingers must follow the midpoint (+60px right).
+    const leftBefore = await page.$eval("#page-img", (el) => el.getBoundingClientRect().left);
+    await touch(page, "touchmove", [{ x: c.x - 40, y: c.y }, { x: c.x + 160, y: c.y }]);
+    const leftAfter = await page.$eval("#page-img", (el) => el.getBoundingClientRect().left);
+    expect(leftAfter - leftBefore).toBeGreaterThan(55);
+    expect(leftAfter - leftBefore).toBeLessThan(65);
+    await touch(page, "touchend", [{ x: c.x - 40, y: c.y }, { x: c.x + 160, y: c.y }]);
+  });
+
+  test("pinch → lift one finger → remaining finger pans", async ({ page }) => {
+    await openCbzReader(page);
+    await page.click("#fit-toggle-btn"); // fit-width so 2x overflows
+    const c = await stageCenter(page);
+    await touch(page, "touchstart", [{ x: c.x - 50, y: c.y }, { x: c.x + 50, y: c.y }]);
+    await touch(page, "touchmove", [{ x: c.x - 100, y: c.y }, { x: c.x + 100, y: c.y }]);
+    expect(await getScale(page)).toBeGreaterThan(1.8);
+    // Lift the left finger only — the right one stays down.
+    await touch(page, "touchend", [{ x: c.x - 100, y: c.y }], [{ x: c.x + 100, y: c.y }]);
+    const leftBefore = await page.$eval("#page-img", (el) => el.getBoundingClientRect().left);
+    expect(await touch(page, "touchmove", [{ x: c.x + 40, y: c.y - 30 }])).toBe(true);
+    const leftAfter = await page.$eval("#page-img", (el) => el.getBoundingClientRect().left);
+    expect(leftAfter).toBeLessThan(leftBefore); // panned left with the finger
+    await touch(page, "touchend", [{ x: c.x + 40, y: c.y - 30 }]);
+    expect(await getScale(page)).toBeGreaterThan(1.8); // zoom survived
   });
 
   test("one-finger drag pans while zoomed and never turns the page", async ({ page }) => {
@@ -255,9 +289,15 @@ test.describe("Reader zoom: touch (M2)", () => {
     expect(await getScale(page)).toBeGreaterThan(1.5); // zoom survives the drag
   });
 
-  test("swipe at 1x still turns the page (regression)", async ({ page }) => {
+  test("swipe at 1x still turns the page; vertical drag at 1x stays native (regression)", async ({ page }) => {
     await openCbzReader(page);
     const c = await stageCenter(page);
+    // A vertical drag at 1x must NOT be claimed — fit-width native
+    // scrolling depends on it.
+    await touch(page, "touchstart", [{ x: c.x, y: c.y }]);
+    expect(await touch(page, "touchmove", [{ x: c.x, y: c.y + 60 }])).toBe(false);
+    await touch(page, "touchend", [{ x: c.x, y: c.y + 60 }]);
+
     await touch(page, "touchstart", [{ x: c.x + 100, y: c.y }]);
     await touch(page, "touchmove", [{ x: c.x + 40, y: c.y }]);
     await touch(page, "touchmove", [{ x: c.x - 20, y: c.y }]);
