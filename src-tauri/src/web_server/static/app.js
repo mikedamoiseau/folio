@@ -2646,6 +2646,10 @@
       if (axisLock === null) {
         if (Math.abs(dx) < AXIS_LOCK_PX && Math.abs(dy) < AXIS_LOCK_PX) return;
         axisLock = Math.abs(dx) > Math.abs(dy) ? "x" : "y";
+        // Real movement — a tap deferred just before this drag wasn't tap
+        // intent. Without this, tap-then-swipe inside the 275ms window
+        // turns two pages (the timer's next() plus the swipe commit).
+        cancelPendingTap();
       }
       if (axisLock !== "x") return;
       e.preventDefault();
@@ -2723,6 +2727,11 @@
   }
 
   function renderReaderChrome() {
+    // A deferred tap from a previous reader (or a previous book's chrome)
+    // must not fire against the freshly built one — the prev/next zones are
+    // already epoch-guarded, but a stale chrome toggle would still hide the
+    // new reader's chrome.
+    cancelPendingTap();
     const { book, mode, count, index, fitMode } = readerState;
     const rootClass = mode === "page" ? `reader-page ${fitMode}` : "reader-chapter";
     // Item 12: `page-img-incoming` is the animated overlay for a committed
