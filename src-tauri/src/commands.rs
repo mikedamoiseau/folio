@@ -7214,14 +7214,17 @@ pub async fn bulk_delete_books(
         },
     );
 
-    if let Ok(storage) = page_cache_storage(&app) {
-        for (hash, path) in evict_targets {
-            if let Some(ref h) = hash {
-                let _ = page_cache::evict_book(&storage, h);
-            }
-            if let Some(ref p) = path {
-                pdf::evict_memory_cache(p);
-            }
+    // In-memory eviction must not depend on disk-cache init: if
+    // page_cache_storage fails, we still drop the resident text so a deleted
+    // book can't serve stale results (matching remove_book). Only the disk
+    // eviction is gated on the storage handle.
+    let storage = page_cache_storage(&app).ok();
+    for (hash, path) in evict_targets {
+        if let (Some(s), Some(h)) = (storage.as_ref(), hash.as_ref()) {
+            let _ = page_cache::evict_book(s, h);
+        }
+        if let Some(ref p) = path {
+            pdf::evict_memory_cache(p);
         }
     }
 
