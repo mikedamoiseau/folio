@@ -467,6 +467,18 @@ pub fn page_texts_memory(path: &str) -> FolioResult<Vec<String>> {
     get_cached_page_texts(path)
 }
 
+/// One page's text from the in-memory `PDF_TEXT_CACHE`, cloning just that page
+/// (not the whole book). `None` if the book isn't cached or the index is out
+/// of range. Lets the per-page reader avoid cloning every page's string on the
+/// hot path — the whole-book resolve is only needed once, to warm the cache
+/// (which `prepare_pdf`'s background pass already does per book on open).
+pub fn cached_page_text(path: &str, page_index: usize) -> FolioResult<Option<String>> {
+    let cache = PDF_TEXT_CACHE.lock()?;
+    Ok(cache
+        .get(path)
+        .and_then(|pages| pages.get(page_index).cloned()))
+}
+
 /// Search all pages of a PDF for a query string (case-insensitive), resolving
 /// page text via [`resolve_page_texts`] (memory → disk index → extract).
 /// A cold session with a persisted `text-index.json` hits the disk layer

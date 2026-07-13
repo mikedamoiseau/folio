@@ -1,4 +1,5 @@
 import { useState, useEffect, useLayoutEffect, useCallback, useRef, type RefObject } from "react";
+import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
 import { getSpreadPages } from "../lib/utils";
@@ -89,6 +90,13 @@ export default function PageViewer({
 
   const [leftImageData, setLeftImageData] = useState<string | null>(null);
   const [rightImageData, setRightImageData] = useState<string | null>(null);
+  // Which page index each rendered <img> currently DISPLAYS — set only once
+  // the browser has decoded+painted that page's bitmap (onLoad). The PDF text
+  // layer stays inert until this matches its pageIndex, so a page turn can't
+  // make the next page's glyphs selectable while the previous bitmap is still
+  // on screen (F-1-4 page-turn race).
+  const [leftLoadedPage, setLeftLoadedPage] = useState<number | null>(null);
+  const [rightLoadedPage, setRightLoadedPage] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [retryCount, setRetryCount] = useState(0);
@@ -706,6 +714,7 @@ export default function PageViewer({
                   alt={`Page ${spread.left + 1} of ${totalPages}`}
                   className="max-h-full max-w-full object-contain rounded-sm shadow-[0_4px_24px_-4px_rgba(44,34,24,0.18)]"
                   draggable={false}
+                  onLoad={() => setLeftLoadedPage(spread.left)}
                   onError={() =>
                     setError(t("reader.failedToLoadPage", { error: t("reader.imageDecodeError") }))
                   }
@@ -713,7 +722,9 @@ export default function PageViewer({
                 <PdfTextLayer
                   bookId={bookId}
                   pageIndex={spread.left}
+                  displayedPage={leftLoadedPage}
                   imgRef={leftImgRef}
+                  containerRef={containerRef}
                   refreshKey={highlightRefreshKey}
                   onCreateHighlight={onCreateHighlight}
                   onRemoveHighlights={onRemoveHighlights}
@@ -741,6 +752,7 @@ export default function PageViewer({
                   alt={`Page ${(spread.right ?? 0) + 1} of ${totalPages}`}
                   className="max-h-full max-w-full object-contain rounded-sm shadow-[0_4px_24px_-4px_rgba(44,34,24,0.18)]"
                   draggable={false}
+                  onLoad={() => setRightLoadedPage(spread.right)}
                   onError={() =>
                     setError(t("reader.failedToLoadPage", { error: t("reader.imageDecodeError") }))
                   }
@@ -748,7 +760,9 @@ export default function PageViewer({
                 <PdfTextLayer
                   bookId={bookId}
                   pageIndex={spread.right}
+                  displayedPage={rightLoadedPage}
                   imgRef={rightImgRef}
+                  containerRef={containerRef}
                   refreshKey={highlightRefreshKey}
                   onCreateHighlight={onCreateHighlight}
                   onRemoveHighlights={onRemoveHighlights}
@@ -910,7 +924,13 @@ interface SavedHighlight {
 interface PdfTextLayerProps {
   bookId: string;
   pageIndex: number;
+  /** Which page the paired <img> currently displays (set on its onLoad). The
+   *  layer is inert until this equals `pageIndex`, so a page turn can't make
+   *  the next page's glyphs selectable over the previous page's bitmap. */
+  displayedPage: number | null;
   imgRef: RefObject<HTMLImageElement | null>;
+  /** The reader's visible (overflow-hidden) viewport box, for popup clamping. */
+  containerRef: RefObject<HTMLDivElement | null>;
   refreshKey: number;
   onCreateHighlight?: (color: string, sel: PdfSelection) => Promise<unknown> | void;
   onRemoveHighlights?: (ids: string[]) => Promise<void> | void;
@@ -931,7 +951,9 @@ interface PdfTextLayerProps {
 function PdfTextLayer({
   bookId,
   pageIndex,
+  displayedPage,
   imgRef,
+  containerRef,
   refreshKey,
   onCreateHighlight,
   onRemoveHighlights,
@@ -939,24 +961,37 @@ function PdfTextLayer({
   const { t } = useTranslation();
   const { addToast } = useToast();
   const layerRef = useRef<HTMLDivElement>(null);
+  const popupRef = useRef<HTMLDivElement>(null);
   const [glyphs, setGlyphs] = useState<Glyph[]>([]);
   const [chars, setChars] = useState<string[]>([]);
   const [saved, setSaved] = useState<SavedHighlight[]>([]);
   const [box, setBox] = useState<{ left: number; top: number; width: number; height: number } | null>(null);
+  // Popup anchor is stored in VIEWPORT coords (from the selection's
+  // getBoundingClientRect); final on-screen position is clamped to the visible
+  // container in a layout effect below, so it can never be clipped by the
+  // reader's overflow-hidden box or displaced by the panned/zoomed spread's
+  // transform.
   const [popup, setPopup] = useState<
-    { x: number; y: number; sel: PdfSelection; overlapIds: string[] } | null
+    { anchorX: number; anchorTop: number; anchorBottom: number; sel: PdfSelection; overlapIds: string[] } | null
   >(null);
+  const [popupPos, setPopupPos] = useState<{ left: number; top: number } | null>(null);
 
-  // Drop the previous page's glyphs/text/highlights/popup SYNCHRONOUSLY the
+  // The paired image must have loaded+measured for THIS page before the layer
+  // becomes interactive (F-1-4 page-turn race): otherwise the next page's
+  // glyphs could be selected over the previous page's still-visible bitmap.
+  const active = displayedPage === pageIndex && box !== null;
+
+  // Drop the previous page's glyphs/text/highlights/popup/box SYNCHRONOUSLY the
   // instant the page (or book) changes — before paint — so the freshly
-  // rendered image never becomes interactive with stale data still live. With
-  // glyphs=[] there are no spans, so no stale selection can be mapped to the
-  // new pageIndex until the fetches below repopulate current-page data.
+  // rendered image never becomes interactive with stale data or a stale
+  // measurement still live. `box` is reset here and only re-measured after the
+  // new image's load fires, which also flips `displayedPage` to this page.
   useLayoutEffect(() => {
     setGlyphs([]);
     setChars([]);
     setSaved([]);
     setPopup(null);
+    setBox(null);
   }, [bookId, pageIndex]);
 
   // Glyph rects + page text — refetched per page (backend memory-cached).
@@ -1058,6 +1093,7 @@ function PdfTextLayer({
     const glyphByOff = new Map(glyphs.map((g) => [g.off, g]));
 
     function handleMouseUp() {
+      if (!active) return;
       const sel = window.getSelection();
       if (!sel || sel.isCollapsed || !sel.anchorNode) return;
       if (!layer || !layer.contains(sel.anchorNode)) return;
@@ -1077,15 +1113,14 @@ function PdfTextLayer({
       if (!offs) return;
       const text = chars.slice(offs.startOffset, offs.endOffset).join("");
       if (!text) return;
-      const wrap = layer.parentElement?.getBoundingClientRect();
-      if (!wrap) return;
       const rangeRect = sel.getRangeAt(0).getBoundingClientRect();
       const overlapIds = saved
         .filter((h) => h.startOffset < offs.endOffset && h.endOffset > offs.startOffset)
         .map((h) => h.id);
       setPopup({
-        x: rangeRect.left + rangeRect.width / 2 - wrap.left,
-        y: rangeRect.top - wrap.top,
+        anchorX: rangeRect.left + rangeRect.width / 2,
+        anchorTop: rangeRect.top,
+        anchorBottom: rangeRect.bottom,
         sel: { text, startOffset: offs.startOffset, endOffset: offs.endOffset, pageIndex },
         overlapIds,
       });
@@ -1102,7 +1137,7 @@ function PdfTextLayer({
       document.removeEventListener("mouseup", handleMouseUp);
       document.removeEventListener("mousedown", handleMouseDown);
     };
-  }, [glyphs, chars, saved, pageIndex]);
+  }, [glyphs, chars, saved, pageIndex, active]);
 
   const dismiss = useCallback(() => {
     setPopup(null);
@@ -1125,21 +1160,62 @@ function PdfTextLayer({
   const handleHighlight = useCallback(
     async (color: string) => {
       if (!popup) return;
-      await onCreateHighlight?.(color, popup.sel);
-      dismiss();
+      // Dismiss only on success — if the create IPC failed (its toast already
+      // told the user), keep the popup + selection so they can retry.
+      try {
+        await onCreateHighlight?.(color, popup.sel);
+        dismiss();
+      } catch {
+        /* keep popup for retry */
+      }
     },
     [popup, onCreateHighlight, dismiss],
   );
 
   const handleClear = useCallback(async () => {
     if (!popup || popup.overlapIds.length === 0) return;
-    await onRemoveHighlights?.(popup.overlapIds);
-    dismiss();
+    try {
+      await onRemoveHighlights?.(popup.overlapIds);
+      dismiss();
+    } catch {
+      /* keep popup for retry */
+    }
   }, [popup, onRemoveHighlights, dismiss]);
 
-  if (!box) return null;
+  // Clamp the popup into the visible container, in viewport coords. Runs after
+  // the popup mounts (so its measured width/height are known) and re-runs on
+  // scroll/resize. Rendered via a portal to <body> at position:fixed so it
+  // escapes the reader's overflow-hidden box AND the spread's transform.
+  useLayoutEffect(() => {
+    if (!popup) {
+      setPopupPos(null);
+      return;
+    }
+    function place() {
+      const el = popupRef.current;
+      const container = containerRef.current;
+      if (!el || !container || !popup) return;
+      const c = container.getBoundingClientRect();
+      const w = el.offsetWidth;
+      const h = el.offsetHeight;
+      const gap = 8;
+      const left = Math.max(c.left + gap, Math.min(popup.anchorX - w / 2, c.right - w - gap));
+      // Prefer above the selection; drop below when there isn't room above.
+      const roomAbove = popup.anchorTop - c.top;
+      const rawTop = roomAbove >= h + gap ? popup.anchorTop - gap - h : popup.anchorBottom + gap;
+      const top = Math.max(c.top + gap, Math.min(rawTop, c.bottom - h - gap));
+      setPopupPos({ left, top });
+    }
+    place();
+    window.addEventListener("resize", place);
+    window.addEventListener("scroll", place, true);
+    return () => {
+      window.removeEventListener("resize", place);
+      window.removeEventListener("scroll", place, true);
+    };
+  }, [popup, containerRef]);
 
-  const showBelow = popup !== null && popup.y < 44;
+  if (!active || !box) return null;
 
   return (
     <>
@@ -1193,14 +1269,17 @@ function PdfTextLayer({
         })}
       </div>
 
-      {popup && (
+      {popup && createPortal(
         <div
+          ref={popupRef}
           data-pdf-selection-popup
-          className="absolute z-30 flex items-center gap-1 px-2 py-1.5 bg-ink/90 backdrop-blur-sm rounded-lg shadow-lg"
+          className="fixed z-50 flex items-center gap-1 px-2 py-1.5 bg-ink/90 backdrop-blur-sm rounded-lg shadow-lg"
           style={{
-            left: `${popup.x}px`,
-            top: `${popup.y}px`,
-            transform: showBelow ? "translate(-50%, 8px)" : "translate(-50%, calc(-100% - 8px))",
+            left: `${popupPos?.left ?? 0}px`,
+            top: `${popupPos?.top ?? 0}px`,
+            // Hidden for the first layout pass (before its size is measured),
+            // then clamped into the visible container and shown.
+            visibility: popupPos ? "visible" : "hidden",
           }}
         >
           {popup.sel.text.length >= 3 &&
@@ -1238,7 +1317,8 @@ function PdfTextLayer({
               <path d="M12 4L4 12M4 4l8 8" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
             </svg>
           </button>
-        </div>
+        </div>,
+        document.body,
       )}
     </>
   );

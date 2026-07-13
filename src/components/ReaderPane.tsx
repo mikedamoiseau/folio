@@ -1666,6 +1666,9 @@ export default function ReaderPane({
         });
       } catch (err) {
         addToast(friendlyError(err, t), "error");
+        // Rethrow so PageViewer keeps the popup + selection for a retry
+        // instead of dismissing on a failed create.
+        throw err;
       }
     },
     [bookId, addToast, t],
@@ -1676,9 +1679,13 @@ export default function ReaderPane({
         for (const id of ids) {
           await invoke("remove_highlight", { highlightId: id });
         }
-        setPdfHighlightRefresh((k) => k + 1);
       } catch (err) {
         addToast(friendlyError(err, t), "error");
+        throw err;
+      } finally {
+        // Always refresh: a partial multi-delete (some removed before one
+        // threw) must still repaint bands so no deleted band lingers.
+        setPdfHighlightRefresh((k) => k + 1);
       }
     },
     [addToast, t],

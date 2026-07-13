@@ -5112,6 +5112,16 @@ pub async fn get_pdf_page_text(
     let file_path = state.resolve_book_path(&book)?;
     validate_file_exists(&file_path)?;
 
+    // Hot path: the in-memory cache is warm (prepare_pdf's background pass
+    // populates it once per book on open), so clone just this page's string
+    // rather than the whole book on every page turn.
+    if let Some(text) = pdf::cached_page_text(&file_path, page_index as usize)? {
+        return Ok(text);
+    }
+
+    // Cold miss: run the full resolve ONCE (memory → disk index → extract),
+    // which also warms PDF_TEXT_CACHE, then read the single page. Mirrors
+    // `search_book_content`'s PDF arm so the offset space matches search.
     let pages = match (book.file_hash.as_deref(), page_cache_storage(&app).ok()) {
         (Some(hash), Some(storage)) => pdf::resolve_page_texts(&file_path, &storage, hash)?,
         _ => pdf::page_texts_memory(&file_path)?,
