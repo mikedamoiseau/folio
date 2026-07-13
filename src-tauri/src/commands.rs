@@ -1807,20 +1807,20 @@ pub async fn search_book_content(
 
     match book.format {
         BookFormat::Pdf => {
-            // F-4-6: with a file_hash, resolve through the persisted
-            // text-index (memory -> disk -> extract) so a cold session
-            // still gets an instant search when the index already exists.
-            // Without a hash (shouldn't happen for imported books, but
-            // degrade gracefully rather than fail search), fall back to
-            // the memory-only path. Search never persists to disk — the
-            // background build in `prepare_pdf` is the single, guarded
-            // writer of `text-index.json` (see its doc comment).
-            let results = match book.file_hash.as_deref() {
-                Some(book_hash) => {
-                    let storage = page_cache_storage(&app)?;
+            // F-4-6: with a file_hash AND an available page cache, resolve
+            // through the persisted text-index (memory -> disk -> extract) so
+            // a cold session still gets an instant search when the index
+            // already exists. The persisted index is an OPTIMIZATION, not a
+            // dependency: with no hash, or if the optional page-cache dir
+            // can't be initialized (permissions / read-only FS), fall back to
+            // extraction-backed search so a readable PDF stays searchable.
+            // Search never persists to disk — the background build in
+            // `prepare_pdf` is the single, guarded writer of `text-index.json`.
+            let results = match (book.file_hash.as_deref(), page_cache_storage(&app).ok()) {
+                (Some(book_hash), Some(storage)) => {
                     pdf::search_pdf_with_storage(&file_path, &query, &storage, book_hash)?
                 }
-                None => pdf::search_pdf(&file_path, &query)?,
+                _ => pdf::search_pdf(&file_path, &query)?,
             };
             Ok(results
                 .into_iter()
