@@ -92,6 +92,10 @@ fn manifest_key(book_hash: &str) -> String {
     format!("{CACHE_PREFIX}{book_hash}/manifest.json")
 }
 
+fn text_index_key(book_hash: &str) -> String {
+    format!("{CACHE_PREFIX}{book_hash}/text-index.json")
+}
+
 fn page_key(book_hash: &str, page_name: &str) -> String {
     format!("{CACHE_PREFIX}{book_hash}/{page_name}")
 }
@@ -120,6 +124,34 @@ pub fn write_manifest(
 
 fn now_iso() -> String {
     chrono::Utc::now().to_rfc3339()
+}
+
+// ---------------------------------------------------------------------------
+// PDF text index I/O (F-4-6)
+// ---------------------------------------------------------------------------
+
+/// Read the persisted PDF text index for `book_hash`. Returns `None` when
+/// absent, unparseable, or written by a different
+/// [`crate::pdf::TEXT_INDEX_VERSION`] — any of those is treated as a miss so
+/// the caller re-extracts cleanly rather than needing a migration.
+pub fn read_text_index(storage: &dyn Storage, book_hash: &str) -> Option<crate::pdf::PdfTextIndex> {
+    let bytes = storage.get(&text_index_key(book_hash)).ok()?;
+    let index: crate::pdf::PdfTextIndex = serde_json::from_slice(&bytes).ok()?;
+    if index.version != crate::pdf::TEXT_INDEX_VERSION {
+        return None;
+    }
+    Some(index)
+}
+
+/// Persist the PDF text index for `book_hash`, atomically (temp-file +
+/// rename via `Storage::put`) — same discipline as [`write_manifest`].
+pub fn write_text_index(
+    storage: &dyn Storage,
+    book_hash: &str,
+    index: &crate::pdf::PdfTextIndex,
+) -> FolioResult<()> {
+    let json = serde_json::to_string_pretty(index)?;
+    storage.put(&text_index_key(book_hash), json.as_bytes())
 }
 
 // ---------------------------------------------------------------------------
@@ -1330,6 +1362,41 @@ mod tests {
     fn read_manifest_missing_returns_none() {
         let (_d, storage) = temp_storage();
         assert!(read_manifest(&storage, "nonexistent").is_none());
+    }
+
+    #[test]
+    fn test_text_index_roundtrip() {
+        let (_d, storage) = temp_storage();
+        let index = crate::pdf::PdfTextIndex {
+            version: crate::pdf::TEXT_INDEX_VERSION,
+            page_count: 3,
+            pages: vec!["a".to_string(), "b".to_string(), "c".to_string()],
+        };
+
+        write_text_index(&storage, "hash1", &index).unwrap();
+        let loaded = read_text_index(&storage, "hash1").expect("index should be readable");
+
+        assert_eq!(loaded.version, index.version);
+        assert_eq!(loaded.page_count, 3);
+        assert_eq!(loaded.pages.len(), loaded.page_count as usize);
+        assert_eq!(loaded.pages, index.pages);
+    }
+
+    #[test]
+    fn test_text_index_version_mismatch_is_miss() {
+        let (_d, storage) = temp_storage();
+        let stale_json = r#"{"version":99,"pageCount":1,"pages":["stale"]}"#;
+        storage
+            .put(&text_index_key("hash2"), stale_json.as_bytes())
+            .unwrap();
+
+        assert!(read_text_index(&storage, "hash2").is_none());
+    }
+
+    #[test]
+    fn test_read_text_index_missing_is_none() {
+        let (_d, storage) = temp_storage();
+        assert!(read_text_index(&storage, "nonexistent").is_none());
     }
 
     #[test]

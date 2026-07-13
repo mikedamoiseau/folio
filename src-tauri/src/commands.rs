@@ -1764,6 +1764,7 @@ pub async fn search_book_content(
     book_id: String,
     query: String,
     state: State<'_, AppState>,
+    app: AppHandle,
 ) -> FolioResult<Vec<crate::models::SearchResult>> {
     let _t = state.ipc_metrics.time("search_book_content");
     if query.trim().is_empty() {
@@ -1781,7 +1782,19 @@ pub async fn search_book_content(
 
     match book.format {
         BookFormat::Pdf => {
-            let results = pdf::search_pdf(&file_path, &query)?;
+            // F-4-6: with a file_hash, resolve through the persisted
+            // text-index (memory -> disk -> extract) so a cold session
+            // still gets an instant search when the index already exists.
+            // Without a hash (shouldn't happen for imported books, but
+            // degrade gracefully rather than fail search), fall back to
+            // the memory-only path.
+            let results = match book.file_hash.as_deref() {
+                Some(book_hash) => {
+                    let storage = page_cache_storage(&app)?;
+                    pdf::search_pdf_with_storage(&file_path, &query, &storage, book_hash)?
+                }
+                None => pdf::search_pdf(&file_path, &query)?,
+            };
             Ok(results
                 .into_iter()
                 .map(|r| crate::models::SearchResult {
@@ -2572,6 +2585,37 @@ pub async fn prepare_comic(
     Ok(manifest)
 }
 
+static TEXT_INDEX_BUILDING: std::sync::LazyLock<
+    std::sync::Mutex<std::collections::HashSet<String>>,
+> = std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashSet::new()));
+
+/// RAII guard preventing duplicate concurrent PDF text-index builds (F-4-6)
+/// for the same `book_hash` — e.g. two `prepare_pdf` calls racing on a rapid
+/// reopen. `acquire` returns `None` (rather than an error) when a build is
+/// already in flight, since this guards a best-effort background job, not a
+/// user-initiated action.
+struct TextIndexBuildGuard {
+    book_hash: String,
+}
+
+impl TextIndexBuildGuard {
+    fn acquire(book_hash: String) -> Option<Self> {
+        let mut running = TEXT_INDEX_BUILDING.lock().ok()?;
+        if !running.insert(book_hash.clone()) {
+            return None;
+        }
+        Some(Self { book_hash })
+    }
+}
+
+impl Drop for TextIndexBuildGuard {
+    fn drop(&mut self) {
+        if let Ok(mut running) = TEXT_INDEX_BUILDING.lock() {
+            running.remove(&self.book_hash);
+        }
+    }
+}
+
 /// First-open warm pass for PDF books. Mirrors `prepare_comic`:
 /// asserts the format, requires `book.file_hash`, renders the first
 /// ten pages into the shared `page-cache/` namespace, and kicks off
@@ -2705,6 +2749,37 @@ pub async fn prepare_pdf(
                     }
                 }
             }
+
+            // F-4-6: build + persist the PDF text index after the prewarm/
+            // prerender pass, so extraction never contends with the user's
+            // first page render. Skipped when already indexed on disk, while
+            // private (mirrors the prerender pass above — no extra book-tied
+            // artifact written behind a "don't track this session" toggle),
+            // or when another build is already in flight for this hash (e.g.
+            // a rapid reopen).
+            if !bg_private.load(Ordering::SeqCst)
+                && page_cache::read_text_index(&bg_storage, &bg_hash).is_none()
+            {
+                if let Some(_guard) = TextIndexBuildGuard::acquire(bg_hash.clone()) {
+                    if page_cache::read_text_index(&bg_storage, &bg_hash).is_none() {
+                        let build_start = std::time::Instant::now();
+                        match pdf::resolve_page_texts(&bg_path, &bg_storage, &bg_hash) {
+                            Ok(pages) => page_cache::page_dbg!(
+                                "text-index: built {} pages for {} in {:?}",
+                                pages.len(),
+                                bg_hash,
+                                build_start.elapsed()
+                            ),
+                            Err(e) => page_cache::page_dbg!(
+                                "text-index: build failed for {}: {}",
+                                bg_hash,
+                                e
+                            ),
+                        }
+                    }
+                }
+            }
+
             let _ = page_cache::run_eviction(&bg_storage, max_size_mb);
         });
     }

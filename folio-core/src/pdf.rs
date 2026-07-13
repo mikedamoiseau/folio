@@ -6,6 +6,8 @@ use std::sync::{LazyLock, Mutex, OnceLock};
 
 use crate::epub;
 use crate::error::{FolioError, FolioResult};
+use crate::page_cache;
+use crate::storage::Storage;
 
 /// Canonical render width used when populating the on-disk page cache.
 /// Wider than typical reading viewports so zoomed-in views can downscale
@@ -246,7 +248,40 @@ pub struct PdfSearchResult {
 
 const MAX_SEARCH_RESULTS: usize = 200;
 
+/// Version tag for [`PdfTextIndex`]'s on-disk format
+/// (`page_cache::read_text_index`/`write_text_index`). Bump this when the
+/// schema changes incompatibly — a read whose `version` doesn't match is
+/// treated as a miss, forcing a clean re-extract, rather than needing a
+/// migration.
+pub const TEXT_INDEX_VERSION: u32 = 1;
+
+/// Persisted per-book PDF text index (F-4-6): one full-page text string per
+/// page, written to `page-cache/{book_hash}/text-index.json` via the
+/// `Storage` trait (see `page_cache::write_text_index`/`read_text_index`).
+///
+/// `pages[i]` is built by concatenating `page.text()?.chars()` in iteration
+/// order (see [`extract_all_page_texts`]) — the same offset space used by
+/// search's `match_offset` and, in a later milestone, glyph bounds, so
+/// downstream consumers can share one char-offset space per page.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PdfTextIndex {
+    pub version: u32,
+    pub page_count: u32,
+    pub pages: Vec<String>,
+}
+
 /// Extract text from every page of a PDF and return as a Vec (one entry per page).
+///
+/// Built by iterating `page.text()?.chars()` and concatenating each
+/// character's `unicode_char()`, NOT `PdfPageText::all()`. `all()` calls
+/// pdfium's bulk `FPDFText_GetBoundedText`, which can inject characters
+/// (e.g. synthetic line breaks) that don't correspond 1:1 to the per-char
+/// codepoints `chars()` yields — pdfium's own docs note that `len()` (char
+/// count) "may differ slightly" from `all().len()`. Search (`match_offset`)
+/// and, in a later milestone, glyph bounds both index into this
+/// `chars()`-built string, so it must be the single source of truth for
+/// page text (see the PDF text epic design doc's "Global Constraints").
 fn extract_all_page_texts(path: &str) -> FolioResult<Vec<String>> {
     let pdfium = bind_pdfium()?;
     let document = pdfium
@@ -261,52 +296,107 @@ fn extract_all_page_texts(path: &str) -> FolioResult<Vec<String>> {
         let page = pages
             .get(page_idx)
             .map_err(|e| FolioError::not_found(format!("page {page_idx} not found: {e}")))?;
-        let text = page
-            .text()
-            .map_err(|e| {
-                FolioError::internal(format!("failed to extract text from page {page_idx}: {e}"))
-            })?
-            .all();
-        texts.push(text);
+        let text = page.text().map_err(|e| {
+            FolioError::internal(format!("failed to extract text from page {page_idx}: {e}"))
+        })?;
+
+        let mut page_text = String::new();
+        for ch in text.chars().iter() {
+            if let Some(c) = ch.unicode_char() {
+                page_text.push(c);
+            }
+        }
+        texts.push(page_text);
     }
 
     Ok(texts)
+}
+
+/// Read-only peek at the in-memory `PDF_TEXT_CACHE`, without extracting on miss.
+fn peek_cached_page_texts(path: &str) -> FolioResult<Option<Vec<String>>> {
+    let cache = PDF_TEXT_CACHE.lock()?;
+    Ok(cache.get(path).cloned())
+}
+
+/// Populate the in-memory `PDF_TEXT_CACHE` for `path`, evicting the whole
+/// cache first if it's at capacity (matches the pre-existing eviction
+/// policy in `get_cached_page_texts`).
+fn store_cached_page_texts(path: &str, texts: &[String]) -> FolioResult<()> {
+    let mut cache = PDF_TEXT_CACHE.lock()?;
+    if cache.len() >= TEXT_CACHE_MAX_BOOKS && !cache.contains_key(path) {
+        cache.clear();
+    }
+    cache.insert(path.to_string(), texts.to_vec());
+    Ok(())
 }
 
 /// Return cached page texts for a PDF, extracting and caching if needed.
+/// Memory-only (no disk index) — kept as the simple two-tier path backing
+/// [`search_pdf`]. Session-crossing durability goes through
+/// [`resolve_page_texts`]/[`search_pdf_with_storage`] instead.
 fn get_cached_page_texts(path: &str) -> FolioResult<Vec<String>> {
-    {
-        let cache = PDF_TEXT_CACHE.lock()?;
-
-        if let Some(texts) = cache.get(path) {
-            return Ok(texts.clone());
-        }
+    if let Some(texts) = peek_cached_page_texts(path)? {
+        return Ok(texts);
     }
-
-    // Extract text without holding the lock (I/O-heavy).
     let texts = extract_all_page_texts(path)?;
+    store_cached_page_texts(path, &texts)?;
+    Ok(texts)
+}
 
-    {
-        let mut cache = PDF_TEXT_CACHE.lock()?;
-
-        // Evict all entries if the cache is at capacity.
-        if cache.len() >= TEXT_CACHE_MAX_BOOKS && !cache.contains_key(path) {
-            cache.clear();
-        }
-
-        cache.insert(path.to_string(), texts.clone());
+/// Text resolution order backing [`search_pdf_with_storage`] (F-4-6):
+/// in-memory `PDF_TEXT_CACHE` → persisted `text-index.json` (populating the
+/// in-memory layer on hit) → `extract` + persist on miss. The extractor is
+/// injected so tests can stub pdfium out and assert it's never called on a
+/// disk-index hit.
+fn resolve_page_texts_with_extractor<F>(
+    path: &str,
+    storage: &dyn Storage,
+    book_hash: &str,
+    extract: F,
+) -> FolioResult<Vec<String>>
+where
+    F: Fn(&str) -> FolioResult<Vec<String>>,
+{
+    if let Some(texts) = peek_cached_page_texts(path)? {
+        return Ok(texts);
     }
+
+    if let Some(index) = page_cache::read_text_index(storage, book_hash) {
+        store_cached_page_texts(path, &index.pages)?;
+        return Ok(index.pages);
+    }
+
+    let texts = extract(path)?;
+    store_cached_page_texts(path, &texts)?;
+
+    // Persisting the index is best-effort: a write failure just means this
+    // session re-extracts next time rather than failing the search itself.
+    let index = PdfTextIndex {
+        version: TEXT_INDEX_VERSION,
+        page_count: texts.len() as u32,
+        pages: texts.clone(),
+    };
+    let _ = page_cache::write_text_index(storage, book_hash, &index);
 
     Ok(texts)
 }
 
-/// Search all pages of a PDF for a query string (case-insensitive).
-/// Returns up to MAX_SEARCH_RESULTS matches with surrounding context snippets.
-pub fn search_pdf(path: &str, query: &str) -> FolioResult<Vec<PdfSearchResult>> {
+/// Production entry point for [`resolve_page_texts_with_extractor`], wiring
+/// [`extract_all_page_texts`] as the extractor.
+pub fn resolve_page_texts(
+    path: &str,
+    storage: &dyn Storage,
+    book_hash: &str,
+) -> FolioResult<Vec<String>> {
+    resolve_page_texts_with_extractor(path, storage, book_hash, extract_all_page_texts)
+}
+
+/// Case-insensitive substring search across already-resolved page texts.
+/// Pure and pdfium-free — shared by [`search_pdf`] and
+/// [`search_pdf_with_storage`], and directly testable with stubbed page text.
+fn search_in_texts(page_texts: &[String], query: &str) -> Vec<PdfSearchResult> {
     let query_lower = query.to_lowercase();
     let mut results = Vec::new();
-
-    let page_texts = get_cached_page_texts(path)?;
 
     for (page_idx, text) in page_texts.iter().enumerate() {
         let text_lower = text.to_lowercase();
@@ -320,18 +410,104 @@ pub fn search_pdf(path: &str, query: &str) -> FolioResult<Vec<PdfSearchResult>> 
                 match_offset: match_start,
             });
             if results.len() >= MAX_SEARCH_RESULTS {
-                return Ok(results);
+                return results;
             }
             search_from = match_start + query_lower.len();
         }
     }
 
-    Ok(results)
+    results
+}
+
+/// Search all pages of a PDF for a query string (case-insensitive).
+/// Returns up to MAX_SEARCH_RESULTS matches with surrounding context snippets.
+/// Memory-cache only; see [`search_pdf_with_storage`] for the disk-backed,
+/// cross-session variant (F-4-6).
+pub fn search_pdf(path: &str, query: &str) -> FolioResult<Vec<PdfSearchResult>> {
+    let page_texts = get_cached_page_texts(path)?;
+    Ok(search_in_texts(&page_texts, query))
+}
+
+/// Search all pages of a PDF for a query string (case-insensitive), resolving
+/// page text via [`resolve_page_texts`] (memory → disk index → extract).
+/// A cold session with a persisted `text-index.json` hits the disk layer
+/// instead of re-extracting.
+pub fn search_pdf_with_storage(
+    path: &str,
+    query: &str,
+    storage: &dyn Storage,
+    book_hash: &str,
+) -> FolioResult<Vec<PdfSearchResult>> {
+    let page_texts = resolve_page_texts(path, storage, book_hash)?;
+    Ok(search_in_texts(&page_texts, query))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::storage::LocalStorage;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use tempfile::TempDir;
+
+    fn temp_storage() -> (TempDir, LocalStorage) {
+        let dir = TempDir::new().unwrap();
+        let storage = LocalStorage::new(dir.path()).unwrap();
+        (dir, storage)
+    }
+
+    /// Pins the offset invariant (epic "Global Constraints"): `match_offset`
+    /// must equal the index of the query substring inside the page's
+    /// `chars()`-built text string — the same offset space search, and
+    /// later glyph bounds, both index into. Uses stubbed page text (no real
+    /// pdfium) since `search_in_texts` is pure.
+    #[test]
+    fn test_page_text_from_chars_matches_search_offset() {
+        let pages = vec!["hello world".to_string(), "goodbye cruel world".to_string()];
+
+        let results = search_in_texts(&pages, "world");
+
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].chapter_index, 0);
+        assert_eq!(results[0].match_offset, pages[0].find("world").unwrap());
+        assert_eq!(results[1].chapter_index, 1);
+        assert_eq!(results[1].match_offset, pages[1].find("world").unwrap());
+    }
+
+    #[test]
+    fn test_search_uses_disk_index_without_extracting() {
+        let (_d, storage) = temp_storage();
+        let book_hash = "hash-cold-session";
+        let index = PdfTextIndex {
+            version: TEXT_INDEX_VERSION,
+            page_count: 1,
+            pages: vec!["needle in a haystack".to_string()],
+        };
+        page_cache::write_text_index(&storage, book_hash, &index).unwrap();
+
+        let extractor_calls = AtomicUsize::new(0);
+        let extractor = |_path: &str| -> FolioResult<Vec<String>> {
+            extractor_calls.fetch_add(1, Ordering::SeqCst);
+            Err(FolioError::internal("extractor should not be called"))
+        };
+
+        let texts = resolve_page_texts_with_extractor(
+            "test_search_uses_disk_index_without_extracting.pdf",
+            &storage,
+            book_hash,
+            extractor,
+        )
+        .expect("should resolve from the disk index");
+
+        let results = search_in_texts(&texts, "needle");
+
+        assert_eq!(
+            extractor_calls.load(Ordering::SeqCst),
+            0,
+            "extractor must not run on a disk-index hit"
+        );
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].match_offset, texts[0].find("needle").unwrap());
+    }
 
     #[test]
     fn filename_stem_normal_path() {

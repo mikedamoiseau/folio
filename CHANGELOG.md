@@ -6,6 +6,11 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- **Faster PDF search, every session.** The text Folio extracts to search a
+  PDF is now saved alongside the book's cached pages, so full-text search is
+  instant from the very first search of a session — not just after the book
+  has been searched once. The index builds quietly in the background when you
+  open a PDF and is reused on every later open; deleting the book clears it.
 - **Set a daily reading-minutes goal.** Alongside the yearly books goal, the
   Reading Stats screen now has a "Reading goals" card where you can set how many
   minutes you want to read each day. A slim progress bar fills as you read and
