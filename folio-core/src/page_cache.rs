@@ -1176,10 +1176,36 @@ fn collect_cached_books(storage: &dyn Storage) -> Vec<CacheManifest> {
 /// `text-index.json` and self-cleans if the book was deleted in that tiny
 /// window, but this sweep covers whatever slips through that race, plus any
 /// other orphaned prefix left by an interrupted write.
+/// Delete only the `text-index.json` for `book_hash`, leaving any page
+/// images and manifest in place. Used to drop an orphaned or
+/// private-mode-forbidden text index without disturbing the rest of the
+/// book's cache. A no-op if the file isn't there.
+pub fn evict_text_index(storage: &dyn Storage, book_hash: &str) -> FolioResult<()> {
+    let key = text_index_key(book_hash);
+    if storage.exists(&key).unwrap_or(false) {
+        storage.delete(&key)?;
+    }
+    Ok(())
+}
+
 fn evict_orphan_prefixes(storage: &dyn Storage) -> FolioResult<()> {
+    // A prefix without a valid manifest may be an ACTIVE build in progress:
+    // both PDF prewarm and comic extraction write page files (and the
+    // manifest's atomic temp file) BEFORE committing the manifest last. So
+    // we must NOT delete the whole prefix here — that could wipe a
+    // concurrent book's in-flight pages or its manifest temp file.
+    //
+    // Only drop an orphaned `text-index.json` — the single artifact the PDF
+    // text-index writer adds, and only ever after confirming a manifest
+    // existed. If the manifest is now gone but a text-index.json remains,
+    // it's a leftover from a delete/eviction that raced the write; removing
+    // just that file keeps it from escaping the cache budget while leaving
+    // any legitimate in-construction page files untouched. Page files
+    // without a manifest are left to the prewarm/extraction paths' own
+    // orphan handling.
     for hash in all_cache_hashes(storage) {
         if read_manifest(storage, &hash).is_none() {
-            evict_book(storage, &hash)?;
+            evict_text_index(storage, &hash)?;
         }
     }
     Ok(())
@@ -1466,6 +1492,34 @@ mod tests {
         assert!(
             read_manifest(&storage, "hash1").is_some(),
             "normal manifested book must be untouched"
+        );
+    }
+
+    /// Regression: the orphan sweep must NOT wipe a manifest-less prefix that
+    /// holds page files — that's an ACTIVE build (prewarm/extraction writes
+    /// pages, then the manifest last). Only a lone orphaned `text-index.json`
+    /// is swept; in-construction page files survive until their manifest
+    /// commits.
+    #[test]
+    fn orphan_sweep_spares_manifestless_page_files() {
+        let (_d, storage) = temp_storage();
+
+        let building_hash = "building-hash";
+        storage
+            .put(&page_key(building_hash, "000.jpg"), b"pagedata")
+            .unwrap();
+        storage
+            .put(&page_key(building_hash, "001.jpg"), b"pagedata")
+            .unwrap();
+        assert!(read_manifest(&storage, building_hash).is_none());
+
+        run_eviction(&storage, DEFAULT_MAX_CACHE_SIZE_MB).unwrap();
+
+        let remaining: Vec<String> = storage.list(&book_prefix(building_hash)).unwrap();
+        assert_eq!(
+            remaining.len(),
+            2,
+            "active prewarm page files must not be swept as orphans: {remaining:?}"
         );
     }
 

@@ -2817,12 +2817,29 @@ pub async fn prepare_pdf(
                                     };
                                     let _ =
                                         page_cache::write_text_index(&bg_storage, &bg_hash, &index);
-                                    // If the book was deleted in the tiny
-                                    // window between the manifest check and
-                                    // the write, self-clean the orphan we
-                                    // just created.
+                                    // Serializing + writing a large index
+                                    // takes time, so a delete or a "don't
+                                    // track this session" toggle can land
+                                    // during the write. Re-check AFTER it and
+                                    // undo, so neither a disk artifact nor a
+                                    // resident in-memory copy survives the
+                                    // cutoff:
+                                    //  - deleted (manifest gone): drop the
+                                    //    whole cache entry + the in-memory
+                                    //    text (which extraction just
+                                    //    repopulated after remove_book
+                                    //    cleared it).
+                                    //  - private toggled on (book still
+                                    //    present): drop only the text index
+                                    //    we wrote, leaving the page cache
+                                    //    intact. The in-memory text is
+                                    //    session-only and cleared on restart,
+                                    //    so it may stay for this session.
                                     if page_cache::read_manifest(&bg_storage, &bg_hash).is_none() {
                                         let _ = page_cache::evict_book(&bg_storage, &bg_hash);
+                                        pdf::evict_memory_cache(&bg_path);
+                                    } else if bg_private.load(Ordering::SeqCst) {
+                                        let _ = page_cache::evict_text_index(&bg_storage, &bg_hash);
                                     }
                                 }
                                 page_cache::page_dbg!(
