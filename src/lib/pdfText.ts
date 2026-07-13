@@ -49,6 +49,33 @@ export function selectionOffsets(
   return { startOffset: min, endOffset: max + 1 };
 }
 
+/**
+ * Which glyph `off` values a selection `range` actually covers with POSITIVE
+ * width — i.e. spans the range genuinely intersects, not ones it merely
+ * touches at an edge. `containsNode(span, true)` (partial containment) counts
+ * a zero-width edge touch as selected, so a range from the end of A to the
+ * start of D over single-char spans A B C D would wrongly include A and D.
+ *
+ * Positive-width overlap requires `range.start < span.end` AND
+ * `range.end > span.start`:
+ *   - a range ending exactly at a span's start → `END_TO_START == 0` (not < 0)
+ *     → span excluded;
+ *   - a range starting exactly at a span's end → `START_TO_END == 0` (not > 0)
+ *     → span excluded.
+ */
+export function selectedOffsets(range: Range, spans: Iterable<HTMLElement>): number[] {
+  const offs: number[] = [];
+  for (const span of spans) {
+    const sr = span.ownerDocument.createRange();
+    sr.selectNodeContents(span);
+    const overlaps =
+      range.compareBoundaryPoints(Range.END_TO_START, sr) < 0 &&
+      range.compareBoundaryPoints(Range.START_TO_END, sr) > 0;
+    if (overlaps) offs.push(Number(span.dataset.off));
+  }
+  return offs;
+}
+
 // Two rects are treated as the same text row if their tops are within this
 // fraction of the (shorter) row's glyph height — loose_bounds() rects on the
 // same line can differ slightly (ascenders/descenders), so an exact-equality

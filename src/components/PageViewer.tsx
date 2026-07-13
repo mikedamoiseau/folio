@@ -4,7 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { getSpreadPages } from "../lib/utils";
 import { friendlyError } from "../lib/errors";
 import { blobUrlFromBytes } from "../lib/pageWire";
-import { glyphToPx, highlightBands, selectionOffsets, type Glyph } from "../lib/pdfText";
+import { glyphToPx, highlightBands, selectionOffsets, selectedOffsets, type Glyph } from "../lib/pdfText";
 import { HIGHLIGHT_COLORS } from "./HighlightsPanel";
 import { useToast } from "./Toast";
 
@@ -613,6 +613,10 @@ export default function PageViewer({
       // zoomed page can be panned from any empty area.
       if ((e.target as HTMLElement).closest("[data-off], [data-pdf-selection-popup]")) return;
       if (!canPan()) return;
+      // Collapse any active text selection before the pan's preventDefault
+      // freezes it — otherwise the native selection survives the pan and the
+      // document mouseup re-runs handleMouseUp, resurrecting the old popup.
+      window.getSelection()?.removeAllRanges();
       e.preventDefault();
       isPanning.current = true;
       panStart.current = { x: e.clientX, y: e.clientY };
@@ -1065,12 +1069,10 @@ function PdfTextLayer({
         return;
       }
       const picked: Glyph[] = [];
-      layer.querySelectorAll<HTMLElement>("[data-off]").forEach((span) => {
-        if (sel.containsNode(span, true)) {
-          const g = glyphByOff.get(Number(span.dataset.off));
-          if (g) picked.push(g);
-        }
-      });
+      for (const off of selectedOffsets(sel.getRangeAt(0), layer.querySelectorAll<HTMLElement>("[data-off]"))) {
+        const g = glyphByOff.get(off);
+        if (g) picked.push(g);
+      }
       const offs = selectionOffsets(picked);
       if (!offs) return;
       const text = chars.slice(offs.startOffset, offs.endOffset).join("");
