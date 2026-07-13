@@ -1363,6 +1363,12 @@ export default function ReaderPane({
   // ---- Highlights ----
   interface ChapterHighlight { id: string; startOffset: number; endOffset: number; color: string }
   const [highlights, setHighlights] = useState<ChapterHighlight[]>([]);
+  // Monotonic signal PageViewer re-fetches its PDF highlight bands on after any
+  // mutation (popup create/remove + undo, Highlights-panel delete/edit, sync).
+  // Declared here (before the sync effect that bumps it) and invalidated in the
+  // same places the EPUB highlight list refreshes, so bands and marks stay in
+  // step. See handleCreatePdfHighlight / handleRemovePdfHighlights below.
+  const [pdfHighlightRefresh, setPdfHighlightRefresh] = useState(0);
 
   const loadHighlights = useCallback(async () => {
     if (!bookId) return;
@@ -1395,6 +1401,7 @@ export default function ReaderPane({
         // Remote bookmarks/highlights were merged — refresh from DB
         loadHighlightsRef.current();
         setBookmarkRefreshKey((k) => k + 1);
+        setPdfHighlightRefresh((k) => k + 1);
       }
     });
 
@@ -1627,10 +1634,9 @@ export default function ReaderPane({
   // ---- PDF highlight wiring (F-1-4) ----
   // PageViewer owns PDF selection geometry + its own highlight-band rendering
   // (it fetches per-page glyphs/text/highlights), so these handlers only run
-  // the same IPC + toast/undo path as the EPUB flow above. `pdfHighlightRefresh`
-  // is a monotonic signal PageViewer re-fetches its bands on after any mutation
-  // (including the undo-toast remove), mirroring `bookmarkRefreshKey`.
-  const [pdfHighlightRefresh, setPdfHighlightRefresh] = useState(0);
+  // the same IPC + toast/undo path as the EPUB flow above, then bump
+  // `pdfHighlightRefresh` (declared with the other highlight state) so the
+  // visible page's bands re-fetch.
   const handleCreatePdfHighlight = useCallback(
     async (color: string, sel: { text: string; startOffset: number; endOffset: number; pageIndex: number }) => {
       if (!bookId) return;
@@ -2275,6 +2281,7 @@ export default function ReaderPane({
           bookId={bookId!}
           onClose={() => setHighlightsOpen(false)}
           onGoToChapter={(index) => { goToChapter(index); setHighlightsOpen(false); }}
+          onMutate={() => { loadHighlightsRef.current(); setPdfHighlightRefresh((k) => k + 1); }}
         />
       )}
 

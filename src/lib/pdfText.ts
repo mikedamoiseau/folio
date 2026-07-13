@@ -87,7 +87,10 @@ export function highlightBands(
     const left = Math.min(...row.map((r) => r.left));
     const right = Math.max(...row.map((r) => r.left + r.width));
     const top = Math.min(...row.map((r) => r.top));
-    const height = Math.max(...row.map((r) => r.height));
-    return { left, top, width: right - left, height };
+    // Span to the lowest bottom edge in the row, not max(height) from the
+    // topmost glyph — otherwise a glyph that sits lower (e.g. a descender)
+    // has its bottom clipped by the band.
+    const bottom = Math.max(...row.map((r) => r.top + r.height));
+    return { left, top, width: right - left, height: bottom - top };
   });
 }

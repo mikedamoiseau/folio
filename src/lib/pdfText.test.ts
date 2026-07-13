@@ -82,4 +82,18 @@ describe("highlightBands", () => {
   it("returns an empty array when no glyphs fall in range", () => {
     expect(highlightBands(oneRow, 100, 200, 1000, 1000)).toEqual([]);
   });
+
+  it("spans a same-row band down to the lowest glyph's bottom edge (descenders)", () => {
+    // Two glyphs clustered on one row (tops within tolerance) but with
+    // different top/height: a tall cap-height glyph and a shorter one that
+    // sits lower and extends further down (a descender). The band must reach
+    // the lowest bottom edge, not just max(height) from min(top).
+    const row: Glyph[] = [
+      { off: 0, x: 0.1, y: 0.1, w: 0.05, h: 0.03 }, // top 100, bottom 130
+      { off: 1, x: 0.15, y: 0.11, w: 0.05, h: 0.04 }, // top 110, bottom 150
+    ];
+    const bands = highlightBands(row, 0, 2, 1000, 1000);
+    expect(bands).toHaveLength(1);
+    expect(bands[0]).toEqual({ left: 100, top: 100, width: 100, height: 50 });
+  });
 });

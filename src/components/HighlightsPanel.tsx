@@ -22,6 +22,9 @@ interface HighlightsPanelProps {
   bookId: string;
   onClose: () => void;
   onGoToChapter: (index: number) => void;
+  /** Fired after a successful highlight mutation (delete / note edit) so the
+   *  reader can invalidate its own highlight views (EPUB marks, PDF bands). */
+  onMutate?: () => void;
 }
 
 const HIGHLIGHT_COLORS = [
@@ -35,7 +38,7 @@ const HIGHLIGHT_COLORS = [
 export { HIGHLIGHT_COLORS };
 export type { Highlight };
 
-export default function HighlightsPanel({ bookId, onClose, onGoToChapter }: HighlightsPanelProps) {
+export default function HighlightsPanel({ bookId, onClose, onGoToChapter, onMutate }: HighlightsPanelProps) {
   const { t } = useTranslation();
   const { mode } = useTheme();
   const [highlights, setHighlights] = useState<Highlight[]>([]);
@@ -84,6 +87,7 @@ export default function HighlightsPanel({ bookId, onClose, onGoToChapter }: High
     try {
       await invoke("remove_highlight", { highlightId: id });
       await loadHighlights();
+      onMutate?.();
     } catch {
       // ignore
     } finally {
@@ -99,6 +103,7 @@ export default function HighlightsPanel({ bookId, onClose, onGoToChapter }: High
       });
       setEditingNote(null);
       await loadHighlights();
+      onMutate?.();
     } catch {
       // ignore
     }

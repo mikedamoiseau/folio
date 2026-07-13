@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef, type RefObject } from "react";
+import { useState, useEffect, useLayoutEffect, useCallback, useRef, type RefObject } from "react";
 import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
 import { getSpreadPages } from "../lib/utils";
@@ -606,6 +606,10 @@ export default function PageViewer({
 
   const handleMouseDown = useCallback(
     (e: React.MouseEvent) => {
+      // Don't start a pan (or preventDefault) when the press lands on the PDF
+      // text layer — that would cancel native text selection at zoom > 1.
+      // Panning from empty page background still works.
+      if ((e.target as HTMLElement).closest("[data-pdf-text-layer]")) return;
       if (!canPan()) return;
       e.preventDefault();
       isPanning.current = true;
@@ -937,10 +941,21 @@ function PdfTextLayer({
     { x: number; y: number; sel: PdfSelection; overlapIds: string[] } | null
   >(null);
 
+  // Drop the previous page's glyphs/text/highlights/popup SYNCHRONOUSLY the
+  // instant the page (or book) changes — before paint — so the freshly
+  // rendered image never becomes interactive with stale data still live. With
+  // glyphs=[] there are no spans, so no stale selection can be mapped to the
+  // new pageIndex until the fetches below repopulate current-page data.
+  useLayoutEffect(() => {
+    setGlyphs([]);
+    setChars([]);
+    setSaved([]);
+    setPopup(null);
+  }, [bookId, pageIndex]);
+
   // Glyph rects + page text — refetched per page (backend memory-cached).
   useEffect(() => {
     let cancelled = false;
-    setPopup(null);
     (async () => {
       try {
         const [g, text] = await Promise.all([
@@ -1028,9 +1043,9 @@ function PdfTextLayer({
   }, [glyphs, measure]);
 
   // Selection → popup. A document-level mouseup lets a drag that ends outside
-  // the layer still resolve; each layer only claims selections that BEGAN
-  // inside it (anchorNode containment) so a two-page spread never produces two
-  // popups and selection never spans the two pages.
+  // the layer still resolve. A selection is only claimed when BOTH endpoints
+  // are inside this layer, so a two-page spread never produces two popups and
+  // native copy can never disagree with the popup's sliced text.
   useEffect(() => {
     const layer = layerRef.current;
     if (!layer) return;
@@ -1040,6 +1055,13 @@ function PdfTextLayer({
       const sel = window.getSelection();
       if (!sel || sel.isCollapsed || !sel.anchorNode) return;
       if (!layer || !layer.contains(sel.anchorNode)) return;
+      // Anchor is in this layer but the focus ended in another page's layer:
+      // a cross-page drag. Native Cmd/Ctrl+C would copy both pages while the
+      // popup slices only this page — so clear the selection and show nothing.
+      if (!sel.focusNode || !layer.contains(sel.focusNode)) {
+        sel.removeAllRanges();
+        return;
+      }
       const picked: Glyph[] = [];
       layer.querySelectorAll<HTMLElement>("[data-off]").forEach((span) => {
         if (sel.containsNode(span, true)) {
@@ -1119,6 +1141,7 @@ function PdfTextLayer({
     <>
       <div
         ref={layerRef}
+        data-pdf-text-layer
         className="absolute select-text"
         style={{ left: box.left, top: box.top, width: box.width, height: box.height }}
       >
