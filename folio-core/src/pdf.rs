@@ -594,18 +594,26 @@ fn glyph_cache_put(
     Ok(true)
 }
 
-/// Reference render width used only to build the [`PdfRenderConfig`] passed
-/// to `PdfPage::points_to_pixels` in [`get_page_glyphs`]. Its exact value is
-/// irrelevant: the resulting 0..1 glyph fractions are invariant to it, since
-/// both the pixel numerator (`points_to_pixels`'s output) and the pixel
-/// denominator (this config's own aspect-locked output width/height) scale
-/// together. What matters is that the config is shaped the same way
-/// (`set_target_width`, no explicit rotation) as
-/// [`get_page_image_bytes`]'s — so `points_to_pixels`, which pdfium-render
+/// Reference render width used to build the [`PdfRenderConfig`] passed to
+/// `PdfPage::points_to_pixels` in [`get_page_glyphs`]. The config is shaped
+/// the same way (`set_target_width`, no explicit rotation) as
+/// [`get_page_image_bytes`]'s, so `points_to_pixels` — which pdfium-render
 /// derives from the identical `PdfRenderConfig::apply_to_page` settings used
-/// by `render_with_config`, maps through the exact clipping/scale/rotate
-/// transform the rendered page image uses.
-const GLYPH_RENDER_REFERENCE_WIDTH: i32 = 1000;
+/// by `render_with_config` — maps through the exact clipping/scale/rotate
+/// transform the rendered page image uses (origin, CropBox, and intrinsic
+/// rotation all resolved inside pdfium).
+///
+/// `points_to_pixels` returns INTEGER device pixels, so the normalized 0..1
+/// fractions carry a quantization error of at most one reference pixel
+/// (1 / this width). This width is therefore chosen to be at least as large
+/// as the largest width the reader ever renders a page at
+/// (`CACHE_CANONICAL_WIDTH` = 2400, and higher on deep zoom), so the glyph
+/// grid is never coarser than the displayed image's own pixels: any glyph
+/// that occupies ≥1 pixel in the rendered page also spans ≥1 reference pixel
+/// and cannot collapse to zero area. Sub-reference-pixel glyphs (sub-point
+/// text, invisible at any real display size) may still collapse — acceptable,
+/// as they can't be seen or selected regardless.
+const GLYPH_RENDER_REFERENCE_WIDTH: i32 = 12000;
 
 /// Output bitmap pixel dimensions pdfium's `apply_to_page` produces for a
 /// target-width-only render config: width is the target, height is
