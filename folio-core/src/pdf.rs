@@ -607,6 +607,28 @@ fn glyph_cache_put(
 /// transform the rendered page image uses.
 const GLYPH_RENDER_REFERENCE_WIDTH: i32 = 1000;
 
+/// Output bitmap pixel dimensions pdfium's `apply_to_page` produces for a
+/// target-width-only render config: width is the target, height is
+/// aspect-locked. Both are ROUNDED to whole pixels — `points_to_pixels`
+/// maps glyph corners into these same rounded dimensions, so normalization
+/// must divide by them (dividing by the unrounded `page_h * scale` would
+/// vertically displace glyphs when the scaled height is fractional).
+/// Returns `None` for a degenerate page (non-finite or non-positive
+/// dimension), so the caller can reject it rather than divide by zero.
+/// Pure — directly unit-testable.
+fn render_output_dims(page_w: f32, page_h: f32, target_width: i32) -> Option<(f32, f32)> {
+    if !page_w.is_finite() || !page_h.is_finite() || page_w <= 0.0 || page_h <= 0.0 {
+        return None;
+    }
+    let scale = target_width as f32 / page_w;
+    let out_w = (page_w * scale).round();
+    let out_h = (page_h * scale).round();
+    if out_w <= 0.0 || out_h <= 0.0 {
+        return None;
+    }
+    Some((out_w, out_h))
+}
+
 /// Normalize a device-PIXEL bounding box (as returned by
 /// `PdfPage::points_to_pixels`) into a [`Glyph`]'s 0..1 page-fraction rect.
 /// Pure — no pdfium calls — so it's directly unit-testable without a real
@@ -741,12 +763,14 @@ pub fn get_page_glyphs(path: &str, page_index: usize) -> FolioResult<Vec<Glyph>>
     // `PdfRenderConfig::apply_to_page` (which computes the output bitmap's
     // pixel dimensions) is private to pdfium-render, so replicate its
     // aspect-locked, target-width-only scaling formula here to get the same
-    // output width/height that `points_to_pixels` maps into.
-    let page_w = page.width().value;
-    let page_h = page.height().value;
-    let scale = GLYPH_RENDER_REFERENCE_WIDTH as f32 / page_w;
-    let out_w = page_w * scale;
-    let out_h = page_h * scale;
+    // output width/height that `points_to_pixels` maps into — including its
+    // rounding to whole pixels (see `render_output_dims`).
+    let (out_w, out_h) = render_output_dims(
+        page.width().value,
+        page.height().value,
+        GLYPH_RENDER_REFERENCE_WIDTH,
+    )
+    .ok_or_else(|| FolioError::invalid(format!("page {page_index} has invalid dimensions")))?;
 
     let mut glyphs = Vec::new();
     let mut counter: u32 = 0;
@@ -1055,6 +1079,24 @@ mod tests {
         evict_memory_cache(path);
 
         assert!(glyph_cache_get(path, 0).unwrap().0.is_none());
+    }
+
+    /// `render_output_dims` must round the aspect-locked height to whole
+    /// pixels, matching pdfium's apply_to_page (which points_to_pixels maps
+    /// into). 850x1099 at target 1000 → height 1099*1000/850 = 1292.94 → 1293.
+    #[test]
+    fn test_render_output_dims_rounds_height() {
+        let (w, h) = render_output_dims(850.0, 1099.0, 1000).unwrap();
+        assert_eq!(w, 1000.0);
+        assert_eq!(h, 1293.0);
+    }
+
+    #[test]
+    fn test_render_output_dims_rejects_degenerate() {
+        assert!(render_output_dims(0.0, 100.0, 1000).is_none());
+        assert!(render_output_dims(100.0, 0.0, 1000).is_none());
+        assert!(render_output_dims(f32::NAN, 100.0, 1000).is_none());
+        assert!(render_output_dims(100.0, f32::INFINITY, 1000).is_none());
     }
 
     /// Race guard: if an eviction (book removal) lands between a
