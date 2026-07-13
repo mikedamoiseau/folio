@@ -594,6 +594,27 @@ fn page_cache_storage<R: tauri::Runtime>(
     folio_core::storage::LocalStorage::new(dir)
 }
 
+/// Evict a permanently-removed book's page cache: the whole
+/// `page-cache/{hash}/` prefix (rendered pages + the persisted PDF text
+/// index) via `storage`, plus the in-memory PDF text entry for its resolved
+/// path. Both are best-effort. The in-memory eviction runs even when
+/// `storage` is `None` (disk-cache init failed), so a deleted book can't
+/// serve stale in-memory search results. Shared by every delete path
+/// (`remove_book`, bulk delete, missing-file cleanup) so they evict
+/// identically; unit-tested with a temp `Storage`.
+fn evict_book_page_cache(
+    storage: Option<&dyn folio_core::storage::Storage>,
+    file_hash: Option<&str>,
+    resolved_path: Option<&str>,
+) {
+    if let (Some(s), Some(h)) = (storage, file_hash) {
+        let _ = page_cache::evict_book(s, h);
+    }
+    if let Some(p) = resolved_path {
+        pdf::evict_memory_cache(p);
+    }
+}
+
 // --- Library management ---
 
 /// Extensions the backend can import in this build. Core formats are
@@ -1477,15 +1498,16 @@ pub async fn remove_book<R: tauri::Runtime>(
     }
 
     // Clear the page cache (rendered pages + the persisted PDF text index)
-    // for this book. Best-effort, like the covers/images cleanup above.
-    if let Some(ref hash) = book_hash {
-        if let Ok(storage) = page_cache_storage(&app) {
-            let _ = page_cache::evict_book(&storage, hash);
-        }
-    }
-    if let Some(ref path) = resolved_path {
-        pdf::evict_memory_cache(path);
-    }
+    // and the in-memory text entry for this book. Best-effort, like the
+    // covers/images cleanup above.
+    let cache_storage = page_cache_storage(&app).ok();
+    evict_book_page_cache(
+        cache_storage
+            .as_ref()
+            .map(|s| s as &dyn folio_core::storage::Storage),
+        book_hash.as_deref(),
+        resolved_path.as_deref(),
+    );
 
     Ok(())
 }
@@ -6749,13 +6771,15 @@ pub async fn cleanup_library(
         }
 
         // Clear the page cache (rendered pages + persisted PDF text index)
-        // for this book.
-        if let Some(ref hash) = book.file_hash {
-            if let Ok(storage) = page_cache_storage(&app) {
-                let _ = page_cache::evict_book(&storage, hash);
-            }
-        }
-        pdf::evict_memory_cache(&resolved);
+        // and the in-memory text entry for this book.
+        let cache_storage = page_cache_storage(&app).ok();
+        evict_book_page_cache(
+            cache_storage
+                .as_ref()
+                .map(|s| s as &dyn folio_core::storage::Storage),
+            book.file_hash.as_deref(),
+            Some(resolved.as_str()),
+        );
 
         log_event(
             &conn,
@@ -7219,13 +7243,11 @@ pub async fn bulk_delete_books(
     // book can't serve stale results (matching remove_book). Only the disk
     // eviction is gated on the storage handle.
     let storage = page_cache_storage(&app).ok();
+    let storage_ref = storage
+        .as_ref()
+        .map(|s| s as &dyn folio_core::storage::Storage);
     for (hash, path) in evict_targets {
-        if let (Some(s), Some(h)) = (storage.as_ref(), hash.as_ref()) {
-            let _ = page_cache::evict_book(s, h);
-        }
-        if let Some(ref p) = path {
-            pdf::evict_memory_cache(p);
-        }
+        evict_book_page_cache(storage_ref, hash.as_deref(), path.as_deref());
     }
 
     Ok(book_ids.len() as u32)
@@ -7632,26 +7654,17 @@ mod tests {
     /// of its `page-cache/{hash}/` entry), not just the DB row / covers /
     /// images. Regression test for the CHANGELOG's "deleting the book clears
     /// it" claim, which previously did not hold for the text index.
-    #[tokio::test]
-    async fn remove_book_evicts_page_cache_including_text_index() {
-        let (app, _dir) = mock_app_with_state();
-        let handle = app.handle().clone();
-        let state = handle.state::<AppState>();
+    // Hermetic: exercises `evict_book_page_cache` — the shared helper every
+    // permanent-delete path (`remove_book`, bulk delete, missing-file
+    // cleanup) routes through — against a `Storage` rooted in a TempDir, so
+    // it can't touch or depend on the real OS application-cache directory.
+    #[test]
+    fn evict_book_page_cache_removes_persisted_text_index() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = folio_core::storage::LocalStorage::new(dir.path()).unwrap();
 
-        let mut book = progress_test_book("pdf-book-1", 3);
-        book.format = BookFormat::Pdf;
-        book.file_hash = Some("hash-remove-test".to_string());
-        // Not imported: `resolve_book_path` returns `file_path` unchanged,
-        // so the test doesn't need a real library folder / file on disk.
-        book.is_imported = false;
-        {
-            let conn = state.active_db().unwrap().get().unwrap();
-            db::insert_book(&conn, &book).unwrap();
-        }
-
-        // Seed a page-cache text index for this book's hash, as prepare_pdf's
+        // Seed a page-cache text index for a book's hash, as prepare_pdf's
         // background pass (or a search miss) would have written.
-        let storage = page_cache_storage(&handle).unwrap();
         let index = folio_core::pdf::PdfTextIndex {
             version: folio_core::pdf::TEXT_INDEX_VERSION,
             page_count: 1,
@@ -7660,13 +7673,11 @@ mod tests {
         page_cache::write_text_index(&storage, "hash-remove-test", &index).unwrap();
         assert!(page_cache::read_text_index(&storage, "hash-remove-test").is_some());
 
-        remove_book("pdf-book-1".to_string(), state.clone(), handle.clone())
-            .await
-            .unwrap();
+        evict_book_page_cache(Some(&storage), Some("hash-remove-test"), None);
 
         assert!(
             page_cache::read_text_index(&storage, "hash-remove-test").is_none(),
-            "removing a book must evict its persisted page cache, including the text index"
+            "eviction must remove the book's persisted page cache, including the text index"
         );
     }
 
