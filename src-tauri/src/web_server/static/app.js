@@ -439,6 +439,15 @@
     if (div) div.remove();
   }
 
+  // Re-clamp the zoom pan against the new stage size on resize/orientation
+  // change so a zoomed image can't get stuck showing a gap.
+  window.addEventListener("resize", () => {
+    if (readerState && readerState.mode === "page" && isZoomed()) {
+      clampZoomPan();
+      applyZoomTransform();
+    }
+  });
+
   document.addEventListener("keydown", (e) => {
     // K3: never hijack modified shortcuts (Cmd/Ctrl+F find, Cmd+ArrowLeft
     // history back, etc.) — bail before any preventDefault.
@@ -2051,6 +2060,11 @@
       turnAnimCleanup: null,
       snapBackCleanup: null,
       pendingInstantTurn: false,
+      // Pinch-zoom (page mode only): scale in [1, 5]; tx/ty are the
+      // translate() applied before scale() (transform-origin 0 0, so
+      // scaling never moves the image's top-left). This object always
+      // mirrors exactly what applyZoomTransform() last wrote to #page-img.
+      zoom: { scale: 1, tx: 0, ty: 0 },
     };
     readerState.handlers = makeReaderHandlers(id);
     renderReaderChrome();
@@ -2141,6 +2155,107 @@
     if (btn) btn.textContent = readerState.fitMode === "fit-height" ? "Fit: Height" : "Fit: Width";
   }
 
+  // ── Pinch-to-zoom (page mode) ────────────────────────────────────────
+  // One writer owns #page-img's transform: applyZoomTransform(). The swipe
+  // drag-follow below only ever runs at scale 1 (where the zoom transform
+  // is empty), so the two never compose — they're mutually exclusive, and
+  // resetDragStyles() re-applies the zoom transform after clearing drag
+  // leftovers so neither path can wipe the other's state.
+  const ZOOM_MIN = 1;
+  const ZOOM_MAX = 5;
+
+  function isZoomed() {
+    return !!(readerState && readerState.zoom && readerState.zoom.scale > 1);
+  }
+
+  function applyZoomTransform() {
+    const img = $("#page-img");
+    if (!img || !readerState || !readerState.zoom) return;
+    const z = readerState.zoom;
+    const stage = $("#reader-stage");
+    if (z.scale <= 1) {
+      img.style.transform = "";
+      if (stage) stage.classList.remove("zoom-active");
+      return;
+    }
+    img.style.transform = `translate(${z.tx}px, ${z.ty}px) scale(${z.scale})`;
+    if (stage) stage.classList.add("zoom-active");
+  }
+
+  function resetZoom() {
+    if (!readerState || !readerState.zoom) return;
+    readerState.zoom = { scale: 1, tx: 0, ty: 0 };
+    applyZoomTransform();
+  }
+
+  // Clamp one axis: if the scaled image overflows the stage, no gap may
+  // open between image edge and stage edge; otherwise center the image on
+  // that axis. `base` is the image's untransformed offset inside the stage.
+  function clampZoomAxis(t, base, scaledSize, stageSize) {
+    if (scaledSize <= stageSize) return (stageSize - scaledSize) / 2 - base;
+    return Math.min(-base, Math.max(stageSize - scaledSize - base, t));
+  }
+
+  function clampZoomPan() {
+    const img = $("#page-img");
+    const stage = $("#reader-stage");
+    const z = readerState && readerState.zoom;
+    if (!img || !stage || !z) return;
+    z.tx = clampZoomAxis(z.tx, img.offsetLeft, img.clientWidth * z.scale, stage.clientWidth);
+    z.ty = clampZoomAxis(z.ty, img.offsetTop, img.clientHeight * z.scale, stage.clientHeight);
+  }
+
+  function zoomAtPoint(newScale, clientX, clientY) {
+    const img = $("#page-img");
+    const stage = $("#reader-stage");
+    const z = readerState && readerState.zoom;
+    // Error state (#page-error visible, img hidden/collapsed): no-op.
+    if (!img || !stage || !z || !img.clientWidth) return;
+    const scale = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, newScale));
+    // Entering zoom from 1x in fit-width: the stage may be natively
+    // scrolled. Freeze that first (same trick as renderPageTurn's F5) —
+    // while zoomed, .zoom-active turns off native overflow entirely and
+    // our pan owns all movement, so offsetTop-based math stays valid.
+    if (scale > 1 && z.scale === 1 && stage.scrollTop > 0) stage.scrollTop = 0;
+    const r = img.getBoundingClientRect(); // includes the current transform
+    // Image-local (unscaled) coords of the anchor point; keep that point
+    // under the cursor/fingers at the new scale.
+    const localX = (clientX - r.left) / z.scale;
+    const localY = (clientY - r.top) / z.scale;
+    const sr = stage.getBoundingClientRect();
+    z.tx = clientX - localX * scale - (sr.left + img.offsetLeft);
+    z.ty = clientY - localY * scale - (sr.top + img.offsetTop);
+    z.scale = scale;
+    clampZoomPan();
+    applyZoomTransform();
+  }
+
+  function panZoomBy(dx, dy) {
+    const z = readerState && readerState.zoom;
+    if (!z || z.scale <= 1) return;
+    z.tx += dx;
+    z.ty += dy;
+    clampZoomPan();
+    applyZoomTransform();
+  }
+
+  function bindWheelZoom(stage) {
+    stage.addEventListener("wheel", (e) => {
+      if (!readerState || readerState.mode !== "page") return;
+      if (e.ctrlKey) {
+        // ctrl+wheel (incl. macOS trackpad pinch, which the browser
+        // delivers as ctrl+wheel) — zoom about the cursor.
+        e.preventDefault();
+        zoomAtPoint(readerState.zoom.scale * Math.exp(-e.deltaY * 0.01), e.clientX, e.clientY);
+      } else if (isZoomed()) {
+        // Plain wheel while zoomed pans (content follows scroll direction);
+        // at 1x native behavior (fit-width scroll) is untouched.
+        e.preventDefault();
+        panZoomBy(-e.deltaX, -e.deltaY);
+      }
+    }, { passive: false });
+  }
+
   // Left third = prev, right third = next, middle third = toggle chrome.
   function bindClickZones(el) {
     el.addEventListener("click", (e) => {
@@ -2164,8 +2279,10 @@
   function resetDragStyles(img) {
     if (!img) return;
     img.style.transition = "";
-    img.style.transform = "";
     img.style.willChange = "";
+    // Re-applies the zoom transform, or clears the transform at 1x — the
+    // pre-zoom behavior. Single-writer rule: never assign transform here.
+    applyZoomTransform();
   }
 
   // F6: cancels any in-flight snap-back on `img` — removes its
@@ -2370,6 +2487,7 @@
       const img = $("#page-img");
       bindClickZones(img);
       bindSwipe(img);
+      bindWheelZoom($("#reader-stage"));
       img.addEventListener("error", handlePageImageError);
       img.addEventListener("load", () => {
         img.style.display = "";
@@ -2377,6 +2495,7 @@
         if (errEl) errEl.hidden = true;
       });
       $("#fit-toggle-btn").addEventListener("click", () => {
+        resetZoom();
         readerState.fitMode = readerState.fitMode === "fit-height" ? "fit-width" : "fit-height";
         safeStorageSet("folio_reader_fit_mode", readerState.fitMode);
         applyFitMode();
@@ -2672,6 +2791,7 @@
     const img = $("#page-img");
     const incoming = $("#page-img-incoming");
     if (!img) return;
+    resetZoom(); // any turn (buttons, keys, slider, swipe) lands unzoomed
     finalizeTurnAnimation(img, incoming);
 
     const prevIndex = readerState.lastRenderedPageIndex;
