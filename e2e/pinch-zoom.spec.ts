@@ -174,7 +174,9 @@ test.describe("Reader zoom: wheel (M1)", () => {
 
     await page.keyboard.press("ArrowRight");
     await expect(page).toHaveURL(new RegExp(`#/book/${READER_BOOK_ID}/1/read`), { timeout: 10_000 });
-    expect(await getScale(page)).toBe(1);
+    // The hash flips synchronously but the render (and its zoom reset) is
+    // async — poll instead of a single read.
+    await expect.poll(async () => getScale(page)).toBe(1);
 
     await ctrlWheel(page, -70);
     expect(await getScale(page)).toBeGreaterThan(1.5);
@@ -185,5 +187,90 @@ test.describe("Reader zoom: wheel (M1)", () => {
     // scroll) — the handler must not claim it.
     expect(await plainWheel(page, 0, -300)).toBe(false);
     expect(await getScale(page)).toBe(1);
+  });
+});
+
+// ── M2: touch ──────────────────────────────────────────────────────────
+// Synthetic TouchEvents dispatched at #reader-stage (the gesture
+// controller's element from M2 on). hasTouch is required for the Touch/
+// TouchEvent constructors to exist in Chromium.
+test.describe("Reader zoom: touch (M2)", () => {
+  test.use({ hasTouch: true });
+
+  // Dispatch a touch event with the given client-coordinate points.
+  async function touch(page: Page, type: string, points: Array<{ x: number; y: number }>) {
+    await page.$eval(
+      "#reader-stage",
+      (el, arg: { type: string; points: Array<{ x: number; y: number }> }) => {
+        const ended = arg.type === "touchend" || arg.type === "touchcancel";
+        const touches = arg.points.map(
+          (p, i) => new Touch({ identifier: i, target: el, clientX: p.x, clientY: p.y }),
+        );
+        el.dispatchEvent(
+          new TouchEvent(arg.type, {
+            touches: ended ? [] : touches,
+            changedTouches: touches,
+            targetTouches: ended ? [] : touches,
+            bubbles: true,
+            cancelable: true,
+          }),
+        );
+      },
+      { type, points },
+    );
+  }
+
+  async function stageCenter(page: Page) {
+    return page.$eval("#reader-stage", (el) => {
+      const r = el.getBoundingClientRect();
+      return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+    });
+  }
+
+  test("two-finger pinch zooms in about the midpoint", async ({ page }) => {
+    await openCbzReader(page);
+    const c = await stageCenter(page);
+    await touch(page, "touchstart", [{ x: c.x - 50, y: c.y }, { x: c.x + 50, y: c.y }]);
+    await touch(page, "touchmove", [{ x: c.x - 100, y: c.y }, { x: c.x + 100, y: c.y }]);
+    await touch(page, "touchend", [{ x: c.x - 100, y: c.y }, { x: c.x + 100, y: c.y }]);
+    // Finger distance doubled: 100px -> 200px.
+    const s = await getScale(page);
+    expect(s).toBeGreaterThan(1.8);
+    expect(s).toBeLessThan(2.2);
+  });
+
+  test("one-finger drag pans while zoomed and never turns the page", async ({ page }) => {
+    await openCbzReader(page);
+    await page.click("#fit-toggle-btn"); // fit-width so 2x overflows
+    await ctrlWheel(page, -70); // ~2x
+    const before = await page.$eval("#page-img", (el) => el.getBoundingClientRect().left);
+    const c = await stageCenter(page);
+    await touch(page, "touchstart", [{ x: c.x, y: c.y }]);
+    await touch(page, "touchmove", [{ x: c.x - 80, y: c.y - 60 }]);
+    await touch(page, "touchend", [{ x: c.x - 80, y: c.y - 60 }]);
+    const after = await page.$eval("#page-img", (el) => el.getBoundingClientRect().left);
+    expect(after).toBeLessThan(before); // image followed the finger left
+    // Still on page 0 — an 80px horizontal drag at 1x would have turned.
+    await expect(page).toHaveURL(new RegExp(`#/book/${READER_BOOK_ID}/0/read`));
+    expect(await getScale(page)).toBeGreaterThan(1.5); // zoom survives the drag
+  });
+
+  test("swipe at 1x still turns the page (regression)", async ({ page }) => {
+    await openCbzReader(page);
+    const c = await stageCenter(page);
+    await touch(page, "touchstart", [{ x: c.x + 100, y: c.y }]);
+    await touch(page, "touchmove", [{ x: c.x + 40, y: c.y }]);
+    await touch(page, "touchmove", [{ x: c.x - 20, y: c.y }]);
+    await touch(page, "touchend", [{ x: c.x - 20, y: c.y }]); // dx = -120
+    await expect(page).toHaveURL(new RegExp(`#/book/${READER_BOOK_ID}/1/read`), { timeout: 10_000 });
+  });
+
+  test("touchcancel mid-pinch keeps the current zoom", async ({ page }) => {
+    await openCbzReader(page);
+    const c = await stageCenter(page);
+    await touch(page, "touchstart", [{ x: c.x - 50, y: c.y }, { x: c.x + 50, y: c.y }]);
+    await touch(page, "touchmove", [{ x: c.x - 100, y: c.y }, { x: c.x + 100, y: c.y }]);
+    await touch(page, "touchcancel", [{ x: c.x - 100, y: c.y }, { x: c.x + 100, y: c.y }]);
+    expect(await getScale(page)).toBeGreaterThan(1.8);
   });
 });
