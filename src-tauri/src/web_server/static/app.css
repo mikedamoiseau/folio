@@ -219,10 +219,10 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .reader-page.fit-width .reader-stage { align-items: flex-start; overflow: auto; }
 .reader-stage img#page-img { max-width: 100%; max-height: 100%; object-fit: contain; cursor: pointer; user-select: none; -webkit-user-drag: none; transform-origin: 0 0; touch-action: manipulation; }
 /* While zoomed, custom pan owns all movement — freeze native fit-width
-   scrolling so offset-based clamp math stays valid. The fit-width variant
-   must out-rank `.reader-page.fit-width .reader-stage`'s overflow:auto
-   (0-3-0), which a bare .reader-stage.zoom-active (0-2-0) loses to. */
-.reader-stage.zoom-active,
+   scrolling so offset-based clamp math stays valid. Only fit-width needs
+   this (the base .reader-stage is already overflow:hidden), and the
+   selector must out-rank `.reader-page.fit-width .reader-stage`'s
+   overflow:auto (0-3-0). */
 .reader-page.fit-width .reader-stage.zoom-active { overflow: hidden; }
 .reader-page.fit-width .reader-stage img#page-img { width: 100%; max-width: 100%; height: auto; max-height: none; }
 .reader-page-error, .reader-error { color: var(--error); text-align: center; padding: 24px; }

@@ -122,6 +122,17 @@ test.describe("Reader zoom: wheel (M1)", () => {
     expect(back.imgLeft).toBeLessThanOrEqual(back.stageLeft + 0.5);
   });
 
+  test("while zoomed, edge taps don't turn the page (zoom preserved)", async ({ page }) => {
+    await openCbzReader(page);
+    await ctrlWheel(page, -70); // ~2x
+    expect(await getScale(page)).toBeGreaterThan(1.5);
+    const box = (await page.locator("#page-img").boundingBox())!;
+    await page.mouse.click(box.x + box.width * 0.9, box.y + box.height / 2);
+    await page.waitForTimeout(300);
+    await expect(page).toHaveURL(new RegExp(`#/book/${READER_BOOK_ID}/0/read`));
+    expect(await getScale(page)).toBeGreaterThan(1.5);
+  });
+
   test("page turn and fit toggle reset zoom to 1x; plain wheel at 1x does not zoom", async ({ page }) => {
     await openCbzReader(page);
     await ctrlWheel(page, -70);

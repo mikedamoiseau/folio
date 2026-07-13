@@ -2245,9 +2245,11 @@
   function bindWheelZoom(stage) {
     // Firefox reports mouse-wheel deltas in lines (deltaMode 1, ±3/notch),
     // not pixels — without normalization zoom/pan is ~30x too weak there.
-    function wheelPx(e, d) {
+    // Page-mode (deltaMode 2) deltas scale by the stage size on the same
+    // axis as the delta, not blanket clientHeight.
+    function wheelPx(e, d, axisSize) {
       if (e.deltaMode === 1) return d * 33;
-      if (e.deltaMode === 2) return d * (stage.clientHeight || 400);
+      if (e.deltaMode === 2) return d * (axisSize || 400);
       return d;
     }
 
@@ -2257,16 +2259,20 @@
     // the zoom twice; the preventDefault also stops Safari's native
     // full-page zoom. No-ops on browsers without GestureEvent.
     let inGesture = false;
+    let gestureAt = 0; // last gesture activity — staleness backstop below
     let gestureBaseScale = 1;
     stage.addEventListener("gesturestart", (e) => {
       if (!readerState || readerState.mode !== "page") return;
       e.preventDefault();
       inGesture = true;
+      gestureAt = Date.now();
       gestureBaseScale = readerState.zoom.scale;
     });
     stage.addEventListener("gesturechange", (e) => {
       if (!readerState || readerState.mode !== "page") return;
       e.preventDefault();
+      inGesture = true;
+      gestureAt = Date.now();
       if (typeof e.scale === "number") {
         zoomAtPoint(gestureBaseScale * e.scale, e.clientX, e.clientY);
       }
@@ -2282,13 +2288,19 @@
         // ctrl+wheel (incl. trackpad pinch on Chrome/Edge/Firefox, which
         // deliver it as ctrl+wheel) — zoom about the cursor.
         e.preventDefault();
-        if (inGesture) return; // Safari already handled via gesturechange
-        zoomAtPoint(readerState.zoom.scale * Math.exp(-wheelPx(e, e.deltaY) * 0.01), e.clientX, e.clientY);
+        if (inGesture) {
+          // Safari handles the pinch via gesturechange — don't double-apply.
+          // Staleness backstop: a gestureend lost to an app switch or system
+          // gesture would otherwise mute ctrl+wheel zoom forever.
+          if (Date.now() - gestureAt < 500) return;
+          inGesture = false;
+        }
+        zoomAtPoint(readerState.zoom.scale * Math.exp(-wheelPx(e, e.deltaY, stage.clientHeight) * 0.01), e.clientX, e.clientY);
       } else if (isZoomed()) {
         // Plain wheel while zoomed pans (content follows scroll direction);
         // at 1x native behavior (fit-width scroll) is untouched.
         e.preventDefault();
-        panZoomBy(-wheelPx(e, e.deltaX), -wheelPx(e, e.deltaY));
+        panZoomBy(-wheelPx(e, e.deltaX, stage.clientWidth), -wheelPx(e, e.deltaY, stage.clientHeight));
       }
     }, { passive: false });
   }
@@ -2299,8 +2311,11 @@
       const rect = el.getBoundingClientRect();
       const x = e.clientX - rect.left;
       const third = rect.width / 3;
-      if (x < third) readerState.handlers.prev();
-      else if (x > third * 2) readerState.handlers.next();
+      // While zoomed, an edge tap must not turn the page (and silently wipe
+      // the zoom via renderPageTurn's reset) — prev/next go inert; the
+      // center chrome toggle stays available.
+      if (x < third) { if (!isZoomed()) readerState.handlers.prev(); }
+      else if (x > third * 2) { if (!isZoomed()) readerState.handlers.next(); }
       else readerState.handlers.toggleChrome();
     });
   }
@@ -2452,6 +2467,13 @@
     el.addEventListener("touchend", (e) => {
       if (!tracking) return; // only a clean single-touch drag reaches here
       tracking = false;
+      if (isZoomed()) {
+        // Zoom engaged between the last touchmove and the lift (same race
+        // as the touchmove guard): never commit a turn or snap-back that
+        // would stomp the zoom transform.
+        axisLock = null;
+        return;
+      }
       const t = e.changedTouches[0];
       const dx = t.clientX - startX;
       const dy = t.clientY - startY;
@@ -2895,7 +2917,9 @@
         incoming.hidden = true;
         incoming.classList.remove("slide-in-left", "slide-in-right");
         incoming.style.willChange = "";
-        if (readerState.turnAnimCleanup === finish) readerState.turnAnimCleanup = null;
+        // Reader may have been exited during the ~280ms window (showDetail/
+        // showLibrary null readerState without running this cleanup).
+        if (readerState && readerState.turnAnimCleanup === finish) readerState.turnAnimCleanup = null;
       };
       const onAnimEnd = () => finish();
       incoming.addEventListener("animationend", onAnimEnd);
