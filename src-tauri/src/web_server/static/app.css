@@ -85,6 +85,13 @@ body {
   min-height: 100vh; /* fallback for browsers without dvh */
   min-height: 100dvh;
   overscroll-behavior: none;
+  /* Item B: viewport-fit=cover drops the webview's automatic side insets, so
+     restore them once here — every document-flow surface (header, grid,
+     detail, the reader root) inherits the landscape notch/rounded-corner
+     clearance. Resolves to 0 in portrait/off-notch/desktop. Fixed chrome
+     (tab bar, FAB, toasts) is position:fixed and pads its own insets. */
+  padding-left: env(safe-area-inset-left);
+  padding-right: env(safe-area-inset-right);
 }
 
 h1, h2, h3 { font-family: "Playfair Display", Georgia, serif; }
@@ -94,7 +101,9 @@ h1, h2, h3 { font-family: "Playfair Display", Georgia, serif; }
 button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 /* ── Login ─────────────────────────────────────── */
-.login { display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; min-height: 100dvh; gap: 16px; }
+/* Item B: these views render no .header, so paint the status-bar strip here too
+   (accent behind the white translucent status-bar text). Strip is 0 off-notch. */
+.login { display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; min-height: 100dvh; gap: 16px; background: linear-gradient(var(--accent), var(--accent)) 0 0 / 100% env(safe-area-inset-top) no-repeat; }
 .login h1 { font-size: 2rem; color: var(--accent); }
 .login input { padding: 12px 16px; font-size: 1.1rem; border: 1px solid var(--warm-border); border-radius: var(--radius); background: var(--surface); color: var(--ink); width: 200px; text-align: center; letter-spacing: 8px; }
 .login button { padding: 12px 32px; background: var(--accent-hover); color: var(--on-accent); border: none; border-radius: var(--radius); font-size: 1rem; cursor: pointer; font-weight: 600; }
@@ -102,14 +111,13 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .login .error { color: var(--error); font-size: 0.9rem; }
 
 /* ── Header ────────────────────────────────────── */
-/* Item B: pad the top by the notch/status-bar inset and the sides by the
-   landscape insets (max() keeps the base --gap when insets are 0, e.g.
-   desktop). The layered background paints an accent strip exactly as tall as
-   the status bar (env(safe-area-inset-top)) behind the black-translucent
-   status bar so its white text stays legible over the light-theme paper
-   header; the strip collapses to 0 height off-notch, leaving the header pure
-   paper. */
-.header { display: flex; align-items: center; padding: calc(12px + env(safe-area-inset-top)) max(var(--gap), env(safe-area-inset-right)) 12px max(var(--gap), env(safe-area-inset-left)); border-bottom: 1px solid var(--warm-border); gap: 16px; position: sticky; top: 0; background: linear-gradient(var(--accent), var(--accent)) 0 0 / 100% env(safe-area-inset-top) no-repeat, var(--paper); z-index: 10; }
+/* Item B: pad the top by the notch/status-bar inset (sides come from body's
+   inset padding). The layered background paints an accent strip exactly as
+   tall as the status bar (env(safe-area-inset-top)) behind the
+   black-translucent status bar so its white text stays legible over the
+   light-theme paper header; the strip collapses to 0 height off-notch, leaving
+   the header pure paper (desktop unchanged). */
+.header { display: flex; align-items: center; padding: calc(12px + env(safe-area-inset-top)) var(--gap) 12px; border-bottom: 1px solid var(--warm-border); gap: 16px; position: sticky; top: 0; background: linear-gradient(var(--accent), var(--accent)) 0 0 / 100% env(safe-area-inset-top) no-repeat, var(--paper); z-index: 10; }
 .header h1 { font-size: 1.3rem; color: var(--accent); white-space: nowrap; }
 /* Reader + detail headers show the (potentially long) book title: let it grow
    into the row and wrap onto multiple lines instead of overflowing/truncating,
@@ -176,7 +184,8 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .shelf-progress-fill { height: 100%; background: var(--accent); }
 
 /* ── Book Detail ───────────────────────────────── */
-.detail { max-width: 700px; margin: 0 auto; padding: var(--gap); }
+/* Item B: detail renders no tab bar, so it clears the home indicator itself. */
+.detail { max-width: 700px; margin: 0 auto; padding: var(--gap); padding-bottom: calc(var(--gap) + env(safe-area-inset-bottom)); }
 .detail .meta { display: flex; gap: var(--gap); margin-bottom: var(--gap); }
 .detail .cover { width: 200px; border-radius: var(--radius); flex-shrink: 0; }
 .detail .cover img { width: 100%; border-radius: var(--radius); border: 1px solid var(--warm-border); background: var(--warm-subtle); }
@@ -208,7 +217,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .btn-secondary:hover { background: var(--warm-subtle); }
 
 /* ── Resume Prompt (Item 4) ────────────────────── */
-.resume-prompt { display: flex; align-items: center; justify-content: center; min-height: 100vh; min-height: 100dvh; padding: var(--gap); }
+.resume-prompt { display: flex; align-items: center; justify-content: center; min-height: 100vh; min-height: 100dvh; padding: var(--gap); background: linear-gradient(var(--accent), var(--accent)) 0 0 / 100% env(safe-area-inset-top) no-repeat; }
 .resume-prompt-panel { background: var(--surface); border: 1px solid var(--warm-border); border-radius: 12px; padding: 28px 32px; max-width: 360px; width: 100%; text-align: center; box-shadow: 0 12px 32px var(--shadow); }
 .resume-prompt-panel h2 { font-size: 1.1rem; margin-bottom: 8px; color: var(--ink); }
 .resume-prompt-panel p { color: var(--ink-muted); font-size: 0.9rem; margin-bottom: 20px; }
@@ -302,7 +311,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .reader-toolbar #page-label { white-space: nowrap; font-variant-numeric: tabular-nums; color: var(--ink-muted); font-size: 0.85rem; }
 .reader-toolbar input[type="range"] { flex: 1; accent-color: var(--accent); }
 
-.chrome-toggle-fab { position: fixed; right: 16px; bottom: 16px; width: 40px; height: 40px; border-radius: 50%; background: var(--surface); border: 1px solid var(--warm-border); color: var(--ink-muted); cursor: pointer; display: flex; align-items: center; justify-content: center; box-shadow: 0 4px 12px var(--shadow); z-index: 20; font-size: 1.2rem; }
+.chrome-toggle-fab { position: fixed; right: 16px; bottom: calc(16px + env(safe-area-inset-bottom)); width: 40px; height: 40px; border-radius: 50%; background: var(--surface); border: 1px solid var(--warm-border); color: var(--ink-muted); cursor: pointer; display: flex; align-items: center; justify-content: center; box-shadow: 0 4px 12px var(--shadow); z-index: 20; font-size: 1.2rem; }
 .chrome-toggle-fab:hover { color: var(--accent); border-color: var(--accent); }
 
 /* ── Shortcuts Overlay ─────────────────────────── */
@@ -333,7 +342,9 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .reader-skeleton .skeleton-cover { width: 60%; max-width: 420px; aspect-ratio: 3/4; border-radius: 8px; }
 
 /* ── Toast (Item 10) ────────────────────────────── */
-.toast-container { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); z-index: 200; display: flex; flex-direction: column; gap: 8px; max-width: calc(100vw - 32px); }
+/* Item B: base clears the home indicator (reader/login, where no tab bar lifts
+   the toast); on tab-bar views the media-query rule lifts it above the bar. */
+.toast-container { position: fixed; bottom: calc(16px + env(safe-area-inset-bottom)); left: 50%; transform: translateX(-50%); z-index: 200; display: flex; flex-direction: column; gap: 8px; max-width: calc(100vw - 32px); }
 .toast { background: var(--ink); color: var(--paper); padding: 10px 14px; border-radius: var(--radius); display: flex; align-items: center; gap: 10px; box-shadow: 0 8px 24px var(--shadow); font-size: 0.85rem; }
 .toast-close { background: none; border: none; color: inherit; cursor: pointer; font-size: 1rem; line-height: 1; padding: 0 2px; }
 
@@ -443,7 +454,9 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .stat-cards { gap: 8px; }
   .stat-value { font-size: 1.1rem; }
   .collections { padding: 12px; }
-  .reader-toolbar { flex-wrap: wrap; padding: 8px 12px; }
+  /* Item B: keep the home-indicator inset that the base .reader-toolbar rule
+     sets — this same-specificity narrow override would otherwise reset it. */
+  .reader-toolbar { flex-wrap: wrap; padding: 8px 12px calc(8px + env(safe-area-inset-bottom)); }
   .reader-toolbar input[type="range"] { order: 1; flex-basis: 100%; }
   /* Item 6/7: the header row (title + search + sort + nav icons, now one
      icon wider with the theme toggle) is too tight to fit on one line at
