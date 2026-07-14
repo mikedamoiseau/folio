@@ -14,12 +14,17 @@ test.describe("App shell — overscroll", () => {
     await page.locator(".grid .card").first().waitFor();
 
     const behavior = await page.evaluate(() => {
-      const html = getComputedStyle(document.documentElement).overscrollBehaviorY;
-      const body = getComputedStyle(document.body).overscrollBehaviorY;
-      return { html, body };
+      const scroller = document.scrollingElement || document.documentElement;
+      return {
+        scroller: getComputedStyle(scroller).overscrollBehaviorY,
+        body: getComputedStyle(document.body).overscrollBehaviorY,
+      };
     });
 
-    // At least the viewport-defining element must pin overscroll to "none".
-    expect([behavior.html, behavior.body]).toContain("none");
+    // Pull-to-refresh fires from the document's scrolling element (html in
+    // standards mode), so that element specifically — not just "one of the
+    // two" — must pin overscroll to "none". body is also pinned.
+    expect(behavior.scroller).toBe("none");
+    expect(behavior.body).toBe("none");
   });
 });

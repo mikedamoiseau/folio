@@ -2931,16 +2931,32 @@ mod tests {
     #[test]
     fn reader_full_viewport_uses_dynamic_viewport_height() {
         const APP_CSS: &str = include_str!("static/app.css");
-        assert!(
-            APP_CSS.contains("100dvh"),
-            "app.css must use dynamic-viewport height (100dvh) for the reader's \
-             full-viewport surfaces (Item C) — found no 100dvh declaration"
-        );
-        assert!(
-            !APP_CSS.contains("height: 100vh; position: relative"),
-            "the reader-page/reader-chapter rule still uses bare `height: 100vh` \
-             — convert it to 100dvh (with a 100vh fallback) per Item C"
-        );
+
+        /// Returns the declaration block (between `{` and the next `}`) of the
+        /// first CSS rule whose selector text starts with `selector`.
+        fn rule_block<'a>(css: &'a str, selector: &str) -> Option<&'a str> {
+            let start = css.find(selector)?;
+            let open = css[start..].find('{')? + start + 1;
+            let close = css[open..].find('}')? + open;
+            Some(&css[open..close])
+        }
+
+        // Guard each reader surface that filled the viewport *within its own
+        // rule*: a file-wide `contains("100dvh")` would pass on the body/login
+        // declarations even if a reader rule regressed, and an exact-substring
+        // negative is evaded by any reformat. Requiring `100vh` before `100dvh`
+        // in the specific block catches a reordered/relocated revert too.
+        for selector in [".reader-page, .reader-chapter", ".reader-skeleton"] {
+            let block = rule_block(APP_CSS, selector)
+                .unwrap_or_else(|| panic!("app.css must contain a `{selector}` rule"));
+            let vh = block.find("100vh");
+            let dvh = block.find("100dvh");
+            assert!(
+                matches!((vh, dvh), (Some(v), Some(d)) if v < d),
+                "the `{selector}` rule must size to 100dvh with a preceding 100vh \
+                 fallback (Item C) — found vh={vh:?} dvh={dvh:?} in block:{block}"
+            );
+        }
     }
 
     // Finding 11: PUBLIC_SHELL_ASSETS is the single source of truth shared by
