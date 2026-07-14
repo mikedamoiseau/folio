@@ -94,6 +94,12 @@ This project adheres to [Semantic Versioning](https://semver.org/).
   touch-target size recommended for fingers, so they're harder to miss. Only
   the tappable area grows; the colors and text stay the same, and a desktop
   browser is unchanged.
+- **Long-pressing the web UI's chrome no longer pops a selection menu.**
+  Pressing and holding a header, a book cover, the bottom tab bar, or a toolbar
+  in the web UI used to select text or raise the browser's copy/callout menu,
+  the way a web page does. Those surfaces now ignore the long-press. Actual
+  reading content still selects normally — you can press-and-hold to select and
+  copy chapter text or a book's description.
 - **Comics open instantly, even large ones.** Opening a CBZ/CBR now paints the
   first page in tens of milliseconds instead of waiting seconds for the whole
   archive to extract. Folio extracts just the first page (plus your resume page)

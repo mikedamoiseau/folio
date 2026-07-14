@@ -3030,6 +3030,39 @@ mod tests {
         );
     }
 
+    // Item F (app-feel Tier 2): chrome suppresses the iOS long-press callout
+    // and stray selection, while reading content keeps selection. The e2e spec
+    // asserts `user-select: none` on the chrome (computed style), but
+    // `-webkit-touch-callout` is Safari-only and not exposed in headless
+    // Chromium, and the seed books have no description / EPUB chapter to select
+    // there — so guard both the callout suppression and the content re-enable
+    // at the CSS source.
+    #[test]
+    fn chrome_suppresses_callout_and_content_keeps_selection() {
+        const APP_CSS: &str = include_str!("static/app.css");
+
+        // The chrome rule must turn off the long-press callout and selection.
+        let chrome = css_block(APP_CSS, ".header, .tab-bar, .card")
+            .expect("app.css must have a chrome rule starting `.header, .tab-bar, .card` (Item F)");
+        assert!(
+            chrome.contains("-webkit-touch-callout: none"),
+            "chrome must suppress the iOS long-press callout (Item F)"
+        );
+        assert!(
+            chrome.contains("user-select: none"),
+            "chrome must suppress stray text selection (Item F)"
+        );
+
+        // Reading content must re-enable selection so quotes/notes still work.
+        let content = css_block(APP_CSS, ".reader-chapter .content, .detail-description").expect(
+            "app.css must re-enable selection on `.reader-chapter .content, .detail-description` (Item F)",
+        );
+        assert!(
+            content.contains("user-select: text"),
+            "chapter text and the book description must keep text selection (Item F)"
+        );
+    }
+
     // Finding 11: PUBLIC_SHELL_ASSETS is the single source of truth shared by
     // web_ui::routes() and auth::auth_middleware's carve-out — this walks the
     // list end-to-end against a live, PIN-protected server, so a path added

@@ -100,6 +100,33 @@ h1, h2, h3 { font-family: "Playfair Display", Georgia, serif; }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
+/* ── Chrome selection / callout (Item F) ────────── */
+/* Chrome shouldn't behave like a web document: suppress the iOS long-press
+   callout and stray text selection on the header, bottom tab bar, cards, and
+   toolbars. Reading content (chapter text, book description) re-enables
+   selection just below, so selecting/copying/quoting still works there. Not
+   media-gated — this reads as native on desktop too, and -webkit-touch-callout
+   is a Safari-only no-op elsewhere. */
+.header, .tab-bar, .card, .shelf-card, .collection-row,
+.reader-toolbar, .filter-bar, .chrome-toggle-fab,
+.detail .cover, .detail .actions {
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+.reader-chapter .content, .detail-description {
+  -webkit-user-select: text;
+  user-select: text;
+}
+/* Editable fields keep native selection + the copy/paste callout even when
+   nested in chrome (the header search box, the filter-panel search) — a direct
+   rule on the control beats the `none` inherited from the chrome ancestor. */
+input, textarea {
+  -webkit-touch-callout: default;
+  -webkit-user-select: text;
+  user-select: text;
+}
+
 /* ── Login ─────────────────────────────────────── */
 .login { display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; min-height: 100dvh; gap: 16px; }
 .login h1 { font-size: 2rem; color: var(--accent); }

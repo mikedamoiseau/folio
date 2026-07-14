@@ -113,7 +113,7 @@ Highest leverage. These three together flip the feel; the rest is polish on top.
 
 **Acceptance.** Every interactive control ≥44px in the touch hit test at 390px; layout not visibly bulkier on desktop.
 
-### Item F — Suppress long-press callout & stray selection  🔲
+### Item F — Suppress long-press callout & stray selection  ✅
 
 **Goal.** Chrome shouldn't trigger the iOS long-press callout or text-selection like a web document.
 
