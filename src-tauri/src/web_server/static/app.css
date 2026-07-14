@@ -101,9 +101,7 @@ h1, h2, h3 { font-family: "Playfair Display", Georgia, serif; }
 button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 /* ── Login ─────────────────────────────────────── */
-/* Item B: these views render no .header, so paint the status-bar strip here too
-   (accent behind the white translucent status-bar text). Strip is 0 off-notch. */
-.login { display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; min-height: 100dvh; gap: 16px; background: linear-gradient(var(--accent), var(--accent)) 0 0 / 100% env(safe-area-inset-top) no-repeat; }
+.login { display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; min-height: 100dvh; gap: 16px; }
 .login h1 { font-size: 2rem; color: var(--accent); }
 .login input { padding: 12px 16px; font-size: 1.1rem; border: 1px solid var(--warm-border); border-radius: var(--radius); background: var(--surface); color: var(--ink); width: 200px; text-align: center; letter-spacing: 8px; }
 .login button { padding: 12px 32px; background: var(--accent-hover); color: var(--on-accent); border: none; border-radius: var(--radius); font-size: 1rem; cursor: pointer; font-weight: 600; }
@@ -118,6 +116,24 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
    light-theme paper header; the strip collapses to 0 height off-notch, leaving
    the header pure paper (desktop unchanged). */
 .header { display: flex; align-items: center; padding: calc(12px + env(safe-area-inset-top)) var(--gap) 12px; border-bottom: 1px solid var(--warm-border); gap: 16px; position: sticky; top: 0; background: linear-gradient(var(--accent), var(--accent)) 0 0 / 100% env(safe-area-inset-top) no-repeat, var(--paper); z-index: 10; }
+/* Item B: the header paints its own status-bar strip (above), but the
+   full-bleed views that render NO .header — login, resume prompt, the detail
+   and reader loading skeletons, the error state — would leave the white
+   translucent status-bar text illegible over the light paper. This one rule
+   paints the accent strip for the whole class: `.header` is present in the DOM
+   on every list/detail/reader view (the reader keeps it even when chrome is
+   hidden, so the reader stays strip-free and immersive), and absent only on
+   those headerless views. Fixed (viewport-relative), so body's inset padding
+   doesn't shift it; collapses to 0 height off-notch. */
+body:not(:has(.header))::before {
+  content: "";
+  position: fixed;
+  top: 0; left: 0; right: 0;
+  height: env(safe-area-inset-top);
+  background: var(--accent);
+  z-index: 5;
+  pointer-events: none;
+}
 .header h1 { font-size: 1.3rem; color: var(--accent); white-space: nowrap; }
 /* Reader + detail headers show the (potentially long) book title: let it grow
    into the row and wrap onto multiple lines instead of overflowing/truncating,
@@ -217,7 +233,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .btn-secondary:hover { background: var(--warm-subtle); }
 
 /* ── Resume Prompt (Item 4) ────────────────────── */
-.resume-prompt { display: flex; align-items: center; justify-content: center; min-height: 100vh; min-height: 100dvh; padding: var(--gap); background: linear-gradient(var(--accent), var(--accent)) 0 0 / 100% env(safe-area-inset-top) no-repeat; }
+.resume-prompt { display: flex; align-items: center; justify-content: center; min-height: 100vh; min-height: 100dvh; padding: var(--gap); }
 .resume-prompt-panel { background: var(--surface); border: 1px solid var(--warm-border); border-radius: 12px; padding: 28px 32px; max-width: 360px; width: 100%; text-align: center; box-shadow: 0 12px 32px var(--shadow); }
 .resume-prompt-panel h2 { font-size: 1.1rem; margin-bottom: 8px; color: var(--ink); }
 .resume-prompt-panel p { color: var(--ink-muted); font-size: 0.9rem; margin-bottom: 20px; }
@@ -338,9 +354,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .skeleton-cover { aspect-ratio: 2/3; }
 .skeleton-line { height: 10px; border-radius: 4px; margin: 10px 10px 0; }
 .skeleton-line.short { width: 60%; margin-bottom: 10px; }
-/* Item B: full-bleed loading state renders no .header, so paint the status-bar
-   strip here too for legibility over the near-white light-theme skeleton. */
-.reader-skeleton { display: flex; align-items: center; justify-content: center; height: 100vh; height: 100dvh; padding: var(--gap); background: linear-gradient(var(--accent), var(--accent)) 0 0 / 100% env(safe-area-inset-top) no-repeat; }
+.reader-skeleton { display: flex; align-items: center; justify-content: center; height: 100vh; height: 100dvh; padding: var(--gap); }
 .reader-skeleton .skeleton-cover { width: 60%; max-width: 420px; aspect-ratio: 3/4; border-radius: 8px; }
 
 /* ── Toast (Item 10) ────────────────────────────── */
