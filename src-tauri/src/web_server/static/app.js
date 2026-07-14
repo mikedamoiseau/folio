@@ -2060,6 +2060,12 @@
       turnAnimCleanup: null,
       snapBackCleanup: null,
       pendingInstantTurn: false,
+      // Page-image cache recovery (page mode only): the index whose <img>
+      // load already got one cache-bypassing retry, so a still-failing page
+      // falls through to the error box instead of looping. Reset to null on
+      // every successful page load (see the #page-img "load" handler), so a
+      // page that later re-fails is retried afresh. See handlePageImageError.
+      pageRetryIndex: null,
       // Pinch-zoom (page mode only): scale in [1, 5]; tx/ty are the
       // translate() applied before scale() (transform-origin 0 0, so
       // scaling never moves the image's top-left). This object always
@@ -2794,6 +2800,9 @@
         img.style.display = "";
         const errEl = $("#page-error");
         if (errEl) errEl.hidden = true;
+        // A page that loads (including from a recovery blob) re-arms the
+        // one-shot cache-bypass retry for its index.
+        if (readerState) readerState.pageRetryIndex = null;
       });
       $("#fit-toggle-btn").addEventListener("click", () => {
         resetZoom();
@@ -3318,6 +3327,29 @@
   // distinguish "session expired" from a genuine image failure.
   async function handlePageImageError() {
     if (!readerState) return;
+    const { id, index } = readerState;
+
+    // A page image can fail because the browser's HTTP cache holds a poisoned
+    // entry (a bad/truncated 200), which then re-serves those broken bytes to
+    // every load of this URL — the page never recovers on its own. On the
+    // first failure for this index, retry once with a cache-busting query
+    // param so the browser fetches the page fresh from the server instead of
+    // the bad cached copy (the param is ignored by the route's path match).
+    // A blob from a `fetch(..., {cache:"reload"})` would be cleaner but the
+    // web UI's CSP img-src is `'self' data:` — no `blob:` — so a same-origin
+    // URL is the one that can actually paint. Guarded by pageRetryIndex so a
+    // genuinely unloadable page falls through to the error box below rather
+    // than looping.
+    if (readerState.pageRetryIndex !== index) {
+      readerState.pageRetryIndex = index;
+      const nonce = (readerState.pageReloadNonce = (readerState.pageReloadNonce || 0) + 1);
+      const img = $("#page-img");
+      if (img) {
+        img.src = `${pageUrl(id, index)}?__reload=${nonce}`;
+        return;
+      }
+    }
+
     // Finding 1: a network error here means the probe itself couldn't run —
     // that's just as much "can't load this page" as any other outcome, so
     // fall through to the same error box instead of the 401 early return.
