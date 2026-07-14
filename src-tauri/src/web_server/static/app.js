@@ -2656,6 +2656,9 @@
       if (reducedMotionEnabled()) return; // gesture still recognized, no visual feedback
       const img = $("#page-img");
       if (img) {
+        // Inline hint for the 1x drag window only; the zoomed pan/pinch
+        // path gets the same hint from app.css's .zoom-active rule — both
+        // are needed, neither covers the other's window.
         img.style.willChange = "transform";
         img.style.transform = `translateX(${dx}px)`;
       }

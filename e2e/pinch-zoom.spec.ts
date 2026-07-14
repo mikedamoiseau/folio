@@ -433,22 +433,25 @@ test.describe("Reader zoom: double-tap + tap zones (M3)", () => {
 // (visible stutter on iOS Safari); the swipe drag-follow already sets
 // will-change:transform for exactly this reason. While zoomed the image
 // must carry the same hint, and drop it back at 1x so the layer isn't
-// held forever.
+// held forever. (will-change is advisory — the browser decides whether to
+// actually promote; this asserts the hint's lifecycle, not compositing.)
 test.describe("Reader zoom: pan compositing (M4)", () => {
   async function getWillChange(page: Page): Promise<string> {
     return page.$eval("#page-img", (el) => getComputedStyle(el).willChange);
   }
 
-  test("while zoomed the page image is promoted to its own layer; 1x releases it", async ({ page }) => {
+  test("while zoomed the page image carries will-change: transform; 1x drops it", async ({ page }) => {
     await openCbzReader(page);
     expect(await getWillChange(page)).toBe("auto");
 
-    await ctrlWheel(page, -70); // ~2x
+    await ctrlWheel(page, -70); // ~2x — synchronous, no poll needed
     expect(await getScale(page)).toBeGreaterThan(1.5);
     expect(await getWillChange(page)).toBe("transform");
 
     await page.keyboard.press("ArrowRight"); // page turn resets zoom
     await expect(page).toHaveURL(new RegExp(`#/book/${READER_BOOK_ID}/1/read`), { timeout: 10_000 });
-    expect(await getWillChange(page)).toBe("auto");
+    // The render after the hash flip is async (same race the M1 reset test
+    // polls getScale for) — poll rather than single-read.
+    await expect.poll(() => getWillChange(page)).toBe("auto");
   });
 });
