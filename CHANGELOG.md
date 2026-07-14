@@ -6,6 +6,14 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- **A bottom tab bar in the web app on phones and tablets.** On a phone,
+  tablet, or installed web app, the primary destinations — Library,
+  Collections, and Reading Stats — now live in a fixed bar along the bottom of
+  the screen, within easy thumb reach, with the current section highlighted.
+  The old top-corner icons for Collections and Stats step aside on these
+  devices (the theme toggle stays in the header), and the bar tucks away while
+  you're reading. On a desktop browser nothing changes — the header icons stay
+  exactly where they were.
 - **Zoom into pages in the web reader.** Comic and PDF pages in the browser
   reader can now be zoomed: hold Ctrl and scroll (or pinch on a trackpad)
   to zoom up to 5×, then scroll to pan around the page. On a phone or

@@ -15,6 +15,7 @@
   --shadow:       rgba(44, 34, 24, 0.18);
   --chip-hover:   rgba(0, 0, 0, 0.08);
   --radius: 8px; --gap: 16px;
+  --tab-bar-h: 56px; /* Item A: bottom tab bar height (narrow/touch only) */
   /* Item 12: page-turn motion, mirrors the desktop app's slide-in timing
      (src/index.css --animate-slide-in-left/right). */
   --ease-page-turn: cubic-bezier(0.22, 1, 0.36, 1);
@@ -366,6 +367,51 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .nav-icon { background: none; border: none; cursor: pointer; padding: 6px; border-radius: 6px; color: var(--ink-muted); display: flex; align-items: center; }
 .nav-icon:hover { color: var(--ink); background: var(--warm-subtle); }
 .nav-icon.active { color: var(--accent); }
+
+/* ── Bottom Tab Bar (Item A) ────────────────────── */
+/* Fixed thumb-reach primary nav for narrow/touch viewports. Hidden by default
+   so the desktop browser keeps the header icon cluster; the media query below
+   reveals the bar and hides the header's collections/stats icons — the two are
+   mutually exclusive so a destination is never offered twice. */
+.tab-bar {
+  display: none;
+  position: fixed;
+  left: 0; right: 0; bottom: 0;
+  z-index: 20;
+  justify-content: space-around;
+  align-items: stretch;
+  height: var(--tab-bar-h);
+  background: var(--paper);
+  border-top: 1px solid var(--warm-border);
+}
+.tab {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--ink-muted);
+  font: inherit;
+}
+.tab-label { font-size: 0.7rem; font-weight: 600; letter-spacing: 0.01em; }
+.tab.active { color: var(--accent); }
+
+/* Narrow OR touch (comma = OR): phones, narrow windows, and coarse-pointer
+   tablets in landscape. Desktop (wide + fine pointer) falls through to the
+   default above with the tab bar hidden and the header cluster intact. */
+@media (max-width: 600px), (hover: none) and (pointer: coarse) {
+  .tab-bar { display: flex; }
+  /* Collections/stats moved to the tab bar; hide their header icons. The theme
+     toggle has no [data-nav], so it stays in the header. */
+  .header .nav-icon[data-nav] { display: none; }
+  /* Keep the last content row clear of the fixed bar. :has scopes this to the
+     views that actually render a tab bar (reader/login render none). */
+  body:has(.tab-bar) { padding-bottom: var(--tab-bar-h); }
+}
 
 @media (max-width: 600px) {
   .detail .meta { flex-direction: column; align-items: center; text-align: center; }

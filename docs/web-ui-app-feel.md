@@ -43,7 +43,7 @@ Chrome, scroll, and touch all use browser defaults. Primary nav lives as three ~
 
 Highest leverage. These three together flip the feel; the rest is polish on top.
 
-### Item A — Bottom tab bar for primary navigation  🔲
+### Item A — Bottom tab bar for primary navigation  ✅
 
 **Goal.** Move primary nav (Library / Collections / Stats) out of the top-right icon cluster into a fixed, thumb-reach bottom tab bar — the single strongest native signal. The top header shrinks to title + search.
 
