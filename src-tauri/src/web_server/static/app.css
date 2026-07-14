@@ -474,6 +474,27 @@ body:not(:has(.header))::before {
   .card:hover, .shelf-card:hover { transform: translateY(-2px); box-shadow: 0 8px 24px -4px var(--shadow); }
 }
 
+/* ── 44px minimum tap targets (Item E) ──────────── */
+/* Grow the small interactive chrome to the 44x44 finger-target floor on touch
+   (and narrow windows — same gate as the tab bar). Only the hit box grows via
+   min-height / min-width; palette, type, and the resting visual size are
+   unchanged. Desktop (wide + fine pointer) keeps the compact controls. */
+@media (max-width: 600px), (hover: none) and (pointer: coarse) {
+  .nav-icon { min-width: 44px; min-height: 44px; justify-content: center; }
+  .header .back-btn { min-width: 44px; min-height: 44px; }
+  .header select { min-height: 44px; }
+  .filter-reset, .filter-dropdown-btn { min-height: 44px; }
+  .filter-panel-item { min-height: 44px; }
+  .collections-toolbar .sort-btn { min-height: 44px; }
+  .reader-toolbar button { min-height: 44px; }
+  /* The chrome-toggle FAB sits outside the toolbar and is explicitly 40x40. */
+  .chrome-toggle-fab { width: 44px; height: 44px; }
+  /* Size the remove (✕) button's own box to 44x44 (the chip pill grows with it
+     on touch). An absolute overlay was avoided: at 44px it overflows the 6px
+     inter-chip gap and would remove the wrong chip on a near-miss tap. */
+  .chip-remove { min-width: 44px; min-height: 44px; }
+}
+
 @media (max-width: 600px) {
   .detail .meta { flex-direction: column; align-items: center; text-align: center; }
   .detail .cover { width: 150px; }

@@ -88,6 +88,12 @@ This project adheres to [Semantic Versioning](https://semver.org/).
   the lifted state until you touched something else. The lift is now limited to
   devices with a hovering mouse or trackpad, so it no longer sticks after a tap
   on a phone or tablet. On a desktop browser nothing changes.
+- **Bigger, easier-to-hit buttons on phones and tablets.** In the web UI the
+  small controls — the header icons and sort menu, the filter buttons and chip
+  removes, the reader's page buttons — now grow to at least the 44-pixel
+  touch-target size recommended for fingers, so they're harder to miss. Only
+  the tappable area grows; the colors and text stay the same, and a desktop
+  browser is unchanged.
 - **Comics open instantly, even large ones.** Opening a CBZ/CBR now paints the
   first page in tens of milliseconds instead of waiting seconds for the whole
   archive to extract. Folio extracts just the first page (plus your resume page)
