@@ -426,3 +426,29 @@ test.describe("Reader zoom: double-tap + tap zones (M3)", () => {
     expect(await getScale(page)).toBeGreaterThan(1.5); // zoom kept
   });
 });
+
+// ── M4: pan smoothness ──────────────────────────────────────────────────
+// Panning writes #page-img's transform on every touchmove. Without a
+// compositor-layer hint the browser repaints the scaled bitmap per event
+// (visible stutter on iOS Safari); the swipe drag-follow already sets
+// will-change:transform for exactly this reason. While zoomed the image
+// must carry the same hint, and drop it back at 1x so the layer isn't
+// held forever.
+test.describe("Reader zoom: pan compositing (M4)", () => {
+  async function getWillChange(page: Page): Promise<string> {
+    return page.$eval("#page-img", (el) => getComputedStyle(el).willChange);
+  }
+
+  test("while zoomed the page image is promoted to its own layer; 1x releases it", async ({ page }) => {
+    await openCbzReader(page);
+    expect(await getWillChange(page)).toBe("auto");
+
+    await ctrlWheel(page, -70); // ~2x
+    expect(await getScale(page)).toBeGreaterThan(1.5);
+    expect(await getWillChange(page)).toBe("transform");
+
+    await page.keyboard.press("ArrowRight"); // page turn resets zoom
+    await expect(page).toHaveURL(new RegExp(`#/book/${READER_BOOK_ID}/1/read`), { timeout: 10_000 });
+    expect(await getWillChange(page)).toBe("auto");
+  });
+});
