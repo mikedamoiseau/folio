@@ -311,7 +311,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .reader-toolbar #page-label { white-space: nowrap; font-variant-numeric: tabular-nums; color: var(--ink-muted); font-size: 0.85rem; }
 .reader-toolbar input[type="range"] { flex: 1; accent-color: var(--accent); }
 
-.chrome-toggle-fab { position: fixed; right: 16px; bottom: calc(16px + env(safe-area-inset-bottom)); width: 40px; height: 40px; border-radius: 50%; background: var(--surface); border: 1px solid var(--warm-border); color: var(--ink-muted); cursor: pointer; display: flex; align-items: center; justify-content: center; box-shadow: 0 4px 12px var(--shadow); z-index: 20; font-size: 1.2rem; }
+.chrome-toggle-fab { position: fixed; right: calc(16px + env(safe-area-inset-right)); bottom: calc(16px + env(safe-area-inset-bottom)); width: 40px; height: 40px; border-radius: 50%; background: var(--surface); border: 1px solid var(--warm-border); color: var(--ink-muted); cursor: pointer; display: flex; align-items: center; justify-content: center; box-shadow: 0 4px 12px var(--shadow); z-index: 20; font-size: 1.2rem; }
 .chrome-toggle-fab:hover { color: var(--accent); border-color: var(--accent); }
 
 /* ── Shortcuts Overlay ─────────────────────────── */
@@ -338,13 +338,15 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .skeleton-cover { aspect-ratio: 2/3; }
 .skeleton-line { height: 10px; border-radius: 4px; margin: 10px 10px 0; }
 .skeleton-line.short { width: 60%; margin-bottom: 10px; }
-.reader-skeleton { display: flex; align-items: center; justify-content: center; height: 100vh; height: 100dvh; padding: var(--gap); }
+/* Item B: full-bleed loading state renders no .header, so paint the status-bar
+   strip here too for legibility over the near-white light-theme skeleton. */
+.reader-skeleton { display: flex; align-items: center; justify-content: center; height: 100vh; height: 100dvh; padding: var(--gap); background: linear-gradient(var(--accent), var(--accent)) 0 0 / 100% env(safe-area-inset-top) no-repeat; }
 .reader-skeleton .skeleton-cover { width: 60%; max-width: 420px; aspect-ratio: 3/4; border-radius: 8px; }
 
 /* ── Toast (Item 10) ────────────────────────────── */
 /* Item B: base clears the home indicator (reader/login, where no tab bar lifts
    the toast); on tab-bar views the media-query rule lifts it above the bar. */
-.toast-container { position: fixed; bottom: calc(16px + env(safe-area-inset-bottom)); left: 50%; transform: translateX(-50%); z-index: 200; display: flex; flex-direction: column; gap: 8px; max-width: calc(100vw - 32px); }
+.toast-container { position: fixed; bottom: calc(16px + env(safe-area-inset-bottom)); left: 50%; transform: translateX(-50%); z-index: 200; display: flex; flex-direction: column; gap: 8px; max-width: calc(100vw - 32px - env(safe-area-inset-left) - env(safe-area-inset-right)); }
 .toast { background: var(--ink); color: var(--paper); padding: 10px 14px; border-radius: var(--radius); display: flex; align-items: center; gap: 10px; box-shadow: 0 8px 24px var(--shadow); font-size: 0.85rem; }
 .toast-close { background: none; border: none; color: inherit; cursor: pointer; font-size: 1rem; line-height: 1; padding: 0 2px; }
 
