@@ -2923,6 +2923,26 @@ mod tests {
         );
     }
 
+    // Item C (app-feel Tier 1): the reader's full-viewport surfaces must use
+    // dynamic-viewport units (dvh) so mobile browser toolbars expanding/
+    // collapsing don't clip the reader (bare 100vh is the pre-Item-C tell).
+    // Computed style resolves dvh->px so a headless-browser check can't see
+    // the unit; this guards the CSS source directly against a silent revert.
+    #[test]
+    fn reader_full_viewport_uses_dynamic_viewport_height() {
+        const APP_CSS: &str = include_str!("static/app.css");
+        assert!(
+            APP_CSS.contains("100dvh"),
+            "app.css must use dynamic-viewport height (100dvh) for the reader's \
+             full-viewport surfaces (Item C) — found no 100dvh declaration"
+        );
+        assert!(
+            !APP_CSS.contains("height: 100vh; position: relative"),
+            "the reader-page/reader-chapter rule still uses bare `height: 100vh` \
+             — convert it to 100dvh (with a 100vh fallback) per Item C"
+        );
+    }
+
     // Finding 11: PUBLIC_SHELL_ASSETS is the single source of truth shared by
     // web_ui::routes() and auth::auth_middleware's carve-out — this walks the
     // list end-to-end against a live, PIN-protected server, so a path added

@@ -63,6 +63,11 @@ This project adheres to [Semantic Versioning](https://semver.org/).
   jump straight back to the book at the spot where you looked it up.
 
 ### Changed
+- **The web reader feels less like a web page on phones and tablets.** Pulling
+  down past the top of a list no longer triggers the browser's pull-to-refresh
+  (which used to reload the whole app), and over-scrolling no longer rubber-bands
+  to reveal the page edges. The reader now sizes itself to the real visible area,
+  so a page is never cut off behind the browser's collapsing address bar.
 - **Comics open instantly, even large ones.** Opening a CBZ/CBR now paints the
   first page in tens of milliseconds instead of waiting seconds for the whole
   archive to extract. Folio extracts just the first page (plus your resume page)

@@ -71,7 +71,7 @@ Highest leverage. These three together flip the feel; the rest is polish on top.
 
 **Acceptance.** Installed on a notched iPhone (or simulator): header clears the notch, bottom bar clears the home indicator, no content under system UI, status bar legible in light and dark. Desktop/non-notched unaffected (insets resolve to 0).
 
-### Item C — Fixed app shell + kill overscroll  🔲
+### Item C — Fixed app shell + kill overscroll  ✅
 
 **Goal.** Pin chrome, scroll only the content region, stop the browser's pull-to-refresh reload and rubber-band overscroll.
 
@@ -84,6 +84,8 @@ Highest leverage. These three together flip the feel; the rest is polish on top.
 **Files.** `app.css` (shell layout, `overscroll`, `dvh`), `app.js` (scroll-restore retarget — grep `scrollTo(`, `scrollY`, `scrollTop` in the library/reader paths), `sw.js` `CACHE_VERSION`.
 
 **Acceptance.** At 390px: pulling down past the top does not reload; content scrolls under a static header/tab bar; reader fills the dynamic viewport with no cut-off behind the URL bar; back-from-book still restores scroll position (Item 14 multi-page replay intact).
+
+**As shipped (deviation from proposed scope).** The web UI is a single-root SPA that re-renders `#app` (header included) per view, and the header is already `position:sticky; top:0` (first element → effectively pinned). The two observable tells were solved directly: `overscroll-behavior:none` on `html, body` kills pull-to-refresh + rubber-band, and the reader's full-viewport surfaces moved from `100vh` to `100dvh` (with a `100vh` fallback). The proposed persistent-shell restructure (extract header into a shared shell, introduce a single dedicated scroll region, retarget every `window.scrollY` scroll-restore call site) was **not** done: it is a large, high-regression refactor that the acceptance criteria do not require (sticky header already pins chrome; window-scroll keeps scroll-restore intact). Scroll-restore was left on `window` and is unchanged.
 
 ---
 
