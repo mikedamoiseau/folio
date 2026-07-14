@@ -82,6 +82,24 @@ This project adheres to [Semantic Versioning](https://semver.org/).
   (which used to reload the whole app), and over-scrolling no longer rubber-bands
   to reveal the page edges. The reader now sizes itself to the real visible area,
   so a page is never cut off behind the browser's collapsing address bar.
+- **Book covers no longer stick "lifted" after a tap on phones and tablets.**
+  In the web UI the subtle raise-on-hover for book covers is a mouse gesture;
+  on a touchscreen it used to latch on after a tap and leave the cover stuck in
+  the lifted state until you touched something else. The lift is now limited to
+  devices with a hovering mouse or trackpad, so it no longer sticks after a tap
+  on a phone or tablet. On a desktop browser nothing changes.
+- **Bigger, easier-to-hit buttons on phones and tablets.** In the web UI the
+  small controls — the header icons and sort menu, the filter buttons and chip
+  removes, the reader's page buttons — now grow to at least the 44-pixel
+  touch-target size recommended for fingers, so they're harder to miss. Only
+  the tappable area grows; the colors and text stay the same, and a desktop
+  browser is unchanged.
+- **Long-pressing the web UI's chrome no longer pops a selection menu.**
+  Pressing and holding a header, a book cover, the bottom tab bar, or a toolbar
+  in the web UI used to select text or raise the browser's copy/callout menu,
+  the way a web page does. Those surfaces now ignore the long-press. Actual
+  reading content still selects normally — you can press-and-hold to select and
+  copy chapter text or a book's description.
 - **Comics open instantly, even large ones.** Opening a CBZ/CBR now paints the
   first page in tens of milliseconds instead of waiting seconds for the whole
   archive to extract. Folio extracts just the first page (plus your resume page)

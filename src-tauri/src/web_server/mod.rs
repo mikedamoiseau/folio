@@ -368,6 +368,30 @@ mod tests {
         }
     }
 
+    /// Balanced-brace body of the first CSS block whose header text matches
+    /// `header` — the substring before its `{`, e.g. a selector list or an
+    /// `@media (...)` prelude. Balanced scanning handles the nesting an @media
+    /// block introduces as well as a flat rule, so the CSS source-guard tests
+    /// below share this one scanner.
+    fn css_block<'a>(css: &'a str, header: &str) -> Option<&'a str> {
+        let start = css.find(header)?;
+        let open = css[start..].find('{')? + start;
+        let mut depth = 0usize;
+        for (i, ch) in css[open..].char_indices() {
+            match ch {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return Some(&css[open + 1..open + i]);
+                    }
+                }
+                _ => {}
+            }
+        }
+        None
+    }
+
     #[test]
     fn test_get_local_ip() {
         // Should return Some on machines with network access
@@ -2932,22 +2956,13 @@ mod tests {
     fn reader_full_viewport_uses_dynamic_viewport_height() {
         const APP_CSS: &str = include_str!("static/app.css");
 
-        /// Returns the declaration block (between `{` and the next `}`) of the
-        /// first CSS rule whose selector text starts with `selector`.
-        fn rule_block<'a>(css: &'a str, selector: &str) -> Option<&'a str> {
-            let start = css.find(selector)?;
-            let open = css[start..].find('{')? + start + 1;
-            let close = css[open..].find('}')? + open;
-            Some(&css[open..close])
-        }
-
         // Guard each reader surface that filled the viewport *within its own
         // rule*: a file-wide `contains("100dvh")` would pass on the body/login
         // declarations even if a reader rule regressed, and an exact-substring
         // negative is evaded by any reformat. Requiring `100vh` before `100dvh`
         // in the specific block catches a reordered/relocated revert too.
         for selector in [".reader-page, .reader-chapter", ".reader-skeleton"] {
-            let block = rule_block(APP_CSS, selector)
+            let block = css_block(APP_CSS, selector)
                 .unwrap_or_else(|| panic!("app.css must contain a `{selector}` rule"));
             let vh = block.find("100vh");
             let dvh = block.find("100dvh");
@@ -2987,6 +3002,65 @@ mod tests {
                  in standalone mode (Item B)"
             );
         }
+    }
+
+    // Item D (app-feel Tier 2): the book-cover lift is hover feedback. On touch
+    // :hover latches after a tap and the card stays stuck lifted — the "it's a
+    // web page" tell. It must be gated behind @media (hover: hover) and
+    // (pointer: fine) so only a hovering fine pointer (desktop mouse/trackpad)
+    // sees it; a coarse finger tap never does. Pointer-capability forks don't
+    // render in headless Chromium, so guard the CSS source directly (same
+    // approach, and shared brace-scanner, as the Item B/C guards above).
+    #[test]
+    fn card_lift_is_gated_to_hovering_fine_pointers() {
+        const APP_CSS: &str = include_str!("static/app.css");
+
+        let gate = css_block(APP_CSS, "@media (hover: hover) and (pointer: fine)").expect(
+            "app.css must gate the card lift behind @media (hover: hover) and (pointer: fine) (Item D)",
+        );
+        // Require every translateY(-2px) lift in the file to sit inside that
+        // gate, so a stray ungated lift (which would re-latch on touch) fails
+        // loudly rather than slipping through a file-wide `contains`.
+        let total = APP_CSS.matches("translateY(-2px)").count();
+        let gated = gate.matches("translateY(-2px)").count();
+        assert!(
+            total > 0 && total == gated,
+            "every translateY(-2px) lift must be inside the hover+fine-pointer gate \
+             so it never sticks after a touch tap — found {total} total, {gated} gated (Item D)"
+        );
+    }
+
+    // Item F (app-feel Tier 2): chrome suppresses the iOS long-press callout
+    // and stray selection, while reading content keeps selection. The e2e spec
+    // asserts `user-select: none` on the chrome (computed style), but
+    // `-webkit-touch-callout` is Safari-only and not exposed in headless
+    // Chromium, and the seed books have no description / EPUB chapter to select
+    // there — so guard both the callout suppression and the content re-enable
+    // at the CSS source.
+    #[test]
+    fn chrome_suppresses_callout_and_content_keeps_selection() {
+        const APP_CSS: &str = include_str!("static/app.css");
+
+        // The chrome rule must turn off the long-press callout and selection.
+        let chrome = css_block(APP_CSS, ".header, .tab-bar, .card")
+            .expect("app.css must have a chrome rule starting `.header, .tab-bar, .card` (Item F)");
+        assert!(
+            chrome.contains("-webkit-touch-callout: none"),
+            "chrome must suppress the iOS long-press callout (Item F)"
+        );
+        assert!(
+            chrome.contains("user-select: none"),
+            "chrome must suppress stray text selection (Item F)"
+        );
+
+        // Reading content must re-enable selection so quotes/notes still work.
+        let content = css_block(APP_CSS, ".reader-chapter .content, .detail-description").expect(
+            "app.css must re-enable selection on `.reader-chapter .content, .detail-description` (Item F)",
+        );
+        assert!(
+            content.contains("user-select: text"),
+            "chapter text and the book description must keep text selection (Item F)"
+        );
     }
 
     // Finding 11: PUBLIC_SHELL_ASSETS is the single source of truth shared by

@@ -91,7 +91,7 @@ Highest leverage. These three together flip the feel; the rest is polish on top.
 
 ## Tier 2 — touch polish
 
-### Item D — Press states, not hover  🔲
+### Item D — Press states, not hover  ✅
 
 **Goal.** Touch has no hover; give real press feedback and stop sticky-hover artifacts.
 
@@ -101,7 +101,9 @@ Highest leverage. These three together flip the feel; the rest is polish on top.
 
 **Acceptance.** On touch: tapping a card gives a brief press-scale, no lingering hover state after the tap; desktop hover lift unchanged.
 
-### Item E — 44px minimum tap targets  🔲
+**As shipped (deviation from proposed scope).** Shipped the sticky-hover fix only: the `.card`/`.shelf-card` lift is gated behind `@media (hover: hover) and (pointer: fine)` (tighter than the proposed `(hover: hover)` — plain `(hover: hover)` still matches the common coarse-primary hybrids where a finger tap re-latches the lift). A residual case remains that pure CSS can't reach: a touchscreen laptop whose *primary* pointer is a trackpad reports `pointer: fine`, so a finger tap there can still latch the lift (media queries describe the primary device, not the pointer that fired `:hover`); eliminating that needs JS pointer-type tracking, deferred with the rest of the custom press-state work. The browser's **native** tap-highlight is kept as universal touch feedback. The proposed global `-webkit-tap-highlight-color: transparent` **+** custom `:active` press-scale were **not** shipped: removing the native highlight forces a bespoke press-state onto every tappable element, and each replacement hit an edge case that three review rounds kept surfacing — `transform` is a no-op on non-replaced inline links (`.series-link`), scrollable `<button>` lists (`.filter-panel-item`) flash-shrink mid-scroll, `<div role=button>` rows (`.card`, `.collection-row`) get no `:active` on iOS without a touch shim, and relocating the control `:hover` rules flipped cascade order against equal-specificity `.active` rules (a desktop regression). The card-lift gate is the highest-leverage, zero-cascade-risk piece and delivers tell #4's headline; a full custom press-state system would need JS pointer-type tracking and per-element handling, deferred as out of proportion to a Tier-2 polish item.
+
+### Item E — 44px minimum tap targets  ✅
 
 **Goal.** Meet the 44×44px touch-target floor on all interactive chrome.
 
@@ -111,7 +113,7 @@ Highest leverage. These three together flip the feel; the rest is polish on top.
 
 **Acceptance.** Every interactive control ≥44px in the touch hit test at 390px; layout not visibly bulkier on desktop.
 
-### Item F — Suppress long-press callout & stray selection  🔲
+### Item F — Suppress long-press callout & stray selection  ✅
 
 **Goal.** Chrome shouldn't trigger the iOS long-press callout or text-selection like a web document.
 
