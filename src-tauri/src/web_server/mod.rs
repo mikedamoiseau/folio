@@ -2959,6 +2959,36 @@ mod tests {
         }
     }
 
+    // Item B (app-feel Tier 1): edge-to-edge standalone chrome must respect the
+    // notch / status bar / home indicator. That needs viewport-fit=cover + a
+    // black-translucent status bar in index.html and env(safe-area-inset-*)
+    // padding in app.css. `env()` resolves to 0 in a non-notched headless
+    // browser, so a runtime check can't observe the insets; these guard the
+    // source directly (the same approach as the dvh guard above).
+    #[test]
+    fn standalone_chrome_declares_safe_area_and_edge_to_edge() {
+        const INDEX_HTML: &str = include_str!("static/index.html");
+        const APP_CSS: &str = include_str!("static/app.css");
+
+        assert!(
+            INDEX_HTML.contains("viewport-fit=cover"),
+            "index.html's viewport meta must include viewport-fit=cover (Item B) \
+             so content can extend into the safe-area insets"
+        );
+        assert!(
+            INDEX_HTML.contains(r#"content="black-translucent""#),
+            "index.html's apple-mobile-web-app-status-bar-style must be \
+             black-translucent for an edge-to-edge status bar (Item B)"
+        );
+        for inset in ["env(safe-area-inset-top", "env(safe-area-inset-bottom"] {
+            assert!(
+                APP_CSS.contains(inset),
+                "app.css must pad chrome with {inset}...) so it clears system UI \
+                 in standalone mode (Item B)"
+            );
+        }
+    }
+
     // Finding 11: PUBLIC_SHELL_ASSETS is the single source of truth shared by
     // web_ui::routes() and auth::auth_middleware's carve-out — this walks the
     // list end-to-end against a live, PIN-protected server, so a path added

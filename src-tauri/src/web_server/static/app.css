@@ -102,7 +102,14 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .login .error { color: var(--error); font-size: 0.9rem; }
 
 /* ── Header ────────────────────────────────────── */
-.header { display: flex; align-items: center; padding: 12px var(--gap); border-bottom: 1px solid var(--warm-border); gap: 16px; position: sticky; top: 0; background: var(--paper); z-index: 10; }
+/* Item B: pad the top by the notch/status-bar inset and the sides by the
+   landscape insets (max() keeps the base --gap when insets are 0, e.g.
+   desktop). The layered background paints an accent strip exactly as tall as
+   the status bar (env(safe-area-inset-top)) behind the black-translucent
+   status bar so its white text stays legible over the light-theme paper
+   header; the strip collapses to 0 height off-notch, leaving the header pure
+   paper. */
+.header { display: flex; align-items: center; padding: calc(12px + env(safe-area-inset-top)) max(var(--gap), env(safe-area-inset-right)) 12px max(var(--gap), env(safe-area-inset-left)); border-bottom: 1px solid var(--warm-border); gap: 16px; position: sticky; top: 0; background: linear-gradient(var(--accent), var(--accent)) 0 0 / 100% env(safe-area-inset-top) no-repeat, var(--paper); z-index: 10; }
 .header h1 { font-size: 1.3rem; color: var(--accent); white-space: nowrap; }
 /* Reader + detail headers show the (potentially long) book title: let it grow
    into the row and wrap onto multiple lines instead of overflowing/truncating,
@@ -286,7 +293,9 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   animation: slide-in-right var(--dur-page-turn) var(--ease-page-turn) both;
 }
 
-.reader-toolbar { display: flex; align-items: center; gap: 10px; padding: 10px var(--gap); border-top: 1px solid var(--warm-border); background: var(--paper); }
+/* Item B: the reader has no tab bar, so its bottom toolbar clears the home
+   indicator itself via the bottom inset (0 off-notch). */
+.reader-toolbar { display: flex; align-items: center; gap: 10px; padding: 10px var(--gap) calc(10px + env(safe-area-inset-bottom)); border-top: 1px solid var(--warm-border); background: var(--paper); }
 .reader-toolbar button { padding: 6px 16px; background: var(--surface); border: 1px solid var(--warm-border); border-radius: var(--radius); color: var(--ink); cursor: pointer; white-space: nowrap; }
 .reader-toolbar button:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
 .reader-toolbar button:disabled { opacity: 0.55; cursor: default; }
@@ -380,7 +389,13 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   z-index: 20;
   justify-content: space-around;
   align-items: stretch;
-  height: var(--tab-bar-h);
+  /* Item B: the --tab-bar-h tap row sits above the home-indicator inset; the
+     inset becomes bottom padding (empty, over the indicator). Side insets keep
+     the tabs clear of a landscape notch. All resolve to 0 off-notch. */
+  height: calc(var(--tab-bar-h) + env(safe-area-inset-bottom));
+  padding-bottom: env(safe-area-inset-bottom);
+  padding-left: env(safe-area-inset-left);
+  padding-right: env(safe-area-inset-right);
   background: var(--paper);
   border-top: 1px solid var(--warm-border);
 }
@@ -411,12 +426,13 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
      as the only way to reach Collections/Stats from a book. The theme toggle
      has no [data-nav], so it always stays. */
   #app:has(.tab-bar) .header .nav-icon[data-nav] { display: none; }
-  /* Keep the last content row clear of the fixed bar. :has scopes this to the
-     views that actually render a tab bar (reader/login render none). */
-  body:has(.tab-bar) { padding-bottom: var(--tab-bar-h); }
+  /* Keep the last content row clear of the fixed bar (including its home-
+     indicator inset). :has scopes this to the views that render a tab bar
+     (reader/login render none). */
+  body:has(.tab-bar) { padding-bottom: calc(var(--tab-bar-h) + env(safe-area-inset-bottom)); }
   /* Lift toasts above the tab bar so it never occludes a tab (only when a bar
      is present — the reader/login toast stays at its default bottom). */
-  body:has(.tab-bar) .toast-container { bottom: calc(var(--tab-bar-h) + 16px); }
+  body:has(.tab-bar) .toast-container { bottom: calc(var(--tab-bar-h) + env(safe-area-inset-bottom) + 16px); }
 }
 
 @media (max-width: 600px) {

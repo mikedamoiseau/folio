@@ -2,14 +2,18 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <title>Folio</title>
   <link rel="icon" type="image/png" href="/favicon.png">
   <link rel="manifest" href="/manifest.json">
   <link rel="apple-touch-icon" href="/icon-192.png">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <!-- Item B (app-feel): black-translucent lets content run edge-to-edge under
+       the status bar (paired with viewport-fit=cover above). The status-bar
+       text is white, so app.css paints the safe-area-inset-top strip with the
+       accent colour to keep it legible over the light-theme paper header. -->
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <!-- Item 9: a static light-palette value is an accepted simplification —
        the alternative (JS updating theme-color to match the live theme) needs
        either an inline script edit (which would break the CSP hash below) or

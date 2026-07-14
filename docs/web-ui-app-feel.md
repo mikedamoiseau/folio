@@ -57,7 +57,7 @@ Highest leverage. These three together flip the feel; the rest is polish on top.
 
 **Acceptance.** At 390px: fixed bottom bar with three tabs, active tab highlighted, tapping switches view; bar absent in reader and login; desktop (1440px) unchanged. Content is not obscured by the bar (pairs with Item C's content padding).
 
-### Item B — Safe-area insets + edge-to-edge chrome  🔲
+### Item B — Safe-area insets + edge-to-edge chrome  ✅
 
 **Goal.** Respect notch / status bar / home indicator so chrome doesn't sit under system UI in standalone mode. THE tell of a web page pretending to be an app.
 

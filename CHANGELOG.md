@@ -71,6 +71,12 @@ This project adheres to [Semantic Versioning](https://semver.org/).
   jump straight back to the book at the spot where you looked it up.
 
 ### Changed
+- **The installed web app runs edge-to-edge on notched phones.** When Folio's
+  web UI is added to the home screen on a device with a notch or a home
+  indicator, the header now clears the status bar, the bottom tab bar sits
+  above the home indicator, and nothing hides behind the rounded corners or the
+  camera cutout. The status bar stays readable in both light and dark themes.
+  On a normal browser or a device without a notch, nothing changes.
 - **The web reader feels less like a web page on phones and tablets.** Pulling
   down past the top of a list no longer triggers the browser's pull-to-refresh
   (which used to reload the whole app), and over-scrolling no longer rubber-bands
