@@ -2923,6 +2923,72 @@ mod tests {
         );
     }
 
+    // Item C (app-feel Tier 1): the reader's full-viewport surfaces must use
+    // dynamic-viewport units (dvh) so mobile browser toolbars expanding/
+    // collapsing don't clip the reader (bare 100vh is the pre-Item-C tell).
+    // Computed style resolves dvh->px so a headless-browser check can't see
+    // the unit; this guards the CSS source directly against a silent revert.
+    #[test]
+    fn reader_full_viewport_uses_dynamic_viewport_height() {
+        const APP_CSS: &str = include_str!("static/app.css");
+
+        /// Returns the declaration block (between `{` and the next `}`) of the
+        /// first CSS rule whose selector text starts with `selector`.
+        fn rule_block<'a>(css: &'a str, selector: &str) -> Option<&'a str> {
+            let start = css.find(selector)?;
+            let open = css[start..].find('{')? + start + 1;
+            let close = css[open..].find('}')? + open;
+            Some(&css[open..close])
+        }
+
+        // Guard each reader surface that filled the viewport *within its own
+        // rule*: a file-wide `contains("100dvh")` would pass on the body/login
+        // declarations even if a reader rule regressed, and an exact-substring
+        // negative is evaded by any reformat. Requiring `100vh` before `100dvh`
+        // in the specific block catches a reordered/relocated revert too.
+        for selector in [".reader-page, .reader-chapter", ".reader-skeleton"] {
+            let block = rule_block(APP_CSS, selector)
+                .unwrap_or_else(|| panic!("app.css must contain a `{selector}` rule"));
+            let vh = block.find("100vh");
+            let dvh = block.find("100dvh");
+            assert!(
+                matches!((vh, dvh), (Some(v), Some(d)) if v < d),
+                "the `{selector}` rule must size to 100dvh with a preceding 100vh \
+                 fallback (Item C) — found vh={vh:?} dvh={dvh:?} in block:{block}"
+            );
+        }
+    }
+
+    // Item B (app-feel Tier 1): edge-to-edge standalone chrome must respect the
+    // notch / status bar / home indicator. That needs viewport-fit=cover + a
+    // black-translucent status bar in index.html and env(safe-area-inset-*)
+    // padding in app.css. `env()` resolves to 0 in a non-notched headless
+    // browser, so a runtime check can't observe the insets; these guard the
+    // source directly (the same approach as the dvh guard above).
+    #[test]
+    fn standalone_chrome_declares_safe_area_and_edge_to_edge() {
+        const INDEX_HTML: &str = include_str!("static/index.html");
+        const APP_CSS: &str = include_str!("static/app.css");
+
+        assert!(
+            INDEX_HTML.contains("viewport-fit=cover"),
+            "index.html's viewport meta must include viewport-fit=cover (Item B) \
+             so content can extend into the safe-area insets"
+        );
+        assert!(
+            INDEX_HTML.contains(r#"content="black-translucent""#),
+            "index.html's apple-mobile-web-app-status-bar-style must be \
+             black-translucent for an edge-to-edge status bar (Item B)"
+        );
+        for inset in ["env(safe-area-inset-top", "env(safe-area-inset-bottom"] {
+            assert!(
+                APP_CSS.contains(inset),
+                "app.css must pad chrome with {inset}...) so it clears system UI \
+                 in standalone mode (Item B)"
+            );
+        }
+    }
+
     // Finding 11: PUBLIC_SHELL_ASSETS is the single source of truth shared by
     // web_ui::routes() and auth::auth_middleware's carve-out — this walks the
     // list end-to-end against a live, PIN-protected server, so a path added

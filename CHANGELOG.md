@@ -6,6 +6,14 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- **A bottom tab bar in the web app on phones and tablets.** On a phone,
+  tablet, or installed web app, the primary destinations — Library,
+  Collections, and Reading Stats — now live in a fixed bar along the bottom of
+  the screen, within easy thumb reach, with the current section highlighted.
+  The old top-corner icons for Collections and Stats step aside on these
+  devices (the theme toggle stays in the header), and the bar tucks away while
+  you're reading. On a desktop browser nothing changes — the header icons stay
+  exactly where they were.
 - **Zoom into pages in the web reader.** Comic and PDF pages in the browser
   reader can now be zoomed: hold Ctrl and scroll (or pinch on a trackpad)
   to zoom up to 5×, then scroll to pan around the page. On a phone or
@@ -63,6 +71,17 @@ This project adheres to [Semantic Versioning](https://semver.org/).
   jump straight back to the book at the spot where you looked it up.
 
 ### Changed
+- **The installed web app runs edge-to-edge on notched phones.** When Folio's
+  web UI is added to the home screen on a device with a notch or a home
+  indicator, the header now clears the status bar, the bottom tab bar sits
+  above the home indicator, and nothing hides behind the rounded corners or the
+  camera cutout. The status bar stays readable in both light and dark themes.
+  On a normal browser or a device without a notch, nothing changes.
+- **The web reader feels less like a web page on phones and tablets.** Pulling
+  down past the top of a list no longer triggers the browser's pull-to-refresh
+  (which used to reload the whole app), and over-scrolling no longer rubber-bands
+  to reveal the page edges. The reader now sizes itself to the real visible area,
+  so a page is never cut off behind the browser's collapsing address bar.
 - **Comics open instantly, even large ones.** Opening a CBZ/CBR now paints the
   first page in tens of milliseconds instead of waiting seconds for the whole
   archive to extract. Folio extracts just the first page (plus your resume page)

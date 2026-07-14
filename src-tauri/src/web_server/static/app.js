@@ -808,7 +808,8 @@
           ${navIconsHtml("")}
         </div>
         <div class="filter-bar" id="filter-bar"></div>
-        <div id="library-content">${skeletonGridHtml()}</div>`;
+        <div id="library-content">${skeletonGridHtml()}</div>
+        ${tabBarHtml("library")}`;
 
       const sortSelect = $("#sort-select");
       sortSelect.value = activeSort;
@@ -829,6 +830,7 @@
       };
 
       bindNavIcons();
+      bindTabBar();
       renderFilterBar();
     } else {
       // Item 7: DOM already exists — this is a hash change while still
@@ -3409,9 +3411,11 @@
         <span style="flex:1"></span>
         ${navIconsHtml("stats")}
       </div>
-      <div class="stats"><div class="loading">Loading...</div></div>`;
+      <div class="stats"><div class="loading">Loading...</div></div>
+      ${tabBarHtml("stats")}`;
     $("#back-btn").addEventListener("click", goHome);
     bindNavIcons();
+    bindTabBar();
 
     // Finding 1: stats previously had no failure handling at all beyond a
     // 401 — a network error, non-2xx response, or bad JSON left "Loading..."
@@ -3496,9 +3500,11 @@
         <span style="flex:1"></span>
         ${navIconsHtml("collections")}
       </div>
-      <div class="collections"><div class="loading">Loading...</div></div>`;
+      <div class="collections"><div class="loading">Loading...</div></div>
+      ${tabBarHtml("collections")}`;
     $("#back-btn").addEventListener("click", goHome);
     bindNavIcons();
+    bindTabBar();
 
     // Finding 1: this previously had no failure handling at all — a network
     // error, non-2xx response, or bad JSON left "Loading..." on screen
@@ -3690,16 +3696,28 @@
     updateThemeButtonLabel();
   }
 
+  // Feather-style icon path geometry shared by the header nav cluster
+  // (navIconsHtml) and the bottom tab bar (tabBarHtml) so the two glyphs for a
+  // destination never drift. Only the `d` data is shared — the wrappers differ
+  // in size (20px header vs 22px tab).
+  const NAV_ICON_PATH = {
+    collections: '<path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>',
+    stats: '<path d="M18 20V10M12 20V4M6 20v-6"/>',
+    library: '<path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>',
+  };
+  const navIconSvg = (size, inner) =>
+    `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${inner}</svg>`;
+
   function navIconsHtml(activePage) {
     const folderColor = activePage === "collections" ? "active" : "";
     const chartColor = activePage === "stats" ? "active" : "";
     return `<div class="nav-icons">
       ${themeToggleHtml()}
       <button class="nav-icon ${folderColor}" title="Collections" aria-label="Collections" data-nav="collections">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+        ${navIconSvg(20, NAV_ICON_PATH.collections)}
       </button>
       <button class="nav-icon ${chartColor}" title="Reading Stats" aria-label="Reading Stats" data-nav="stats">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 20V10M12 20V4M6 20v-6"/></svg>
+        ${navIconSvg(20, NAV_ICON_PATH.stats)}
       </button>
     </div>`;
   }
@@ -3710,6 +3728,34 @@
     });
     const themeBtn = $("#theme-toggle-btn");
     if (themeBtn) themeBtn.onclick = cycleTheme;
+  }
+
+  // Item A (app-feel Tier 1): fixed bottom tab bar for primary navigation on
+  // narrow/touch viewports. Rendered by the three top-level views
+  // (library/collections/stats) — not the reader (immersive) or login. On
+  // desktop it is CSS-hidden and the header icon cluster is used instead
+  // (the two are mutually exclusive via a media query in app.css). SVGs mirror
+  // the header cluster's (folder = collections, bar-chart = stats); Library
+  // gets a book glyph the cluster never had.
+  function tabBarHtml(activePage) {
+    const tab = (page, label, svg) => {
+      const active = activePage === page;
+      return `<button class="tab ${active ? "active" : ""}" data-tab="${page}" aria-label="${label}"${active ? ' aria-current="page"' : ""}>
+        ${svg}
+        <span class="tab-label">${label}</span>
+      </button>`;
+    };
+    return `<nav class="tab-bar" aria-label="Primary">
+      ${tab("library", "Library", navIconSvg(22, NAV_ICON_PATH.library))}
+      ${tab("collections", "Collections", navIconSvg(22, NAV_ICON_PATH.collections))}
+      ${tab("stats", "Stats", navIconSvg(22, NAV_ICON_PATH.stats))}
+    </nav>`;
+  }
+
+  function bindTabBar() {
+    $$(".tab-bar .tab").forEach(t => {
+      t.onclick = () => navigate(t.dataset.tab === "library" ? "#/" : "#/" + t.dataset.tab);
+    });
   }
 
   // Item 9 (PWA): feature-detected registration — service workers only
