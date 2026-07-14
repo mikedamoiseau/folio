@@ -174,7 +174,8 @@ body:not(:has(.header))::before {
    setupInfiniteScroll() in app.js). No visual footprint of its own. */
 .library-sentinel { height: 1px; }
 .card { background: var(--surface); border: 1px solid var(--warm-border); border-radius: 12px; overflow: hidden; cursor: pointer; transition: transform 0.2s ease, box-shadow 0.2s ease; }
-.card:hover { transform: translateY(-2px); box-shadow: 0 8px 24px -4px var(--shadow); }
+/* Item D: the lift is a hover affordance — gated to a hovering fine pointer in
+   the @media block near the end of this file so a finger tap never triggers it. */
 .card img { width: 100%; aspect-ratio: 2/3; object-fit: cover; background: var(--warm-subtle); display: block; }
 /* Item 10: shared placeholder for a missing/failed cover — one markup/style
    used everywhere a cover <img> can fail (grid card, shelf card, detail
@@ -193,7 +194,7 @@ body:not(:has(.header))::before {
 .shelf-heading.all-books-heading { margin-top: var(--gap); }
 .shelf-row { display: flex; gap: 12px; overflow-x: auto; padding: 0 var(--gap) 10px; scroll-snap-type: x mandatory; -webkit-overflow-scrolling: touch; }
 .shelf-card { flex: 0 0 130px; scroll-snap-align: start; background: var(--surface); border: 1px solid var(--warm-border); border-radius: 10px; overflow: hidden; cursor: pointer; transition: transform 0.2s ease, box-shadow 0.2s ease; }
-.shelf-card:hover { transform: translateY(-2px); box-shadow: 0 8px 24px -4px var(--shadow); }
+/* Item D: lift gated to a hovering fine pointer (see the @media block below). */
 .shelf-card img { width: 100%; aspect-ratio: 2/3; object-fit: cover; background: var(--warm-subtle); display: block; }
 .shelf-title { font-size: 0.78rem; font-weight: 600; padding: 8px 8px 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .shelf-progress { height: 3px; background: var(--warm-subtle); margin: 0 8px 8px; border-radius: 2px; overflow: hidden; }
@@ -460,6 +461,17 @@ body:not(:has(.header))::before {
   /* Lift toasts above the tab bar so it never occludes a tab (only when a bar
      is present — the reader/login toast stays at its default bottom). */
   body:has(.tab-bar) .toast-container { bottom: calc(var(--tab-bar-h) + env(safe-area-inset-bottom) + 16px); }
+}
+
+/* ── Card lift: hover-capable pointers only (Item D) ── */
+/* The book-cover lift is hover feedback. On touch :hover latches after a tap
+   and the card stays stuck in the lifted state until another element is
+   touched — the "it's a web page" tell. Gate it to a device whose primary
+   pointer both hovers and is fine (desktop mouse/trackpad); a coarse-pointer
+   finger tap never triggers it. Cards carry no .active variant, so relocating
+   these two rules here changes nothing about the desktop cascade. */
+@media (hover: hover) and (pointer: fine) {
+  .card:hover, .shelf-card:hover { transform: translateY(-2px); box-shadow: 0 8px 24px -4px var(--shadow); }
 }
 
 @media (max-width: 600px) {

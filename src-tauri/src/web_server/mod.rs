@@ -368,6 +368,30 @@ mod tests {
         }
     }
 
+    /// Balanced-brace body of the first CSS block whose header text matches
+    /// `header` — the substring before its `{`, e.g. a selector list or an
+    /// `@media (...)` prelude. Balanced scanning handles the nesting an @media
+    /// block introduces as well as a flat rule, so the CSS source-guard tests
+    /// below share this one scanner.
+    fn css_block<'a>(css: &'a str, header: &str) -> Option<&'a str> {
+        let start = css.find(header)?;
+        let open = css[start..].find('{')? + start;
+        let mut depth = 0usize;
+        for (i, ch) in css[open..].char_indices() {
+            match ch {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return Some(&css[open + 1..open + i]);
+                    }
+                }
+                _ => {}
+            }
+        }
+        None
+    }
+
     #[test]
     fn test_get_local_ip() {
         // Should return Some on machines with network access
@@ -2932,22 +2956,13 @@ mod tests {
     fn reader_full_viewport_uses_dynamic_viewport_height() {
         const APP_CSS: &str = include_str!("static/app.css");
 
-        /// Returns the declaration block (between `{` and the next `}`) of the
-        /// first CSS rule whose selector text starts with `selector`.
-        fn rule_block<'a>(css: &'a str, selector: &str) -> Option<&'a str> {
-            let start = css.find(selector)?;
-            let open = css[start..].find('{')? + start + 1;
-            let close = css[open..].find('}')? + open;
-            Some(&css[open..close])
-        }
-
         // Guard each reader surface that filled the viewport *within its own
         // rule*: a file-wide `contains("100dvh")` would pass on the body/login
         // declarations even if a reader rule regressed, and an exact-substring
         // negative is evaded by any reformat. Requiring `100vh` before `100dvh`
         // in the specific block catches a reordered/relocated revert too.
         for selector in [".reader-page, .reader-chapter", ".reader-skeleton"] {
-            let block = rule_block(APP_CSS, selector)
+            let block = css_block(APP_CSS, selector)
                 .unwrap_or_else(|| panic!("app.css must contain a `{selector}` rule"));
             let vh = block.find("100vh");
             let dvh = block.find("100dvh");
@@ -2987,6 +3002,32 @@ mod tests {
                  in standalone mode (Item B)"
             );
         }
+    }
+
+    // Item D (app-feel Tier 2): the book-cover lift is hover feedback. On touch
+    // :hover latches after a tap and the card stays stuck lifted — the "it's a
+    // web page" tell. It must be gated behind @media (hover: hover) and
+    // (pointer: fine) so only a hovering fine pointer (desktop mouse/trackpad)
+    // sees it; a coarse finger tap never does. Pointer-capability forks don't
+    // render in headless Chromium, so guard the CSS source directly (same
+    // approach, and shared brace-scanner, as the Item B/C guards above).
+    #[test]
+    fn card_lift_is_gated_to_hovering_fine_pointers() {
+        const APP_CSS: &str = include_str!("static/app.css");
+
+        let gate = css_block(APP_CSS, "@media (hover: hover) and (pointer: fine)").expect(
+            "app.css must gate the card lift behind @media (hover: hover) and (pointer: fine) (Item D)",
+        );
+        // Require every translateY(-2px) lift in the file to sit inside that
+        // gate, so a stray ungated lift (which would re-latch on touch) fails
+        // loudly rather than slipping through a file-wide `contains`.
+        let total = APP_CSS.matches("translateY(-2px)").count();
+        let gated = gate.matches("translateY(-2px)").count();
+        assert!(
+            total > 0 && total == gated,
+            "every translateY(-2px) lift must be inside the hover+fine-pointer gate \
+             so it never sticks after a touch tap — found {total} total, {gated} gated (Item D)"
+        );
     }
 
     // Finding 11: PUBLIC_SHELL_ASSETS is the single source of truth shared by
