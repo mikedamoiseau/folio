@@ -224,6 +224,11 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
    selector must out-rank `.reader-page.fit-width .reader-stage`'s
    overflow:auto (0-3-0). */
 .reader-page.fit-width .reader-stage.zoom-active { overflow: hidden; }
+/* Pan/pinch rewrite the image transform on every touchmove; without a
+   compositor layer each write repaints the scaled bitmap (stutter on iOS
+   Safari). Scoped to .zoom-active so the layer is released at 1x — the
+   swipe drag-follow sets will-change inline for its own short window. */
+.reader-stage.zoom-active img#page-img { will-change: transform; }
 .reader-page.fit-width .reader-stage img#page-img { width: 100%; max-width: 100%; height: auto; max-height: none; }
 .reader-page-error, .reader-error { color: var(--error); text-align: center; padding: 24px; }
 
