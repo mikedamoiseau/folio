@@ -85,6 +85,20 @@ test.describe("App shell — bottom tab bar (narrow)", () => {
     }
     await page.locator("#reader-stage").waitFor();
     await expect(page.locator(".tab-bar")).toHaveCount(0);
+    // The reader has no tab bar, so its header must KEEP the Collections/Stats
+    // icons on narrow — they are the only way to those destinations from a book
+    // (the icon-hide is scoped to views that render a bar).
+    await expect(page.locator('.header .nav-icon[data-nav="stats"]')).toBeVisible();
+    await expect(page.locator('.header .nav-icon[data-nav="collections"]')).toBeVisible();
+  });
+
+  test("content is padded clear of the fixed tab bar", async ({ page }) => {
+    await page.goto("/");
+    await page.locator(".grid .card").first().waitFor();
+    const pad = await page.evaluate(() => parseFloat(getComputedStyle(document.body).paddingBottom));
+    // body:has(.tab-bar) reserves --tab-bar-h (56px) so the last grid row is
+    // not occluded by the fixed bar.
+    expect(pad).toBeGreaterThanOrEqual(56);
   });
 });
 

@@ -3696,16 +3696,28 @@
     updateThemeButtonLabel();
   }
 
+  // Feather-style icon path geometry shared by the header nav cluster
+  // (navIconsHtml) and the bottom tab bar (tabBarHtml) so the two glyphs for a
+  // destination never drift. Only the `d` data is shared — the wrappers differ
+  // in size (20px header vs 22px tab).
+  const NAV_ICON_PATH = {
+    collections: '<path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>',
+    stats: '<path d="M18 20V10M12 20V4M6 20v-6"/>',
+    library: '<path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>',
+  };
+  const navIconSvg = (size, inner) =>
+    `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${inner}</svg>`;
+
   function navIconsHtml(activePage) {
     const folderColor = activePage === "collections" ? "active" : "";
     const chartColor = activePage === "stats" ? "active" : "";
     return `<div class="nav-icons">
       ${themeToggleHtml()}
       <button class="nav-icon ${folderColor}" title="Collections" aria-label="Collections" data-nav="collections">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+        ${navIconSvg(20, NAV_ICON_PATH.collections)}
       </button>
       <button class="nav-icon ${chartColor}" title="Reading Stats" aria-label="Reading Stats" data-nav="stats">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 20V10M12 20V4M6 20v-6"/></svg>
+        ${navIconSvg(20, NAV_ICON_PATH.stats)}
       </button>
     </div>`;
   }
@@ -3733,15 +3745,10 @@
         <span class="tab-label">${label}</span>
       </button>`;
     };
-    const svg = (inner) =>
-      `<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${inner}</svg>`;
-    const libSvg = svg('<path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>');
-    const colSvg = svg('<path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>');
-    const statSvg = svg('<path d="M18 20V10M12 20V4M6 20v-6"/>');
     return `<nav class="tab-bar" aria-label="Primary">
-      ${tab("library", "Library", libSvg)}
-      ${tab("collections", "Collections", colSvg)}
-      ${tab("stats", "Stats", statSvg)}
+      ${tab("library", "Library", navIconSvg(22, NAV_ICON_PATH.library))}
+      ${tab("collections", "Collections", navIconSvg(22, NAV_ICON_PATH.collections))}
+      ${tab("stats", "Stats", navIconSvg(22, NAV_ICON_PATH.stats))}
     </nav>`;
   }
 

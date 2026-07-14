@@ -405,12 +405,18 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
    default above with the tab bar hidden and the header cluster intact. */
 @media (max-width: 600px), (hover: none) and (pointer: coarse) {
   .tab-bar { display: flex; }
-  /* Collections/stats moved to the tab bar; hide their header icons. The theme
-     toggle has no [data-nav], so it stays in the header. */
-  .header .nav-icon[data-nav] { display: none; }
+  /* Collections/stats moved to the tab bar; hide their header icons ONLY on the
+     views that render a bar (#app:has(.tab-bar) = library/collections/stats).
+     The reader and detail render no tab bar, so their header keeps those icons
+     as the only way to reach Collections/Stats from a book. The theme toggle
+     has no [data-nav], so it always stays. */
+  #app:has(.tab-bar) .header .nav-icon[data-nav] { display: none; }
   /* Keep the last content row clear of the fixed bar. :has scopes this to the
      views that actually render a tab bar (reader/login render none). */
   body:has(.tab-bar) { padding-bottom: var(--tab-bar-h); }
+  /* Lift toasts above the tab bar so it never occludes a tab (only when a bar
+     is present — the reader/login toast stays at its default bottom). */
+  body:has(.tab-bar) .toast-container { bottom: calc(var(--tab-bar-h) + 16px); }
 }
 
 @media (max-width: 600px) {
