@@ -439,6 +439,15 @@
     if (div) div.remove();
   }
 
+  // Re-clamp the zoom pan against the new stage size on resize/orientation
+  // change so a zoomed image can't get stuck showing a gap.
+  window.addEventListener("resize", () => {
+    if (readerState && readerState.mode === "page" && isZoomed()) {
+      clampZoomPan();
+      applyZoomTransform();
+    }
+  });
+
   document.addEventListener("keydown", (e) => {
     // K3: never hijack modified shortcuts (Cmd/Ctrl+F find, Cmd+ArrowLeft
     // history back, etc.) — bail before any preventDefault.
@@ -2051,6 +2060,11 @@
       turnAnimCleanup: null,
       snapBackCleanup: null,
       pendingInstantTurn: false,
+      // Pinch-zoom (page mode only): scale in [1, 5]; tx/ty are the
+      // translate() applied before scale() (transform-origin 0 0, so
+      // scaling never moves the image's top-left). This object always
+      // mirrors exactly what applyZoomTransform() last wrote to #page-img.
+      zoom: { scale: 1, tx: 0, ty: 0 },
     };
     readerState.handlers = makeReaderHandlers(id);
     renderReaderChrome();
@@ -2130,6 +2144,13 @@
   function applyChromeVisibility() {
     const root = $("#reader-root");
     if (root) root.classList.toggle("chrome-hidden", readerState.chromeHidden);
+    // Showing/hiding the chrome rows resizes the stage without a window
+    // resize event — re-clamp a zoomed pan against the new bounds so no
+    // gap opens at an edge.
+    if (readerState.mode === "page" && isZoomed()) {
+      clampZoomPan();
+      applyZoomTransform();
+    }
   }
 
   function applyFitMode() {
@@ -2141,15 +2162,275 @@
     if (btn) btn.textContent = readerState.fitMode === "fit-height" ? "Fit: Height" : "Fit: Width";
   }
 
-  // Left third = prev, right third = next, middle third = toggle chrome.
+  // ── Pinch-to-zoom (page mode) ────────────────────────────────────────
+  // One writer owns #page-img's transform: applyZoomTransform(). The swipe
+  // drag-follow below only ever runs at scale 1 (where the zoom transform
+  // is empty), so the two never compose — they're mutually exclusive, and
+  // resetDragStyles() re-applies the zoom transform after clearing drag
+  // leftovers so neither path can wipe the other's state.
+  const ZOOM_MIN = 1;
+  const ZOOM_MAX = 5;
+  // iOS Safari fires touch events AND proprietary GestureEvents for the
+  // same physical pinch. The touch pinch (bindSwipe) sets this so the
+  // gesture handlers (bindWheelZoom) stand down — otherwise both write the
+  // scale each frame from slightly different anchors and the zoom jitters.
+  let touchPinchActive = false;
+  // Bumped by resetZoom(): an in-flight gesture that captured its base
+  // scale before a page turn (or reader re-entry) is stale — without this
+  // its next touchmove would re-apply the old scale to the new page.
+  let zoomEpoch = 0;
+  const ZOOM_DOUBLE_TAP_SCALE = 2.5;
+  const DOUBLE_TAP_WINDOW_MS = 275; // also the single-tap defer window
+  const DOUBLE_TAP_SLOP_PX = 30;
+
+  function isZoomed() {
+    return !!(readerState && readerState.zoom && readerState.zoom.scale > 1);
+  }
+
+  function applyZoomTransform() {
+    const img = $("#page-img");
+    if (!img || !readerState || !readerState.zoom) return;
+    const z = readerState.zoom;
+    const stage = $("#reader-stage");
+    if (z.scale <= 1) {
+      img.style.transform = "";
+      if (stage) stage.classList.remove("zoom-active");
+      return;
+    }
+    img.style.transform = `translate(${z.tx}px, ${z.ty}px) scale(${z.scale})`;
+    if (stage) stage.classList.add("zoom-active");
+  }
+
+  function resetZoom() {
+    if (!readerState || !readerState.zoom) return;
+    zoomEpoch++;
+    readerState.zoom = { scale: 1, tx: 0, ty: 0 };
+    applyZoomTransform();
+  }
+
+  // Clamp one axis: if the scaled image overflows the stage, no gap may
+  // open between image edge and stage edge; otherwise center the image on
+  // that axis. `base` is the image's untransformed offset inside the stage.
+  function clampZoomAxis(t, base, scaledSize, stageSize) {
+    if (scaledSize <= stageSize) return (stageSize - scaledSize) / 2 - base;
+    return Math.min(-base, Math.max(stageSize - scaledSize - base, t));
+  }
+
+  function clampZoomPan() {
+    const img = $("#page-img");
+    const stage = $("#reader-stage");
+    const z = readerState && readerState.zoom;
+    if (!img || !stage || !z) return;
+    z.tx = clampZoomAxis(z.tx, img.offsetLeft, img.clientWidth * z.scale, stage.clientWidth);
+    z.ty = clampZoomAxis(z.ty, img.offsetTop, img.clientHeight * z.scale, stage.clientHeight);
+  }
+
+  // Core zoom apply: put the image-local point (localX, localY) under the
+  // client point (clientX, clientY) at `newScale`. Shared by zoomAtPoint
+  // (anchor = whatever is under the cursor right now) and the touch pinch
+  // (anchor captured once at pinch start, so the content that was between
+  // the fingers follows a moving midpoint — a constant-spread two-finger
+  // drag pans).
+  function zoomToAnchor(newScale, localX, localY, clientX, clientY) {
+    const img = $("#page-img");
+    const stage = $("#reader-stage");
+    const z = readerState && readerState.zoom;
+    // Error state (#page-error visible, img hidden/collapsed): no-op.
+    if (!img || !stage || !z || !img.clientWidth) return;
+    const scale = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, newScale));
+    // Entering zoom from 1x in fit-width: the stage may be natively
+    // scrolled. Freeze that (same trick as renderPageTurn's F5) — while
+    // zoomed, .zoom-active turns off native overflow entirely and our pan
+    // owns all movement, so the offset-based math below stays valid (the
+    // tx/ty formula assumes scrollTop 0 at apply time).
+    if (scale > 1 && z.scale === 1 && stage.scrollTop > 0) stage.scrollTop = 0;
+    const sr = stage.getBoundingClientRect();
+    z.tx = clientX - localX * scale - (sr.left + img.offsetLeft);
+    z.ty = clientY - localY * scale - (sr.top + img.offsetTop);
+    z.scale = scale;
+    clampZoomPan();
+    applyZoomTransform();
+  }
+
+  // Image-local (unscaled) coords of a client point, measured from the
+  // CURRENT rendered rect — so it reflects any native fit-width scroll and
+  // the current transform. Must run before zoomToAnchor's scroll reset.
+  function imageLocalPoint(clientX, clientY) {
+    const img = $("#page-img");
+    const z = readerState && readerState.zoom;
+    if (!img || !z || !img.clientWidth) return null;
+    const r = img.getBoundingClientRect();
+    return { x: (clientX - r.left) / z.scale, y: (clientY - r.top) / z.scale };
+  }
+
+  function zoomAtPoint(newScale, clientX, clientY) {
+    const local = imageLocalPoint(clientX, clientY);
+    if (!local) return;
+    zoomToAnchor(newScale, local.x, local.y, clientX, clientY);
+  }
+
+  function panZoomBy(dx, dy) {
+    const z = readerState && readerState.zoom;
+    if (!z || z.scale <= 1) return;
+    z.tx += dx;
+    z.ty += dy;
+    clampZoomPan();
+    applyZoomTransform();
+  }
+
+  function bindWheelZoom(stage) {
+    // Firefox reports mouse-wheel deltas in lines (deltaMode 1, ±3/notch),
+    // not pixels — without normalization zoom/pan is ~30x too weak there.
+    // Page-mode (deltaMode 2) deltas scale by the stage size on the same
+    // axis as the delta, not blanket clientHeight.
+    function wheelPx(e, d, axisSize) {
+      if (e.deltaMode === 1) return d * 33;
+      if (e.deltaMode === 2) return d * (axisSize || 400);
+      return d;
+    }
+
+    // Safari (macOS) fires proprietary GestureEvents for a trackpad pinch
+    // alongside/instead of ctrl+wheel. Handle the gesture directly and mute
+    // ctrl+wheel while one is active so browsers that emit both never apply
+    // the zoom twice; the preventDefault also stops Safari's native
+    // full-page zoom. No-ops on browsers without GestureEvent.
+    let inGesture = false;
+    let gestureAt = 0; // last gesture activity — staleness backstop below
+    let gestureBaseScale = 1;
+    let gestureEpoch = 0; // zoomEpoch at (re)base — see the mismatch check
+    let gestureBaseFactor = 1; // e.scale at (re)base; e.scale is cumulative
+    stage.addEventListener("gesturestart", (e) => {
+      if (!readerState || readerState.mode !== "page") return;
+      e.preventDefault();
+      if (touchPinchActive) return; // touch pinch owns this physical gesture
+      inGesture = true;
+      gestureAt = Date.now();
+      gestureBaseScale = readerState.zoom.scale;
+      gestureEpoch = zoomEpoch;
+      gestureBaseFactor = 1;
+    });
+    stage.addEventListener("gesturechange", (e) => {
+      if (!readerState || readerState.mode !== "page") return;
+      e.preventDefault();
+      if (touchPinchActive) return; // touch pinch owns this physical gesture
+      inGesture = true;
+      gestureAt = Date.now();
+      if (typeof e.scale !== "number") return;
+      if (gestureEpoch !== zoomEpoch) {
+        // A page turn reset the zoom mid-gesture — re-base on the fresh
+        // scale instead of re-applying the previous page's. e.scale is
+        // cumulative since gesturestart, so remember the factor at the
+        // re-base point and zoom by the ratio from here on.
+        gestureBaseScale = readerState.zoom.scale;
+        gestureEpoch = zoomEpoch;
+        gestureBaseFactor = e.scale;
+        return;
+      }
+      zoomAtPoint(gestureBaseScale * (e.scale / gestureBaseFactor), e.clientX, e.clientY);
+    });
+    stage.addEventListener("gestureend", (e) => {
+      e.preventDefault();
+      inGesture = false;
+    });
+
+    stage.addEventListener("wheel", (e) => {
+      if (!readerState || readerState.mode !== "page") return;
+      if (e.ctrlKey) {
+        // ctrl+wheel (incl. trackpad pinch on Chrome/Edge/Firefox, which
+        // deliver it as ctrl+wheel) — zoom about the cursor.
+        e.preventDefault();
+        if (inGesture) {
+          // Safari handles the pinch via gesturechange — don't double-apply.
+          // Staleness backstop: a gestureend lost to an app switch or system
+          // gesture would otherwise mute ctrl+wheel zoom forever.
+          if (Date.now() - gestureAt < 500) return;
+          inGesture = false;
+        }
+        zoomAtPoint(readerState.zoom.scale * Math.exp(-wheelPx(e, e.deltaY, stage.clientHeight) * 0.01), e.clientX, e.clientY);
+      } else if (isZoomed()) {
+        // Plain wheel while zoomed pans (content follows scroll direction);
+        // at 1x native behavior (fit-width scroll) is untouched.
+        e.preventDefault();
+        panZoomBy(-wheelPx(e, e.deltaX, stage.clientWidth), -wheelPx(e, e.deltaY, stage.clientHeight));
+      }
+    }, { passive: false });
+  }
+
+  // Pending deferred tap-zone action (see bindClickZones). Module-scope so
+  // the gesture controller can cancel it: a pinch or pan starting inside
+  // the defer window means the taps were gesture noise, not intent.
+  let pendingTap = null; // { x, y, zone, epoch, timer }
+  function cancelPendingTap() {
+    if (!pendingTap) return;
+    clearTimeout(pendingTap.timer);
+    pendingTap = null;
+  }
+
+  // Left third = prev, right third = next, middle third = toggle chrome —
+  // but deferred DOUBLE_TAP_WINDOW_MS so a second tap can turn the pair
+  // into a double-tap zoom toggle instead. Browsers synthesize click events
+  // for taps, so one code path covers touch double-tap and desktop
+  // double-click alike. While zoomed, prev/next zones stay inert (panning
+  // is the only navigation) and the center zone still toggles chrome.
   function bindClickZones(el) {
-    el.addEventListener("click", (e) => {
+    // Zone is classified at click time — measuring the rect when the timer
+    // fires would misclassify if the layout changed inside the window
+    // (rotation, fit toggle, page turn to a different aspect).
+    function zoneAt(clientX) {
       const rect = el.getBoundingClientRect();
-      const x = e.clientX - rect.left;
       const third = rect.width / 3;
-      if (x < third) readerState.handlers.prev();
-      else if (x > third * 2) readerState.handlers.next();
+      const rel = clientX - rect.left;
+      return rel < third ? "prev" : rel > third * 2 ? "next" : "chrome";
+    }
+
+    function runZone(zone) {
+      if (!readerState) return;
+      if (zone === "prev") { if (!isZoomed()) readerState.handlers.prev(); }
+      else if (zone === "next") { if (!isZoomed()) readerState.handlers.next(); }
       else readerState.handlers.toggleChrome();
+    }
+
+    el.addEventListener("click", (e) => {
+      if (pendingTap
+          && Math.abs(e.clientX - pendingTap.x) < DOUBLE_TAP_SLOP_PX
+          && Math.abs(e.clientY - pendingTap.y) < DOUBLE_TAP_SLOP_PX) {
+        // Second tap in time and in place: double-tap. Cancel the pending
+        // single-tap action and toggle zoom at the tap point.
+        cancelPendingTap();
+        if (isZoomed()) resetZoom();
+        else zoomAtPoint(ZOOM_DOUBLE_TAP_SCALE, e.clientX, e.clientY);
+        return;
+      }
+      if (pendingTap) {
+        // A second tap far away is not a double-tap — run the first tap's
+        // action NOW rather than dropping it (rapid taps across zones, e.g.
+        // two quick right-third taps landing >30px apart, must not lose a
+        // page turn), then defer the new tap as usual.
+        const prev = pendingTap;
+        cancelPendingTap();
+        if (prev.zone === "chrome" || prev.epoch === zoomEpoch) runZone(prev.zone);
+      }
+      // Zone and staleness epoch are captured now — after any immediate
+      // action above, which may itself have turned the page (epoch bump).
+      const zone = zoneAt(e.clientX);
+      const epoch = zoomEpoch;
+      pendingTap = {
+        x: e.clientX,
+        y: e.clientY,
+        zone,
+        epoch,
+        timer: setTimeout(() => {
+          pendingTap = null;
+          // prev/next are stale if anything reset the zoom since the tap —
+          // page turn (any means), fit toggle, reader exit/re-entry.
+          // Without this, a tap immediately followed by a keyboard turn
+          // would fire a second turn 275ms later. The chrome toggle is
+          // pure UI, valid on whatever page is showing — never stale (and
+          // a turn queued by a rapid earlier tap in another zone must not
+          // swallow it).
+          if (zone === "chrome" || epoch === zoomEpoch) runZone(zone);
+        }, DOUBLE_TAP_WINDOW_MS),
+      };
     });
   }
 
@@ -2164,8 +2445,10 @@
   function resetDragStyles(img) {
     if (!img) return;
     img.style.transition = "";
-    img.style.transform = "";
     img.style.willChange = "";
+    // Re-applies the zoom transform, or clears the transform at 1x — the
+    // pre-zoom behavior. Single-writer rule: never assign transform here.
+    applyZoomTransform();
   }
 
   // F6: cancels any in-flight snap-back on `img` — removes its
@@ -2226,11 +2509,21 @@
   const AXIS_LOCK_PX = 10;
   function bindSwipe(el) {
     let startX = 0, startY = 0, tracking = false, axisLock = null;
+    // M2 pinch bookkeeping: finger distance & zoom scale captured when the
+    // second finger lands; null when not pinching. Pan bookkeeping: last
+    // single-finger position while zoomed; null when not panning.
+    let pinch = null;
+    let pan = null;
+
+    function touchDist(t0, t1) {
+      return Math.hypot(t1.clientX - t0.clientX, t1.clientY - t0.clientY);
+    }
 
     // F1/F2: shared abort path — stops tracking so a stray touchend (from
     // whichever finger lifts) can't commit a bogus swipe, and immediately
     // clears any drag-follow transform/will-change plus any in-flight
-    // snap-back so nothing is left stuck mid-gesture.
+    // snap-back so nothing is left stuck mid-gesture. resetDragStyles
+    // re-applies the zoom transform, so aborting never disturbs zoom state.
     function abortDrag() {
       tracking = false;
       axisLock = null;
@@ -2240,13 +2533,48 @@
     }
 
     el.addEventListener("touchstart", (e) => {
-      if (e.touches.length !== 1) {
-        // F2: a second finger present at touchstart (e.g. joining mid-drag,
-        // since touchstart re-fires with the full active touch list) — never
-        // (re)start tracking on multi-touch.
+      if (e.touches.length === 2) {
+        // Second finger down = pinch begins (this used to be a plain
+        // abort). Swipe tracking must die first so its touchend can't fire.
         abortDrag();
+        pan = null;
+        cancelPendingTap(); // a tap right before a pinch was gesture noise
+        const t0 = e.touches[0], t1 = e.touches[1];
+        const midX = (t0.clientX + t1.clientX) / 2;
+        const midY = (t0.clientY + t1.clientY) / 2;
+        // Anchor the image-local point under the starting midpoint for the
+        // whole pinch: zooming scales about it AND a moving midpoint drags
+        // it along (constant-spread two-finger drag = pan).
+        const local = imageLocalPoint(midX, midY);
+        pinch = local && {
+          dist: touchDist(t0, t1),
+          scale: readerState && readerState.zoom ? readerState.zoom.scale : 1,
+          localX: local.x,
+          localY: local.y,
+          epoch: zoomEpoch,
+        };
+        touchPinchActive = !!pinch;
         return;
       }
+      if (e.touches.length !== 1) {
+        // 3+ fingers: abort everything.
+        abortDrag();
+        pinch = null;
+        pan = null;
+        touchPinchActive = false;
+        return;
+      }
+      pinch = null;
+      touchPinchActive = false;
+      if (isZoomed()) {
+        // One finger while zoomed pans — never a swipe (a swipe would stomp
+        // the zoom transform with translateX and turn pages under a user
+        // trying to pan).
+        cancelPendingTap(); // a tap right before a pan was gesture noise
+        pan = { x: e.touches[0].clientX, y: e.touches[0].clientY, epoch: zoomEpoch };
+        return;
+      }
+      pan = null;
       cancelSnapBack($("#page-img")); // F6: a new drag interrupts any snap-back in flight
       startX = e.touches[0].clientX;
       startY = e.touches[0].clientY;
@@ -2254,15 +2582,62 @@
       axisLock = null;
     }, { passive: true });
 
-    // Registered non-passive so a horizontally-locked drag can
-    // preventDefault() to stop the page from also being scrolled/selected —
-    // but that call only happens once locked horizontal; a vertical drag
-    // returns immediately and never blocks the native scroll gesture.
+    // Registered non-passive: pinch and zoomed-pan preventDefault() to own
+    // the gesture, and a horizontally-locked drag preventDefault()s to stop
+    // the page from also being scrolled/selected — but a 1x vertical drag
+    // returns before any preventDefault, so native fit-width scrolling is
+    // never blocked.
     el.addEventListener("touchmove", (e) => {
+      if (pinch && e.touches.length === 2) {
+        if (pinch.epoch !== zoomEpoch) {
+          // A page turn (resetZoom) happened mid-pinch — the captured base
+          // scale/anchor belong to the previous page. Drop the gesture
+          // before claiming the event.
+          pinch = null;
+          touchPinchActive = false;
+          return;
+        }
+        e.preventDefault();
+        const t0 = e.touches[0], t1 = e.touches[1];
+        const dist = touchDist(t0, t1);
+        if (pinch.dist > 0) {
+          zoomToAnchor(
+            pinch.scale * (dist / pinch.dist),
+            pinch.localX,
+            pinch.localY,
+            (t0.clientX + t1.clientX) / 2,
+            (t0.clientY + t1.clientY) / 2,
+          );
+        }
+        return;
+      }
+      if (pan && e.touches.length === 1) {
+        if (!isZoomed() || pan.epoch !== zoomEpoch) {
+          // Zoom reset mid-gesture (e.g. a keyboard page turn while the
+          // finger is down) — stop claiming the touch. The epoch check
+          // also catches a reset-then-rezoom on a new page before the
+          // finger's next move: the old pan's deltas belong to the
+          // previous page.
+          pan = null;
+          return;
+        }
+        e.preventDefault();
+        const t = e.touches[0];
+        panZoomBy(t.clientX - pan.x, t.clientY - pan.y);
+        pan = { x: t.clientX, y: t.clientY, epoch: pan.epoch };
+        return;
+      }
       if (!tracking) return;
       if (e.touches.length !== 1) {
-        // F2: a second finger joined mid-drag — abort so a later touchend
-        // (computed from whichever finger lifts) can't commit a bogus turn.
+        // F2: a second finger joined mid-drag — the touchstart above has
+        // already flipped this into a pinch; just make sure swipe is dead.
+        abortDrag();
+        return;
+      }
+      if (isZoomed()) {
+        // Zoom engaged mid-drag from outside the touch path (ctrl+wheel or
+        // Safari gesture on a touchscreen laptop): kill the swipe rather
+        // than let translateX stomp the zoom.
         abortDrag();
         return;
       }
@@ -2271,20 +2646,50 @@
       if (axisLock === null) {
         if (Math.abs(dx) < AXIS_LOCK_PX && Math.abs(dy) < AXIS_LOCK_PX) return;
         axisLock = Math.abs(dx) > Math.abs(dy) ? "x" : "y";
+        // Real movement — a tap deferred just before this drag wasn't tap
+        // intent. Without this, tap-then-swipe inside the 275ms window
+        // turns two pages (the timer's next() plus the swipe commit).
+        cancelPendingTap();
       }
       if (axisLock !== "x") return;
       e.preventDefault();
       if (reducedMotionEnabled()) return; // gesture still recognized, no visual feedback
       const img = $("#page-img");
       if (img) {
+        // Inline hint for the 1x drag window only; the zoomed pan/pinch
+        // path gets the same hint from app.css's .zoom-active rule — both
+        // are needed, neither covers the other's window.
         img.style.willChange = "transform";
         img.style.transform = `translateX(${dx}px)`;
       }
     }, { passive: false });
 
     el.addEventListener("touchend", (e) => {
+      if (pinch) {
+        // Pinch ends when fewer than two fingers remain. If one finger
+        // stays down and we're zoomed, hand it to the pan branch.
+        if (e.touches.length < 2) {
+          pinch = null;
+          touchPinchActive = false;
+          pan = e.touches.length === 1 && isZoomed()
+            ? { x: e.touches[0].clientX, y: e.touches[0].clientY, epoch: zoomEpoch }
+            : null;
+        }
+        return;
+      }
+      if (pan) {
+        if (e.touches.length === 0) pan = null;
+        return;
+      }
       if (!tracking) return; // only a clean single-touch drag reaches here
       tracking = false;
+      if (isZoomed()) {
+        // Zoom engaged between the last touchmove and the lift (same race
+        // as the touchmove guard): never commit a turn or snap-back that
+        // would stomp the zoom transform.
+        axisLock = null;
+        return;
+      }
       const t = e.changedTouches[0];
       const dx = t.clientX - startX;
       const dy = t.clientY - startY;
@@ -2312,14 +2717,24 @@
     // F1: a system-cancelled gesture (incoming call, notification shade,
     // browser edge-gesture) fires touchcancel instead of touchend — without
     // this, the drag-follow transform/will-change stays on #page-img
-    // indefinitely (only recovered by the next *committed* turn).
+    // indefinitely (only recovered by the next *committed* turn). A
+    // cancelled pinch/pan keeps the current zoom (platform convention) but
+    // stops all tracking.
     el.addEventListener("touchcancel", () => {
+      pinch = null;
+      pan = null;
+      touchPinchActive = false;
       if (!tracking) return;
       abortDrag();
     }, { passive: true });
   }
 
   function renderReaderChrome() {
+    // A deferred tap from a previous reader (or a previous book's chrome)
+    // must not fire against the freshly built one — the prev/next zones are
+    // already epoch-guarded, but a stale chrome toggle would still hide the
+    // new reader's chrome.
+    cancelPendingTap();
     const { book, mode, count, index, fitMode } = readerState;
     const rootClass = mode === "page" ? `reader-page ${fitMode}` : "reader-chapter";
     // Item 12: `page-img-incoming` is the animated overlay for a committed
@@ -2369,7 +2784,11 @@
     if (mode === "page") {
       const img = $("#page-img");
       bindClickZones(img);
-      bindSwipe(img);
+      // M2: the gesture controller listens on the stage, not the image —
+      // a pinch finger landing in the gutter beside a narrow page still
+      // counts, and swipes keep working from the whole stage.
+      bindSwipe($("#reader-stage"));
+      bindWheelZoom($("#reader-stage"));
       img.addEventListener("error", handlePageImageError);
       img.addEventListener("load", () => {
         img.style.display = "";
@@ -2377,6 +2796,7 @@
         if (errEl) errEl.hidden = true;
       });
       $("#fit-toggle-btn").addEventListener("click", () => {
+        resetZoom();
         readerState.fitMode = readerState.fitMode === "fit-height" ? "fit-width" : "fit-height";
         safeStorageSet("folio_reader_fit_mode", readerState.fitMode);
         applyFitMode();
@@ -2672,6 +3092,7 @@
     const img = $("#page-img");
     const incoming = $("#page-img-incoming");
     if (!img) return;
+    resetZoom(); // any turn (buttons, keys, slider, swipe) lands unzoomed
     finalizeTurnAnimation(img, incoming);
 
     const prevIndex = readerState.lastRenderedPageIndex;
@@ -2716,12 +3137,18 @@
         incoming.removeEventListener("animationend", onAnimEnd);
         incoming.removeEventListener("animationcancel", onAnimEnd);
         clearTimeout(timer);
+        // A ctrl+wheel/pinch zoom landed during the ~280ms slide (on the
+        // covered outgoing img, clamped to its dimensions) must not leak
+        // onto the incoming page — re-assert "every turn lands unzoomed".
+        resetZoom();
         img.src = url;
         img.alt = alt;
         incoming.hidden = true;
         incoming.classList.remove("slide-in-left", "slide-in-right");
         incoming.style.willChange = "";
-        if (readerState.turnAnimCleanup === finish) readerState.turnAnimCleanup = null;
+        // Reader may have been exited during the ~280ms window (showDetail/
+        // showLibrary null readerState without running this cleanup).
+        if (readerState && readerState.turnAnimCleanup === finish) readerState.turnAnimCleanup = null;
       };
       const onAnimEnd = () => finish();
       incoming.addEventListener("animationend", onAnimEnd);

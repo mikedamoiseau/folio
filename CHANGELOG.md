@@ -6,6 +6,13 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- **Zoom into pages in the web reader.** Comic and PDF pages in the browser
+  reader can now be zoomed: hold Ctrl and scroll (or pinch on a trackpad)
+  to zoom up to 5×, then scroll to pan around the page. On a phone or
+  tablet, pinch with two fingers and drag with one to pan; swiping to turn
+  pages still works when not zoomed. Double-tap (or double-click) jumps to
+  2.5× at that spot and double-tapping again zooms back out. Zoom resets
+  when you turn the page or switch fit mode.
 - **Select, copy, and highlight text in PDFs.** PDFs now have a selectable
   text layer in the desktop reader, just like EPUBs: drag to select, copy to
   the clipboard, or highlight in any of the five colors. Highlights are saved
