@@ -795,7 +795,7 @@ export default function Library({ catalogImportedBookIds }: LibraryProps = {}) {
         </div>
         {/* Skeleton book grid */}
         <div className="flex-1 overflow-y-auto px-8 py-6">
-          <div className="grid grid-cols-[repeat(auto-fill,160px)] justify-center gap-5">
+          <div className="grid grid-cols-[repeat(auto-fill,160px)] justify-start gap-5">
             {Array.from({ length: Math.min(24, Math.max(4, Math.floor(((window.innerWidth - 64) / 180)) * Math.ceil(((window.innerHeight - 120) / 300)))) }, (_, i) => (
               <div key={i} className="w-full rounded-xl bg-surface border border-warm-border overflow-hidden">
                 <div className="aspect-[2/3] bg-warm-subtle animate-shimmer" />
@@ -1309,7 +1309,7 @@ export default function Library({ catalogImportedBookIds }: LibraryProps = {}) {
               </>
             );
             return sortBy === "series" ? (
-              <div className="grid grid-cols-[repeat(auto-fill,160px)] justify-center gap-5">
+              <div className="grid grid-cols-[repeat(auto-fill,160px)] justify-start gap-5">
                 {topSections}
                 {(() => {
                 const seriesBooks = filtered.filter((b) => b.series);
