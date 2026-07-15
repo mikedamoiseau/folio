@@ -164,3 +164,77 @@ describe("CollectionsSidebar overlay", () => {
     expect(screen.getByText("collections.allBooks")).toBeInTheDocument();
   });
 });
+
+function dataProps() {
+  return {
+    ...baseProps(),
+    collections: [
+      { id: "c1", name: "Sci-Fi", type: "manual", rules: [] },
+      { id: "c2", name: "Fantasy", type: "manual", rules: [] },
+    ] as Collection[],
+    seriesList: [
+      { name: "Dune", count: 6 },
+      { name: "Foundation", count: 7 },
+    ],
+  };
+}
+
+describe("CollectionsSidebar filter", () => {
+  it("narrows both the collections and series lists", () => {
+    render(<CollectionsSidebar {...dataProps()} />);
+    const input = screen.getByLabelText("collections.filterPlaceholder");
+    fireEvent.change(input, { target: { value: "fantasy" } });
+    expect(screen.getByText("Fantasy")).toBeInTheDocument();
+    expect(screen.queryByText("Sci-Fi")).not.toBeInTheDocument();
+    expect(screen.queryByText("Dune")).not.toBeInTheDocument();
+    // A collection-only match hides the whole Series section — no orphan heading.
+    expect(screen.queryByText("collections.series")).not.toBeInTheDocument();
+  });
+
+  it("filters case-insensitively by substring", () => {
+    render(<CollectionsSidebar {...dataProps()} />);
+    fireEvent.change(screen.getByLabelText("collections.filterPlaceholder"), { target: { value: "DUN" } });
+    expect(screen.getByText("Dune")).toBeInTheDocument();
+    expect(screen.queryByText("Foundation")).not.toBeInTheDocument();
+  });
+
+  it("treats a whitespace-only filter as inactive (hides nothing)", () => {
+    render(<CollectionsSidebar {...dataProps()} />);
+    fireEvent.change(screen.getByLabelText("collections.filterPlaceholder"), { target: { value: "   " } });
+    expect(screen.getByText("Sci-Fi")).toBeInTheDocument();
+    expect(screen.getByText("Fantasy")).toBeInTheDocument();
+    expect(screen.getByText("Dune")).toBeInTheDocument();
+  });
+
+  it("clears the filter via the labelled clear button", () => {
+    render(<CollectionsSidebar {...dataProps()} />);
+    fireEvent.change(screen.getByLabelText("collections.filterPlaceholder"), { target: { value: "fantasy" } });
+    expect(screen.queryByText("Sci-Fi")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByLabelText("collections.clearFilter"));
+    expect(screen.getByText("Sci-Fi")).toBeInTheDocument();
+  });
+
+  it("returns focus to the filter input after clearing", () => {
+    render(<CollectionsSidebar {...dataProps()} />);
+    const input = screen.getByLabelText("collections.filterPlaceholder");
+    fireEvent.change(input, { target: { value: "fantasy" } });
+    fireEvent.click(screen.getByLabelText("collections.clearFilter"));
+    expect(input).toHaveFocus();
+  });
+
+  it("keeps All Books visible under an active filter", () => {
+    render(<CollectionsSidebar {...dataProps()} />);
+    fireEvent.change(screen.getByLabelText("collections.filterPlaceholder"), { target: { value: "zzzznomatch" } });
+    expect(screen.getByText("collections.allBooks")).toBeInTheDocument();
+  });
+
+  it("resets the filter text after the panel closes and reopens", () => {
+    const props = dataProps();
+    const { rerender } = render(<CollectionsSidebar {...props} />);
+    fireEvent.change(screen.getByLabelText("collections.filterPlaceholder"), { target: { value: "fantasy" } });
+    rerender(<CollectionsSidebar {...props} open={false} />);
+    rerender(<CollectionsSidebar {...props} open={true} />);
+    expect(screen.getByLabelText("collections.filterPlaceholder")).toHaveValue("");
+    expect(screen.getByText("Sci-Fi")).toBeInTheDocument();
+  });
+});

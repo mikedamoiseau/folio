@@ -630,6 +630,8 @@
     "matchCount": "{{count}} livre correspond \u00e0 ces r\u00e8gles",
     "matchesCount": "{{count}} livres correspondent \u00e0 ces r\u00e8gles",
     "series": "S\u00e9ries",
+    "filterPlaceholder": "Filtrer collections et s\u00e9ries\u2026",
+    "clearFilter": "Effacer le filtre",
     "auto": "auto",
     "fieldAuthor": "Auteur",
     "fieldTitle": "Titre",

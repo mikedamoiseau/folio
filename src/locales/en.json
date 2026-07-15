@@ -644,6 +644,8 @@
     "matchCount": "{{count}} book matches these rules",
     "matchesCount": "{{count}} books match these rules",
     "series": "Series",
+    "filterPlaceholder": "Filter collections and series…",
+    "clearFilter": "Clear filter",
     "auto": "auto",
     "fieldAuthor": "Author",
     "fieldTitle": "Title",

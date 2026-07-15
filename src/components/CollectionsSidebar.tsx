@@ -669,6 +669,14 @@ export default function CollectionsSidebar({
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [loadingSuggestions, setLoadingSuggestions] = useState(false);
 
+  const [filterText, setFilterText] = useState("");
+  const filterInputRef = useRef<HTMLInputElement>(null);
+  const query = filterText.trim().toLowerCase();
+  const filterActive = query.length > 0;
+  const matchName = (name: string) => name.toLowerCase().includes(query);
+  const filteredCollections = filterActive ? collections.filter((c) => matchName(c.name)) : collections;
+  const filteredSeries = filterActive ? seriesList.filter((s) => matchName(s.name)) : seriesList;
+
   // The parent keeps this component mounted while the sidebar is closed
   // (it renders `open={false}` rather than unmounting), so suggestion state
   // would otherwise persist and reappear on reopen. Clear it on close.
@@ -679,6 +687,7 @@ export default function CollectionsSidebar({
       // Also drop any open create/edit form, so closing mid-edit (via outside
       // click, Escape, or the X) doesn't reopen to a stale, half-filled form.
       setFormMode(null);
+      setFilterText("");
     }
   }, [open]);
 
@@ -818,6 +827,37 @@ export default function CollectionsSidebar({
               </button>
             </div>
 
+            {/* Filter — fixed above the scrolling list */}
+            <div className="px-3 py-2 border-b border-warm-border shrink-0">
+              <div className="relative">
+                <input
+                  ref={filterInputRef}
+                  type="text"
+                  value={filterText}
+                  onChange={(e) => setFilterText(e.target.value)}
+                  placeholder={t("collections.filterPlaceholder")}
+                  aria-label={t("collections.filterPlaceholder")}
+                  className="w-full text-sm bg-warm-subtle border border-warm-border rounded-lg pl-3 pr-8 py-1.5 text-ink placeholder-ink-muted/50 focus:outline-none focus:border-accent"
+                />
+                {filterText && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setFilterText("");
+                      filterInputRef.current?.focus();
+                    }}
+                    aria-label={t("collections.clearFilter")}
+                    title={t("collections.clearFilter")}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 text-ink-muted hover:text-ink transition-colors"
+                  >
+                    <svg width="14" height="14" viewBox="0 0 20 20" fill="none">
+                      <path d="M15 5L5 15M5 5l10 10" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                    </svg>
+                  </button>
+                )}
+              </div>
+            </div>
+
             {/* List */}
             <nav className="flex-1 overflow-y-auto py-1" aria-label={t("collections.title")}>
               {/* All Books row */}
@@ -841,12 +881,12 @@ export default function CollectionsSidebar({
               </button>
 
               {/* Divider */}
-              {collections.length > 0 && (
+              {filteredCollections.length > 0 && (
                 <div className="mx-3 my-1 border-t border-warm-border" />
               )}
 
               {/* Collection rows */}
-              {collections.map((collection) => (
+              {filteredCollections.map((collection) => (
                 <CollectionRow
                   key={collection.id}
                   collection={collection}
@@ -860,7 +900,7 @@ export default function CollectionsSidebar({
               ))}
 
               {/* Series section */}
-              {seriesList.length > 0 && (
+              {filteredSeries.length > 0 && (
                 <>
                   <div className="mx-3 my-1 border-t border-warm-border" />
                   <div className="px-3 pt-2 pb-1">
@@ -868,7 +908,7 @@ export default function CollectionsSidebar({
                       {t("collections.series")}
                     </span>
                   </div>
-                  {seriesList.map((s) => (
+                  {filteredSeries.map((s) => (
                     <button
                       key={s.name}
                       className={`w-full flex items-center gap-2.5 px-3 py-2 text-sm transition-colors ${

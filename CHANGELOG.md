@@ -6,6 +6,11 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- **Filter the Collections panel.** The Collections panel now has a filter box
+  at the top: start typing to narrow both your collections and your series to
+  the ones whose names match, live as you type. Matching ignores case, and a
+  clear button empties the box in one click. "All Books" always stays in view,
+  and the filter resets when you close the panel.
 - **A roomier Collections panel that floats over your library.** Opening
   Collections in the desktop app now slides a wider panel over the library
   instead of squeezing the book grid to one side — the grid stays put, and the
