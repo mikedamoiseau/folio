@@ -151,6 +151,12 @@ This project adheres to [Semantic Versioning](https://semver.org/).
   "Searching all catalogs…" message. Searching a single catalog names it
   ("Searching Project Gutenberg…") rather than showing a bare "Loading…".
 
+### Fixed
+- **Library covers pin to the left on wide screens.** The library grid and the
+  series/skeleton grids used to center each row, so a sparse row floated to the
+  middle of a wide window with large gaps on both sides. Covers now align to the
+  left, matching a standard library layout.
+
 ## [2.7.0] - 2026-07-08
 
 A reading-insights and privacy release: the stats screen gains a year view and
