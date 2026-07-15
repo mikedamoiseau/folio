@@ -157,7 +157,7 @@ Selection mode disables drag-and-drop to prevent accidental actions. Your select
 
 ## 3. Collections
 
-Collections let you organize books into groups. Open the collections sidebar by clicking the collections icon or pressing `C`.
+Collections let you organize books into groups. Open the collections sidebar by clicking the collections icon or pressing `C`. It opens as a panel over your library — click anywhere outside it, or press `Esc`, to close it.
 
 ![Collections sidebar](../screenshots/09-collections.png)
 

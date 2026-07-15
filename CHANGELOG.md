@@ -9,7 +9,9 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 - **A roomier Collections panel that floats over your library.** Opening
   Collections in the desktop app now slides a wider panel over the library
   instead of squeezing the book grid to one side — the grid stays put, and the
-  panel has more room for collection names and controls.
+  panel has more room for collection names and controls. The library dims
+  behind it; click anywhere outside the panel, or press `Esc`, to close it.
+  Dragging a book onto a collection still works.
 - **A bottom tab bar in the web app on phones and tablets.** On a phone,
   tablet, or installed web app, the primary destinations — Library,
   Collections, and Reading Stats — now live in a fixed bar along the bottom of

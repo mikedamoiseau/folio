@@ -80,11 +80,87 @@ describe("CollectionsSidebar suggestions", () => {
 describe("CollectionsSidebar overlay", () => {
   it("overlays at min(480px, 85vw) instead of the old narrow width", () => {
     render(<CollectionsSidebar {...baseProps()} />);
-    // Pure styling milestone: the width tokens are the deliverable. Dialog/
-    // modal semantics (role, aria-modal, focus trap, scrim) land in M2.
+    // The panel is a non-modal overlay: it floats over the grid at the wider
+    // width rather than pushing it. The width tokens are the deliverable.
     const panel = document.querySelector("aside");
     expect(panel).not.toBeNull();
     expect(panel).toHaveClass("fixed", "w-[480px]", "max-w-[85vw]");
     expect(panel).not.toHaveClass("w-64");
+  });
+
+  it("dims the background without a scrim that blocks pointer events", () => {
+    render(<CollectionsSidebar {...baseProps()} />);
+    const scrim = document.querySelector("[aria-hidden='true'].fixed.inset-0");
+    expect(scrim).not.toBeNull();
+    expect(scrim).toHaveClass("pointer-events-none");
+  });
+
+  it("closes on an outside click and stops the click reaching the target", () => {
+    const props = baseProps();
+    render(<CollectionsSidebar {...props} />);
+
+    const outsideBtn = document.createElement("button");
+    const outsideClick = vi.fn();
+    outsideBtn.addEventListener("click", outsideClick);
+    document.body.appendChild(outsideBtn);
+
+    fireEvent.click(outsideBtn);
+
+    expect(props.onClose).toHaveBeenCalledTimes(1);
+    expect(outsideClick).not.toHaveBeenCalled(); // capture-phase stopPropagation
+
+    outsideBtn.remove();
+  });
+
+  it("keeps the panel open after a successful drop (suppressed trailing click)", async () => {
+    const { startDrag } = await import("../lib/dragState");
+    const props = baseProps();
+    props.collections = [
+      { id: "c1", name: "Manual", type: "manual", icon: "📗", color: "#4e7a8f", rules: [] },
+    ];
+    render(<CollectionsSidebar {...props} />);
+
+    // Simulate a drag ending on the manual collection row.
+    act(() => { startDrag("book-1"); });
+    const row = screen.getByText("Manual");
+    fireEvent.mouseUp(row);
+
+    expect(props.onDropBook).toHaveBeenCalledWith("book-1", "c1");
+
+    // The trailing body-targeted click must NOT close the panel.
+    fireEvent.click(document.body);
+    expect(props.onClose).not.toHaveBeenCalled();
+  });
+
+  it("stays open when a book is dropped on an automated collection (no add)", async () => {
+    const { startDrag } = await import("../lib/dragState");
+    const props = baseProps();
+    props.collections = [
+      { id: "a1", name: "Auto", type: "automated", icon: "🤖", color: "#8f7a4e", rules: [] },
+    ];
+    render(<CollectionsSidebar {...props} />);
+
+    act(() => { startDrag("book-1"); });
+    fireEvent.mouseUp(screen.getByText("Auto"));
+
+    // Automated collections can't accept a manual add, but the drop gesture
+    // must not be read as a click-outside that closes the panel.
+    expect(props.onDropBook).not.toHaveBeenCalled();
+    fireEvent.click(document.body);
+    expect(props.onClose).not.toHaveBeenCalled();
+  });
+
+  it("does not reopen to a stale form after closing mid-edit", () => {
+    const props = baseProps();
+    const { rerender } = render(<CollectionsSidebar {...props} />);
+
+    // Open the create form, then close the panel while it is still open.
+    fireEvent.click(screen.getByText("collections.newCollection"));
+    expect(document.querySelector("input")).not.toBeNull();
+    rerender(<CollectionsSidebar {...props} open={false} />);
+
+    // Reopen — should be back on the list (the "All Books" row), not the form.
+    rerender(<CollectionsSidebar {...props} open={true} />);
+    expect(screen.getByText("collections.allBooks")).toBeInTheDocument();
   });
 });

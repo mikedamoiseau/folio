@@ -2,7 +2,14 @@ import { useState, useEffect, useRef, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { useTranslation } from "react-i18next";
-import { getDraggedBookId, endDrag, isDragging, subscribe } from "../lib/dragState";
+import {
+  getDraggedBookId,
+  endDrag,
+  isDragging,
+  subscribe,
+  suppressNextOutsideClickClose,
+  consumeSuppressOutsideClick,
+} from "../lib/dragState";
 
 // ---- Types ----
 
@@ -163,12 +170,15 @@ function CollectionRow({
   };
 
   const handleMouseUp = () => {
-    if (!isManual) return;
     const bookId = getDraggedBookId();
-    if (bookId) {
-      endDrag();
-      onDropBook(bookId, collection.id);
-    }
+    if (!bookId) return; // a plain click (no drag) must still close the panel
+    endDrag();
+    // Swallow this drop gesture's trailing click for any collection row — even
+    // an automated one that can't accept the book — so a drop is never read as
+    // a click-outside that closes the panel. The book is only added to manual
+    // collections.
+    suppressNextOutsideClickClose();
+    if (isManual) onDropBook(bookId, collection.id);
   };
 
   const showDropHighlight = isManual && dragging && isHovered;
@@ -666,6 +676,9 @@ export default function CollectionsSidebar({
     if (!open) {
       setShowSuggestions(false);
       setSuggestions([]);
+      // Also drop any open create/edit form, so closing mid-edit (via outside
+      // click, Escape, or the X) doesn't reopen to a stale, half-filled form.
+      setFormMode(null);
     }
   }, [open]);
 
@@ -720,6 +733,33 @@ export default function CollectionsSidebar({
     if (suggestions.length <= 1) setShowSuggestions(false);
   };
 
+  // Close on a click outside the panel (capture phase, so we can swallow the
+  // click before it activates the book underneath the dim). The panel is a
+  // non-modal overlay: it does not trap focus, and Escape is handled by
+  // Library's central keyboard chain rather than here.
+  const panelRef = useRef<HTMLElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const handleClick = (e: MouseEvent) => {
+      const panel = panelRef.current;
+      // A click inside the panel is normal interaction — never treat it as an
+      // outside click (and never consume the drag-suppress flag for it).
+      if (!panel || panel.contains(e.target as Node)) return;
+      // The trailing click of a completed book→collection drop lands outside
+      // the panel; swallow it without closing (see dragState suppress flag).
+      if (consumeSuppressOutsideClick()) {
+        e.stopPropagation();
+        e.preventDefault();
+        return;
+      }
+      e.stopPropagation();
+      e.preventDefault();
+      onClose();
+    };
+    document.addEventListener("click", handleClick, true);
+    return () => document.removeEventListener("click", handleClick, true);
+  }, [open, onClose]);
+
   if (!open) return null;
 
   const handleCreate = async (data: CreateCollectionData) => {
@@ -734,7 +774,15 @@ export default function CollectionsSidebar({
   };
 
   return createPortal(
-    <aside className="fixed left-0 top-0 bottom-0 w-[480px] max-w-[85vw] bg-surface border-r border-warm-border z-20 flex flex-col shadow-[4px_0_24px_-4px_rgba(44,34,24,0.12)] animate-slide-in-left">
+    <>
+      <div
+        aria-hidden="true"
+        className="fixed inset-0 bg-ink/30 z-10 animate-fade-in pointer-events-none"
+      />
+      <aside
+        ref={panelRef}
+        className="fixed left-0 top-0 bottom-0 w-[480px] max-w-[85vw] bg-surface border-r border-warm-border z-20 flex flex-col shadow-[4px_0_24px_-4px_rgba(44,34,24,0.12)] animate-slide-in-left"
+      >
         {formMode?.mode === "create" ? (
           <CollectionForm
             initial={formMode.prefill ? {
@@ -940,7 +988,8 @@ export default function CollectionsSidebar({
             </div>
           </>
         )}
-    </aside>,
+      </aside>
+    </>,
     document.body,
   );
 }
