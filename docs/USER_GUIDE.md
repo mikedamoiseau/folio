@@ -161,6 +161,8 @@ Collections let you organize books into groups. Open the collections sidebar by 
 
 ![Collections sidebar](../screenshots/09-collections.png)
 
+A **filter box** at the top of the panel narrows both the collections and the series lists to names that match what you type (case-insensitive); the clear button empties it. The **Collections** and **Series** lists each have a header you can click to collapse or expand them independently, so a long list can be tucked away. Typing in the filter temporarily reveals matches inside a collapsed list, then restores your collapse choice when you clear it. "All Books" always stays visible, and both the filter text and collapse state reset when you close the panel.
+
 ### Manual collections
 
 Create a collection, then drag book cards onto it to add them. You can remove books from a manual collection via the book card's context actions.

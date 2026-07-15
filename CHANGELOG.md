@@ -6,6 +6,15 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- **Filter and collapse the Collections panel.** The Collections panel now has
+  a filter box at the top: start typing to narrow both your collections and your
+  series to the ones whose names match, live as you type. Matching ignores case,
+  and a clear button empties the box in one click. The Collections and Series
+  lists each have a header you can click to collapse or expand that list
+  independently, so a long list can be tucked away while you work in the other.
+  Typing in the filter temporarily reveals matches inside a collapsed list;
+  clearing it restores your collapse choice. "All Books" always stays in view,
+  and the filter and collapse state reset when you close the panel.
 - **A roomier Collections panel that floats over your library.** Opening
   Collections in the desktop app now slides a wider panel over the library
   instead of squeezing the book grid to one side — the grid stays put, and the
