@@ -78,7 +78,7 @@ export default function VirtualizedBookGrid<T>({
       components={header ? { Header: () => <>{header}</> } : undefined}
       computeItemKey={(_index, row) => row.map(itemKey).join("|")}
       itemContent={(rowIndex, row) => (
-        <div style={{ display: "flex", justifyContent: "center", gap: GAP, paddingBottom: GAP }}>
+        <div style={{ display: "flex", justifyContent: "flex-start", gap: GAP, paddingBottom: GAP }}>
           {row.map((item, colIndex) => (
             <div key={itemKey(item)} style={{ width: CARD_WIDTH }}>
               {renderItem(rowIndex * columns + colIndex, item)}
