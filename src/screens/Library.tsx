@@ -188,6 +188,9 @@ export default function Library({ catalogImportedBookIds }: LibraryProps = {}) {
 
   // Collections state
   const [collectionsOpen, setCollectionsOpen] = useState(false);
+  // Stable identity so the sidebar's outside-click listener attaches once per
+  // open instead of re-attaching on every Library re-render.
+  const handleCollectionsClose = useCallback(() => setCollectionsOpen(false), []);
   const [highlightSearchOpen, setHighlightSearchOpen] = useState(false);
   const [collections, setCollections] = useState<Collection[]>([]);
   const [activeCollectionId, setActiveCollectionId] = useState<string | null>(null);
@@ -686,8 +689,14 @@ export default function Library({ catalogImportedBookIds }: LibraryProps = {}) {
       const tag = (e.target as HTMLElement)?.tagName;
       if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") {
         if (e.key === "Escape") {
-          (e.target as HTMLElement).blur();
-          setSearch("");
+          // Escape from a field inside the open Collections overlay dismisses
+          // the overlay; otherwise it just blurs the (library search) field.
+          if (collectionsOpen) {
+            setCollectionsOpen(false);
+          } else {
+            (e.target as HTMLElement).blur();
+            setSearch("");
+          }
         }
         return;
       }
@@ -803,7 +812,7 @@ export default function Library({ catalogImportedBookIds }: LibraryProps = {}) {
   }
 
   return (
-    <div className={`flex flex-col h-full relative bg-paper transition-[padding] duration-200 ${collectionsOpen ? "pl-64" : ""}`}>
+    <div className="flex flex-col h-full relative bg-paper">
       {/* Toolbar — always show when books exist or a collection is selected */}
       {(hasBooks || activeCollectionId) && (
         <div className="shrink-0 h-14 px-6 flex items-center gap-3 border-b border-warm-border bg-surface">
@@ -1724,7 +1733,7 @@ export default function Library({ catalogImportedBookIds }: LibraryProps = {}) {
         activeCollectionId={activeCollectionId}
         activeSeries={activeSeries}
         seriesList={seriesList}
-        onClose={() => setCollectionsOpen(false)}
+        onClose={handleCollectionsClose}
         onSelect={(id) => {
           setActiveCollectionId(id);
           setActiveSeries(null);
