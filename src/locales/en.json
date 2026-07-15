@@ -646,6 +646,8 @@
     "series": "Series",
     "filterPlaceholder": "Filter collections and series…",
     "clearFilter": "Clear filter",
+    "collections": "Collections",
+    "noMatches": "No matches",
     "auto": "auto",
     "fieldAuthor": "Author",
     "fieldTitle": "Title",

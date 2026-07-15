@@ -632,6 +632,8 @@
     "series": "S\u00e9ries",
     "filterPlaceholder": "Filtrer collections et s\u00e9ries\u2026",
     "clearFilter": "Effacer le filtre",
+    "collections": "Collections",
+    "noMatches": "Aucune correspondance",
     "auto": "auto",
     "fieldAuthor": "Auteur",
     "fieldTitle": "Titre",

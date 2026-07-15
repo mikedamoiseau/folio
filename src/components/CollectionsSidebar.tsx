@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useSyncExternalStore } from "react";
+import { useState, useEffect, useRef, useSyncExternalStore, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { useTranslation } from "react-i18next";
@@ -329,6 +329,74 @@ function CollectionRow({
       document.body,
     )}
     </div>
+  );
+}
+
+// ---- SectionHeader ----
+
+// ---- Section ----
+//
+// A collapsible list section (Collections or Series). Owns the shared scaffold:
+// a top divider, the toggle header, and an always-mounted rows container whose
+// id `aria-controls` points at. The section is visibly expanded when the user
+// has not collapsed it, or when an active filter has matches to reveal here
+// (matching the "auto-expand if matches" behaviour). A filter forces the
+// visible state, so the header is disabled while a filter is active — toggling
+// would only mutate the hidden collapse flag and silently change what the user
+// sees once they clear the filter. When expanded with no matches (only possible
+// under an active filter), a "no matches" line renders in place of the rows.
+
+function Section({
+  label,
+  controlsId,
+  collapsed,
+  filterActive,
+  hasMatches,
+  onToggle,
+  children,
+}: {
+  label: string;
+  controlsId: string;
+  collapsed: boolean;
+  filterActive: boolean;
+  hasMatches: boolean;
+  onToggle: () => void;
+  children: ReactNode;
+}) {
+  const { t } = useTranslation();
+  const expanded = !collapsed || (filterActive && hasMatches);
+  return (
+    <>
+      <div className="mx-3 my-1 border-t border-warm-border" />
+      <button
+        type="button"
+        onClick={onToggle}
+        disabled={filterActive}
+        aria-expanded={expanded}
+        aria-controls={controlsId}
+        className="w-full flex items-center gap-1.5 px-3 pt-2 pb-1 text-left transition-colors enabled:hover:text-ink disabled:cursor-default"
+      >
+        <svg
+          aria-hidden="true"
+          width="10"
+          height="10"
+          viewBox="0 0 20 20"
+          fill="none"
+          className={`shrink-0 text-ink-muted transition-transform ${expanded ? "" : "-rotate-90"}`}
+        >
+          <path d="M5 8l5 5 5-5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+        <span className="text-[10px] font-semibold uppercase tracking-wider text-ink-muted">{label}</span>
+      </button>
+      <div id={controlsId}>
+        {expanded &&
+          (hasMatches ? (
+            children
+          ) : (
+            <div className="px-3 py-2 text-xs italic text-ink-muted/50">{t("collections.noMatches")}</div>
+          ))}
+      </div>
+    </>
   );
 }
 
@@ -677,6 +745,9 @@ export default function CollectionsSidebar({
   const filteredCollections = filterActive ? collections.filter((c) => matchName(c.name)) : collections;
   const filteredSeries = filterActive ? seriesList.filter((s) => matchName(s.name)) : seriesList;
 
+  const [collectionsCollapsed, setCollectionsCollapsed] = useState(false);
+  const [seriesCollapsed, setSeriesCollapsed] = useState(false);
+
   // The parent keeps this component mounted while the sidebar is closed
   // (it renders `open={false}` rather than unmounting), so suggestion state
   // would otherwise persist and reappear on reopen. Clear it on close.
@@ -688,6 +759,8 @@ export default function CollectionsSidebar({
       // click, Escape, or the X) doesn't reopen to a stale, half-filled form.
       setFormMode(null);
       setFilterText("");
+      setCollectionsCollapsed(false);
+      setSeriesCollapsed(false);
     }
   }, [open]);
 
@@ -880,34 +953,41 @@ export default function CollectionsSidebar({
                 <span>{t("collections.allBooks")}</span>
               </button>
 
-              {/* Divider */}
-              {filteredCollections.length > 0 && (
-                <div className="mx-3 my-1 border-t border-warm-border" />
+              {/* Collections section */}
+              {collections.length > 0 && (
+                <Section
+                  label={t("collections.collections")}
+                  controlsId="collections-section-rows"
+                  collapsed={collectionsCollapsed}
+                  filterActive={filterActive}
+                  hasMatches={filteredCollections.length > 0}
+                  onToggle={() => setCollectionsCollapsed((v) => !v)}
+                >
+                  {filteredCollections.map((collection) => (
+                    <CollectionRow
+                      key={collection.id}
+                      collection={collection}
+                      isActive={activeCollectionId === collection.id}
+                      isManual={collection.type === "manual"}
+                      onSelect={() => onSelect(collection.id)}
+                      onEdit={() => setFormMode({ mode: "edit", collection })}
+                      onDelete={() => onDelete(collection.id)}
+                      onDropBook={onDropBook}
+                    />
+                  ))}
+                </Section>
               )}
 
-              {/* Collection rows */}
-              {filteredCollections.map((collection) => (
-                <CollectionRow
-                  key={collection.id}
-                  collection={collection}
-                  isActive={activeCollectionId === collection.id}
-                  isManual={collection.type === "manual"}
-                  onSelect={() => onSelect(collection.id)}
-                  onEdit={() => setFormMode({ mode: "edit", collection })}
-                  onDelete={() => onDelete(collection.id)}
-                  onDropBook={onDropBook}
-                />
-              ))}
-
               {/* Series section */}
-              {filteredSeries.length > 0 && (
-                <>
-                  <div className="mx-3 my-1 border-t border-warm-border" />
-                  <div className="px-3 pt-2 pb-1">
-                    <span className="text-[10px] font-semibold uppercase tracking-wider text-ink-muted">
-                      {t("collections.series")}
-                    </span>
-                  </div>
+              {seriesList.length > 0 && (
+                <Section
+                  label={t("collections.series")}
+                  controlsId="series-section-rows"
+                  collapsed={seriesCollapsed}
+                  filterActive={filterActive}
+                  hasMatches={filteredSeries.length > 0}
+                  onToggle={() => setSeriesCollapsed((v) => !v)}
+                >
                   {filteredSeries.map((s) => (
                     <button
                       key={s.name}
@@ -928,7 +1008,7 @@ export default function CollectionsSidebar({
                       <span className="text-[10px] text-ink-muted/60 tabular-nums">{s.count}</span>
                     </button>
                   ))}
-                </>
+                </Section>
               )}
             </nav>
 
