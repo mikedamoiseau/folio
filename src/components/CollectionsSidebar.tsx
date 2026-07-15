@@ -734,7 +734,7 @@ export default function CollectionsSidebar({
   };
 
   return createPortal(
-    <aside className="fixed left-0 top-0 bottom-0 w-64 bg-surface border-r border-warm-border z-20 flex flex-col shadow-[4px_0_24px_-4px_rgba(44,34,24,0.12)] animate-slide-in-left">
+    <aside className="fixed left-0 top-0 bottom-0 w-[480px] max-w-[85vw] bg-surface border-r border-warm-border z-20 flex flex-col shadow-[4px_0_24px_-4px_rgba(44,34,24,0.12)] animate-slide-in-left">
         {formMode?.mode === "create" ? (
           <CollectionForm
             initial={formMode.prefill ? {

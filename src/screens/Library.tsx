@@ -803,7 +803,7 @@ export default function Library({ catalogImportedBookIds }: LibraryProps = {}) {
   }
 
   return (
-    <div className={`flex flex-col h-full relative bg-paper transition-[padding] duration-200 ${collectionsOpen ? "pl-64" : ""}`}>
+    <div className="flex flex-col h-full relative bg-paper">
       {/* Toolbar — always show when books exist or a collection is selected */}
       {(hasBooks || activeCollectionId) && (
         <div className="shrink-0 h-14 px-6 flex items-center gap-3 border-b border-warm-border bg-surface">

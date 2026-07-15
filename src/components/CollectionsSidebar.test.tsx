@@ -76,3 +76,15 @@ describe("CollectionsSidebar suggestions", () => {
     expect(screen.queryByText("CBZ Books")).not.toBeInTheDocument();
   });
 });
+
+describe("CollectionsSidebar overlay", () => {
+  it("overlays at min(480px, 85vw) instead of the old narrow width", () => {
+    render(<CollectionsSidebar {...baseProps()} />);
+    // Pure styling milestone: the width tokens are the deliverable. Dialog/
+    // modal semantics (role, aria-modal, focus trap, scrim) land in M2.
+    const panel = document.querySelector("aside");
+    expect(panel).not.toBeNull();
+    expect(panel).toHaveClass("fixed", "w-[480px]", "max-w-[85vw]");
+    expect(panel).not.toHaveClass("w-64");
+  });
+});
