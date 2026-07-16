@@ -225,7 +225,8 @@ async fn fetch_latest(
             .and_then(|v| v.to_str().ok())
             .map(|s| s.trim() == "0")
             .unwrap_or(false);
-        if code == 429 || (code == 403 && remaining_zero) {
+        let has_retry_after = resp.headers().contains_key("retry-after");
+        if code == 429 || (code == 403 && (remaining_zero || has_retry_after)) {
             tracing::warn!(code, "update check: rate limited");
             return Err("rate_limited".to_string());
         }
@@ -473,6 +474,24 @@ mod tests {
             .await
             .unwrap_err(),
             "http_error"
+        );
+    }
+
+    #[tokio::test]
+    async fn http_403_with_retry_after_is_rate_limited() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(403).insert_header("retry-after", "60"))
+            .mount(&server)
+            .await;
+        assert_eq!(
+            check(
+                &state_for(format!("{}/x", server.uri())),
+                &Version::parse("2.7.0").unwrap()
+            )
+            .await
+            .unwrap_err(),
+            "rate_limited"
         );
     }
 
