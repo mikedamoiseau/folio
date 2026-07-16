@@ -191,6 +191,17 @@ async fn do_fetch(
     map_release(&release, current)
 }
 
+/// Map a reqwest transport/decode error to a stable IPC error code.
+fn classify_reqwest_err(e: &reqwest::Error) -> &'static str {
+    if e.is_timeout() {
+        "timeout"
+    } else if e.is_decode() {
+        "malformed_response"
+    } else {
+        "network"
+    }
+}
+
 async fn fetch_latest(
     client: &reqwest::Client,
     releases_url: &str,
@@ -207,13 +218,9 @@ async fn fetch_latest(
         .send()
         .await
         .map_err(|e| {
-            if e.is_timeout() {
-                tracing::warn!(error = %e, "update check: request timed out");
-                "timeout".to_string()
-            } else {
-                tracing::warn!(error = %e, "update check: network error");
-                "network".to_string()
-            }
+            let code = classify_reqwest_err(&e);
+            tracing::warn!(error = %e, code, "update check: request failed");
+            code.to_string()
         })?;
 
     let status = resp.status();
@@ -235,8 +242,9 @@ async fn fetch_latest(
     }
 
     resp.json::<GitHubRelease>().await.map_err(|e| {
-        tracing::warn!(error = %e, "update check: malformed response body");
-        "malformed_response".to_string()
+        let code = classify_reqwest_err(&e);
+        tracing::warn!(error = %e, code, "update check: failed reading response body");
+        code.to_string()
     })
 }
 
