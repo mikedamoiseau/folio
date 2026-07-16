@@ -52,7 +52,7 @@ export default function UpdateModal({ state, onClose }: Props) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
-        e.stopPropagation();
+        e.stopImmediatePropagation();
         onClose();
       }
     };

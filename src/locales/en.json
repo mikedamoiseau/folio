@@ -352,7 +352,7 @@
     "title": "Settings",
     "closeLabel": "Close settings",
     "searchPlaceholder": "Search settings…",
-    "searchTermsGeneral": "startup launch autostart cache storage update version release github startup",
+    "searchTermsGeneral": "startup launch autostart cache storage update version release github",
     "searchTermsAppearance": "theme dark light mode font color colour custom css typography text size",
     "searchTermsLayout": "page layout dual page spread manga continuous scroll reading mode animation",
     "searchTermsLibrary": "library folder import mode copy link export location",

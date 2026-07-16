@@ -13,6 +13,6 @@ import UpdateModal from "./UpdateModal";
 export default function UpdateCheckHost({ deferWhilePresent }: { deferWhilePresent: boolean }) {
   const { isActive: onboardingActive } = useOnboardingContext();
   const { modal, close } = useUpdateCheck(onboardingActive);
-  if (!modal || deferWhilePresent) return null; // held; shows once the overlay closes
+  if (!modal || deferWhilePresent || onboardingActive) return null; // held; shows once the overlay closes
   return <UpdateModal state={modal} onClose={close} />;
 }

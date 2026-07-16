@@ -25,7 +25,8 @@ export function useUpdateCheck(onboardingActive: boolean) {
   const [modal, setModal] = useState<UpdateModalState | null>(null);
   const mode = useRef<null | "auto" | "manual">(null); // in-flight mode
   const mounted = useRef(true);
-  const gatedRan = useRef(false);
+  const gen = useRef(0); // bumped on close(); invalidates in-flight runCheck presentations
+  const prevOnboarding = useRef(onboardingActive);
   const onboardingActiveRef = useRef(onboardingActive);
 
   useEffect(() => {
@@ -54,7 +55,8 @@ export function useUpdateCheck(onboardingActive: boolean) {
         return; // the single in-flight request will present per mode.current
       }
       mode.current = requested;
-      if (requested === "manual") present({ status: "loading" });
+      const myGen = ++gen.current;
+      if (requested === "manual" && gen.current === myGen) present({ status: "loading" });
       try {
         const data = await invoke<UpdateCheck>("check_for_update");
         // Auto path gates on the toggle; re-check mode.current after EACH await
@@ -62,18 +64,20 @@ export function useUpdateCheck(onboardingActive: boolean) {
         if (mode.current === "auto") {
           const enabled = await startupEnabled();
           if (mode.current === "auto") {
-            if (enabled && data.update_available) present({ status: "available", data });
+            if (enabled && data.update_available && gen.current === myGen) present({ status: "available", data });
             return;
           }
         }
         // Manual (initial, or upgraded from auto at any point above): always present.
-        present(
-          data.update_available
-            ? { status: "available", data }
-            : { status: "uptodate", data },
-        );
+        if (gen.current === myGen) {
+          present(
+            data.update_available
+              ? { status: "available", data }
+              : { status: "uptodate", data },
+          );
+        }
       } catch (err) {
-        if (mode.current === "manual") {
+        if (mode.current === "manual" && gen.current === myGen) {
           present({ status: "error", rateLimited: toFolioError(err).message === "rate_limited" });
         }
         // auto: swallow
@@ -100,10 +104,13 @@ export function useUpdateCheck(onboardingActive: boolean) {
     };
   }, [runCheck]);
 
-  // Gated consume: on mount if onboarding already inactive, and on active→inactive.
+  // Gated consume: on mount if onboarding already inactive, and on every
+  // active→inactive transition (e.g. onboarding re-run from Settings). The
+  // backend tokens make repeat runs safe: take_startup_update_check grants
+  // once per process; take_pending_manual_update_check is atomic.
   useEffect(() => {
-    if (onboardingActive || gatedRan.current) return;
-    gatedRan.current = true; // once per mount; startup failure = no auto-retry (spec)
+    prevOnboarding.current = onboardingActive;
+    if (onboardingActive) return;
     (async () => {
       try {
         const pending = await invoke<boolean>("take_pending_manual_update_check");
@@ -120,6 +127,9 @@ export function useUpdateCheck(onboardingActive: boolean) {
     })();
   }, [onboardingActive, runCheck]);
 
-  const close = useCallback(() => setModal(null), []);
+  const close = useCallback(() => {
+    gen.current++;
+    setModal(null);
+  }, []);
   return { modal, close };
 }

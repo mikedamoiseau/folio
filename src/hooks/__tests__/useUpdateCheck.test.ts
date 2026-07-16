@@ -280,6 +280,54 @@ describe("useUpdateCheck", () => {
     expect(result.current.modal).toBeNull();
     expect(countCalls("check_for_update")).toBe(0);
   });
+
+  it("dismissing the loading modal suppresses the in-flight manual result", async () => {
+    const fetchD = deferred<unknown>();
+    route({
+      take_pending_manual_update_check: true,
+      take_startup_update_check: false,
+      get_setting_value: null,
+      check_for_update: () => fetchD.promise,
+    });
+    const { result } = renderHook(() => useUpdateCheck(false));
+    await vi.waitFor(() => expect(result.current.modal?.status).toBe("loading"));
+    act(() => result.current.close());
+    expect(result.current.modal).toBeNull();
+    await act(async () => {
+      fetchD.resolve(AVAILABLE);
+      await new Promise((r) => setTimeout(r, 10));
+    });
+    expect(result.current.modal).toBeNull(); // superseded run's result is not presented
+  });
+
+  it("runs queued manual check after onboarding is re-run", async () => {
+    let pending = false;
+    route({
+      take_pending_manual_update_check: () => pending,
+      take_startup_update_check: true,
+      get_setting_value: "false", // auto disabled: initial mount stays silent
+      check_for_update: AVAILABLE,
+    });
+    const { result, rerender } = renderHook(({ a }) => useUpdateCheck(a), {
+      initialProps: { a: false },
+    });
+    await new Promise((r) => setTimeout(r, 10)); // initial startup consumes tokens
+    expect(result.current.modal).toBeNull();
+
+    rerender({ a: true }); // onboarding re-run starts
+    await new Promise((r) => setTimeout(r, 10));
+
+    pending = true; // tray sets the flag while onboarding is active
+    await act(async () => {
+      evt.cb?.({});
+      await new Promise((r) => setTimeout(r, 10));
+    });
+    expect(result.current.modal).toBeNull(); // left untouched while active
+    expect(countCalls("take_pending_manual_update_check")).toBe(1); // only the initial mount consume
+
+    rerender({ a: false }); // onboarding re-run completes
+    await vi.waitFor(() => expect(result.current.modal?.status).toBe("available"));
+  });
 });
 
 describe("startupCheckEnabled", () => {
