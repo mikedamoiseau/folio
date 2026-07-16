@@ -72,6 +72,7 @@ tempfile = "3"
 folio-core = { path = "../folio-core", features = ["test-utils"] }
 tauri = { version = "2", features = ["protocol-asset", "tray-icon", "test"] }
 tokio = { version = "1", features = ["macros"] }
+wiremock = "0.6"
 
 [features]
 default = ["sftp"]
