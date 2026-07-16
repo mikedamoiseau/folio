@@ -990,6 +990,23 @@
     "trayLabel": "Nouveaut\u00e9s"
   },
 
+  "updateCheck": {
+    "titleAvailable": "Mise \u00e0 jour disponible",
+    "titleUpToDate": "Vous \u00eates \u00e0 jour",
+    "titleError": "Impossible de v\u00e9rifier les mises \u00e0 jour",
+    "newVersion": "Folio {{version}} est disponible.",
+    "currentVersion": "Vous avez la version {{version}}.",
+    "upToDateBody": "Vous utilisez la derni\u00e8re version ({{version}}).",
+    "errorBody": "Impossible de v\u00e9rifier les mises \u00e0 jour. R\u00e9essayez plus tard.",
+    "rateLimitBody": "La limite de requ\u00eates GitHub a \u00e9t\u00e9 atteinte. R\u00e9essayez dans un moment.",
+    "notesHeading": "Notes de version",
+    "notesEmpty": "Aucune note de version fournie.",
+    "fullChangelog": "Voir le journal complet sur GitHub",
+    "download": "T\u00e9l\u00e9charger",
+    "close": "Fermer",
+    "loading": "V\u00e9rification des mises \u00e0 jour\u2026"
+  },
+
   "toast": {
     "backupAuthFailed": "Backup authentication failed \u2014 check credentials in Settings"
   },

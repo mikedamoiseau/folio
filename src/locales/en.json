@@ -1006,6 +1006,23 @@
     "trayLabel": "What's New"
   },
 
+  "updateCheck": {
+    "titleAvailable": "Update available",
+    "titleUpToDate": "You're up to date",
+    "titleError": "Couldn't check for updates",
+    "newVersion": "Folio {{version}} is available.",
+    "currentVersion": "You have {{version}}.",
+    "upToDateBody": "You're on the latest version ({{version}}).",
+    "errorBody": "Couldn't check for updates. Try again later.",
+    "rateLimitBody": "GitHub's rate limit was reached. Try again in a little while.",
+    "notesHeading": "Release notes",
+    "notesEmpty": "No release notes were provided.",
+    "fullChangelog": "See the full changelog on GitHub",
+    "download": "Download",
+    "close": "Close",
+    "loading": "Checking for updates…"
+  },
+
   "celebration": {
     "title": "Book Completed",
     "heading": "You finished it!",
