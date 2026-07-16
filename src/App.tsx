@@ -17,6 +17,7 @@ import LanguageSwitcher from "./components/LanguageSwitcher";
 import PrivateModeToggle from "./components/PrivateModeToggle";
 import PrivateModeBar from "./components/PrivateModeBar";
 import ImportStatusBar from "./components/ImportStatusBar";
+import UpdateCheckHost from "./components/UpdateCheckHost";
 import Library from "./screens/Library";
 import ReaderSkeleton from "./components/ReaderSkeleton";
 import ReaderErrorBoundary from "./components/ReaderErrorBoundary";
@@ -251,6 +252,8 @@ function AppShell() {
         open={settingsOpen}
         onClose={() => setSettingsOpen(false)}
       />
+
+      <UpdateCheckHost deferWhilePresent={settingsOpen || statsOpen || vocabularyOpen || catalogOpen} />
 
       <ImportStatusBar />
     </div>
