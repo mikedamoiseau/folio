@@ -10,6 +10,7 @@ mod release_workflow_test;
 #[cfg(test)]
 mod tauri_config_test;
 pub mod tray;
+pub mod update;
 pub mod web_server;
 
 // Re-export every module that now lives in folio-core so existing `crate::…`
