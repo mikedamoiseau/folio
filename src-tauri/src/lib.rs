@@ -198,6 +198,9 @@ pub fn run() {
                 _log_guard: log_guard,
                 dictionary_pool: std::sync::Mutex::new(None),
                 dictionary_downloading: std::sync::atomic::AtomicBool::new(false),
+                pending_manual_update_check: std::sync::Mutex::new(false),
+                startup_update_check_taken: std::sync::atomic::AtomicBool::new(false),
+                update_check: crate::update::UpdateCheckState::new(),
             });
 
             // Initialize system tray
@@ -544,6 +547,9 @@ pub fn run() {
             commands::set_autostart_enabled,
             commands::get_ipc_metrics,
             commands::save_quote_card_png,
+            commands::check_for_update,
+            commands::take_pending_manual_update_check,
+            commands::take_startup_update_check,
         ])
         .on_window_event(|window, event| {
             match event {
