@@ -351,7 +351,7 @@
     "title": "Param\u00e8tres",
     "closeLabel": "Fermer les param\u00e8tres",
     "searchPlaceholder": "Rechercher dans les param\u00e8tres\u2026",
-    "searchTermsGeneral": "d\u00e9marrage lancement autostart cache stockage",
+    "searchTermsGeneral": "d\u00e9marrage lancement autostart cache stockage mise \u00e0 jour version release github d\u00e9marrage",
     "searchTermsAppearance": "th\u00e8me sombre clair mode police couleur css personnalis\u00e9 typographie taille texte",
     "searchTermsLayout": "mise en page double page manga d\u00e9filement continu lecture animation",
     "searchTermsLibrary": "biblioth\u00e8que dossier importation copier lier exporter emplacement",
@@ -474,6 +474,8 @@
     "showContinueReadingHint": "Afficher les livres r\u00e9cemment ouverts en haut de la biblioth\u00e8que",
     "showDiscover": "Afficher la section D\u00e9couvrir",
     "showDiscoverHint": "Afficher les livres populaires et nouveaux des catalogues sur la page biblioth\u00e8que",
+    "updateCheckOnStartup": "V\u00e9rifier les mises \u00e0 jour au d\u00e9marrage",
+    "updateCheckOnStartupHint": "Au lancement de Folio, v\u00e9rifier discr\u00e8tement une nouvelle version sur GitHub.",
     "remoteAccess": "Acc\u00e8s \u00e0 distance",
     "remoteAccessDescriptions": {
       "webUiCheckbox": "Interface Web",

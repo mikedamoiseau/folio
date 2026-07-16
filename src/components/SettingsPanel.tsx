@@ -17,6 +17,7 @@ import {
 import { isPinUnsaved, shouldSaveOnBlur } from "../lib/pinSaveState";
 import { validateWebServerPort, WEB_SERVER_PORT_MIN, WEB_SERVER_PORT_MAX, formatBytes } from "../lib/utils";
 import { useOnboardingContext } from "../context/OnboardingContext";
+import { startupCheckEnabled } from "../hooks/useUpdateCheck";
 import { useToast } from "./Toast";
 import {
   SEPIA_TOKENS,
@@ -412,6 +413,7 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
 
   // Auto-focus new imported books (default off)
   const [autoFocusNewBooks, setAutoFocusNewBooks] = useState(() => localStorage.getItem("folio-auto-focus-new-books") === "true");
+  const [updateCheckStartup, setUpdateCheckStartup] = useState(true);
 
   const [savedThemes, setSavedThemes] = useState<SavedTheme[]>(loadSavedThemes);
   const [activeThemeId, setActiveThemeId] = useState<string | null>(null);
@@ -827,6 +829,10 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
         dictDispatch({ type: "statusLoaded", status: dictStatus });
         const vocabEnabledVal = await invoke<string | null>("get_setting_value", { key: "vocabulary_enabled" });
         setVocabEnabled(vocabEnabledVal === "true");
+        const updateCheckVal = await invoke<string | null>("get_setting_value", {
+          key: "update_check_on_startup",
+        });
+        setUpdateCheckStartup(startupCheckEnabled(updateCheckVal));
         await loadServerStatus();
       })().catch(() => {});
     }
@@ -1468,6 +1474,32 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                     className={`absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full shadow transition-transform ${autoFocusNewBooks ? "translate-x-4" : ""}`}
                   />
                 </button>
+              </label>
+              <label className="flex items-start gap-2.5 cursor-pointer px-1">
+                <input
+                  type="checkbox"
+                  checked={updateCheckStartup}
+                  onChange={async (e) => {
+                    const val = e.target.checked;
+                    setUpdateCheckStartup(val);
+                    try {
+                      await invoke("set_setting_value", {
+                        key: "update_check_on_startup",
+                        value: val ? "true" : "false",
+                      });
+                    } catch (err) {
+                      setUpdateCheckStartup(!val); // revert — the setting did not persist
+                      addToast(friendlyError(err, t), "error");
+                    }
+                  }}
+                  className="mt-0.5 accent-accent"
+                />
+                <span className="text-sm text-ink leading-snug">
+                  {t("settings.updateCheckOnStartup")}
+                  <span className="block text-xs text-ink-muted mt-0.5">
+                    {t("settings.updateCheckOnStartupHint")}
+                  </span>
+                </span>
               </label>
             </div>
           </Accordion>

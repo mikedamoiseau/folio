@@ -352,7 +352,7 @@
     "title": "Settings",
     "closeLabel": "Close settings",
     "searchPlaceholder": "Search settings…",
-    "searchTermsGeneral": "startup launch autostart cache storage",
+    "searchTermsGeneral": "startup launch autostart cache storage update version release github startup",
     "searchTermsAppearance": "theme dark light mode font color colour custom css typography text size",
     "searchTermsLayout": "page layout dual page spread manga continuous scroll reading mode animation",
     "searchTermsLibrary": "library folder import mode copy link export location",
@@ -477,6 +477,8 @@
     "showDiscoverHint": "Display popular and new books from catalogs on the library page",
     "autoFocusNewBooks": "Auto-focus new books",
     "autoFocusNewBooksHint": "Enter focus mode when opening a newly imported book",
+    "updateCheckOnStartup": "Check for updates on startup",
+    "updateCheckOnStartupHint": "When Folio starts, quietly check GitHub for a newer release.",
     "remoteAccess": "Remote Access",
     "remoteAccessDescriptions": {
       "webUiCheckbox": "Web UI",
