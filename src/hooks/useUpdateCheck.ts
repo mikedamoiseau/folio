@@ -26,6 +26,11 @@ export function useUpdateCheck(onboardingActive: boolean) {
   const mode = useRef<null | "auto" | "manual">(null); // in-flight mode
   const mounted = useRef(true);
   const gatedRan = useRef(false);
+  const onboardingActiveRef = useRef(onboardingActive);
+
+  useEffect(() => {
+    onboardingActiveRef.current = onboardingActive;
+  }, [onboardingActive]);
 
   useEffect(() => {
     mounted.current = true;
@@ -82,7 +87,7 @@ export function useUpdateCheck(onboardingActive: boolean) {
   // Manual trigger while the window is already open.
   useEffect(() => {
     const unlisten = listen("check-update-open", async () => {
-      if (onboardingActive) return; // leave the flag set; consumed on completion
+      if (onboardingActiveRef.current) return; // leave the flag set; consumed on completion
       try {
         const pending = await invoke<boolean>("take_pending_manual_update_check");
         if (pending) runCheck("manual");
@@ -93,7 +98,7 @@ export function useUpdateCheck(onboardingActive: boolean) {
     return () => {
       unlisten.then((fn) => fn()).catch(() => {});
     };
-  }, [onboardingActive, runCheck]);
+  }, [runCheck]);
 
   // Gated consume: on mount if onboarding already inactive, and on active→inactive.
   useEffect(() => {

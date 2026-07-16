@@ -3,13 +3,14 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, cleanup } from "@testing-library/react";
 import UpdateModal, { isTrustedReleaseUrl, isTrustedChangelogUrl, type UpdateCheck } from "../UpdateModal";
 
-vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl: vi.fn() }));
+vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl: vi.fn(() => Promise.resolve()) }));
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({
     t: (k: string, o?: Record<string, unknown>) =>
       o && "version" in o ? `${k}:${o.version}` : k,
   }),
 }));
+vi.mock("../Toast", () => ({ useToast: () => ({ addToast: vi.fn() }) }));
 
 import { openUrl } from "@tauri-apps/plugin-opener";
 
@@ -52,6 +53,11 @@ describe("UpdateModal", () => {
     expect(screen.getByText("updateCheck.newVersion:2.8.0")).toBeTruthy();
     fireEvent.click(screen.getByText("updateCheck.download"));
     expect(openUrl).toHaveBeenCalledWith(sample.release_url);
+  });
+
+  it("focuses the Download button (not Close) in the available state", () => {
+    render(<UpdateModal state={{ status: "available", data: sample }} onClose={() => {}} />);
+    expect(document.activeElement).toBe(screen.getByText("updateCheck.download"));
   });
 
   it("opens the changelog via the external opener", () => {

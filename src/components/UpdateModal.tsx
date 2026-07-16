@@ -1,6 +1,8 @@
 import { useEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { useToast } from "./Toast";
+import { friendlyError } from "../lib/errors";
 
 export interface UpdateCheck {
   update_available: boolean;
@@ -43,7 +45,9 @@ interface Props {
 
 export default function UpdateModal({ state, onClose }: Props) {
   const { t } = useTranslation();
+  const { addToast } = useToast();
   const dialogRef = useRef<HTMLDivElement>(null);
+  const downloadRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -53,7 +57,7 @@ export default function UpdateModal({ state, onClose }: Props) {
       }
     };
     document.addEventListener("keydown", onKey);
-    dialogRef.current?.querySelector<HTMLElement>("button")?.focus();
+    (downloadRef.current ?? dialogRef.current?.querySelector<HTMLElement>("button"))?.focus();
     return () => document.removeEventListener("keydown", onKey);
   }, [onClose]);
 
@@ -125,7 +129,8 @@ export default function UpdateModal({ state, onClose }: Props) {
               <button
                 type="button"
                 onClick={() => {
-                  if (isTrustedChangelogUrl(state.data.changelog_url)) openUrl(state.data.changelog_url);
+                  if (isTrustedChangelogUrl(state.data.changelog_url))
+                    openUrl(state.data.changelog_url).catch((err) => addToast(friendlyError(err, t), "error"));
                 }}
                 className="mt-3 text-accent hover:underline"
               >
@@ -138,9 +143,11 @@ export default function UpdateModal({ state, onClose }: Props) {
         {state.status === "available" && (
           <div className="flex justify-end p-4 border-t border-warm-border">
             <button
+              ref={downloadRef}
               type="button"
               onClick={() => {
-                if (isTrustedReleaseUrl(state.data.release_url)) openUrl(state.data.release_url);
+                if (isTrustedReleaseUrl(state.data.release_url))
+                  openUrl(state.data.release_url).catch((err) => addToast(friendlyError(err, t), "error"));
               }}
               className="px-4 py-2 rounded-lg bg-accent text-white text-sm font-medium hover:opacity-90 focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2"
             >
