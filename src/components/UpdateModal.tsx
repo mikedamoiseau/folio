@@ -57,7 +57,10 @@ export default function UpdateModal({ state, onClose }: Props) {
       }
     };
     document.addEventListener("keydown", onKey);
-    (downloadRef.current ?? dialogRef.current?.querySelector<HTMLElement>("button"))?.focus();
+    // Focus the primary Download action when present; otherwise focus the
+    // dialog container itself (tabIndex -1) rather than the Close button, so
+    // states without a primary action don't show a focus ring on the ✕.
+    (downloadRef.current ?? dialogRef.current)?.focus();
     return () => document.removeEventListener("keydown", onKey);
   }, [onClose]);
 
@@ -80,7 +83,8 @@ export default function UpdateModal({ state, onClose }: Props) {
         role="dialog"
         aria-modal="true"
         aria-label={title}
-        className="bg-surface border border-warm-border rounded-2xl shadow-xl max-w-lg w-full mx-4 max-h-[80vh] flex flex-col overflow-hidden"
+        tabIndex={-1}
+        className="bg-surface border border-warm-border rounded-2xl shadow-xl max-w-lg w-full mx-4 max-h-[80vh] flex flex-col overflow-hidden focus:outline-none"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between p-5 border-b border-warm-border">

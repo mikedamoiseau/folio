@@ -60,6 +60,15 @@ describe("UpdateModal", () => {
     expect(document.activeElement).toBe(screen.getByText("updateCheck.download"));
   });
 
+  it("does not focus the Close button in states without a primary action", () => {
+    const { container } = render(
+      <UpdateModal state={{ status: "uptodate", data: sample }} onClose={() => {}} />,
+    );
+    expect(document.activeElement).not.toBe(screen.getByLabelText("updateCheck.close"));
+    // Focus rests on the dialog container itself, so no ✕ focus ring shows.
+    expect(document.activeElement).toBe(container.querySelector('[role="dialog"]'));
+  });
+
   it("opens the changelog via the external opener", () => {
     render(<UpdateModal state={{ status: "available", data: sample }} onClose={() => {}} />);
     fireEvent.click(screen.getByText("updateCheck.fullChangelog"));
