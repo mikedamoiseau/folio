@@ -6,8 +6,10 @@ import ConfirmDialog from "./ConfirmDialog";
 /**
  * First-run analytics opt-in. Reads app-global consent on mount; renders the
  * dialog only while consent is "unset" (self-gating tri-state). "Enable" ⇒
- * enabled, "Not now" ⇒ disabled. Dismissing without choosing leaves it unset,
- * so the prompt reappears next launch.
+ * enabled; "Not now" ⇒ disabled. Dismissing (Escape / backdrop click) routes
+ * through ConfirmDialog's onCancel, i.e. it is treated as "Not now" ⇒ disabled
+ * — so once shown, the dialog resolves consent one way or the other and does
+ * not reappear. Fail-closed throughout: nothing is tracked unless "Enable".
  */
 export default function AnalyticsConsentDialog() {
   const { t } = useTranslation();
