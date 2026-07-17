@@ -74,6 +74,14 @@ You can skip the wizard at any step — it won't appear again. Everything stays 
 
 ![Folio library in light theme](../screenshots/01-library-light.png)
 
+### Checking for updates
+
+Folio can tell you when a newer version is available on GitHub. It checks quietly once each time it starts, and you can check any time from the system-tray menu with **Check for Updates**. When a newer release exists, a window shows the new version and its release notes, with a **Download** button that opens the release page on GitHub and a link to the full changelog; if you are already up to date, a manual check tells you so.
+
+To turn off the automatic check at startup, open **Settings → General** and clear **Check for updates on startup**.
+
+The check only reads GitHub's public release list — Folio never downloads or installs an update for you. You download the new version yourself from the release page.
+
 ---
 
 ## 2. Managing Your Library
@@ -888,7 +896,7 @@ Whatever surfaces were enabled when you last closed Folio start automatically th
 
 ### Tray menu
 
-The system tray shows the same two toggles (Web UI: ON/OFF, OPDS: ON/OFF). Click either to flip its state without opening Settings.
+The system tray shows the same two toggles (Web UI: ON/OFF, OPDS: ON/OFF). Click either to flip its state without opening Settings. The menu also has **Check for Updates** (see [Checking for updates](#checking-for-updates)) and **What's New**.
 
 ### Security
 

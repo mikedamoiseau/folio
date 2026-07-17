@@ -18,6 +18,7 @@ import PrivateModeToggle from "./components/PrivateModeToggle";
 import PrivateModeBar from "./components/PrivateModeBar";
 import ImportStatusBar from "./components/ImportStatusBar";
 import AnalyticsConsentDialog from "./components/AnalyticsConsentDialog";
+import UpdateCheckHost from "./components/UpdateCheckHost";
 import Library from "./screens/Library";
 import ReaderSkeleton from "./components/ReaderSkeleton";
 import ReaderErrorBoundary from "./components/ReaderErrorBoundary";
@@ -254,6 +255,7 @@ function AppShell() {
       />
 
       <AnalyticsConsentDialog />
+      <UpdateCheckHost deferWhilePresent={settingsOpen || statsOpen || vocabularyOpen || catalogOpen} />
 
       <ImportStatusBar />
     </div>

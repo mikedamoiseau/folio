@@ -49,6 +49,7 @@ tokio-util = { version = "0.7", features = ["io"] }
 keyring = "3"
 secrecy = { workspace = true }
 regex = "1"
+semver = "1"
 url = "2"
 urlencoding = "2"
 log = "0.4.29"
@@ -72,6 +73,7 @@ tempfile = "3"
 folio-core = { path = "../folio-core", features = ["test-utils"] }
 tauri = { version = "2", features = ["protocol-asset", "tray-icon", "test"] }
 tokio = { version = "1", features = ["macros"] }
+wiremock = "0.6"
 
 [features]
 default = ["sftp"]

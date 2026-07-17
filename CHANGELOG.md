@@ -6,6 +6,14 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- **Check for app updates.** Folio can now tell you when a newer version is
+  available on GitHub. Choose "Check for Updates" from the tray menu at any
+  time, and Folio also checks quietly once when it starts — you can turn the
+  startup check off under Settings → General. When a newer release exists, a
+  window shows the new version and its release notes, with a button to open the
+  download page on GitHub and a link to the full changelog; if you're already up
+  to date, a manual check tells you so. The check only reads GitHub's public
+  release list and never downloads or installs anything for you.
 - **Filter and collapse the Collections panel.** The Collections panel now has
   a filter box at the top: start typing to narrow both your collections and your
   series to the ones whose names match, live as you type. Matching ignores case,
