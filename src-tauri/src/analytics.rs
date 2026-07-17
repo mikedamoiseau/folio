@@ -120,6 +120,23 @@ mod tests {
         assert!(!should_send(Consent::Unset));
     }
 
+    // Regression guard for the tauri-plugin-aptabase startup panic
+    // ("there is no reactor running, must be called from the context of a
+    // Tokio 1.x runtime"): the plugin spawns its background flush task via
+    // bare `tokio::spawn` at plugin-init, which requires an *entered* Tokio
+    // runtime on the current thread. `run()` enters Tauri's own runtime handle
+    // on the main thread to provide one. This verifies the mechanism the fix
+    // relies on: with the handle entered, bare `tokio::spawn` schedules instead
+    // of panicking. Remove the `_guard` line below and this test panics.
+    #[test]
+    fn entering_tauri_runtime_enables_bare_tokio_spawn() {
+        let rt_handle = tauri::async_runtime::handle();
+        let _guard = rt_handle.inner().enter();
+        let jh = tokio::spawn(async { 21 * 2 });
+        let val = tauri::async_runtime::block_on(async { jh.await.unwrap() });
+        assert_eq!(val, 42);
+    }
+
     #[test]
     fn absent_file_is_unset() {
         let dir =

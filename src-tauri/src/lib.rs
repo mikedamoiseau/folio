@@ -26,6 +26,16 @@ use tauri::{Emitter, Manager};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // tauri-plugin-aptabase spawns its background flush task via bare
+    // `tokio::spawn` at plugin-init, which requires an *entered* Tokio runtime
+    // on the current thread. Folio otherwise uses `tauri::async_runtime::spawn`
+    // (handle-based — no entered context needed), so the main thread has no
+    // entered runtime by default and the plugin panics ("there is no reactor
+    // running"). Enter Tauri's own runtime handle here and hold the guard for
+    // the lifetime of `run()` so the plugin can spawn onto that runtime.
+    let rt_handle = tauri::async_runtime::handle();
+    let _rt_guard = rt_handle.inner().enter();
+
     #[allow(unused_mut)]
     let mut builder = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
