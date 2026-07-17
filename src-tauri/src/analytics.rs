@@ -7,8 +7,10 @@
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
+use tauri::State;
 
-use crate::error::FolioResult;
+use crate::commands::AppState;
+use crate::error::{FolioError, FolioResult};
 
 /// Aptabase cloud app key. Client-side by design (not a secret). Read from the
 /// build-time env var so dev builds stay silent unless a key is provided; an
@@ -93,6 +95,20 @@ pub fn maybe_track_app_started(app: &tauri::App, data_dir: &Path) {
     }
 }
 
+/// Return the app-global analytics consent as `"unset"|"enabled"|"disabled"`.
+#[tauri::command]
+pub async fn get_analytics_consent(state: State<'_, AppState>) -> FolioResult<String> {
+    Ok(read_consent(&state.data_dir).as_str().to_string())
+}
+
+/// Persist the app-global analytics consent. Rejects values outside the enum.
+#[tauri::command]
+pub async fn set_analytics_consent(consent: String, state: State<'_, AppState>) -> FolioResult<()> {
+    let parsed = Consent::parse(&consent)
+        .ok_or_else(|| FolioError::invalid(format!("invalid consent value: {consent}")))?;
+    write_consent(&state.data_dir, parsed)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -119,6 +135,13 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(consent_path(&dir), b"not json").unwrap();
         assert_eq!(read_consent(&dir), Consent::Unset);
+    }
+
+    #[test]
+    fn parse_rejects_unknown_values() {
+        assert_eq!(Consent::parse("enabled"), Some(Consent::Enabled));
+        assert_eq!(Consent::parse("garbage"), None);
+        assert_eq!(Consent::parse(""), None);
     }
 
     #[test]

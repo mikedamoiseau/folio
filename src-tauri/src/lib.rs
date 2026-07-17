@@ -507,6 +507,8 @@ pub fn run() {
             commands::queue_book_for_scan,
             commands::get_setting_value,
             commands::set_setting_value,
+            analytics::get_analytics_consent,
+            analytics::set_analytics_consent,
             commands::get_dictionary_status,
             commands::download_dictionary,
             commands::delete_dictionary,
