@@ -47,6 +47,7 @@ export default function AnalyticsConsentDialog() {
       confirmLabel={t("settings.analyticsEnable")}
       cancelLabel={t("settings.analyticsNotNow")}
       destructive={false}
+      autoFocus="dialog"
       onConfirm={() => void choose("enabled")}
       onCancel={() => void choose("disabled")}
     />

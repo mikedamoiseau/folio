@@ -17,6 +17,13 @@ interface ConfirmDialogProps {
   confirmDisabled?: boolean;
   /** Extra content (e.g. a cover thumbnail) rendered above the buttons. */
   children?: ReactNode;
+  /**
+   * Where initial focus lands on open. `"cancel"` (default) focuses the cancel
+   * button — a safe default for destructive confirmations. `"dialog"` focuses
+   * the dialog container so no action button is highlighted on open — use for
+   * neutral prompts (e.g. opt-in) where nudging a choice is undesirable.
+   */
+  autoFocus?: "cancel" | "dialog";
   onConfirm: () => void;
   onCancel: () => void;
 }
@@ -37,11 +44,12 @@ export default function ConfirmDialog({
   destructive = true,
   confirmDisabled = false,
   children,
+  autoFocus = "cancel",
   onConfirm,
   onCancel,
 }: ConfirmDialogProps) {
   const { t } = useTranslation();
-  const dialogRef = useFocusTrap(onCancel);
+  const dialogRef = useFocusTrap(onCancel, true, autoFocus === "dialog");
 
   return (
     <>
@@ -55,7 +63,7 @@ export default function ConfirmDialog({
           role="dialog"
           aria-modal="true"
           aria-label={title}
-          className="bg-surface rounded-2xl shadow-xl border border-warm-border w-full max-w-sm pointer-events-auto animate-slide-in-up overflow-hidden"
+          className="bg-surface rounded-2xl shadow-xl border border-warm-border w-full max-w-sm pointer-events-auto animate-slide-in-up overflow-hidden focus:outline-none"
           onClick={(e) => e.stopPropagation()}
         >
           <div className="px-6 py-5 space-y-3">
