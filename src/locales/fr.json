@@ -351,7 +351,7 @@
     "title": "Param\u00e8tres",
     "closeLabel": "Fermer les param\u00e8tres",
     "searchPlaceholder": "Rechercher dans les param\u00e8tres\u2026",
-    "searchTermsGeneral": "d\u00e9marrage lancement autostart cache stockage",
+    "searchTermsGeneral": "d\u00e9marrage lancement autostart cache stockage mise \u00e0 jour version release github",
     "searchTermsAppearance": "th\u00e8me sombre clair mode police couleur css personnalis\u00e9 typographie taille texte",
     "searchTermsLayout": "mise en page double page manga d\u00e9filement continu lecture animation",
     "searchTermsLibrary": "biblioth\u00e8que dossier importation copier lier exporter emplacement",
@@ -474,6 +474,8 @@
     "showContinueReadingHint": "Afficher les livres r\u00e9cemment ouverts en haut de la biblioth\u00e8que",
     "showDiscover": "Afficher la section D\u00e9couvrir",
     "showDiscoverHint": "Afficher les livres populaires et nouveaux des catalogues sur la page biblioth\u00e8que",
+    "updateCheckOnStartup": "V\u00e9rifier les mises \u00e0 jour au d\u00e9marrage",
+    "updateCheckOnStartupHint": "Au lancement de Folio, v\u00e9rifier discr\u00e8tement une nouvelle version sur GitHub.",
     "remoteAccess": "Acc\u00e8s \u00e0 distance",
     "remoteAccessDescriptions": {
       "webUiCheckbox": "Interface Web",
@@ -988,6 +990,23 @@
     "modalFullChangelog": "Voir le changelog complet",
     "settingsButton": "Notes de version",
     "trayLabel": "Nouveaut\u00e9s"
+  },
+
+  "updateCheck": {
+    "titleAvailable": "Mise \u00e0 jour disponible",
+    "titleUpToDate": "Vous \u00eates \u00e0 jour",
+    "titleError": "Impossible de v\u00e9rifier les mises \u00e0 jour",
+    "newVersion": "Folio {{version}} est disponible.",
+    "currentVersion": "Vous avez la version {{version}}.",
+    "upToDateBody": "Vous utilisez la derni\u00e8re version ({{version}}).",
+    "errorBody": "Impossible de v\u00e9rifier les mises \u00e0 jour. R\u00e9essayez plus tard.",
+    "rateLimitBody": "La limite de requ\u00eates GitHub a \u00e9t\u00e9 atteinte. R\u00e9essayez dans un moment.",
+    "notesHeading": "Notes de version",
+    "notesEmpty": "Aucune note de version fournie.",
+    "fullChangelog": "Voir le journal complet sur GitHub",
+    "download": "T\u00e9l\u00e9charger",
+    "close": "Fermer",
+    "loading": "V\u00e9rification des mises \u00e0 jour\u2026"
   },
 
   "toast": {

@@ -22,8 +22,9 @@ export default function WhatsNewModal({ release, onClose }: WhatsNewModalProps) 
       }
     };
     document.addEventListener("keydown", handleKeyDown);
-    const firstBtn = dialogRef.current?.querySelector<HTMLElement>("button");
-    firstBtn?.focus();
+    // Focus the dialog container (tabIndex -1) rather than the first button
+    // (the ✕), so opening the modal doesn't paint a focus ring on Close.
+    dialogRef.current?.focus();
     return () => document.removeEventListener("keydown", handleKeyDown);
   }, [onClose]);
 
@@ -37,7 +38,8 @@ export default function WhatsNewModal({ release, onClose }: WhatsNewModalProps) 
         role="dialog"
         aria-modal="true"
         aria-label={t("whatsNew.modalTitle", { version: release.version })}
-        className="bg-surface border border-warm-border rounded-2xl shadow-xl max-w-lg w-full mx-4 max-h-[80vh] flex flex-col overflow-hidden"
+        tabIndex={-1}
+        className="bg-surface border border-warm-border rounded-2xl shadow-xl max-w-lg w-full mx-4 max-h-[80vh] flex flex-col overflow-hidden focus:outline-none"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}

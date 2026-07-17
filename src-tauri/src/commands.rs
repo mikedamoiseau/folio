@@ -42,6 +42,9 @@ use folio_core::cache::{
 /// 3. `mobi_cache` — MOBI parsed-book LRU cache (mobi feature only)
 /// 4. `enrichment_registry` — metadata provider registry
 /// 5. `web_server_handle` — running web server handle
+///
+/// `pending_manual_update_check` and `update_check`'s internal async mutex
+/// are leaf locks — acquired alone, never nested with the above.
 pub struct ProfileState {
     pub active: String,
     pub pools: std::collections::HashMap<String, DbPool>,
@@ -128,6 +131,16 @@ pub struct AppState {
     /// when done, so a second invocation returns early instead of racing on
     /// the staging files.
     pub dictionary_downloading: std::sync::atomic::AtomicBool,
+    /// Set true by the tray "Check for Updates" item; consumed exactly once by
+    /// the frontend via `take_pending_manual_update_check`. LEAF LOCK — never
+    /// held together with the profile/cache locks above.
+    pub pending_manual_update_check: std::sync::Mutex<bool>,
+    /// Guards the automatic startup check to once per process.
+    pub startup_update_check_taken: std::sync::atomic::AtomicBool,
+    /// GitHub update-check client + single-flight/cache state. Its internal
+    /// async mutex is a LEAF and is never held across `.await` alongside any
+    /// `AppState` std mutex.
+    pub update_check: crate::update::UpdateCheckState,
 }
 
 impl AppState {
@@ -9248,6 +9261,9 @@ mod tests {
             _log_guard: None,
             dictionary_pool: std::sync::Mutex::new(None),
             dictionary_downloading: std::sync::atomic::AtomicBool::new(false),
+            pending_manual_update_check: std::sync::Mutex::new(false),
+            startup_update_check_taken: std::sync::atomic::AtomicBool::new(false),
+            update_check: crate::update::UpdateCheckState::new(),
         });
         (app, dir)
     }
@@ -9795,6 +9811,62 @@ mod tests {
         assert!(words[0].next_due_at.is_some());
         assert!(words[0].last_reviewed_at.is_some());
     }
+
+    #[test]
+    fn startup_update_check_command_grants_once() {
+        let (app, _dir) = mock_app_with_state();
+        assert!(take_startup_update_check(app.state::<AppState>())); // first → true
+        assert!(!take_startup_update_check(app.state::<AppState>())); // then → false
+        assert!(!take_startup_update_check(app.state::<AppState>()));
+    }
+
+    #[test]
+    fn pending_manual_update_check_command_consumes_once() {
+        let (app, _dir) = mock_app_with_state();
+        assert!(!take_pending_manual_update_check(app.state::<AppState>())); // starts false
+        *app.state::<AppState>()
+            .pending_manual_update_check
+            .lock()
+            .unwrap() = true; // tray sets it
+        assert!(take_pending_manual_update_check(app.state::<AppState>())); // consumed → true
+        assert!(!take_pending_manual_update_check(app.state::<AppState>())); // cleared → false
+    }
+}
+
+// ── Update check ───────────────────────────────────────────
+
+/// Check GitHub for a newer release. Returns the comparison; the frontend
+/// decides presentation per trigger. Errors are stable codes
+/// (timeout | network | rate_limited | http_error | malformed_response);
+/// detail is logged in Rust, not returned.
+#[tauri::command]
+pub async fn check_for_update(
+    state: State<'_, AppState>,
+    app: AppHandle,
+) -> Result<crate::update::UpdateCheck, String> {
+    // Re-parse through our own semver crate so both operands share one crate
+    // version regardless of Tauri's transitive semver.
+    let current = semver::Version::parse(&app.package_info().version.to_string()).map_err(|e| {
+        tracing::error!(error = %e, "update check: cannot parse installed version");
+        "malformed_response".to_string()
+    })?;
+    crate::update::check(&state.update_check, &current).await
+}
+
+/// Atomically read-and-clear the pending manual-check flag. Exactly one caller
+/// (open-window event handler OR recreated-window mount) gets `true`.
+#[tauri::command]
+pub fn take_pending_manual_update_check(state: State<'_, AppState>) -> bool {
+    let mut flag = state.pending_manual_update_check.lock().unwrap();
+    std::mem::take(&mut *flag) // clippy prefers take over replace(_, false)
+}
+
+/// Grant the automatic startup check to the first caller per process only.
+#[tauri::command]
+pub fn take_startup_update_check(state: State<'_, AppState>) -> bool {
+    !state
+        .startup_update_check_taken
+        .swap(true, std::sync::atomic::Ordering::SeqCst)
 }
 
 // ── Autostart ──────────────────────────────────────────────

@@ -15,6 +15,7 @@ pub fn build_tray_menu(
 ) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
     let show_item = MenuItemBuilder::with_id("show", "Show Folio").build(app)?;
     let whats_new = MenuItemBuilder::with_id("whats_new", "What's New").build(app)?;
+    let check_update = MenuItemBuilder::with_id("check_update", "Check for Updates").build(app)?;
 
     let open_webui = MenuItemBuilder::with_id("open_webui", "Open Web UI")
         .enabled(server_running && web_ui_enabled)
@@ -43,6 +44,7 @@ pub fn build_tray_menu(
     MenuBuilder::new(app)
         .item(&show_item)
         .item(&whats_new)
+        .item(&check_update)
         .item(&open_webui)
         .item(&sep1)
         .item(&web_ui_toggle)
@@ -109,6 +111,26 @@ pub fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
                         .build();
                     if let Ok(w) = window {
                         let _ = w.emit("whats-new-open", ());
+                    }
+                }
+            }
+            "check_update" => {
+                {
+                    let state = app.state::<AppState>();
+                    *state.pending_manual_update_check.lock().unwrap() = true;
+                }
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.unminimize();
+                    let _ = window.show();
+                    let _ = window.set_focus();
+                    let _ = window.emit("check-update-open", ());
+                } else {
+                    let window = WebviewWindowBuilder::new(app, "main", WebviewUrl::default())
+                        .title("Folio")
+                        .inner_size(800.0, 600.0)
+                        .build();
+                    if let Ok(w) = window {
+                        let _ = w.emit("check-update-open", ());
                     }
                 }
             }

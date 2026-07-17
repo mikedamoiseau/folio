@@ -84,6 +84,7 @@ Folio is for the opposite case: you already have the files, and you want a bette
 - Multi-language UI — English and French, with OS-language auto-detection
 - "Don't track this session" mode — an app-wide toggle that pauses passive tracking (reading position, session stats, recently-read, activity log) while keeping your highlights and bookmarks; resets off on restart
 - Cross-platform desktop app for macOS, Windows, and Linux
+- Update check — a tray "Check for Updates" item plus a quiet check on startup (toggleable in Settings) tell you when a newer release is on GitHub, showing release notes and a download link; check-only, nothing is installed for you
 
 ## Screenshots
 
