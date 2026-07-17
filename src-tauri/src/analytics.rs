@@ -10,6 +10,16 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::FolioResult;
 
+/// Aptabase cloud app key. Client-side by design (not a secret). Read from the
+/// build-time env var so dev builds stay silent unless a key is provided; an
+/// empty key disables the SDK safely. Set `FOLIO_APTABASE_KEY` in the release
+/// build environment (e.g. CI) to the app key from the Aptabase dashboard
+/// (format `A-EU-XXXXXXXXXX`).
+pub const APTABASE_APP_KEY: &str = match option_env!("FOLIO_APTABASE_KEY") {
+    Some(k) => k,
+    None => "",
+};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Consent {
     Unset,
@@ -69,6 +79,18 @@ pub fn write_consent(data_dir: &Path, c: Consent) -> FolioResult<()> {
     std::fs::write(consent_path(data_dir), json)
         .map_err(|e| crate::error::FolioError::internal(e.to_string()))?;
     Ok(())
+}
+
+/// Fire exactly one anonymous `app_started` event for this process launch,
+/// iff the user has opted in. Fail-closed: no consent file ⇒ nothing sent.
+/// Called once from the Tauri `setup` closure — never from the event bus.
+pub fn maybe_track_app_started(app: &tauri::App, data_dir: &Path) {
+    if should_send(read_consent(data_dir)) {
+        use tauri_plugin_aptabase::EventTracker;
+        if let Err(e) = app.track_event("app_started", None) {
+            tracing::warn!(error = %e, "analytics app_started track failed");
+        }
+    }
 }
 
 #[cfg(test)]

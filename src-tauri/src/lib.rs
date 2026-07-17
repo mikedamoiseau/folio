@@ -32,6 +32,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_aptabase::Builder::new(analytics::APTABASE_APP_KEY).build())
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             None,
@@ -199,6 +200,17 @@ pub fn run() {
                 dictionary_pool: std::sync::Mutex::new(None),
                 dictionary_downloading: std::sync::atomic::AtomicBool::new(false),
             });
+
+            // Usage analytics (opt-in): fire one anonymous `app_started` per
+            // process launch iff the user enabled analytics. App-global consent
+            // is read from `{data_dir}/analytics.json`; fail-closed. Direct
+            // call (not the event bus) so there is no ordering race and no
+            // profile-switch re-fire. `data_dir` was moved into AppState above,
+            // so re-derive the path here.
+            {
+                let analytics_dir = app.path().app_data_dir()?;
+                analytics::maybe_track_app_started(app, &analytics_dir);
+            }
 
             // Initialize system tray
             if let Err(e) = tray::setup_tray(&app.handle().clone()) {
