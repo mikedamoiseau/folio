@@ -3836,14 +3836,63 @@ pub async fn search_all_catalogs(
     Ok(all_entries)
 }
 
+/// Normalize a title or author for duplicate detection: collapse internal
+/// whitespace and lowercase, so cosmetic differences ("The  Odyssey" vs
+/// "The Odyssey") don't defeat the match.
+fn discover_dedup_key(title: &str, author: &str) -> String {
+    fn norm(s: &str) -> String {
+        s.split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .to_lowercase()
+    }
+    format!("{}\u{1f}{}", norm(title), norm(author))
+}
+
+/// Number of discover picks shown at once. The fetched pool is larger so that
+/// dedup against a well-stocked library still leaves fresh picks to show.
+const DISCOVER_DISPLAY_LIMIT: usize = 20;
+
+/// Filter discover entries against the library: drop any book already owned,
+/// and drop intra-list duplicates (same title+author surfaced by multiple
+/// catalogs), keeping the first occurrence, then cap at `limit`. Matching is by
+/// normalized title+author — imperfect for feeds that format authors
+/// differently, but enough to keep obvious duplicates out of the shelf.
+fn dedup_discover_entries(
+    entries: Vec<opds::OpdsEntry>,
+    library: &[(String, String)],
+    limit: usize,
+) -> Vec<opds::OpdsEntry> {
+    let owned: std::collections::HashSet<String> = library
+        .iter()
+        .map(|(t, a)| discover_dedup_key(t, a))
+        .collect();
+    let mut seen = std::collections::HashSet::new();
+    entries
+        .into_iter()
+        .filter(|e| {
+            let key = discover_dedup_key(&e.title, &e.author);
+            !owned.contains(&key) && seen.insert(key)
+        })
+        .take(limit)
+        .collect()
+}
+
 /// Returns a cached list of popular/new books from all configured catalogs.
 /// Results are cached for 24 hours in the settings DB to avoid slowing down startup.
 #[tauri::command]
 pub async fn get_discover_books(state: State<'_, AppState>) -> FolioResult<Vec<opds::OpdsEntry>> {
     let conn = state.active_db()?.get()?;
 
+    // Library title/author pairs, used to drop books the user already owns.
+    // Applied to both the cached and freshly-fetched paths.
+    let library: Vec<(String, String)> = db::list_books_grid(&conn)?
+        .into_iter()
+        .map(|b| (b.title, b.author))
+        .collect();
+
     // Check cache (stored as JSON with a timestamp)
-    if let Some(cached) = db::get_setting(&conn, "discover_cache_v3")? {
+    if let Some(cached) = db::get_setting(&conn, "discover_cache_v4")? {
         if let Ok(cache) = serde_json::from_str::<serde_json::Value>(&cached) {
             let cached_at = cache["cached_at"].as_i64().unwrap_or(0);
             let now = std::time::SystemTime::now()
@@ -3855,7 +3904,11 @@ pub async fn get_discover_books(state: State<'_, AppState>) -> FolioResult<Vec<o
                 if let Ok(entries) =
                     serde_json::from_value::<Vec<opds::OpdsEntry>>(cache["entries"].clone())
                 {
-                    return Ok(entries);
+                    return Ok(dedup_discover_entries(
+                        entries,
+                        &library,
+                        DISCOVER_DISPLAY_LIMIT,
+                    ));
                 }
             }
         }
@@ -3878,7 +3931,7 @@ pub async fn get_discover_books(state: State<'_, AppState>) -> FolioResult<Vec<o
                     .entries
                     .into_iter()
                     .filter(|e| !e.links.is_empty() && e.nav_url.is_none())
-                    .take(10)
+                    .take(20)
                     .map(|mut e| {
                         // Tag with catalog source
                         if e.summary.is_empty() {
@@ -3902,7 +3955,9 @@ pub async fn get_discover_books(state: State<'_, AppState>) -> FolioResult<Vec<o
         }
     }
 
-    // Cache the results
+    // Cache the raw (pre-dedup) results so the cached list stays valid as the
+    // library changes — dedup is re-applied against the current library on
+    // every read.
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
@@ -3913,11 +3968,15 @@ pub async fn get_discover_books(state: State<'_, AppState>) -> FolioResult<Vec<o
     });
     let _ = db::set_setting(
         &conn,
-        "discover_cache_v3",
+        "discover_cache_v4",
         &serde_json::to_string(&cache).unwrap_or_default(),
     );
 
-    Ok(all_entries)
+    Ok(dedup_discover_entries(
+        all_entries,
+        &library,
+        DISCOVER_DISPLAY_LIMIT,
+    ))
 }
 
 /// Pick the file extension from an OPDS acquisition URL. Parses the URL with
@@ -7655,6 +7714,55 @@ pub async fn get_ipc_metrics(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn discover_entry(title: &str, author: &str) -> opds::OpdsEntry {
+        opds::OpdsEntry {
+            id: format!("{title}-{author}"),
+            title: title.to_string(),
+            author: author.to_string(),
+            summary: String::new(),
+            cover_url: None,
+            links: Vec::new(),
+            nav_url: None,
+        }
+    }
+
+    #[test]
+    fn dedup_discover_drops_owned_and_intra_list_duplicates() {
+        let library = vec![("Dune".to_string(), "Frank Herbert".to_string())];
+        let entries = vec![
+            discover_entry("Dune", "Frank Herbert"), // owned → dropped
+            discover_entry("Basil", "Wilkie Collins"),
+            discover_entry("Basil", "Wilkie Collins"), // intra-list dup → dropped
+            discover_entry("Flight", "Walter White"),
+        ];
+
+        let out = dedup_discover_entries(entries, &library, 100);
+        let titles: Vec<_> = out.iter().map(|e| e.title.as_str()).collect();
+        assert_eq!(titles, vec!["Basil", "Flight"]);
+    }
+
+    #[test]
+    fn dedup_discover_matches_ignoring_case_and_whitespace() {
+        let library = vec![("The  Odyssey".to_string(), "HOMER".to_string())];
+        let entries = vec![
+            discover_entry("the odyssey", "homer"), // owned (normalized) → dropped
+            discover_entry("Kept", "Author"),
+        ];
+
+        let out = dedup_discover_entries(entries, &library, 100);
+        let titles: Vec<_> = out.iter().map(|e| e.title.as_str()).collect();
+        assert_eq!(titles, vec!["Kept"]);
+    }
+
+    #[test]
+    fn dedup_discover_caps_at_limit() {
+        let entries: Vec<_> = (0..10)
+            .map(|i| discover_entry(&format!("Book {i}"), "Author"))
+            .collect();
+        let out = dedup_discover_entries(entries, &[], 3);
+        assert_eq!(out.len(), 3, "result must be capped at the limit");
+    }
 
     fn progress_test_book(id: &str, total_chapters: u32) -> Book {
         Book {

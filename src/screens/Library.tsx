@@ -168,6 +168,8 @@ export default function Library({ catalogImportedBookIds }: LibraryProps = {}) {
   const [discoverBooks, setDiscoverBooks] = useState<DiscoverEntry[]>([]);
   const [discoverInfo, setDiscoverInfo] = useState<{ id: string; rect: DOMRect } | null>(null);
   const [discoverLoading, setDiscoverLoading] = useState(true);
+  // Entry ids currently downloading+importing, for per-book "Adding…" feedback.
+  const [discoverAddingIds, setDiscoverAddingIds] = useState<Set<string>>(new Set());
 
   // Sync showContinueReading when changed from SettingsPanel
   useEffect(() => {
@@ -1171,7 +1173,7 @@ export default function Library({ catalogImportedBookIds }: LibraryProps = {}) {
             </div>
           )}
           {/* Discover — popular/new from catalogs */}
-          {showDiscover && !search && !activeCollectionId && !activeSeries && (discoverLoading || discoverBooks.length > 0) && (
+          {showDiscover && !search && !activeCollectionId && !activeSeries && (
             <div className="mb-1 col-[1/-1]" data-testid="discover-section">
               <h2 className="text-sm font-semibold text-ink-muted uppercase tracking-wide mb-3">{t("library.discover")}</h2>
               <div className="flex gap-4 overflow-x-auto pb-2">
@@ -1231,9 +1233,13 @@ export default function Library({ catalogImportedBookIds }: LibraryProps = {}) {
                       <div className="px-2 py-1.5">
                         <p className="text-xs font-medium text-ink truncate">{entry.title}</p>
                         {entry.author && <p className="text-[10px] text-ink-muted truncate">{entry.author}</p>}
-                        {picked && (
+                        {picked && (() => {
+                          const adding = discoverAddingIds.has(entry.id);
+                          return (
                           <button
+                            disabled={adding}
                             onClick={async () => {
+                              setDiscoverAddingIds((prev) => new Set(prev).add(entry.id));
                               try {
                                 const result = await invoke<{ id: string; newly_imported: boolean }>("download_opds_book", {
                                   downloadUrl: picked.link.href,
@@ -1246,17 +1252,27 @@ export default function Library({ catalogImportedBookIds }: LibraryProps = {}) {
                                 setDiscoverBooks((prev) => prev.filter((e) => e.id !== entry.id));
                               } catch (err) {
                                 setError(friendlyError(err, t));
+                              } finally {
+                                setDiscoverAddingIds((prev) => {
+                                  const next = new Set(prev);
+                                  next.delete(entry.id);
+                                  return next;
+                                });
                               }
                             }}
-                            className="mt-1 text-[10px] font-medium text-accent hover:text-accent-hover transition-colors"
+                            className="mt-1 text-[10px] font-medium text-accent hover:text-accent-hover transition-colors disabled:text-ink-muted disabled:cursor-default"
                           >
-                            {t("library.addToLibrary")}
+                            {adding ? t("library.adding") : t("library.addToLibrary")}
                           </button>
-                        )}
+                          );
+                        })()}
                       </div>
                     </div>
                   );
                 })}
+                {!discoverLoading && discoverBooks.length === 0 && (
+                  <p className="text-xs italic text-ink-muted/60 py-4">{t("library.discoverEmpty")}</p>
+                )}
               </div>
               {discoverInfo && (() => {
                 const entry = discoverBooks.find((e) => e.id === discoverInfo.id);
