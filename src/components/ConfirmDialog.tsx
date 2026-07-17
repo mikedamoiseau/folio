@@ -17,6 +17,13 @@ interface ConfirmDialogProps {
   confirmDisabled?: boolean;
   /** Extra content (e.g. a cover thumbnail) rendered above the buttons. */
   children?: ReactNode;
+  /**
+   * Where initial focus lands on open. `"cancel"` (default) focuses the cancel
+   * button — a safe default for destructive confirmations. `"dialog"` focuses
+   * the dialog container so no action button is highlighted on open — use for
+   * neutral prompts (e.g. opt-in) where nudging a choice is undesirable.
+   */
+  autoFocus?: "cancel" | "dialog";
   onConfirm: () => void;
   onCancel: () => void;
 }
@@ -37,11 +44,12 @@ export default function ConfirmDialog({
   destructive = true,
   confirmDisabled = false,
   children,
+  autoFocus = "cancel",
   onConfirm,
   onCancel,
 }: ConfirmDialogProps) {
   const { t } = useTranslation();
-  const dialogRef = useFocusTrap(onCancel);
+  const dialogRef = useFocusTrap(onCancel, true, autoFocus === "dialog");
 
   return (
     <>
@@ -55,7 +63,7 @@ export default function ConfirmDialog({
           role="dialog"
           aria-modal="true"
           aria-label={title}
-          className="bg-surface rounded-2xl shadow-xl border border-warm-border w-full max-w-sm pointer-events-auto animate-slide-in-up overflow-hidden"
+          className="bg-surface rounded-2xl shadow-xl border border-warm-border w-full max-w-sm pointer-events-auto animate-slide-in-up overflow-hidden focus:outline-none"
           onClick={(e) => e.stopPropagation()}
         >
           <div className="px-6 py-5 space-y-3">
@@ -65,14 +73,14 @@ export default function ConfirmDialog({
             <div className="flex gap-2 justify-end pt-2">
               <button
                 onClick={onCancel}
-                className="px-4 py-1.5 text-sm font-medium text-ink-muted hover:text-ink hover:bg-warm-subtle rounded-lg transition-colors duration-150"
+                className="px-4 py-1.5 text-sm font-medium text-ink-muted hover:text-ink hover:bg-warm-subtle rounded-lg transition-colors duration-150 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2"
               >
                 {cancelLabel ?? t("common.cancel")}
               </button>
               <button
                 onClick={onConfirm}
                 disabled={confirmDisabled}
-                className={`px-4 py-1.5 text-sm font-medium text-white rounded-lg transition-colors duration-150 disabled:opacity-40 disabled:cursor-not-allowed ${
+                className={`px-4 py-1.5 text-sm font-medium text-white rounded-lg transition-colors duration-150 disabled:opacity-40 disabled:cursor-not-allowed focus:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 ${
                   destructive ? "bg-red-600 hover:bg-red-500" : "bg-accent hover:bg-accent-hover"
                 }`}
               >

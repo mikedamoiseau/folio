@@ -17,6 +17,7 @@ import LanguageSwitcher from "./components/LanguageSwitcher";
 import PrivateModeToggle from "./components/PrivateModeToggle";
 import PrivateModeBar from "./components/PrivateModeBar";
 import ImportStatusBar from "./components/ImportStatusBar";
+import AnalyticsConsentDialog from "./components/AnalyticsConsentDialog";
 import UpdateCheckHost from "./components/UpdateCheckHost";
 import Library from "./screens/Library";
 import ReaderSkeleton from "./components/ReaderSkeleton";
@@ -253,6 +254,7 @@ function AppShell() {
         onClose={() => setSettingsOpen(false)}
       />
 
+      <AnalyticsConsentDialog />
       <UpdateCheckHost deferWhilePresent={settingsOpen || statsOpen || vocabularyOpen || catalogOpen} />
 
       <ImportStatusBar />

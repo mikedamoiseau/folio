@@ -214,8 +214,8 @@ lands.
   macOS Intel (without MOBI), Linux, Windows
 - [ ] **License & attribution** — libmobi (LGPL), pdfium (BSD), unrar
   (RARLAB) — credits in a visible Settings → About section
-- [ ] **Privacy doc** — if you collect anything (telemetry, OPDS server
-  logs), state it; if not, state *that*. Users care.
+- [x] **Privacy doc** — if you collect anything (telemetry, OPDS server
+  logs), state it; if not, state *that*. Users care. (see docs/PRIVACY.md)
 
 **Sizing:** ~1 day for the actual tag.
 

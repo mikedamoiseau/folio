@@ -18,6 +18,7 @@ const FOCUSABLE =
 export function useFocusTrap(
   onClose: () => void,
   enabled = true,
+  focusContainer = false,
 ): RefObject<HTMLDivElement | null> {
   const ref = useRef<HTMLDivElement>(null);
 
@@ -49,12 +50,22 @@ export function useFocusTrap(
     };
 
     document.addEventListener("keydown", handleKeyDown);
-    // Auto-focus first focusable element
-    const first = el.querySelector<HTMLElement>(FOCUSABLE);
-    first?.focus();
+    // Move focus into the dialog on mount. Default: the first focusable
+    // element (good for forms — lands on the first input). `focusContainer`
+    // instead focuses the dialog itself, so no action button shows a focus
+    // ring on open — used where auto-highlighting a button is undesirable
+    // (e.g. an opt-in prompt) and reliable across engines whose
+    // `:focus-visible` matches programmatic focus (WebKit).
+    if (focusContainer) {
+      el.setAttribute("tabindex", "-1");
+      el.focus();
+    } else {
+      const first = el.querySelector<HTMLElement>(FOCUSABLE);
+      first?.focus();
+    }
 
     return () => document.removeEventListener("keydown", handleKeyDown);
-  }, [onClose, enabled]);
+  }, [onClose, enabled, focusContainer]);
 
   return ref;
 }

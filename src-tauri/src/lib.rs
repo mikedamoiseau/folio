@@ -1,3 +1,4 @@
+pub mod analytics;
 #[cfg(test)]
 mod ci_workflow_test;
 pub mod commands;
@@ -26,12 +27,23 @@ use tauri::{Emitter, Manager};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // tauri-plugin-aptabase spawns its background flush task via bare
+    // `tokio::spawn` at plugin-init, which requires an *entered* Tokio runtime
+    // on the current thread. Folio otherwise uses `tauri::async_runtime::spawn`
+    // (handle-based — no entered context needed), so the main thread has no
+    // entered runtime by default and the plugin panics ("there is no reactor
+    // running"). Enter Tauri's own runtime handle here and hold the guard for
+    // the lifetime of `run()` so the plugin can spawn onto that runtime.
+    let rt_handle = tauri::async_runtime::handle();
+    let _rt_guard = rt_handle.inner().enter();
+
     #[allow(unused_mut)]
     let mut builder = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_aptabase::Builder::new(analytics::APTABASE_APP_KEY).build())
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             None,
@@ -202,6 +214,17 @@ pub fn run() {
                 startup_update_check_taken: std::sync::atomic::AtomicBool::new(false),
                 update_check: crate::update::UpdateCheckState::new(),
             });
+
+            // Usage analytics (opt-in): fire one anonymous `app_started` per
+            // process launch iff the user enabled analytics. App-global consent
+            // is read from `{data_dir}/analytics.json`; fail-closed. Direct
+            // call (not the event bus) so there is no ordering race and no
+            // profile-switch re-fire. `data_dir` was moved into AppState above,
+            // so re-derive the path here.
+            {
+                let analytics_dir = app.path().app_data_dir()?;
+                analytics::maybe_track_app_started(app, &analytics_dir);
+            }
 
             // Initialize system tray
             if let Err(e) = tray::setup_tray(&app.handle().clone()) {
@@ -498,6 +521,8 @@ pub fn run() {
             commands::queue_book_for_scan,
             commands::get_setting_value,
             commands::set_setting_value,
+            analytics::get_analytics_consent,
+            analytics::set_analytics_consent,
             commands::get_dictionary_status,
             commands::download_dictionary,
             commands::delete_dictionary,
