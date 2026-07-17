@@ -70,7 +70,7 @@ The first time you open the app, a short onboarding wizard guides you through th
 2. **Import a Book** — pick individual files, scan a folder, or drag and drop. The wizard advances automatically once your first import completes.
 3. **Quick Tips** — highlights Focus Mode (press **D** while reading), online catalogs (Project Gutenberg, Standard Ebooks, and more), and drag-and-drop import.
 
-You can skip the wizard at any step — it won't appear again. Everything stays on your machine; nothing is sent to the cloud.
+You can skip the wizard at any step — it won't appear again. Everything stays on your machine; nothing is sent to the cloud unless you opt in to anonymous usage analytics (see [Usage analytics and privacy](#usage-analytics-and-privacy) below).
 
 ![Folio library in light theme](../screenshots/01-library-light.png)
 
@@ -81,6 +81,16 @@ Folio can tell you when a newer version is available on GitHub. It checks quietl
 To turn off the automatic check at startup, open **Settings → General** and clear **Check for updates on startup**.
 
 The check only reads GitHub's public release list — Folio never downloads or installs an update for you. You download the new version yourself from the release page.
+
+### Usage analytics and privacy
+
+Folio is local-first: your library, reading progress, highlights, and settings stay on your device. To help gauge how many people use Folio, the app can send **one** anonymous `app_started` event per launch — but only if you opt in. It is **off by default**.
+
+The first time you run Folio, a prompt asks whether to enable anonymous usage statistics. Choose **Enable** to turn it on, or **Not now** (or just dismiss the prompt) to leave it off; the prompt won't ask again. You can change your choice any time under **Settings → General → "Send anonymous usage statistics."**
+
+When enabled, each launch sends — through [Aptabase](https://aptabase.com) (EU region), acting as data processor — your operating system name and version, Folio's app version, your locale, the webview engine, and a short-lived random session id. It **never** sends book titles, authors, file paths, library contents, reading progress, highlights, or any stable identifier for you or your device. Folio transmits no user or install id at all.
+
+For the full detail — exactly what is sent, the legal basis, and data retention — see [`docs/PRIVACY.md`](PRIVACY.md).
 
 ---
 

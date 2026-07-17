@@ -85,6 +85,7 @@ Folio is for the opposite case: you already have the files, and you want a bette
 - "Don't track this session" mode — an app-wide toggle that pauses passive tracking (reading position, session stats, recently-read, activity log) while keeping your highlights and bookmarks; resets off on restart
 - Cross-platform desktop app for macOS, Windows, and Linux
 - Update check — a tray "Check for Updates" item plus a quiet check on startup (toggleable in Settings) tell you when a newer release is on GitHub, showing release notes and a download link; check-only, nothing is installed for you
+- Privacy — local-first by default; optional anonymous usage analytics are **off unless you opt in**, send only a single `app_started` event per launch (OS, app version, locale — never your library or reading data), and can be switched off anytime in Settings. See [Privacy](docs/PRIVACY.md)
 
 ## Screenshots
 
@@ -145,6 +146,7 @@ Folio is for the opposite case: you already have the files, and you want a bette
 ## Docs
 
 - User guide: [`docs/USER_GUIDE.md`](docs/USER_GUIDE.md)
+- Privacy: [`docs/PRIVACY.md`](docs/PRIVACY.md)
 - Web server / API reference: [`docs/WEB_SERVER_API.md`](docs/WEB_SERVER_API.md)
 - Changelog: [`docs/changelog.html`](docs/changelog.html) ([raw](CHANGELOG.md))
 - Roadmap: [`docs/ROADMAP.md`](docs/ROADMAP.md)
