@@ -1,3 +1,4 @@
+pub mod analytics;
 #[cfg(test)]
 mod ci_workflow_test;
 pub mod commands;
