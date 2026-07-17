@@ -99,6 +99,13 @@ This project adheres to [Semantic Versioning](https://semver.org/).
   user or install identifier is sent. See docs/PRIVACY.md.
 
 ### Changed
+- **The Discover shelf hides books you already own and won't show duplicates.**
+  Recommendations that match a book already in your library — by title and
+  author, ignoring case and spacing — are filtered out, and the same book
+  surfaced by more than one catalog appears only once. Each recommendation now
+  shows an "Adding…" state while it downloads so you can tell it's working, and
+  once you've added every current pick the shelf tells you so instead of
+  looking broken.
 - **The installed web app runs edge-to-edge on notched phones.** When Folio's
   web UI is added to the home screen on a device with a notch or a home
   indicator, the header now clears the status bar, the bottom tab bar sits
