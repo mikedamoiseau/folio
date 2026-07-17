@@ -125,9 +125,11 @@ Highest leverage. These three together flip the feel; the rest is polish on top.
 
 ---
 
-## Tier 3 — navigation feel
+## Tier 3 — navigation feel  ⏸️ will not implement
 
-### Item G — Directional view transitions  🔲
+Descoped 2026-07-15. Tier 1 (app shell) + Tier 2 (touch polish) delivered the "it's an app" feel; the remaining navigation-motion items are polish that the maintainer chose not to pursue. Both items are left documented below for anyone who revisits the decision.
+
+### Item G — Directional view transitions  ⏸️
 
 **Goal.** Convey navigation hierarchy: push (slide in from right) on drill-in, pop (slide in from left) on back — the app stack metaphor. Reuse the existing motion tokens.
 
@@ -137,7 +139,7 @@ Highest leverage. These three together flip the feel; the rest is polish on top.
 
 **Acceptance.** Library→detail slides in from the right; back slides in from the left; reduced-motion = instant; reader page-turn (Item 12) unaffected; no double-animation.
 
-### Item H — Edge-swipe back gesture  🔲  ⏸️ optional
+### Item H — Edge-swipe back gesture  ⏸️ optional
 
 **Goal.** Native-style swipe-from-left-edge to go back on detail/reader.
 
@@ -155,7 +157,7 @@ Highest leverage. These three together flip the feel; the rest is polish on top.
 |-------|---------|-----------|
 | 1 | **A + B + C** (Tier 1 backbone) | Interdependent shell rewrite (tab bar height, safe-area padding, and fixed-shell content padding must agree). One branch, one PR. |
 | 2 | **D + E + F** (Tier 2 touch) | All `app.css`-only, small, independent of Tier 1's structure. |
-| 3 | **G** (view transitions) | `route()` change; land after the shell is stable. |
-| 4 | **H** (edge-swipe back) | Optional; only if it doesn't fight the reader gesture. |
+| 3 | **G** (view transitions) | ⏸️ Will not implement — `route()` change; descoped 2026-07-15. |
+| 4 | **H** (edge-swipe back) | ⏸️ Will not implement — optional; descoped 2026-07-15. |
 
 Each batch: feature branch (`feature/web-ui-app-shell` for batch 1), full CI suite locally before push, `CACHE_VERSION` bump verified, PR to main.
