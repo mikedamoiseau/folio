@@ -392,6 +392,9 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
   const [autoStartLoading, setAutoStartLoading] = useState(false);
   const [autoStartError, setAutoStartError] = useState<string | null>(null);
 
+  // Usage analytics consent
+  const [analyticsEnabled, setAnalyticsEnabled] = useState(false);
+
   // App version for the About section — reads tauri.conf.json at runtime
   // so we don't have to sync a frontend constant with the package.
   const [appVersion, setAppVersion] = useState<string>("");
@@ -827,6 +830,8 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
         dictDispatch({ type: "statusLoaded", status: dictStatus });
         const vocabEnabledVal = await invoke<string | null>("get_setting_value", { key: "vocabulary_enabled" });
         setVocabEnabled(vocabEnabledVal === "true");
+        const analyticsConsent = await invoke<string | null>("get_analytics_consent");
+        setAnalyticsEnabled(analyticsConsent === "enabled");
         await loadServerStatus();
       })().catch(() => {});
     }
@@ -1367,7 +1372,7 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
         {/* Settings content */}
         <div className="flex-1 overflow-y-auto p-5 space-y-7">
           {/* General */}
-          <Accordion title={t("settings.general")} open={openSection === "general"} onToggle={() => toggleSection("general")} query={settingsQuery} keywords={t("settings.searchTermsGeneral")}>
+          <Accordion title={t("settings.general")} open={openSection === "general"} onToggle={() => toggleSection("general")} query={settingsQuery} keywords={t("settings.searchTermsGeneral") + " " + t("settings.searchTermsAnalytics")}>
             <div className="space-y-2">
               <label className="flex items-center justify-between gap-3 bg-warm-subtle rounded-xl px-3 py-2.5">
                 <div>
@@ -1401,6 +1406,32 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
               {autoStartError && (
                 <p className="text-xs text-red-500 px-1">{autoStartError}</p>
               )}
+              <label className="flex items-center justify-between gap-3 bg-warm-subtle rounded-xl px-3 py-2.5">
+                <div>
+                  <span className="text-sm text-ink">{t("settings.analyticsToggle")}</span>
+                  <p className="text-[11px] text-ink-muted/60 mt-0.5">{t("settings.analyticsToggleHint")}</p>
+                </div>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={analyticsEnabled}
+                  onClick={async () => {
+                    const next = !analyticsEnabled;
+                    setAnalyticsEnabled(next); // optimistic
+                    try {
+                      await invoke("set_analytics_consent", { consent: next ? "enabled" : "disabled" });
+                    } catch (e) {
+                      setAnalyticsEnabled(!next); // revert — did not persist
+                      addToast(friendlyError(e, t), "error");
+                    }
+                  }}
+                  className={`relative w-10 h-6 rounded-full transition-colors shrink-0 ${analyticsEnabled ? "bg-accent" : "bg-warm-border"}`}
+                >
+                  <span
+                    className={`absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full shadow transition-transform ${analyticsEnabled ? "translate-x-4" : ""}`}
+                  />
+                </button>
+              </label>
               <label className="flex items-center justify-between gap-3 bg-warm-subtle rounded-xl px-3 py-2.5">
                 <div>
                   <span className="text-sm text-ink">{t("settings.showContinueReading")}</span>
