@@ -5,6 +5,8 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.8.0] - 2026-07-17
+
 ### Added
 - **Check for app updates.** Folio can now tell you when a newer version is
   available on GitHub. Choose "Check for Updates" from the tray menu at any
