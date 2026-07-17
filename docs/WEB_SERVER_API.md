@@ -71,7 +71,7 @@ If no PIN is configured, all endpoints are accessible without authentication.
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/api/books/:id/pages/:index` | Page image (JPEG for PDF, original format for comics) |
+| GET | `/api/books/:id/pages/:index` | Page image (JPEG for PDF, original format for comics). Optional `?width=` (64–4096, clamped): PDF renders at that width; comics downscale to it (never upscale) and re-encode as JPEG. Invalid or duplicate `width` values are ignored (full-size behavior). |
 | GET | `/api/books/:id/page-count` | Returns `{ "count": N }` |
 
 ### Reading Progress
