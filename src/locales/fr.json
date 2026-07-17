@@ -53,7 +53,8 @@
     "adding": "Ajout\u2026",
     "showDescription": "Afficher la description",
     "otherBooks": "Autres livres",
-    "booksCount": "{{count}} livres",
+    "booksCount_one": "{{count}} livre",
+    "booksCount_other": "{{count}} livres",
     "noMatchFilters": "Aucun livre ne correspond aux filtres actuels",
     "emptyNoBooks": "Aucun livre à afficher",
     "emptyNoBooksHint": "Aucun livre dans cette vue pour le moment.",
@@ -311,7 +312,8 @@
     "stacked": "Empilé",
     "expanded": "Étendu",
     "backToLibrary": "← {{name}}",
-    "bookCount": "{{count}} livres"
+    "bookCount_one": "{{count}} livre",
+    "bookCount_other": "{{count}} livres"
   },
 
   "plugins": {

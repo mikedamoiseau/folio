@@ -5,6 +5,12 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+- **Book counts now read "1 book", not "1 books".** The library section headers
+  and the series-stack cards said "1 books" (and "1 livres" in French) when a
+  section or series held a single book; they now use the correct singular in
+  both languages.
+
 ## [2.8.0] - 2026-07-17
 
 ### Added
