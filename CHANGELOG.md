@@ -84,6 +84,11 @@ This project adheres to [Semantic Versioning](https://semver.org/).
   dictionary or the source book. Turning the setting off stops saving but keeps
   what you've collected. Filter the list as you type, and click any saved word to
   jump straight back to the book at the spot where you looked it up.
+- **Usage analytics (opt-in).** Folio can send a single anonymous `app_started`
+  event per launch to help gauge how many people use the app. Off by default —
+  nothing is sent until you opt in via the first-run prompt or Settings. No
+  personal data, book titles, or library contents are ever transmitted, and no
+  user or install identifier is sent. See docs/PRIVACY.md.
 
 ### Changed
 - **The installed web app runs edge-to-edge on notched phones.** When Folio's
