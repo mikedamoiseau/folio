@@ -53,7 +53,8 @@
     "adding": "Adding…",
     "showDescription": "Show description",
     "otherBooks": "Other Books",
-    "booksCount": "{{count}} books",
+    "booksCount_one": "{{count}} book",
+    "booksCount_other": "{{count}} books",
     "noMatchFilters": "No books match the current filters",
     "emptyNoBooks": "No books to show",
     "emptyNoBooksHint": "There are no books in this view yet.",
@@ -312,7 +313,8 @@
     "stacked": "Stacked",
     "expanded": "Expanded",
     "backToLibrary": "← {{name}}",
-    "bookCount": "{{count}} books"
+    "bookCount_one": "{{count}} book",
+    "bookCount_other": "{{count}} books"
   },
 
   "plugins": {
