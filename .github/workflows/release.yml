@@ -355,6 +355,12 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Aptabase usage-analytics app key, baked in at compile time
+          # (option_env! in src-tauri/src/analytics.rs). Client-side by design
+          # (not a secret), so a repo Actions *variable* is fine. When unset the
+          # SDK is disabled and no analytics are ever sent — so builds without
+          # this configured simply ship analytics-off.
+          FOLIO_APTABASE_KEY: ${{ vars.FOLIO_APTABASE_KEY }}
           # folio-core/build.rs uses pkg-config first, then falls back to
           # LIBMOBI_INCLUDE_DIR / LIBMOBI_LIB_DIR. Neither Windows (MSVC) nor
           # the macOS runner (no brew libmobi) has libmobi on the pkg-config
