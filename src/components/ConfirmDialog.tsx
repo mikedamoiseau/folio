@@ -65,14 +65,14 @@ export default function ConfirmDialog({
             <div className="flex gap-2 justify-end pt-2">
               <button
                 onClick={onCancel}
-                className="px-4 py-1.5 text-sm font-medium text-ink-muted hover:text-ink hover:bg-warm-subtle rounded-lg transition-colors duration-150"
+                className="px-4 py-1.5 text-sm font-medium text-ink-muted hover:text-ink hover:bg-warm-subtle rounded-lg transition-colors duration-150 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2"
               >
                 {cancelLabel ?? t("common.cancel")}
               </button>
               <button
                 onClick={onConfirm}
                 disabled={confirmDisabled}
-                className={`px-4 py-1.5 text-sm font-medium text-white rounded-lg transition-colors duration-150 disabled:opacity-40 disabled:cursor-not-allowed ${
+                className={`px-4 py-1.5 text-sm font-medium text-white rounded-lg transition-colors duration-150 disabled:opacity-40 disabled:cursor-not-allowed focus:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 ${
                   destructive ? "bg-red-600 hover:bg-red-500" : "bg-accent hover:bg-accent-hover"
                 }`}
               >
