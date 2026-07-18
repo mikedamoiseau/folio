@@ -255,12 +255,14 @@ test.describe("offline mode — boot & offline library (M4)", () => {
     const card = page.locator(".grid .card", { hasText: "Book 050" });
     await expect(card).toHaveCount(1); // only the saved book
 
-    // Open it → detail renders offline (cached detail JSON via SW fallback).
+    // Open it → detail fully renders offline (cached detail JSON via the SW
+    // fallback). Wait on the real Read button, not the skeleton's .detail
+    // wrapper — its presence proves showDetail's real render completed.
     await card.click();
     await expect(page).toHaveURL(/#\/book\//);
-    await expect(page.locator(".detail")).toBeVisible({ timeout: 15_000 });
+    await expect(page.locator("#read-btn")).toBeVisible({ timeout: 15_000 });
     // Read → chapter renders offline.
-    await page.getByRole("button", { name: /^read$/i }).click();
+    await page.locator("#read-btn").click();
     await expect(page.locator("#reader-content")).toContainText("chapter zero", { timeout: 15_000 });
 
     await context.setOffline(false);

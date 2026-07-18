@@ -93,19 +93,33 @@ self.addEventListener("fetch", (event) => {
     !url.pathname.includes("/download") &&
     url.pathname.match(/^\/api\/books\/([^/]+)(?:\/|$)/);
   if (bookMatch) {
+    // Page images are cached with ?width=... but requested plain (or with a
+    // ?__reload= retry nonce) — match ignoring the query for those URLs
+    // ONLY. Everything else must match exactly (/cover vs /cover?size=thumb
+    // are distinct entries). caches.match with a cacheName returns undefined
+    // for a nonexistent cache without creating it, so unsaved books just
+    // propagate the network outcome.
+    const isPage = /^\/api\/books\/[^/]+\/pages\/\d+$/.test(url.pathname);
+    const matchOpts = { cacheName: OFFLINE_CACHE_PREFIX + bookMatch[1], ignoreSearch: isPage };
+    if (!self.navigator.onLine) {
+      // The browser reports offline: a network fetch will fail — and under
+      // some engines (Chromium with the network emulated offline) it can
+      // HANG rather than reject promptly, which would stall the reader/detail
+      // on a request the cache could answer instantly. Serve the cache first;
+      // only fall through to the (doomed) network for an unsaved resource, so
+      // the caller still gets a normal network error.
+      event.respondWith(
+        caches.match(event.request, matchOpts).then((cached) => cached || fetch(event.request))
+      );
+      return;
+    }
+    // Online: network-first so auth/session/profile-lock/freshness are always
+    // the server's answer; fall back to the cache only when fetch() rejects
+    // (server unreachable though the browser thinks it's online, e.g. the
+    // Folio app is closed).
     event.respondWith(
       fetch(event.request).catch(async (err) => {
-        // Page images are cached with ?width=... but requested plain (or
-        // with a ?__reload= retry nonce) — match ignoring the query for
-        // those URLs ONLY. Everything else must match exactly (/cover vs
-        // /cover?size=thumb are distinct entries). caches.match with a
-        // cacheName returns undefined for a nonexistent cache without
-        // creating it, so unsaved books just propagate the rejection.
-        const isPage = /^\/api\/books\/[^/]+\/pages\/\d+$/.test(url.pathname);
-        const cached = await caches.match(event.request, {
-          cacheName: OFFLINE_CACHE_PREFIX + bookMatch[1],
-          ignoreSearch: isPage,
-        });
+        const cached = await caches.match(event.request, matchOpts);
         if (cached) return cached;
         throw err;
       })
