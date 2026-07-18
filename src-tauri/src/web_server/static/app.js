@@ -78,7 +78,14 @@
   let offlineDbPromise = null;
   function offlineDb() {
     if (!offlineDbPromise) {
-      const opened = new Promise((resolve, reject) => {
+      // `settled` guards every side effect below so a late timeout or a late
+      // request event can't null out (or otherwise disturb) a promise that
+      // has already resolved/rejected — including a NEWER singleton created
+      // by a subsequent offlineDb() call after this one was cleared.
+      let settled = false;
+      let timer = null;
+      const thisPromise = new Promise((resolve, reject) => {
+        const clear = () => { if (timer !== null) { clearTimeout(timer); timer = null; } };
         const req = indexedDB.open("folio-offline", 1);
         req.onupgradeneeded = () => {
           const db = req.result;
@@ -88,27 +95,37 @@
           if (!db.objectStoreNames.contains("meta")) db.createObjectStore("meta", { keyPath: "key" });
         };
         req.onsuccess = () => {
+          if (settled) { req.result.close(); return; } // timed out already — don't leak this connection
+          settled = true;
+          clear();
           const db = req.result;
           // A future schema bump in another tab must not be blocked forever
           // by this connection — close so the upgrade can proceed; the next
-          // offlineDb() call reopens at the new version.
-          db.onversionchange = () => { db.close(); offlineDbPromise = null; };
+          // offlineDb() call reopens at the new version. Only clear the
+          // singleton if it's still THIS promise.
+          db.onversionchange = () => { db.close(); if (offlineDbPromise === thisPromise) offlineDbPromise = null; };
           // The browser can force-close the connection (storage eviction,
           // site-data clear in another tab); drop the cached promise so the
           // next call reopens instead of throwing InvalidStateError forever.
-          db.onclose = () => { offlineDbPromise = null; };
+          db.onclose = () => { if (offlineDbPromise === thisPromise) offlineDbPromise = null; };
           resolve(db);
         };
         req.onblocked = () => { /* an old tab holds the DB; the open resumes when it closes */ };
-        req.onerror = () => { offlineDbPromise = null; reject(req.error); };
-      });
-      const timeout = new Promise((_, reject) => {
-        setTimeout(() => {
-          offlineDbPromise = null;
+        req.onerror = () => {
+          if (settled) return;
+          settled = true;
+          clear();
+          if (offlineDbPromise === thisPromise) offlineDbPromise = null;
+          reject(req.error);
+        };
+        timer = setTimeout(() => {
+          if (settled) return;
+          settled = true;
+          if (offlineDbPromise === thisPromise) offlineDbPromise = null;
           reject(new Error("IndexedDB open timed out"));
         }, 5000);
       });
-      offlineDbPromise = Promise.race([opened, timeout]);
+      offlineDbPromise = thisPromise;
     }
     return offlineDbPromise;
   }
@@ -204,7 +221,15 @@
           throw e;
         }
         if (optional && resp.status === 404) return { bytes: 0, text: null, skipped: true };
-        if (!resp.ok) throw new Error(`Server error (${resp.status})`);
+        if (!resp.ok) {
+          // A non-ok HTTP response means the server's view of this book
+          // changed (e.g. a re-import shrank the page count → 404) — the
+          // resume state is genuinely stale, so tag it for self-heal. A
+          // network reject (below) is transient and must NOT wipe progress.
+          const e = new Error(`Server error (${resp.status})`);
+          e.stale = true;
+          throw e;
+        }
         // One body materialization: buffer once, derive byte count and (for
         // TOC/chapter/page-count bodies) the parseable text from it, and put
         // a rebuilt response — never clone the stream three ways.
@@ -246,6 +271,7 @@
     const marker = { cancelled: false };
     activeOfflineSaves[id] = marker;
     let wasResume = false;
+    let published = false;
     try {
       await ensurePersistence();
 
@@ -335,7 +361,14 @@
       }
       const expectHash = await inventoryHash(inventory);
       const gotHash = await inventoryHash(await cachedUrlSet(cache));
-      if (expectHash !== gotHash) throw new Error("Download incomplete — retry");
+      if (expectHash !== gotHash) {
+        // The cache holds keys outside the final inventory (or is missing
+        // some) — e.g. stale ?width= variants from a pre-update generation.
+        // Genuinely stale resume state, so tag for self-heal.
+        const e = new Error("Download incomplete — retry");
+        e.stale = true;
+        throw e;
+      }
 
       // Progress baseline for M5's compare-then-push replay (best-effort).
       let baseline = null;
@@ -346,6 +379,19 @@
           baseline = j && j.last_read_at ? j.last_read_at : null;
         }
       } catch (e) { /* baseline stays null */ }
+
+      // Final cancellation gate, immediately before the manifest write — a
+      // Cancel click or removeBookOffline() during the hash/baseline awaits
+      // above must not publish (or resurrect) a manifest for a cache that
+      // was just deleted. The window between this check and the write is a
+      // single microtask; removeBookOffline deletes the manifest last, so a
+      // resurrected row would still be a bug, but the marker check closes
+      // the realistic (human-timed) race.
+      if (marker.cancelled) {
+        const e = new Error("Save cancelled");
+        e.cancelled = true;
+        throw e;
+      }
 
       await idbPut("books", {
         id,
@@ -361,16 +407,18 @@
         baselineLastReadAt: baseline,
         version: OFFLINE_MANIFEST_VERSION,
       });
+      published = true;
       await idbDelete("pendingSaves", id);
       offlineBookIds.add(id);
       offlineBookIdsGen++; // invalidate any in-flight refresh snapshot
     } catch (e) {
-      // Self-heal a poisoned resume: if a RESUMED run fails for a real
-      // reason (not cancellation/auth), the pending row + partial cache are
-      // more likely stale (book changed server-side, width constant changed
-      // in an update) than recoverable — wipe them so the next click starts
-      // fresh instead of failing identically forever with no UI escape.
-      if (wasResume && !e.cancelled && !e.auth) {
+      // Self-heal a poisoned resume: only when a RESUMED run fails because
+      // the state is genuinely STALE (a server-side change → HTTP error, or
+      // a leftover-key hash mismatch), and only before publishing. A
+      // transient network drop is NOT stale — wiping the partial cache then
+      // would throw away every already-downloaded chapter/page and force a
+      // full re-download on the next attempt, so those keep the resume state.
+      if (wasResume && !published && e.stale) {
         await caches.delete(offlineCacheName(id)).catch(() => {});
         await idbDelete("pendingSaves", id).catch(() => {});
       }
@@ -2147,8 +2195,9 @@
         actionsHtml += `<span class="offline-saved-label">Saved · ${esc(formatFileSize(offlineRow.bytes) || "")}</span><button class="btn-secondary" id="offline-remove-btn">Remove download</button><span class="offline-usage" id="offline-usage" role="status"></span>`;
       } else if (activeOfflineSaves[id]) {
         // A save started from a previous render of this page is still
-        // running — never offer a second concurrent one.
-        actionsHtml += `<button class="btn-secondary" id="offline-save-btn" disabled>Downloading…</button>`;
+        // running — never offer a second concurrent one, but do offer a
+        // Cancel (the running save's own catch re-renders on completion).
+        actionsHtml += `<button class="btn-secondary" disabled>Downloading…</button><button class="btn-secondary" id="offline-cancel-btn">Cancel</button>`;
       } else if (offlineSaveable) {
         actionsHtml += `<button class="btn-secondary" id="offline-save-btn">Save offline</button>`;
       }
@@ -2242,14 +2291,24 @@
         showToast("Saved for offline reading");
         if (hashTargetsDetail(id)) showDetail(id); // re-render into the saved state
       } catch (e) {
-        prog.remove();
-        cancelBtn.remove();
-        offlineSaveBtn.disabled = false;
-        offlineSaveBtn.textContent = "Save offline";
-        if (e.silent) { /* a concurrent save owns the UI — say nothing */ }
-        else if (e.cancelled) showToast("Download cancelled");
-        else showToast(e.message || "Download failed — retry");
+        if (e.silent) return; // a concurrent save owns the UI — say nothing
+        showToast(e.cancelled ? "Download cancelled" : (e.message || "Download failed — retry"));
+        // Re-render rather than mutate these captured elements: if the user
+        // navigated away and back mid-save, showDetail already replaced this
+        // page with a disabled "Downloading…" button bound to nothing —
+        // mutating the detached original would leave that visible button
+        // stuck. A fresh render reflects the real (not-saved) state with a
+        // working Save button.
+        if (hashTargetsDetail(id)) showDetail(id);
       }
+    });
+    // Cancel button on a mid-save re-render (the save itself was started by
+    // a previous render's handler; cancellation is id-based, and that
+    // handler's catch re-renders the page when the save unwinds).
+    const midSaveCancelBtn = $("#offline-cancel-btn");
+    if (midSaveCancelBtn) midSaveCancelBtn.addEventListener("click", () => {
+      midSaveCancelBtn.disabled = true;
+      cancelOfflineSave(id);
     });
     // Total offline storage in use, across all saved books (spec: shown
     // wherever the saved state is displayed). Best-effort — absent API or a
