@@ -36,17 +36,18 @@ test.describe("offline mode — service worker foundations", () => {
       null,
       { timeout: 15_000 },
     );
-    // Activation (and its cache cleanup) has completed once the new worker is
-    // active; poll briefly anyway since the purge promise is not awaitable
-    // from the page.
+    // The purge promise isn't awaitable from the page, so poll until the
+    // stale shell cache is gone…
     await expect
       .poll(async () => page.evaluate(() => caches.keys()), { timeout: 10_000 })
       .not.toContain("folio-shell-deadbeef0000");
 
+    // …then confirm the survivor is STILL there after the purge settles — a
+    // single immediate read could race a concurrent (regressed) delete of the
+    // offline cache and pass intermittently.
+    await page.waitForTimeout(500);
     const keys = await page.evaluate(() => caches.keys());
     expect(keys).toContain("folio-offline-book-e2e-fake");
-
-    // Cleanup so repeated local runs stay deterministic.
-    await page.evaluate(() => caches.delete("folio-offline-book-e2e-fake"));
+    expect(keys).not.toContain("folio-shell-deadbeef0000");
   });
 });

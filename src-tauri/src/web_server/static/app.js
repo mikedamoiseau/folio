@@ -83,7 +83,19 @@
           if (!db.objectStoreNames.contains("progressQueue")) db.createObjectStore("progressQueue", { keyPath: "bookId" });
           if (!db.objectStoreNames.contains("meta")) db.createObjectStore("meta", { keyPath: "key" });
         };
-        req.onsuccess = () => resolve(req.result);
+        req.onsuccess = () => {
+          const db = req.result;
+          // A future schema bump in another tab must not be blocked forever
+          // by this connection — close so the upgrade can proceed; the next
+          // offlineDb() call reopens at the new version.
+          db.onversionchange = () => { db.close(); offlineDbPromise = null; };
+          // The browser can force-close the connection (storage eviction,
+          // site-data clear in another tab); drop the cached promise so the
+          // next call reopens instead of throwing InvalidStateError forever.
+          db.onclose = () => { offlineDbPromise = null; };
+          resolve(db);
+        };
+        req.onblocked = () => { /* an old tab holds the DB; the open resumes when it closes */ };
         req.onerror = () => { offlineDbPromise = null; reject(req.error); };
       });
     }
@@ -94,8 +106,15 @@
     return offlineDb().then((db) => new Promise((resolve, reject) => {
       const tx = db.transaction(storeName, mode);
       const req = fn(tx.objectStore(storeName));
-      req.onsuccess = () => resolve(req.result);
-      req.onerror = () => reject(req.error);
+      let result;
+      req.onsuccess = () => { result = req.result; };
+      // Resolve on transaction commit, not request success — a readwrite
+      // transaction can still abort (e.g. quota) after the request's
+      // onsuccess, and the save flow's manifest-then-delete-pending ordering
+      // must never act on an uncommitted write.
+      tx.oncomplete = () => resolve(result);
+      tx.onabort = () => reject(tx.error || new Error("IndexedDB transaction aborted"));
+      tx.onerror = () => reject(tx.error);
     }));
   }
   function idbGet(store, key) { return idbOp(store, "readonly", (s) => s.get(key)); }

@@ -22,7 +22,7 @@
 // activates; app.js's registration call is feature-detected/try-catched so
 // this is silent, not an error. The manifest + icons still work for iOS
 // Safari "Add to Home Screen" over plain HTTP.
-const CACHE_VERSION = "folio-shell-618ff7735f59";
+const CACHE_VERSION = "folio-shell-96fdf9d57f0a";
 
 // Offline mode (spec 2026-07-17-web-reader-offline): per-book content caches,
 // written ONLY by app.js's save flow — the SW never writes to them. The SW
@@ -80,26 +80,33 @@ self.addEventListener("fetch", (event) => {
   // (session expiry, profile lock, api()'s 401→login) are untouched. The
   // cache answers only when fetch() itself rejects (server unreachable);
   // a fallback miss lets the rejection propagate so app.js handles it
-  // exactly as it does today. The book-list route (/api/books, no trailing
+  // exactly as it does today. The book-list route (/api/books, no id
   // segment) never matches — the offline library renders from IndexedDB.
+  // The bare /api/books/{id} detail route MUST match (no trailing slash):
+  // the reader and detail view fetch it, and the saved inventory caches it.
+  // /download is deliberately excluded: whole-file downloads are never in
+  // the offline inventory, and piping a multi-hundred-MB stream through
+  // respondWith would subject it to SW-lifetime termination mid-download.
   const bookMatch =
     event.request.method === "GET" &&
     url.origin === self.location.origin &&
-    url.pathname.match(/^\/api\/books\/([^/]+)\//);
+    !url.pathname.includes("/download") &&
+    url.pathname.match(/^\/api\/books\/([^/]+)(?:\/|$)/);
   if (bookMatch) {
     event.respondWith(
       fetch(event.request).catch(async (err) => {
-        const cacheName = OFFLINE_CACHE_PREFIX + bookMatch[1];
-        if (await caches.has(cacheName)) {
-          const cache = await caches.open(cacheName);
-          // Page images are cached with ?width=... but requested plain (or
-          // with a ?__reload= retry nonce) — match ignoring the query for
-          // those URLs ONLY. Everything else must match exactly (/cover vs
-          // /cover?size=thumb are distinct entries).
-          const isPage = /^\/api\/books\/[^/]+\/pages\/\d+$/.test(url.pathname);
-          const cached = await cache.match(event.request, isPage ? { ignoreSearch: true } : undefined);
-          if (cached) return cached;
-        }
+        // Page images are cached with ?width=... but requested plain (or
+        // with a ?__reload= retry nonce) — match ignoring the query for
+        // those URLs ONLY. Everything else must match exactly (/cover vs
+        // /cover?size=thumb are distinct entries). caches.match with a
+        // cacheName returns undefined for a nonexistent cache without
+        // creating it, so unsaved books just propagate the rejection.
+        const isPage = /^\/api\/books\/[^/]+\/pages\/\d+$/.test(url.pathname);
+        const cached = await caches.match(event.request, {
+          cacheName: OFFLINE_CACHE_PREFIX + bookMatch[1],
+          ignoreSearch: isPage,
+        });
+        if (cached) return cached;
         throw err;
       })
     );
