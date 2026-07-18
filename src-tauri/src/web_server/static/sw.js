@@ -102,28 +102,47 @@ self.addEventListener("fetch", (event) => {
     const isPage = /^\/api\/books\/[^/]+\/pages\/\d+$/.test(url.pathname);
     const matchOpts = { cacheName: OFFLINE_CACHE_PREFIX + bookMatch[1], ignoreSearch: isPage };
     if (!self.navigator.onLine) {
-      // The browser reports offline: a network fetch will fail — and under
-      // some engines (Chromium with the network emulated offline) it can
-      // HANG rather than reject promptly, which would stall the reader/detail
-      // on a request the cache could answer instantly. Serve the cache first;
-      // only fall through to the (doomed) network for an unsaved resource, so
-      // the caller still gets a normal network error.
+      // The browser definitively reports offline (airplane mode): skip the
+      // network entirely and serve the cache; only touch the (doomed) network
+      // for an unsaved resource so the caller still gets a normal error.
       event.respondWith(
         caches.match(event.request, matchOpts).then((cached) => cached || fetch(event.request))
       );
       return;
     }
-    // Online: network-first so auth/session/profile-lock/freshness are always
-    // the server's answer; fall back to the cache only when fetch() rejects
-    // (server unreachable though the browser thinks it's online, e.g. the
-    // Folio app is closed).
-    event.respondWith(
-      fetch(event.request).catch(async (err) => {
-        const cached = await caches.match(event.request, matchOpts);
-        if (cached) return cached;
-        throw err;
-      })
-    );
+    // Online (or navigator.onLine can't be trusted — it stays true under some
+    // engines' emulated-offline and on a LAN whose server has gone away):
+    // network-FIRST so auth/session/profile-lock/freshness always come from
+    // the server when it answers. But a saved book's cached content must not
+    // be held hostage to a fetch that hangs (emulated offline, dead server on
+    // a still-"online" LAN), so race the network against a short timeout and
+    // fall back to the cache if the network hasn't answered by then. Book
+    // content is immutable per id, so serving the cached copy on a slow/hung
+    // network is safe; a real localhost/LAN server answers in tens of ms —
+    // far under the 800ms timeout — so the auth-sensitive path stays
+    // network-first in every normal case.
+    event.respondWith((async () => {
+      const cachedPromise = caches.match(event.request, matchOpts);
+      const netPromise = fetch(event.request);
+      netPromise.catch(() => {}); // may be abandoned below — don't leak an unhandled rejection
+      try {
+        const raced = await Promise.race([
+          netPromise.then((response) => ({ response })),
+          new Promise((resolve) => setTimeout(() => resolve({ timedOut: true }), 800)),
+        ]);
+        if (raced.response) return raced.response;
+        // Network didn't answer within the timeout. Serve the cache if we
+        // have it; otherwise treat the resource as unreachable and fail fast
+        // with a network error — do NOT await the possibly-hung netPromise,
+        // which would stall the caller indefinitely (e.g. an uncached
+        // /progress request the reader/detail issues while offline).
+        return (await cachedPromise) || Response.error();
+      } catch (err) {
+        // fetch() rejected outright (server refused / unreachable) — cache or
+        // propagate the failure.
+        return (await cachedPromise) || Response.error();
+      }
+    })());
     return;
   }
 

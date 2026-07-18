@@ -12,6 +12,18 @@ async function saveBookOffline(page: Page, bookId: string) {
   await expect(page.locator("#offline-remove-btn")).toBeVisible({ timeout: 30_000 });
 }
 
+// Reload and wait until the service worker actually CONTROLS the page. Without
+// this, a reload can run app.js before the SW takes control, so the offline
+// book/content fetches bypass the cache and hit the (offline) network — the
+// detail then dead-ends on the error view instead of rendering. Real installed
+// PWAs are controlled from launch; this just makes the test deterministic.
+async function reloadControlled(page: Page) {
+  await page.reload();
+  await page.waitForFunction(() => !!navigator.serviceWorker.controller, null, {
+    timeout: 15_000,
+  });
+}
+
 // Offline mode (spec docs/superpowers/specs/2026-07-17-web-reader-offline-design.md).
 //
 // M2 — service-worker foundations: the activate handler's shell-version
@@ -249,21 +261,26 @@ test.describe("offline mode — boot & offline library (M4)", () => {
     // from IndexedDB.
     await page.goto("/#/");
     await context.setOffline(true);
-    await page.reload();
+    await reloadControlled(page);
 
     await expect(page.locator(".offline-banner")).toBeVisible();
     const card = page.locator(".grid .card", { hasText: "Book 050" });
     await expect(card).toHaveCount(1); // only the saved book
 
     // Open it → detail fully renders offline (cached detail JSON via the SW
-    // fallback). Wait on the real Read button, not the skeleton's .detail
-    // wrapper — its presence proves showDetail's real render completed.
+    // fallback). The open button is Read or, if this book already has
+    // server-side progress from an earlier test on the shared harness,
+    // Continue — either proves showDetail's real render completed. Then the
+    // reader renders a cached chapter offline (chapter zero or one; both are
+    // in the saved inventory).
     await card.click();
     await expect(page).toHaveURL(/#\/book\//);
-    await expect(page.locator("#read-btn")).toBeVisible({ timeout: 15_000 });
-    // Read → chapter renders offline.
-    await page.locator("#read-btn").click();
-    await expect(page.locator("#reader-content")).toContainText("chapter zero", { timeout: 15_000 });
+    const openBtn = page.locator("#read-btn, #continue-btn").first();
+    await expect(openBtn).toBeVisible({ timeout: 15_000 });
+    await openBtn.click();
+    await expect(page.locator("#reader-content")).toContainText(/chapter (zero|one)/, {
+      timeout: 15_000,
+    });
 
     await context.setOffline(false);
   });
@@ -272,7 +289,7 @@ test.describe("offline mode — boot & offline library (M4)", () => {
     await saveBookOffline(page, EPUB_ID);
     await page.goto("/#/");
     await context.setOffline(true);
-    await page.reload();
+    await reloadControlled(page);
     await expect(page.locator(".offline-banner")).toBeVisible();
 
     await context.setOffline(false);
@@ -289,7 +306,7 @@ test.describe("offline mode — boot & offline library (M4)", () => {
     await saveBookOffline(page, EPUB_ID); // 050 saved; 130 is not
     await page.goto("/#/");
     await context.setOffline(true);
-    await page.reload();
+    await reloadControlled(page);
     await expect(page.locator(".offline-banner")).toBeVisible();
 
     // Navigate to an un-downloaded book's URL — must land on the offline
@@ -307,7 +324,7 @@ test.describe("offline mode — boot & offline library (M4)", () => {
     await saveBookOffline(page, EPUB_ID);
     await page.goto("/#/");
     await context.setOffline(true);
-    await page.reload();
+    await reloadControlled(page);
     await expect(page.locator(".offline-banner")).toBeVisible();
 
     // Reconnect, then navigate normally (NOT the Retry button) — the offline
@@ -339,7 +356,7 @@ test.describe("offline mode — boot & offline library (M4)", () => {
     });
 
     await context.setOffline(true);
-    await page.reload();
+    await reloadControlled(page);
     // No manifests → the plain "couldn't reach server" card, not a library.
     await expect(page.locator("#retry-init-btn")).toBeVisible();
     await expect(page.locator(".offline-banner")).toHaveCount(0);
