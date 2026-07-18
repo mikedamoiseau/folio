@@ -24,6 +24,19 @@ async function reloadControlled(page: Page) {
   });
 }
 
+// Open a book's reader at page 0 online and land on the stage. If the book
+// carries server-side progress from an earlier test on the shared harness,
+// opening /0/read shows a resume prompt (Continue vs Start Over) instead of
+// the stage — dismiss it via Start Over so we deterministically render page 0.
+async function openReaderAtZero(page: Page, bookId: string) {
+  await page.goto(`/#/book/${bookId}/0/read`);
+  const restart = page.locator("#resume-restart-btn");
+  const stage = page.locator("#reader-stage");
+  await expect(restart.or(stage)).toBeVisible({ timeout: 15_000 });
+  if (await restart.isVisible().catch(() => false)) await restart.click();
+  await expect(stage).toBeVisible({ timeout: 15_000 });
+}
+
 // Offline mode (spec docs/superpowers/specs/2026-07-17-web-reader-offline-design.md).
 //
 // M2 — service-worker foundations: the activate handler's shell-version
@@ -373,11 +386,12 @@ test.describe("offline mode — progress replay (M5)", () => {
     const startOver = page.locator("#restart-btn");
     if (await startOver.isVisible().catch(() => false)) await startOver.click();
 
-    // Go offline, open the reader, turn to page 1, and wait out the 2s
-    // progress debounce so the PUT fires, fails, and enqueues.
+    // Open the reader ONLINE first (avoids racing SW control on an offline
+    // navigation — and matches the real flow: reading, then losing signal),
+    // then go offline and turn to page 1, waiting out the 2s progress
+    // debounce so the PUT fires, fails, and enqueues.
+    await openReaderAtZero(page, CBZ_ID);
     await context.setOffline(true);
-    await page.goto(`/#/book/${CBZ_ID}/0/read`);
-    await expect(page.locator("#reader-stage")).toBeVisible({ timeout: 15_000 });
     await page.locator("#reader-stage").focus();
     await page.keyboard.press("ArrowRight");
     await page.waitForTimeout(2500);
@@ -426,5 +440,73 @@ test.describe("offline mode — progress replay (M5)", () => {
         { timeout: 10_000 },
       )
       .toBe(0);
+  });
+
+  test("replay discards the queued position when the server advanced past the baseline", async ({
+    page,
+    context,
+  }) => {
+    // Simulate "another device advanced this book's server progress after our
+    // last sync": open the reader online (which refreshes the baseline from
+    // the server), THEN corrupt the manifest baseline to an old value. On
+    // reconnect the server's real last_read_at won't match, so the queued
+    // offline edit must be discarded (server wins), leaving the server
+    // position untouched. (Corrupting before the online open wouldn't work —
+    // the reader-open baseline refresh would overwrite it.)
+    await saveBookOffline(page, CBZ_ID);
+    await openReaderAtZero(page, CBZ_ID);
+    await page.evaluate(async (id) => {
+      const db = await new Promise<IDBDatabase>((res, rej) => {
+        const req = indexedDB.open("folio-offline");
+        req.onsuccess = () => res(req.result);
+        req.onerror = () => rej(req.error);
+      });
+      await new Promise<void>((res) => {
+        const tx = db.transaction("books", "readwrite");
+        const store = tx.objectStore("books");
+        const g = store.get(id);
+        g.onsuccess = () => {
+          const row = g.result;
+          row.baselineLastReadAt = 1; // definitely older than any real server ts
+          store.put(row);
+        };
+        tx.oncomplete = () => res();
+        tx.onerror = () => res();
+      });
+    }, CBZ_ID);
+
+    await context.setOffline(true);
+    await page.locator("#reader-stage").focus();
+    await page.keyboard.press("ArrowRight");
+    await page.waitForTimeout(2500);
+
+    // Reconnect: replay GETs the server, baseline mismatch → discard, no PUT.
+    let putFired = false;
+    page.on("request", (r) => {
+      if (r.method() === "PUT" && r.url().includes(`/api/books/${CBZ_ID}/progress`)) putFired = true;
+    });
+    await context.setOffline(false);
+    await page.evaluate(() => window.dispatchEvent(new Event("online")));
+
+    // Queue drains (row consumed) but no PUT was issued (discarded).
+    await expect
+      .poll(async () =>
+        page.evaluate(async (id) => {
+          const db = await new Promise<IDBDatabase>((res, rej) => {
+            const req = indexedDB.open("folio-offline");
+            req.onsuccess = () => res(req.result);
+            req.onerror = () => rej(req.error);
+          });
+          return new Promise<number>((res) => {
+            const tx = db.transaction("progressQueue", "readonly");
+            const r = tx.objectStore("progressQueue").getAll();
+            r.onsuccess = () => res(r.result.filter((x: any) => x.bookId === id).length);
+            r.onerror = () => res(-1);
+          });
+        }, CBZ_ID),
+        { timeout: 10_000 },
+      )
+      .toBe(0);
+    expect(putFired).toBe(false);
   });
 });

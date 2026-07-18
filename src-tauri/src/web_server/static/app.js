@@ -472,11 +472,45 @@
   // Record the server's current last_read_at as the sync baseline for a saved
   // book (called after any successful server progress read/write). Best-effort.
   async function updateOfflineBaseline(id, lastReadAt) {
-    if (!offlineSupported() || !lastReadAt || !offlineBookIds.has(id)) return;
+    if (!offlineSupported() || !lastReadAt) return;
     try {
-      const row = await idbGet("books", id);
-      if (row) { row.baselineLastReadAt = lastReadAt; await idbPut("books", row); }
+      // Read-modify-write in ONE transaction: if removeBookOffline deleted
+      // the row in a prior transaction, the get returns undefined and we
+      // don't put — so a baseline update can never resurrect a removed
+      // manifest. (A get-then-separate-put would race that delete.)
+      const db = await offlineDb();
+      await new Promise((resolve, reject) => {
+        const tx = db.transaction("books", "readwrite");
+        const store = tx.objectStore("books");
+        const getReq = store.get(id);
+        getReq.onsuccess = () => {
+          const row = getReq.result;
+          if (row) { row.baselineLastReadAt = lastReadAt; store.put(row); }
+        };
+        tx.oncomplete = () => resolve();
+        tx.onabort = () => reject(tx.error);
+        tx.onerror = () => reject(tx.error);
+      });
     } catch (e) { /* best-effort */ }
+  }
+
+  // Atomic revision-guarded delete of a queue row: re-reads and deletes in one
+  // transaction, so a newer offline write that lands between a separate
+  // read and delete is never dropped.
+  async function deleteQueueRowIfRevision(id, revision) {
+    const db = await offlineDb();
+    await new Promise((resolve, reject) => {
+      const tx = db.transaction("progressQueue", "readwrite");
+      const store = tx.objectStore("progressQueue");
+      const getReq = store.get(id);
+      getReq.onsuccess = () => {
+        const cur = getReq.result;
+        if (cur && cur.revision === revision) store.delete(id);
+      };
+      tx.oncomplete = () => resolve();
+      tx.onabort = () => reject(tx.error);
+      tx.onerror = () => reject(tx.error);
+    });
   }
 
   // Enqueue an offline progress write (the sendProgress network-failure path).
@@ -499,14 +533,24 @@
   // Replay every queued row, serialized per book through saveChains so a
   // replay can't interleave with a live save. Triggered on reconnect (the
   // `online` event and each successful init()).
+  let replayInFlight = false;
   async function replayProgressQueue() {
     if (!offlineSupported()) return;
+    // init() and the `online` listener can both fire on a launch-after-
+    // reconnect; a guard avoids replaying every queued row twice (the second
+    // pass would just waste a GET per book hitting the already-drained path).
+    if (replayInFlight) return;
+    replayInFlight = true;
     let rows;
-    try { rows = await idbGetAll("progressQueue"); } catch (e) { return; }
-    for (const row of rows) {
+    try { rows = await idbGetAll("progressQueue"); }
+    catch (e) { replayInFlight = false; return; }
+    const chains = rows.map((row) => {
       const prev = saveChains[row.bookId] || Promise.resolve();
-      saveChains[row.bookId] = prev.then(() => replayOneProgress(row)).catch(() => {});
-    }
+      const next = prev.then(() => replayOneProgress(row)).catch(() => {});
+      saveChains[row.bookId] = next;
+      return next;
+    });
+    Promise.all(chains).finally(() => { replayInFlight = false; });
   }
 
   async function replayOneProgress(row) {
@@ -514,7 +558,13 @@
     try {
       resp = await fetch(`/api/books/${row.bookId}/progress`, { credentials: "same-origin" });
     } catch (e) { return; }                 // still offline — keep the row
-    if (resp.status === 401) return;         // keep; replay again after re-auth
+    if (resp.status === 401) {
+      // Session expired — surface login (same as a live save) and keep the
+      // row so replay retries after re-auth, instead of failing silently.
+      authenticated = false;
+      showLogin();
+      return;
+    }
     if (resp.status === 404) { await idbDelete("progressQueue", row.bookId).catch(() => {}); return; }
     if (!resp.ok) return;                    // 5xx — keep, retry next trigger
     let server = null;
@@ -522,8 +572,15 @@
     const serverTs = server && server.last_read_at ? server.last_read_at : null;
     // Push only if the server hasn't advanced past our baseline (nobody read
     // this book elsewhere while we were offline). Otherwise discard — server
-    // wins (the locked compare-then-push decision). NOTE the GET→PUT gap is a
-    // documented, accepted single-user race (spec §Progress sync).
+    // wins (the locked compare-then-push decision).
+    //
+    // Accepted limitations (single-user app; spec §Progress sync): the
+    // GET→PUT gap is a non-atomic check that another client could interleave,
+    // and last_read_at has 1-second precision so a same-second write from
+    // another device is indistinguishable from "unchanged". Both windows are
+    // milliseconds/one-second wide for one person and the cost is a stale
+    // reading position they can page back from — closing them needs a
+    // server-side conditional (CAS) write, judged disproportionate for v1.
     if (serverTs === row.baselineLastReadAt || (!serverTs && !row.baselineLastReadAt)) {
       try {
         // Direct PUT (not sendProgress) — a queued row is the book's latest
@@ -536,16 +593,16 @@
           credentials: "same-origin",
         });
         if (!put.ok) return;                 // keep the row; retry next trigger
+        // Advance the live-session high-water mark so a later stale live save
+        // (lower index) can't regress the position replay just committed.
+        lastSentIndex[row.bookId] = row.chapterIndex;
         const saved = await put.json().catch(() => null);
         if (saved && saved.last_read_at) await updateOfflineBaseline(row.bookId, saved.last_read_at);
       } catch (e) { return; }               // network dropped mid-replay — keep
     }
-    // Pushed or discarded: delete the row only if a newer offline write
-    // hasn't superseded it since we read it (revision guard).
-    const current = await idbGet("progressQueue", row.bookId).catch(() => null);
-    if (current && current.revision === row.revision) {
-      await idbDelete("progressQueue", row.bookId).catch(() => {});
-    }
+    // Pushed or discarded: atomically delete the row only if a newer offline
+    // write hasn't superseded it since we read it (revision guard in one tx).
+    await deleteQueueRowIfRevision(row.bookId, row.revision).catch(() => {});
   }
 
 
@@ -2276,6 +2333,11 @@
       if (progResp && progResp.ok) {
         try { progress = await progResp.json(); } catch (e) { progress = null; }
         if (!hashTargetsDetail(id)) return;
+        // A successful server read is a fresh observation of the server's
+        // position — advance the offline sync baseline so a later offline
+        // edit's replay compares against what we actually saw, not a stale
+        // save-time value (else replay could wrongly discard a valid edit).
+        if (progress && progress.last_read_at) updateOfflineBaseline(id, progress.last_read_at);
       }
       progress = mergeProgress(id, progress);
     }
@@ -2611,6 +2673,10 @@
             savedIndex = clampIndex(progress.chapter_index, count);
             savedScroll = typeof progress.scroll_position === "number" ? progress.scroll_position : 0;
           }
+          // Opening the reader online is a fresh server observation — advance
+          // the offline baseline (same reason as the detail-view GET) so a
+          // later offline edit isn't wrongly discarded as "server advanced".
+          if (progress && progress.last_read_at) updateOfflineBaseline(id, progress.last_read_at);
         }
         if (!hashTargetsReader(id)) return;
       }
@@ -3923,14 +3989,26 @@
         lastSentIndex[id] = chapterIndex;
         recordLocalProgress(id, chapterIndex, scrollPosition);
         // Advance the offline sync baseline so a later offline write's replay
-        // compares against the position we just committed.
-        const saved = await resp.json().catch(() => null);
-        if (saved && saved.last_read_at) updateOfflineBaseline(id, saved.last_read_at);
+        // compares against the position we just committed. Awaited so it
+        // commits within this saveChains link, before any later queued write
+        // reads the baseline (sendProgress always runs inside queueProgressSave).
+        // The body read is bounded: on a flaky connection the 200 headers can
+        // arrive while the tiny JSON body stalls, and an unbounded await here
+        // would wedge this book's entire save chain (every later page-turn
+        // save would queue behind it forever). A 2s cap degrades to "baseline
+        // not refreshed this time" — best-effort, self-heals on the next GET.
+        const saved = await Promise.race([
+          resp.json().catch(() => null),
+          new Promise((r) => setTimeout(() => r(null), 2000)),
+        ]);
+        if (saved && saved.last_read_at) await updateOfflineBaseline(id, saved.last_read_at);
       }
     } catch (e) {
       // Network error: for a saved book, queue the position for
-      // compare-then-push replay on reconnect instead of dropping it.
-      queueOfflineProgress(id, chapterIndex, scrollPosition);
+      // compare-then-push replay on reconnect instead of dropping it. Awaited
+      // so two failed saves (both inside the saveChains link) can't race on
+      // the row's revision and commit out of order.
+      await queueOfflineProgress(id, chapterIndex, scrollPosition);
     }
   }
 
