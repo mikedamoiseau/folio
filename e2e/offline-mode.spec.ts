@@ -510,3 +510,99 @@ test.describe("offline mode — progress replay (M5)", () => {
     expect(putFired).toBe(false);
   });
 });
+
+test.describe("offline mode — eviction integrity & reconciliation (M6)", () => {
+  test("a partially-evicted cache drops the manifest row and badge on boot", async ({ page }) => {
+    await saveBookOffline(page, EPUB_ID);
+
+    // Simulate browser eviction: delete one cached entry so the cache's key
+    // set no longer matches the manifest's inventory hash.
+    await page.evaluate(async (id) => {
+      const cache = await caches.open(`folio-offline-book-${id}`);
+      await cache.delete(new Request(`/api/books/${id}/chapters/1`));
+    }, EPUB_ID);
+
+    // Reload online: the boot integrity check must detect the hash mismatch,
+    // drop the manifest row AND the cache, and toast.
+    await reloadControlled(page);
+    await expect(page.locator(".toast")).toContainText(/removed some downloaded books/i, {
+      timeout: 15_000,
+    });
+
+    const state = await page.evaluate(async (id) => {
+      const hasCache = await caches.has(`folio-offline-book-${id}`);
+      const db = await new Promise<IDBDatabase>((res, rej) => {
+        const req = indexedDB.open("folio-offline");
+        req.onsuccess = () => res(req.result);
+        req.onerror = () => rej(req.error);
+      });
+      const row = await new Promise<any>((res) => {
+        const tx = db.transaction("books", "readonly");
+        const r = tx.objectStore("books").get(id);
+        r.onsuccess = () => res(r.result);
+        r.onerror = () => res(undefined);
+      });
+      return { hasCache, row };
+    }, EPUB_ID);
+    expect(state.row).toBeFalsy();
+    expect(state.hasCache).toBe(false);
+
+    // Grid badge gone.
+    await page.goto("/#/?q=Book%20050");
+    const card = page.locator(".grid .card", { hasText: "Book 050" });
+    await card.waitFor();
+    await expect(card.locator(".offline-badge")).toHaveCount(0);
+  });
+
+  test("reconciliation removes an offline copy of a book deleted server-side", async ({ page }) => {
+    // Inject a manifest row + cache for a book id the server doesn't have,
+    // mimicking a book deleted on the desktop side while it was saved offline.
+    const GHOST = "e2e-book-ghost-999";
+    await page.goto("/#/");
+    await page.evaluate(async (id) => {
+      const cache = await caches.open(`folio-offline-book-${id}`);
+      await cache.put(new Request(`/api/books/${id}`), new Response("{}", {
+        headers: { "Content-Type": "application/json" },
+      }));
+      const db = await new Promise<IDBDatabase>((res, rej) => {
+        const req = indexedDB.open("folio-offline");
+        req.onsuccess = () => res(req.result);
+        req.onerror = () => rej(req.error);
+      });
+      await new Promise<void>((res) => {
+        const tx = db.transaction("books", "readwrite");
+        tx.objectStore("books").put({
+          id, title: "Ghost", author: "x", format: "epub", totalChapters: 1,
+          pageCount: 0, savedAt: Date.now(), bytes: 2,
+          inventoryHash: "deadbeef", generation: "g", baselineLastReadAt: null, version: 1,
+        });
+        tx.oncomplete = () => res();
+        tx.onerror = () => res();
+      });
+    }, GHOST);
+
+    // Reload online: reconciliation compares manifests to the live library
+    // and removes the copy of a book that no longer exists on the server.
+    await reloadControlled(page);
+    await expect
+      .poll(async () =>
+        page.evaluate(async (id) => {
+          const hasCache = await caches.has(`folio-offline-book-${id}`);
+          const db = await new Promise<IDBDatabase>((res, rej) => {
+            const req = indexedDB.open("folio-offline");
+            req.onsuccess = () => res(req.result);
+            req.onerror = () => rej(req.error);
+          });
+          const row = await new Promise<any>((res) => {
+            const tx = db.transaction("books", "readonly");
+            const r = tx.objectStore("books").get(id);
+            r.onsuccess = () => res(r.result);
+            r.onerror = () => res(undefined);
+          });
+          return hasCache || !!row;
+        }, GHOST),
+        { timeout: 15_000 },
+      )
+      .toBe(false);
+  });
+});

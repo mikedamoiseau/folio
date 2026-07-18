@@ -447,6 +447,78 @@
     offlineBookIdsGen++; // invalidate any in-flight refresh snapshot
   }
 
+  // ── Offline mode: eviction integrity + library reconciliation ──
+  // Eviction honesty (spec §Eviction honesty): the browser can evict Cache
+  // Storage under pressure while leaving the IndexedDB manifest behind, so a
+  // manifest row is only as true as its cache. On boot (online OR offline),
+  // for each saved book compare the cache's current key set against the
+  // manifest's inventory hash — one cache.keys() per book, no per-URL sweep.
+  // A mismatch (or a vanished cache) means the download is no longer whole:
+  // drop BOTH the row and the cache (a post-eviction partial cache has no
+  // pendingSaves row, so per the save-engine garbage rule it must not linger
+  // as fake resume state; a fresh save rebuilds it).
+  async function verifyOfflineIntegrity() {
+    if (!offlineSupported()) return;
+    let rows;
+    try { rows = await idbGetAll("books"); } catch (e) { return; }
+    let dropped = 0;
+    for (const row of rows) {
+      let ok = false;
+      try {
+        if (await caches.has(offlineCacheName(row.id))) {
+          const cache = await caches.open(offlineCacheName(row.id));
+          ok = (await inventoryHash(await cachedUrlSet(cache))) === row.inventoryHash;
+        }
+      } catch (e) { ok = false; }
+      if (!ok) {
+        await caches.delete(offlineCacheName(row.id)).catch(() => {});
+        await idbDelete("books", row.id).catch(() => {});
+        offlineBookIds.delete(row.id);
+        dropped++;
+      }
+    }
+    if (dropped) {
+      offlineBookIdsGen++;
+      showToast("Your browser removed some downloaded books");
+    }
+  }
+
+  // Online reconciliation (spec §Library reconciliation): after a successful
+  // boot, compare saved manifests against the live library. A book gone from
+  // the server loses its offline copy; a book still present has its display
+  // metadata + cached detail/cover refreshed unconditionally (covers a
+  // cover-only change with no drift detection). Refresh writes are ok-gated
+  // so a transient 401/503 can never poison a valid cached entry.
+  async function reconcileOfflineBooks(liveBooks) {
+    if (!offlineSupported()) return;
+    let rows;
+    try { rows = await idbGetAll("books"); } catch (e) { return; }
+    if (!rows.length) return;
+    const liveById = new Map((liveBooks || []).map((b) => [b.id, b]));
+    let removed = 0;
+    for (const row of rows) {
+      const live = liveById.get(row.id);
+      if (!live) { await removeBookOffline(row.id); removed++; continue; }
+      row.title = live.title;
+      row.author = live.author;
+      row.format = live.format;
+      await idbPut("books", row).catch(() => {});
+      const cache = await caches.open(offlineCacheName(row.id)).catch(() => null);
+      if (!cache) continue;
+      for (const url of [
+        `/api/books/${row.id}`,
+        `/api/books/${row.id}/cover`,
+        `/api/books/${row.id}/cover?size=thumb`,
+      ]) {
+        try {
+          const resp = await fetch(url, { credentials: "same-origin" });
+          if (resp.ok) await cache.put(new Request(url), resp);
+        } catch (e) { /* keep the existing cached entry */ }
+      }
+    }
+    if (removed) { offlineBookIdsGen++; showToast("Removed offline copies of deleted books"); }
+  }
+
   // Grid badges read this set (mirrors progressByBook's pattern); refreshed
   // by showLibrary and kept current by save/unsave above. The manifest read
   // in refreshOfflineBookIds is async and can resolve after a save/unsave
@@ -4599,6 +4671,10 @@
 
   // ── Init ──────────────────────────────────────
   async function init() {
+    // Eviction honesty first: make the manifest truthful before either boot
+    // path reads it (the offline branch renders straight from it, and the
+    // online grid badges read offlineBookIds). Safe on- or offline.
+    await verifyOfflineIntegrity();
     // Finding 2: this initial probe is a raw fetch (not api(), which would
     // itself call showLogin() on 401 before `authenticated` is known here)
     // — but it needs the same guard: an unhandled rejection (offline PWA
@@ -4639,6 +4715,10 @@
     // while offline. Fire-and-forget — it serializes per book via saveChains
     // and never blocks the first render.
     replayProgressQueue();
+    // Reconcile saved books against the live library (deleted → removed,
+    // metadata/cover → refreshed). Fire-and-forget off the probe's own body
+    // (nothing else consumes `test`); never blocks the first render.
+    test.clone().json().then((books) => reconcileOfflineBooks(books)).catch(() => {});
     route();
   }
 

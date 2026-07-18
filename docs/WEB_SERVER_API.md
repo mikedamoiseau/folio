@@ -129,9 +129,10 @@ Open `http://<your-ip>:7788/` in a browser for a built-in reading interface. It 
 - EPUB reader with chapter navigation (neighbouring chapters are prefetched in the background, so turning to the next chapter on a phone is instant); PDF/CBZ/CBR page-image reader with animated swipe page-turns on touch devices (reduced-motion aware)
 - Reading progress syncs back to the library, so a book picks up where a desktop or other device session left off
 - Installable as a PWA (web app manifest, service worker) and supports iOS "Add to Home Screen". The service worker only registers on a secure context (`https` or `localhost`), so offline shell caching does not activate over a plain-HTTP LAN URL — Add-to-Home-Screen and the manifest still work there
+- **Save for offline** (secure context only): per-book download into browser storage (Cache Storage for content, IndexedDB for the manifest/progress queue). When the server is unreachable the app boots into a library of downloaded books and reads them fully offline; progress made offline syncs back with a compare-then-push rule on reconnect; evicted downloads are detected and pruned on next launch. The service worker serves saved-book requests network-first (cache only on failure/offline), so online auth and freshness are unchanged
 - Loading skeletons, friendly empty states, and broken-cover placeholders
 
-All assets are embedded in the app (no CDN dependencies). The app shell can work offline once cached by the service worker; reading content and the API are never cached and always require a live connection to the server.
+All assets are embedded in the app (no CDN dependencies). The app shell works offline once cached by the service worker; API content is served network-first and only falls back to a per-book offline cache for books the user explicitly saved.
 
 ---
 
