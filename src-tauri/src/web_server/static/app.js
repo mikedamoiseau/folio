@@ -781,12 +781,20 @@
     // shortcuts on it.
     closeShortcutsOverlay();
     const hash = rawHash();
-    // Offline: only saved-book detail/reader work (their content is served
-    // from the M2 cache); every top-level destination — library, stats,
-    // collections, none of which have offline data — returns to the offline
-    // library. The banner's Retry (init) is the only path back online.
-    if (offlineMode && !hash.startsWith("#/book/")) {
-      return showOfflineLibrary();
+    // Offline: only a SAVED book's detail/reader work (their content is
+    // served from the M2 cache). Everything else — a top-level destination
+    // (library/stats/collections, none of which have offline data) OR a
+    // deep-link to a book that isn't downloaded — routes to the offline
+    // library instead of dead-ending on a bare error page. showOfflineLibrary
+    // also re-probes the network, so ordinary navigation recovers the full
+    // app once connectivity returns (not only the banner's Retry button).
+    if (offlineMode) {
+      const bm = hash.match(/^#\/book\/([^/]+)/);
+      const savedBook = bm && offlineBookIds.has(decodeURIComponent(bm[1]));
+      if (!savedBook) {
+        if (bm) showToast("That book isn't available offline");
+        return showOfflineLibrary();
+      }
     }
     if (hash === "#" || hash === "#/" || hash.startsWith("#/library")) {
       return showLibrary(parseLibraryParams(hash));
@@ -4374,13 +4382,26 @@
     if (retry) retry.onclick = init;
   }
 
-  // While offline, re-read manifests and re-render the library (used by the
-  // route guard for a top-level navigation). If everything was removed, drop
-  // back to the plain offline card via a fresh init().
+  // The offline-library entry point used by the route guard. It first
+  // re-probes the network: if the server is reachable again, it leaves
+  // offline mode and routes normally — so ANY navigation (not just the
+  // banner's Retry) recovers the full library/search/stats/collections once
+  // connectivity returns. Still offline → render from manifests, or the
+  // plain offline card if nothing is saved.
   async function showOfflineLibrary() {
-    const rows = await getAllOfflineManifests();
-    if (rows.length) renderOfflineLibrary(rows);
-    else { offlineMode = false; init(); }
+    let test;
+    try {
+      test = await fetch("/api/books", { credentials: "same-origin" });
+    } catch (e) {
+      const rows = await getAllOfflineManifests();
+      if (rows.length) renderOfflineLibrary(rows);
+      else { offlineMode = false; renderOfflineState(); }
+      return;
+    }
+    offlineMode = false;
+    if (test.status === 401) return showLogin();
+    authenticated = true;
+    route();
   }
 
   // ── Init ──────────────────────────────────────
@@ -4403,10 +4424,14 @@
           if (saved.length) {
             offlineMode = true;
             authenticated = true;
+            offlineBookIds = new Set(saved.map((r) => r.id));
             // Honor the boot hash: a saved book's URL deep-links straight to
-            // its (SW-served) detail/reader offline; any top-level hash lands
-            // on the offline library. route()'s offline guard decides.
-            route();
+            // its (SW-served) detail/reader offline (route()'s guard lets a
+            // saved-book hash through); any top-level hash renders the
+            // offline library directly from the rows we just read (no second
+            // manifest round-trip).
+            if (rawHash().startsWith("#/book/")) route();
+            else renderOfflineLibrary(saved);
             return;
           }
         } catch (err) { /* fall through to the plain offline card */ }

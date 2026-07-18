@@ -279,6 +279,42 @@ test.describe("offline mode — boot & offline library (M4)", () => {
     await expect(page.locator(".offline-banner")).toHaveCount(0);
   });
 
+  test("offline deep-link to a NON-saved book redirects to the offline library", async ({
+    page,
+    context,
+  }) => {
+    await saveBookOffline(page, EPUB_ID); // 050 saved; 130 is not
+    await page.goto("/#/");
+    await context.setOffline(true);
+    await page.reload();
+    await expect(page.locator(".offline-banner")).toBeVisible();
+
+    // Navigate to an un-downloaded book's URL — must land on the offline
+    // library, not a bare "couldn't reach server" dead-end.
+    await page.evaluate((id) => { location.hash = `#/book/${id}`; }, CBZ_ID);
+    await expect(page.locator(".offline-banner")).toBeVisible();
+    await expect(page.locator(".grid .card", { hasText: "Book 050" })).toHaveCount(1);
+    await context.setOffline(false);
+  });
+
+  test("ordinary navigation recovers the online library after reconnect", async ({
+    page,
+    context,
+  }) => {
+    await saveBookOffline(page, EPUB_ID);
+    await page.goto("/#/");
+    await context.setOffline(true);
+    await page.reload();
+    await expect(page.locator(".offline-banner")).toBeVisible();
+
+    // Reconnect, then navigate normally (NOT the Retry button) — the offline
+    // library's re-probe must recover the full library with search.
+    await context.setOffline(false);
+    await page.evaluate(() => { location.hash = "#/library"; });
+    await expect(page.locator("#search")).toBeVisible({ timeout: 15_000 });
+    await expect(page.locator(".offline-banner")).toHaveCount(0);
+  });
+
   test("booting offline with no saved books shows the offline card", async ({ page, context }) => {
     // Ensure nothing is saved.
     await page.goto("/#/");
