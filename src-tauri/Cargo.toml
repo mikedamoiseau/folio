@@ -37,6 +37,7 @@ zip = "2"
 quick-xml = "0.36"
 ammonia = "4"
 base64 = "0.22"
+form_urlencoded = "1"
 pdfium-render = { version = "0.8", features = ["image"] }
 image = "0.25"
 dirs = "5"

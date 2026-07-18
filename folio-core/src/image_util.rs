@@ -101,6 +101,8 @@ pub fn make_thumbnail(bytes: &[u8], target_width: u32) -> FolioResult<Option<Vec
 /// - `target_width` is `None` or `Some(0)`
 /// - the source image width is already ≤ `target_width`
 /// - the source format is GIF or WebP (may carry animation frames)
+/// - the bytes fail to probe or decode (a corrupt-but-renderable page must
+///   not become an error just because a resize was requested)
 ///
 /// Resize case:
 /// - decode, downscale to `(target_width, scaled_height)` via Lanczos3
@@ -120,9 +122,15 @@ pub fn maybe_resize_to_jpeg(
 
     // Cheap dimension probe — avoids a full decode when we're already
     // below the target width.
-    let reader = image::ImageReader::new(Cursor::new(&bytes))
-        .with_guessed_format()
-        .map_err(|e| FolioError::invalid(format!("cannot probe image format: {e}")))?;
+    //
+    // Probe/decode failures below fall back to the original bytes rather than
+    // erroring: a corrupt-but-browser-renderable page (truncated JPEG — common
+    // in scanned comics) serves fine at full size, and requesting a resize
+    // must never turn that working page into an error response.
+    let reader = match image::ImageReader::new(Cursor::new(&bytes)).with_guessed_format() {
+        Ok(r) => r,
+        Err(_) => return Ok((bytes, current_mime)),
+    };
 
     // GIF/WebP may carry multiple frames; `load_from_memory` decodes
     // only the first one, so resizing would silently drop animation.
@@ -135,15 +143,18 @@ pub fn maybe_resize_to_jpeg(
         return Ok((bytes, current_mime));
     }
 
-    let (src_w, src_h) = reader
-        .into_dimensions()
-        .map_err(|e| FolioError::invalid(format!("cannot read image dimensions: {e}")))?;
+    let (src_w, src_h) = match reader.into_dimensions() {
+        Ok(dims) => dims,
+        Err(_) => return Ok((bytes, current_mime)),
+    };
     if src_w <= target {
         return Ok((bytes, current_mime));
     }
 
-    let img = image::load_from_memory(&bytes)
-        .map_err(|e| FolioError::invalid(format!("image decode failed: {e}")))?;
+    let img = match image::load_from_memory(&bytes) {
+        Ok(img) => img,
+        Err(_) => return Ok((bytes, current_mime)),
+    };
 
     let target_h = (((src_h as u64) * (target as u64)) / (src_w as u64)).max(1) as u32;
     let resized = img.resize_exact(target, target_h, image::imageops::FilterType::Lanczos3);
@@ -186,6 +197,24 @@ fn composite_over_white(img: &image::DynamicImage) -> image::RgbImage {
 mod tests {
     use super::*;
     use image::{ImageBuffer, Rgb, Rgba};
+
+    #[test]
+    fn undecodable_bytes_pass_through_unchanged_when_width_requested() {
+        // A corrupt-but-browser-renderable page (e.g. truncated JPEG) must not
+        // start failing just because a resize was requested — serving the
+        // original bytes beats a 4xx for a page that displays fine full-size.
+        let truncated: Vec<u8> = encode_jpeg(600, 400)[..64].to_vec();
+        let (bytes, mime) =
+            maybe_resize_to_jpeg(truncated.clone(), "image/jpeg".to_string(), Some(100)).unwrap();
+        assert_eq!(bytes, truncated);
+        assert_eq!(mime, "image/jpeg");
+
+        let garbage = vec![0u8; 32];
+        let (bytes, mime) =
+            maybe_resize_to_jpeg(garbage.clone(), "image/jpeg".to_string(), Some(100)).unwrap();
+        assert_eq!(bytes, garbage);
+        assert_eq!(mime, "image/jpeg");
+    }
 
     fn encode_jpeg(w: u32, h: u32) -> Vec<u8> {
         let buf: ImageBuffer<Rgb<u8>, _> =
@@ -312,9 +341,15 @@ mod tests {
     }
 
     #[test]
-    fn invalid_bytes_return_invalid_error() {
-        let result = maybe_resize_to_jpeg(b"not an image".to_vec(), "image/jpeg".into(), Some(500));
-        assert!(matches!(result, Err(FolioError::InvalidInput { .. })));
+    fn invalid_bytes_pass_through_unchanged() {
+        // Contract change (offline-mode review): undecodable bytes fall back
+        // to the original payload instead of erroring — a corrupt-but-
+        // renderable page must keep serving when a resize is requested. See
+        // undecodable_bytes_pass_through_unchanged_when_width_requested.
+        let (bytes, mime) =
+            maybe_resize_to_jpeg(b"not an image".to_vec(), "image/jpeg".into(), Some(500)).unwrap();
+        assert_eq!(bytes, b"not an image".to_vec());
+        assert_eq!(mime, "image/jpeg");
     }
 
     #[test]

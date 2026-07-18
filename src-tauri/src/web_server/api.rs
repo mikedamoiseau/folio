@@ -906,24 +906,25 @@ fn session_cache_control(state: &WebState) -> &'static str {
 /// Tolerant `?width=` parsing (web-reader offline mode downscales page images
 /// on download). Any input that isn't exactly one positive integer resolves to
 /// `None` — byte-identical current behavior — so a malformed query can never
-/// break a page request. Valid values clamp to 64..=4096. Zero is rejected (a
+/// break a page request. Valid values clamp to 64..=2048 — the cap bounds per-request raster cost on this unauthenticated-capable surface (no-PIN mode) close to the old fixed 1200 px render. Zero is rejected (a
 /// zero-width render is meaningless); duplicates are rejected (ambiguous
 /// intent); unrelated params (the reader's `?__reload=` retry nonce) are
 /// ignored.
 fn parse_width(query: Option<&str>) -> Option<u32> {
     let query = query?;
     let mut found: Option<u32> = None;
-    for pair in query.split('&') {
-        let mut it = pair.splitn(2, '=');
-        if it.next() != Some("width") {
+    // form_urlencoded percent-decodes keys and values (RawQuery is raw), so an
+    // encoded `width=%31%30%38%30` parses normally and an encoded `w%69dth`
+    // still counts toward duplicate detection instead of sneaking past it.
+    for (key, value) in form_urlencoded::parse(query.as_bytes()) {
+        if key != "width" {
             continue;
         }
-        let value = it.next().unwrap_or("");
         let parsed: u32 = value.parse().ok().filter(|w| *w > 0)?;
         if found.is_some() {
             return None; // duplicate width params
         }
-        found = Some(parsed.clamp(64, 4096));
+        found = Some(parsed.clamp(64, 2048));
     }
     found
 }
@@ -1257,12 +1258,22 @@ mod tests {
     fn width_param_valid_values_clamp_to_range() {
         assert_eq!(parse_width(Some("width=1080")), Some(1080));
         assert_eq!(parse_width(Some("width=64")), Some(64));
-        assert_eq!(parse_width(Some("width=4096")), Some(4096));
+        assert_eq!(parse_width(Some("width=2048")), Some(2048));
         assert_eq!(parse_width(Some("width=1")), Some(64)); // clamp low
-        assert_eq!(parse_width(Some("width=8000")), Some(4096)); // clamp high
+        assert_eq!(parse_width(Some("width=8000")), Some(2048)); // clamp high
                                                                  // other params (e.g. the reader's ?__reload= retry nonce) are ignored
         assert_eq!(parse_width(Some("width=1080&__reload=123")), Some(1080));
         assert_eq!(parse_width(Some("__reload=123&width=1080")), Some(1080));
+    }
+
+    #[test]
+    fn width_param_is_percent_decoded() {
+        // RawQuery hands us the undecoded query string — values…
+        assert_eq!(parse_width(Some("width=%31%30%38%30")), Some(1080));
+        // …and keys decode, so an encoded duplicate is still ambiguous.
+        assert_eq!(parse_width(Some("width=800&w%69dth=900")), None);
+        // form-encoding: '+' is a space, so "+800" (" 800") is not a number.
+        assert_eq!(parse_width(Some("width=+800")), None);
     }
 
     #[test]
