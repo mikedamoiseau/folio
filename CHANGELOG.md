@@ -5,6 +5,18 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- **Save books for offline reading in the web reader (in progress).** On
+  HTTPS-served web UIs (e.g. behind a Tailscale/reverse-proxy certificate;
+  service workers require a secure context), a book's detail page now offers
+  "Save offline": chapters, images, and comic/PDF pages (downscaled to
+  1080 px wide via the new optional `?width=` parameter on the page-image
+  endpoint) are downloaded into browser storage, with a progress counter, an
+  "available offline" badge on the library grid, and a "Saved · size /
+  Remove download" state on the detail page. Reading a saved book falls back
+  to the offline copy automatically when the server is unreachable. (Booting
+  the app fully offline into a saved-books library ships next.)
+
 ### Fixed
 - **Book counts now read "1 book", not "1 books".** The library section headers
   and the series-stack cards said "1 books" (and "1 livres" in French) when a

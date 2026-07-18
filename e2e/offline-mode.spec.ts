@@ -1,4 +1,16 @@
-import { test, expect } from "@playwright/test";
+import { test, expect, type Page } from "@playwright/test";
+
+// Harness fixtures (src-tauri/examples/web_e2e_server.rs): Book 050 = the
+// only EPUB with a real 2-chapter file (chapter 1 embeds one inline image);
+// Book 130 = the only CBZ with a real 2-page file.
+const EPUB_ID = "e2e-book-050";
+const CBZ_ID = "e2e-book-130";
+
+async function saveBookOffline(page: Page, bookId: string) {
+  await page.goto(`/#/book/${bookId}`);
+  await page.locator("#offline-save-btn").click();
+  await expect(page.locator("#offline-remove-btn")).toBeVisible({ timeout: 30_000 });
+}
 
 // Offline mode (spec docs/superpowers/specs/2026-07-17-web-reader-offline-design.md).
 //
@@ -49,5 +61,131 @@ test.describe("offline mode — service worker foundations", () => {
     const keys = await page.evaluate(() => caches.keys());
     expect(keys).toContain("folio-offline-book-e2e-fake");
     expect(keys).not.toContain("folio-shell-deadbeef0000");
+  });
+});
+
+test.describe("offline mode — save / unsave (M3)", () => {
+  test("saving an EPUB caches its full inventory and flips the detail UI", async ({ page }) => {
+    await saveBookOffline(page, EPUB_ID);
+
+    // Detail view shows the saved state.
+    await expect(page.locator(".offline-saved-label")).toContainText(/Saved ·/);
+
+    // The cache holds detail JSON, covers, TOC, both chapters, and the
+    // chapter-1 inline image; the manifest row exists with a matching hash.
+    const state = await page.evaluate(async (id) => {
+      const cache = await caches.open(`folio-offline-book-${id}`);
+      const keys = (await cache.keys()).map((r) => new URL(r.url).pathname + new URL(r.url).search);
+      const db = await new Promise<IDBDatabase>((res, rej) => {
+        const req = indexedDB.open("folio-offline");
+        req.onsuccess = () => res(req.result);
+        req.onerror = () => rej(req.error);
+      });
+      const row = await new Promise<any>((res, rej) => {
+        const tx = db.transaction("books", "readonly");
+        const r = tx.objectStore("books").get(id);
+        r.onsuccess = () => res(r.result);
+        r.onerror = () => rej(r.error);
+      });
+      return { keys, row };
+    }, EPUB_ID);
+
+    expect(state.keys).toContain(`/api/books/${EPUB_ID}`);
+    expect(state.keys).toContain(`/api/books/${EPUB_ID}/chapters`);
+    expect(state.keys).toContain(`/api/books/${EPUB_ID}/chapters/0`);
+    expect(state.keys).toContain(`/api/books/${EPUB_ID}/chapters/1`);
+    expect(state.keys.some((k: string) => k.startsWith(`/api/books/${EPUB_ID}/images/`))).toBe(true);
+    expect(state.row).toBeTruthy();
+    expect(state.row.inventoryHash).toMatch(/^[0-9a-f]{64}$/);
+    expect(state.row.generation).toBeTruthy();
+
+    // Grid badge appears for the saved book only. (Book 050 isn't on grid
+    // page 1 under the default recent-first sort — search brings it up.)
+    await page.goto("/#/?q=Book%20050");
+    const savedCard = page.locator(".grid .card", { hasText: "Book 050" });
+    await savedCard.waitFor();
+    await expect(savedCard.locator(".offline-badge")).toBeVisible();
+  });
+
+  test("saving a CBZ downloads pages at OFFLINE_PAGE_WIDTH", async ({ page }) => {
+    const widthRequest = page.waitForRequest((r) =>
+      r.url().includes(`/api/books/${CBZ_ID}/pages/0`) && r.url().includes("width=1080"),
+    );
+    await saveBookOffline(page, CBZ_ID);
+    await widthRequest;
+
+    const keys = await page.evaluate(async (id) => {
+      const cache = await caches.open(`folio-offline-book-${id}`);
+      return (await cache.keys()).map((r) => new URL(r.url).pathname + new URL(r.url).search);
+    }, CBZ_ID);
+    expect(keys).toContain(`/api/books/${CBZ_ID}/pages/0?width=1080`);
+    expect(keys).toContain(`/api/books/${CBZ_ID}/pages/1?width=1080`);
+    expect(keys).toContain(`/api/books/${CBZ_ID}/page-count`);
+  });
+
+  test("network-first: online reads bypass the cache; offline falls back to it", async ({
+    page,
+    context,
+  }) => {
+    await saveBookOffline(page, EPUB_ID);
+
+    // Poison the cached chapter 1 with a sentinel.
+    await page.evaluate(async (id) => {
+      const cache = await caches.open(`folio-offline-book-${id}`);
+      await cache.put(
+        new Request(`/api/books/${id}/chapters/1`),
+        new Response("<p>SENTINEL-CACHED</p>", { headers: { "Content-Type": "text/html" } }),
+      );
+    }, EPUB_ID);
+
+    // ONLINE: open the reader at chapter 1 — network must win.
+    await page.goto(`/#/book/${EPUB_ID}/1/read`);
+    const restart = page.locator("#resume-restart-btn");
+    const content = page.locator("#reader-content");
+    await expect(restart.or(content)).toBeVisible({ timeout: 15_000 });
+    if (await restart.isVisible()) await restart.click();
+    await expect(content).toContainText("chapter one", { timeout: 10_000 });
+    await expect(content).not.toContainText("SENTINEL-CACHED");
+
+    // OFFLINE: the same URL fetched directly is now served by the SW cache
+    // fallback → sentinel bytes. (A reader page-turn wouldn't prove this —
+    // the F-4-4 in-memory prefetch cache would satisfy it without any
+    // network/SW involvement.)
+    await context.setOffline(true);
+    const offlineBody = await page.evaluate(async (id) => {
+      const resp = await fetch(`/api/books/${id}/chapters/1`, { credentials: "same-origin" });
+      return resp.text();
+    }, EPUB_ID);
+    expect(offlineBody).toContain("SENTINEL-CACHED");
+    await context.setOffline(false);
+  });
+
+  test("unsave removes the cache, manifest row, and badge", async ({ page }) => {
+    await saveBookOffline(page, EPUB_ID);
+    await page.locator("#offline-remove-btn").click();
+    await expect(page.locator("#offline-save-btn")).toBeVisible({ timeout: 10_000 });
+
+    const gone = await page.evaluate(async (id) => {
+      const hasCache = await caches.has(`folio-offline-book-${id}`);
+      const db = await new Promise<IDBDatabase>((res, rej) => {
+        const req = indexedDB.open("folio-offline");
+        req.onsuccess = () => res(req.result);
+        req.onerror = () => rej(req.error);
+      });
+      const row = await new Promise<any>((res) => {
+        const tx = db.transaction("books", "readonly");
+        const r = tx.objectStore("books").get(id);
+        r.onsuccess = () => res(r.result);
+        r.onerror = () => res(undefined);
+      });
+      return { hasCache, row };
+    }, EPUB_ID);
+    expect(gone.hasCache).toBe(false);
+    expect(gone.row).toBeFalsy();
+
+    await page.goto("/#/?q=Book%20050");
+    const card = page.locator(".grid .card", { hasText: "Book 050" });
+    await card.waitFor();
+    await expect(card.locator(".offline-badge")).toHaveCount(0);
   });
 });

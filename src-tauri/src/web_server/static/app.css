@@ -253,7 +253,15 @@ body:not(:has(.header))::before {
 .detail-progress-bar { height: 6px; background: var(--warm-subtle); border-radius: 3px; overflow: hidden; }
 .detail-progress-fill { height: 100%; background: var(--accent); }
 .detail-progress-label { font-size: 0.8rem; color: var(--ink-muted); margin-top: 6px; }
-.detail .actions { display: flex; gap: 8px; margin-top: 12px; }
+.detail .actions { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; align-items: center; }
+/* Offline mode: save-progress counter + saved-state label in the detail
+   actions row, and the "available offline" chip on grid-card covers. The
+   card needs position:relative for the chip's absolute anchor — it already
+   clips via overflow:hidden. */
+.offline-save-progress { font-size: 0.85rem; color: var(--ink-muted); align-self: center; }
+.offline-saved-label { font-size: 0.85rem; color: var(--ink-muted); align-self: center; }
+.card { position: relative; }
+.offline-badge { position: absolute; top: 8px; right: 8px; width: 22px; height: 22px; border-radius: 50%; background: var(--accent); color: #fff; font-size: 0.75rem; line-height: 22px; text-align: center; pointer-events: none; }
 .detail .actions a, .detail .actions button { padding: 10px 20px; border-radius: var(--radius); text-decoration: none; font-weight: 600; font-size: 0.9rem; cursor: pointer; border: none; }
 .btn-primary { background: var(--accent-hover); color: var(--on-accent); }
 .btn-primary:hover { background: var(--accent-hover); }
