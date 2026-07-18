@@ -775,11 +775,17 @@
     navigate(libraryHash({ ...currentLibraryState(), series: null, collection: null }));
   }
 
+  // Bumped on every route() call; showOfflineLibrary's async re-probe checks
+  // it after each await so a stale continuation can't render the offline
+  // library over a newer navigation (or over a successful reconnect).
+  let routeGen = 0;
+
   function route() {
     // K4: the shortcuts overlay is appended to document.body and must not
     // survive a navigation — it would block the next view and swallow
     // shortcuts on it.
     closeShortcutsOverlay();
+    const gen = ++routeGen;
     const hash = rawHash();
     // Offline: only a SAVED book's detail/reader work (their content is
     // served from the M2 cache). Everything else — a top-level destination
@@ -793,7 +799,7 @@
       const savedBook = bm && offlineBookIds.has(decodeURIComponent(bm[1]));
       if (!savedBook) {
         if (bm) showToast("That book isn't available offline");
-        return showOfflineLibrary();
+        return showOfflineLibrary(gen);
       }
     }
     if (hash === "#" || hash === "#/" || hash.startsWith("#/library")) {
@@ -4388,16 +4394,23 @@
   // banner's Retry) recovers the full library/search/stats/collections once
   // connectivity returns. Still offline → render from manifests, or the
   // plain offline card if nothing is saved.
-  async function showOfflineLibrary() {
+  async function showOfflineLibrary(gen) {
+    // gen ties this async render to the route() call that triggered it; if a
+    // newer navigation (or a completed reconnect) ran during an await below,
+    // bail so we never paint a stale offline library over the newer view.
+    const superseded = () => typeof gen === "number" && gen !== routeGen;
     let test;
     try {
       test = await fetch("/api/books", { credentials: "same-origin" });
     } catch (e) {
+      if (superseded()) return;
       const rows = await getAllOfflineManifests();
+      if (superseded()) return;
       if (rows.length) renderOfflineLibrary(rows);
       else { offlineMode = false; renderOfflineState(); }
       return;
     }
+    if (superseded()) return;
     offlineMode = false;
     if (test.status === 401) return showLogin();
     authenticated = true;

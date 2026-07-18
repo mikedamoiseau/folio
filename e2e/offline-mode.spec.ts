@@ -257,7 +257,8 @@ test.describe("offline mode — boot & offline library (M4)", () => {
 
     // Open it → detail renders offline (cached detail JSON via SW fallback).
     await card.click();
-    await expect(page.locator(".detail")).toBeVisible();
+    await expect(page).toHaveURL(/#\/book\//);
+    await expect(page.locator(".detail")).toBeVisible({ timeout: 15_000 });
     // Read → chapter renders offline.
     await page.getByRole("button", { name: /^read$/i }).click();
     await expect(page.locator("#reader-content")).toContainText("chapter zero", { timeout: 15_000 });
