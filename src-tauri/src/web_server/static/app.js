@@ -541,16 +541,21 @@
     // pass would just waste a GET per book hitting the already-drained path).
     if (replayInFlight) return;
     replayInFlight = true;
-    let rows;
-    try { rows = await idbGetAll("progressQueue"); }
-    catch (e) { replayInFlight = false; return; }
-    const chains = rows.map((row) => {
-      const prev = saveChains[row.bookId] || Promise.resolve();
-      const next = prev.then(() => replayOneProgress(row)).catch(() => {});
-      saveChains[row.bookId] = next;
-      return next;
-    });
-    Promise.all(chains).finally(() => { replayInFlight = false; });
+    try {
+      const rows = await idbGetAll("progressQueue");
+      const chains = rows.map((row) => {
+        const prev = saveChains[row.bookId] || Promise.resolve();
+        const next = prev.then(() => replayOneProgress(row)).catch(() => {});
+        saveChains[row.bookId] = next;
+        return next;
+      });
+      Promise.all(chains).finally(() => { replayInFlight = false; });
+    } catch (e) {
+      // idbGetAll rejected, or a synchronous throw while wiring the chains —
+      // clear the guard so a later trigger can retry (never wedge replay off
+      // for the whole session).
+      replayInFlight = false;
+    }
   }
 
   async function replayOneProgress(row) {
@@ -3996,7 +4001,12 @@
         // arrive while the tiny JSON body stalls, and an unbounded await here
         // would wedge this book's entire save chain (every later page-turn
         // save would queue behind it forever). A 2s cap degrades to "baseline
-        // not refreshed this time" — best-effort, self-heals on the next GET.
+        // not refreshed this time" — best-effort, self-heals on the next
+        // successful progress GET (detail/reader open also call
+        // updateOfflineBaseline). Accepted residual: if the body hangs past 2s
+        // AND the connection then drops AND a save is queued, all before any
+        // such GET, that row's baseline is stale and replay may discard it —
+        // a pathological triple-coincidence costing one recoverable position.
         const saved = await Promise.race([
           resp.json().catch(() => null),
           new Promise((r) => setTimeout(() => r(null), 2000)),
