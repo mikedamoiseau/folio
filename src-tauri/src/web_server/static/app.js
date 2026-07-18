@@ -126,6 +126,11 @@
         }, 5000);
       });
       offlineDbPromise = thisPromise;
+      // A synchronous throw from indexedDB.open (e.g. SecurityError when
+      // storage access is blocked) rejects thisPromise before any handler
+      // above runs and would otherwise cache the rejection for the whole
+      // session; null the singleton on any rejection so a later call retries.
+      thisPromise.catch(() => { if (offlineDbPromise === thisPromise) offlineDbPromise = null; });
     }
     return offlineDbPromise;
   }
@@ -243,7 +248,11 @@
         return { bytes: buf.byteLength, text };
       } catch (e) {
         if (e.auth) throw e;
-        lastErr = e;
+        // Preserve a stale classification across retries: a later transient
+        // network reject must not mask an earlier "server changed" (non-ok
+        // HTTP) signal, or the resume self-heal would be skipped for a run
+        // that is genuinely stale.
+        if (!lastErr || !lastErr.stale) lastErr = e;
       }
     }
     throw lastErr;
