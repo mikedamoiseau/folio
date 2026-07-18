@@ -19,7 +19,11 @@ This project adheres to [Semantic Versioning](https://semver.org/).
   library of your downloaded books (with an "Offline — showing downloaded
   books" banner and a Retry) instead of a dead-end error — saved books open
   and read fully offline, and a saved book's own URL deep-links to it
-  directly. (Reading-progress sync-back and storage housekeeping ship next.)
+  directly. Reading progress made while offline is now queued and synced
+  back to the library when the connection returns — using a
+  compare-then-push rule so a book you also read on another device in the
+  meantime is never overwritten by a stale offline position. (Storage
+  housekeeping ships next.)
 
 ### Fixed
 - **Book counts now read "1 book", not "1 books".** The library section headers

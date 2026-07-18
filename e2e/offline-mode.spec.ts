@@ -363,3 +363,68 @@ test.describe("offline mode — boot & offline library (M4)", () => {
     await context.setOffline(false);
   });
 });
+
+test.describe("offline mode — progress replay (M5)", () => {
+  test("progress made offline queues, then replays on reconnect", async ({ page, context }) => {
+    // Use the CBZ (page mode): a page turn is a single deterministic progress
+    // write. Reset any prior server progress so the queued position is newer.
+    await saveBookOffline(page, CBZ_ID);
+    await page.goto(`/#/book/${CBZ_ID}`);
+    const startOver = page.locator("#restart-btn");
+    if (await startOver.isVisible().catch(() => false)) await startOver.click();
+
+    // Go offline, open the reader, turn to page 1, and wait out the 2s
+    // progress debounce so the PUT fires, fails, and enqueues.
+    await context.setOffline(true);
+    await page.goto(`/#/book/${CBZ_ID}/0/read`);
+    await expect(page.locator("#reader-stage")).toBeVisible({ timeout: 15_000 });
+    await page.locator("#reader-stage").focus();
+    await page.keyboard.press("ArrowRight");
+    await page.waitForTimeout(2500);
+
+    // A queue row now exists for this book.
+    const queued = await page.evaluate(async (id) => {
+      const db = await new Promise<IDBDatabase>((res, rej) => {
+        const req = indexedDB.open("folio-offline");
+        req.onsuccess = () => res(req.result);
+        req.onerror = () => rej(req.error);
+      });
+      return new Promise<any>((res) => {
+        const tx = db.transaction("progressQueue", "readonly");
+        const r = tx.objectStore("progressQueue").get(id);
+        r.onsuccess = () => res(r.result);
+        r.onerror = () => res(undefined);
+      });
+    }, CBZ_ID);
+    expect(queued).toBeTruthy();
+    expect(queued.chapterIndex).toBeGreaterThan(0);
+
+    // Reconnect → a PUT of the queued position must fire, and the queue drains.
+    const replayPut = page.waitForRequest(
+      (r) => r.method() === "PUT" && r.url().includes(`/api/books/${CBZ_ID}/progress`),
+      { timeout: 20_000 },
+    );
+    await context.setOffline(false);
+    await page.evaluate(() => window.dispatchEvent(new Event("online")));
+    await replayPut;
+
+    await expect
+      .poll(async () =>
+        page.evaluate(async (id) => {
+          const db = await new Promise<IDBDatabase>((res, rej) => {
+            const req = indexedDB.open("folio-offline");
+            req.onsuccess = () => res(req.result);
+            req.onerror = () => rej(req.error);
+          });
+          return new Promise<number>((res) => {
+            const tx = db.transaction("progressQueue", "readonly");
+            const r = tx.objectStore("progressQueue").getAll();
+            r.onsuccess = () => res(r.result.filter((x: any) => x.bookId === id).length);
+            r.onerror = () => res(-1);
+          });
+        }, CBZ_ID),
+        { timeout: 10_000 },
+      )
+      .toBe(0);
+  });
+});

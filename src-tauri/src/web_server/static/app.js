@@ -462,6 +462,92 @@
     offlineBookIds = new Set(ids);
   }
 
+  // ── Offline mode: reading-progress queue + replay ──
+  // Progress made while offline is queued (one row per book, latest wins) and
+  // replayed on reconnect with compare-then-push: push only if the server's
+  // progress hasn't advanced past the baseline recorded when the book was
+  // last in sync — so reading the same book elsewhere meanwhile is never
+  // clobbered by a stale offline position.
+
+  // Record the server's current last_read_at as the sync baseline for a saved
+  // book (called after any successful server progress read/write). Best-effort.
+  async function updateOfflineBaseline(id, lastReadAt) {
+    if (!offlineSupported() || !lastReadAt || !offlineBookIds.has(id)) return;
+    try {
+      const row = await idbGet("books", id);
+      if (row) { row.baselineLastReadAt = lastReadAt; await idbPut("books", row); }
+    } catch (e) { /* best-effort */ }
+  }
+
+  // Enqueue an offline progress write (the sendProgress network-failure path).
+  async function queueOfflineProgress(id, chapterIndex, scrollPosition) {
+    if (!offlineSupported() || !offlineBookIds.has(id)) return;
+    try {
+      const row = await idbGet("books", id);
+      const prev = await idbGet("progressQueue", id);
+      await idbPut("progressQueue", {
+        bookId: id,
+        chapterIndex,
+        scrollPosition,
+        queuedAt: Date.now(),
+        baselineLastReadAt: row ? row.baselineLastReadAt : null,
+        revision: (prev ? prev.revision : 0) + 1,
+      });
+    } catch (e) { /* best-effort — a dropped offline save matches pre-offline behavior */ }
+  }
+
+  // Replay every queued row, serialized per book through saveChains so a
+  // replay can't interleave with a live save. Triggered on reconnect (the
+  // `online` event and each successful init()).
+  async function replayProgressQueue() {
+    if (!offlineSupported()) return;
+    let rows;
+    try { rows = await idbGetAll("progressQueue"); } catch (e) { return; }
+    for (const row of rows) {
+      const prev = saveChains[row.bookId] || Promise.resolve();
+      saveChains[row.bookId] = prev.then(() => replayOneProgress(row)).catch(() => {});
+    }
+  }
+
+  async function replayOneProgress(row) {
+    let resp;
+    try {
+      resp = await fetch(`/api/books/${row.bookId}/progress`, { credentials: "same-origin" });
+    } catch (e) { return; }                 // still offline — keep the row
+    if (resp.status === 401) return;         // keep; replay again after re-auth
+    if (resp.status === 404) { await idbDelete("progressQueue", row.bookId).catch(() => {}); return; }
+    if (!resp.ok) return;                    // 5xx — keep, retry next trigger
+    let server = null;
+    try { server = await resp.json(); } catch (e) { return; } // malformed — keep
+    const serverTs = server && server.last_read_at ? server.last_read_at : null;
+    // Push only if the server hasn't advanced past our baseline (nobody read
+    // this book elsewhere while we were offline). Otherwise discard — server
+    // wins (the locked compare-then-push decision). NOTE the GET→PUT gap is a
+    // documented, accepted single-user race (spec §Progress sync).
+    if (serverTs === row.baselineLastReadAt || (!serverTs && !row.baselineLastReadAt)) {
+      try {
+        // Direct PUT (not sendProgress) — a queued row is the book's latest
+        // offline intent, so it must bypass the live-session monotonic guard
+        // (an offline Start Over to page 0 must replay, not be dropped).
+        const put = await fetch(`/api/books/${row.bookId}/progress`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ chapter_index: row.chapterIndex, scroll_position: row.scrollPosition }),
+          credentials: "same-origin",
+        });
+        if (!put.ok) return;                 // keep the row; retry next trigger
+        const saved = await put.json().catch(() => null);
+        if (saved && saved.last_read_at) await updateOfflineBaseline(row.bookId, saved.last_read_at);
+      } catch (e) { return; }               // network dropped mid-replay — keep
+    }
+    // Pushed or discarded: delete the row only if a newer offline write
+    // hasn't superseded it since we read it (revision guard).
+    const current = await idbGet("progressQueue", row.bookId).catch(() => null);
+    if (current && current.revision === row.revision) {
+      await idbDelete("progressQueue", row.bookId).catch(() => {});
+    }
+  }
+
 
   // Finding 11: a hand-edited or corrupted stored value must never flow
   // straight into data-theme/aria-label — coerce anything outside the known
@@ -3836,9 +3922,15 @@
       if (resp.ok) {
         lastSentIndex[id] = chapterIndex;
         recordLocalProgress(id, chapterIndex, scrollPosition);
+        // Advance the offline sync baseline so a later offline write's replay
+        // compares against the position we just committed.
+        const saved = await resp.json().catch(() => null);
+        if (saved && saved.last_read_at) updateOfflineBaseline(id, saved.last_read_at);
       }
     } catch (e) {
-      // Network error: best-effort save, nothing more to do.
+      // Network error: for a saved book, queue the position for
+      // compare-then-push replay on reconnect instead of dropping it.
+      queueOfflineProgress(id, chapterIndex, scrollPosition);
     }
   }
 
@@ -4455,8 +4547,16 @@
     offlineMode = false;
     if (test.status === 401) { showLogin(); return; }
     authenticated = true;
+    // Reconnected (or a normal online launch): flush any progress queued
+    // while offline. Fire-and-forget — it serializes per book via saveChains
+    // and never blocks the first render.
+    replayProgressQueue();
     route();
   }
+
+  // Reconnect signal: the browser fires `online` when connectivity returns —
+  // replay the offline progress queue without waiting for a navigation.
+  window.addEventListener("online", () => { replayProgressQueue(); });
 
   init();
 })();
