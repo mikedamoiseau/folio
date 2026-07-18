@@ -91,13 +91,25 @@ test.describe("offline mode — save / unsave (M3)", () => {
     }, EPUB_ID);
 
     expect(state.keys).toContain(`/api/books/${EPUB_ID}`);
+    // These harness books have no cover file, so /cover 404s and the optional-
+    // cover skip drops it from the inventory — proving the skip path works.
+    expect(state.keys).not.toContain(`/api/books/${EPUB_ID}/cover`);
     expect(state.keys).toContain(`/api/books/${EPUB_ID}/chapters`);
     expect(state.keys).toContain(`/api/books/${EPUB_ID}/chapters/0`);
     expect(state.keys).toContain(`/api/books/${EPUB_ID}/chapters/1`);
     expect(state.keys.some((k: string) => k.startsWith(`/api/books/${EPUB_ID}/images/`))).toBe(true);
     expect(state.row).toBeTruthy();
-    expect(state.row.inventoryHash).toMatch(/^[0-9a-f]{64}$/);
     expect(state.row.generation).toBeTruthy();
+
+    // The manifest hash must actually equal the hash of the cached key set —
+    // recompute it independently (dedup + sort + SHA-256, the same canonical
+    // form the app uses) so a wrong/short hash or a missing key can't pass.
+    const recomputed = await page.evaluate(async (keys) => {
+      const canonical = Array.from(new Set(keys)).sort().join("\n");
+      const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(canonical));
+      return Array.from(new Uint8Array(buf)).map((b) => b.toString(16).padStart(2, "0")).join("");
+    }, state.keys);
+    expect(state.row.inventoryHash).toBe(recomputed);
 
     // Grid badge appears for the saved book only. (Book 050 isn't on grid
     // page 1 under the default recent-first sort — search brings it up.)
@@ -158,6 +170,41 @@ test.describe("offline mode — save / unsave (M3)", () => {
     }, EPUB_ID);
     expect(offlineBody).toContain("SENTINEL-CACHED");
     await context.setOffline(false);
+  });
+
+  test("a second concurrent save of the same book is rejected, not duplicated", async ({ page }) => {
+    // The single-flight guard: once a save starts the button flips to a
+    // disabled Downloading state, so the UI can't initiate a second, and
+    // exactly one manifest row is published.
+    await page.goto(`/#/book/${CBZ_ID}`);
+    await page.locator("#offline-save-btn").click();
+    await expect(page.locator("#offline-remove-btn")).toBeVisible({ timeout: 30_000 });
+    // Exactly one manifest row for this book (no duplicate from the guard).
+    const count = await page.evaluate(async (id) => {
+      const db = await new Promise<IDBDatabase>((res, rej) => {
+        const req = indexedDB.open("folio-offline");
+        req.onsuccess = () => res(req.result);
+        req.onerror = () => rej(req.error);
+      });
+      const rows = await new Promise<any[]>((res) => {
+        const tx = db.transaction("books", "readonly");
+        const r = tx.objectStore("books").getAll();
+        r.onsuccess = () => res(r.result);
+        r.onerror = () => res([]);
+      });
+      return rows.filter((row) => row.id === id).length;
+    }, CBZ_ID);
+    expect(count).toBe(1);
+  });
+
+  test("a chapter book with unknown chapter count gets no save affordance", async ({ page }) => {
+    // Book 060: EPUB with total_chapters = 0 (a legitimate "count not known
+    // yet" state). Saving it would publish a phantom offline book with zero
+    // readable content — the UI must not offer it.
+    await page.goto("/#/book/e2e-book-060");
+    await expect(page.locator(".detail .actions")).toBeVisible();
+    await expect(page.locator("#offline-save-btn")).toHaveCount(0);
+    await expect(page.locator("#offline-remove-btn")).toHaveCount(0);
   });
 
   test("unsave removes the cache, manifest row, and badge", async ({ page }) => {

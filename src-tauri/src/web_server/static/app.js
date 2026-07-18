@@ -70,11 +70,15 @@
   function offlineCacheName(id) { return OFFLINE_CACHE_PREFIX + id; }
 
   // Lazy singleton connection; a failed open clears the promise so a later
-  // call can retry (e.g. transient quota pressure at first open).
+  // call can retry (e.g. transient quota pressure at first open). The open
+  // is raced against a timeout: some browsers' IndexedDB can hang without
+  // ever firing success OR error (Safari lazy-init/private-mode bugs), and
+  // the library/detail render paths await reads on this — a never-settling
+  // open must degrade to "no offline features", never a blank UI.
   let offlineDbPromise = null;
   function offlineDb() {
     if (!offlineDbPromise) {
-      offlineDbPromise = new Promise((resolve, reject) => {
+      const opened = new Promise((resolve, reject) => {
         const req = indexedDB.open("folio-offline", 1);
         req.onupgradeneeded = () => {
           const db = req.result;
@@ -98,6 +102,13 @@
         req.onblocked = () => { /* an old tab holds the DB; the open resumes when it closes */ };
         req.onerror = () => { offlineDbPromise = null; reject(req.error); };
       });
+      const timeout = new Promise((_, reject) => {
+        setTimeout(() => {
+          offlineDbPromise = null;
+          reject(new Error("IndexedDB open timed out"));
+        }, 5000);
+      });
+      offlineDbPromise = Promise.race([opened, timeout]);
     }
     return offlineDbPromise;
   }
@@ -147,6 +158,13 @@
   // URLs (safe because only response.ok bodies are ever cached).
   const activeOfflineSaves = {}; // id -> { cancelled: boolean }
 
+  // Text bodies the save loop parses for follow-up URLs (TOC, chapters,
+  // page-count) — single source for the classifier used in two places.
+  const OFFLINE_TEXT_BODY_RE = /\/chapters(\/\d+)?$|\/page-count$/;
+  function offlineUrlIsTextBody(url) {
+    return OFFLINE_TEXT_BODY_RE.test(url.split("?")[0]);
+  }
+
   function cancelOfflineSave(id) {
     if (activeOfflineSaves[id]) activeOfflineSaves[id].cancelled = true;
   }
@@ -187,10 +205,16 @@
         }
         if (optional && resp.status === 404) return { bytes: 0, text: null, skipped: true };
         if (!resp.ok) throw new Error(`Server error (${resp.status})`);
-        const buf = await resp.clone().arrayBuffer();
-        const isText = /\/chapters(\/\d+)?$|\/page-count$/.test(url.split("?")[0]);
-        const text = isText ? await resp.clone().text() : null;
-        await cache.put(new Request(url), resp);
+        // One body materialization: buffer once, derive byte count and (for
+        // TOC/chapter/page-count bodies) the parseable text from it, and put
+        // a rebuilt response — never clone the stream three ways.
+        const buf = await resp.arrayBuffer();
+        const text = offlineUrlIsTextBody(url) ? new TextDecoder().decode(buf) : null;
+        await cache.put(new Request(url), new Response(buf, {
+          status: resp.status,
+          statusText: resp.statusText,
+          headers: resp.headers,
+        }));
         return { bytes: buf.byteLength, text };
       } catch (e) {
         if (e.auth) throw e;
@@ -203,8 +227,25 @@
   async function saveBookOffline(book, onProgress) {
     const id = book.id;
     const isChapterMode = book.format === "epub" || book.format === "mobi";
+    // A chapter-mode book with an unknown chapter count (total_chapters = 0
+    // is a legitimate "not known yet" state — see Finding G in the reader)
+    // would pass the hash gate having cached zero chapters and publish a
+    // phantom "saved" book that can't actually be read offline. Refuse.
+    if (isChapterMode && !(book.total_chapters > 0)) {
+      throw new Error("Chapter count unknown — open the book online once, then retry");
+    }
+    // Single-flight per book: a second concurrent save (navigate away and
+    // back mid-save re-renders an enabled button) would orphan the first
+    // run's cancellation marker and let a removed save resurrect its
+    // manifest.
+    if (activeOfflineSaves[id]) {
+      const e = new Error("Already downloading");
+      e.silent = true; // the running save owns the state; UI says nothing
+      throw e;
+    }
     const marker = { cancelled: false };
     activeOfflineSaves[id] = marker;
+    let wasResume = false;
     try {
       await ensurePersistence();
 
@@ -213,6 +254,7 @@
       // OFFLINE_PAGE_WIDTH changed) can never leave old variants behind for
       // the SW's ignoreSearch page matching to trip over.
       let pending = await idbGet("pendingSaves", id);
+      wasResume = !!pending;
       if (!pending) {
         await caches.delete(offlineCacheName(id));
         const seed = [`/api/books/${id}`, `/api/books/${id}/cover`, `/api/books/${id}/cover?size=thumb`];
@@ -249,10 +291,9 @@
         const cached = await cache.match(new Request(url));
         let text = null;
         if (cached) {
-          bytes += (await cached.clone().arrayBuffer()).byteLength;
-          if (/\/chapters(\/\d+)?$|\/page-count$/.test(url.split("?")[0])) {
-            text = await cached.clone().text();
-          }
+          const buf = await cached.clone().arrayBuffer();
+          bytes += buf.byteLength;
+          if (offlineUrlIsTextBody(url)) text = new TextDecoder().decode(buf);
         } else {
           const got = await offlineFetchIntoCache(cache, url, optional);
           if (got.skipped) {
@@ -267,7 +308,7 @@
         if (url === `/api/books/${id}/chapters`) {
           for (let i = 0; i < (book.total_chapters || 0); i++) addUrl(`/api/books/${id}/chapters/${i}`);
         } else if (/\/chapters\/\d+$/.test(url) && text != null) {
-          chapterImageUrls(text).forEach(addUrl);
+          chapterImageUrls(id, text).forEach(addUrl);
         } else if (/\/page-count$/.test(url) && text != null) {
           let count = 0;
           try { count = (JSON.parse(text) || {}).count || 0; } catch (e) { /* leave 0 */ }
@@ -283,7 +324,15 @@
       pending.completed = done;
       await idbPut("pendingSaves", pending);
 
-      // Publication gate: the cached key set must hash-match the inventory.
+      // Publication gate: the cached key set must hash-match the inventory,
+      // and a cancellation (incl. one from removeBookOffline racing this
+      // loop's last iteration) must never publish a manifest for a cache
+      // that was just deleted.
+      if (marker.cancelled) {
+        const e = new Error("Save cancelled");
+        e.cancelled = true;
+        throw e;
+      }
       const expectHash = await inventoryHash(inventory);
       const gotHash = await inventoryHash(await cachedUrlSet(cache));
       if (expectHash !== gotHash) throw new Error("Download incomplete — retry");
@@ -314,33 +363,48 @@
       });
       await idbDelete("pendingSaves", id);
       offlineBookIds.add(id);
+      offlineBookIdsGen++; // invalidate any in-flight refresh snapshot
+    } catch (e) {
+      // Self-heal a poisoned resume: if a RESUMED run fails for a real
+      // reason (not cancellation/auth), the pending row + partial cache are
+      // more likely stale (book changed server-side, width constant changed
+      // in an update) than recoverable — wipe them so the next click starts
+      // fresh instead of failing identically forever with no UI escape.
+      if (wasResume && !e.cancelled && !e.auth) {
+        await caches.delete(offlineCacheName(id)).catch(() => {});
+        await idbDelete("pendingSaves", id).catch(() => {});
+      }
+      throw e;
     } finally {
-      delete activeOfflineSaves[id];
+      // Delete only our own marker — a newer save's marker must survive.
+      if (activeOfflineSaves[id] === marker) delete activeOfflineSaves[id];
     }
   }
 
   async function removeBookOffline(id) {
     cancelOfflineSave(id);
-    await caches.delete(offlineCacheName(id));
+    await caches.delete(offlineCacheName(id)).catch(() => {});
     await idbDelete("books", id).catch(() => {});
     await idbDelete("pendingSaves", id).catch(() => {});
     offlineBookIds.delete(id);
+    offlineBookIdsGen++; // invalidate any in-flight refresh snapshot
   }
 
   // Grid badges read this set (mirrors progressByBook's pattern); refreshed
-  // by showLibrary and kept current by save/unsave above.
+  // by showLibrary and kept current by save/unsave above. The manifest read
+  // in refreshOfflineBookIds is async and can resolve after a save/unsave
+  // has already mutated the set in place — a generation token drops any
+  // snapshot that a later mutation has superseded, so a stale read can't
+  // restore a removed id or drop a just-saved one.
   let offlineBookIds = new Set();
+  let offlineBookIdsGen = 0;
   async function refreshOfflineBookIds() {
-    offlineBookIds = new Set((await getAllOfflineManifests()).map((r) => r.id));
+    const gen = ++offlineBookIdsGen;
+    const ids = (await getAllOfflineManifests()).map((r) => r.id);
+    if (gen !== offlineBookIdsGen) return; // a save/unsave superseded this snapshot
+    offlineBookIds = new Set(ids);
   }
 
-  function formatBytes(n) {
-    if (!(n >= 0)) return "0 B";
-    if (n < 1024) return `${n} B`;
-    if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
-    if (n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`;
-    return `${(n / (1024 * 1024 * 1024)).toFixed(1)} GB`;
-  }
 
   // Finding 11: a hand-edited or corrupted stored value must never flow
   // straight into data-theme/aria-label — coerce anything outside the known
@@ -2078,9 +2142,18 @@
     if (isReadable && offlineSupported()) {
       offlineRow = await getOfflineManifest(id);
       if (!hashTargetsDetail(id)) return;
-      actionsHtml += offlineRow
-        ? `<span class="offline-saved-label">Saved · ${esc(formatBytes(offlineRow.bytes))}</span><button class="btn-secondary" id="offline-remove-btn">Remove download</button>`
-        : `<button class="btn-secondary" id="offline-save-btn">Save offline</button>`;
+      const offlineSaveable = !isHtmlBook || book.total_chapters > 0;
+      if (offlineRow) {
+        actionsHtml += `<span class="offline-saved-label">Saved · ${esc(formatFileSize(offlineRow.bytes) || "")}</span><button class="btn-secondary" id="offline-remove-btn">Remove download</button><span class="offline-usage" id="offline-usage" role="status"></span>`;
+      } else if (activeOfflineSaves[id]) {
+        // A save started from a previous render of this page is still
+        // running — never offer a second concurrent one.
+        actionsHtml += `<button class="btn-secondary" id="offline-save-btn" disabled>Downloading…</button>`;
+      } else if (offlineSaveable) {
+        actionsHtml += `<button class="btn-secondary" id="offline-save-btn">Save offline</button>`;
+      }
+      // Chapter-mode book with unknown chapter count: no save affordance at
+      // all — the engine would (correctly) refuse it.
     }
 
     const facts = [];
@@ -2146,10 +2219,22 @@
     const offlineSaveBtn = $("#offline-save-btn");
     if (offlineSaveBtn) offlineSaveBtn.addEventListener("click", async () => {
       offlineSaveBtn.disabled = true;
+      offlineSaveBtn.textContent = "Downloading…";
       const prog = document.createElement("span");
       prog.className = "offline-save-progress";
       prog.setAttribute("role", "status");
       offlineSaveBtn.after(prog);
+      // Cancel affordance (the engine's cancellation marker is honored at
+      // every loop iteration and before publication).
+      const cancelBtn = document.createElement("button");
+      cancelBtn.className = "btn-secondary";
+      cancelBtn.id = "offline-cancel-btn";
+      cancelBtn.textContent = "Cancel";
+      cancelBtn.addEventListener("click", () => {
+        cancelBtn.disabled = true;
+        cancelOfflineSave(id);
+      });
+      prog.after(cancelBtn);
       try {
         await saveBookOffline(book, ({ done, total }) => {
           prog.textContent = ` ${done} / ${total}`;
@@ -2158,15 +2243,34 @@
         if (hashTargetsDetail(id)) showDetail(id); // re-render into the saved state
       } catch (e) {
         prog.remove();
+        cancelBtn.remove();
         offlineSaveBtn.disabled = false;
-        if (!e.cancelled) showToast(e.message || "Download failed — retry");
+        offlineSaveBtn.textContent = "Save offline";
+        if (e.silent) { /* a concurrent save owns the UI — say nothing */ }
+        else if (e.cancelled) showToast("Download cancelled");
+        else showToast(e.message || "Download failed — retry");
       }
     });
+    // Total offline storage in use, across all saved books (spec: shown
+    // wherever the saved state is displayed). Best-effort — absent API or a
+    // failure just leaves the line blank.
+    const usageEl = $("#offline-usage");
+    if (usageEl && navigator.storage && navigator.storage.estimate) {
+      navigator.storage.estimate().then((est) => {
+        if (usageEl.isConnected && typeof est.usage === "number") {
+          usageEl.textContent = `Using ${formatFileSize(est.usage) || "0 B"} of offline storage`;
+        }
+      }).catch(() => {});
+    }
     const offlineRemoveBtn = $("#offline-remove-btn");
     if (offlineRemoveBtn) offlineRemoveBtn.addEventListener("click", async () => {
       offlineRemoveBtn.disabled = true;
-      await removeBookOffline(id);
-      showToast("Offline copy removed");
+      try {
+        await removeBookOffline(id);
+        showToast("Offline copy removed");
+      } catch (e) {
+        showToast("Couldn't remove the offline copy");
+      }
       if (hashTargetsDetail(id)) showDetail(id);
     });
     const seriesLink = $("#series-link");
@@ -3363,31 +3467,45 @@
   // are deliberately skipped: proactively fetching a third-party image for a
   // chapter the reader may never open would leak reading activity earlier and
   // more broadly than an on-demand load ever did.
-  function warmChapterImages(html) {
-    chapterImageUrls(html).forEach((u) => {
+  function warmChapterImages(id, html) {
+    chapterImageUrls(id, html).forEach((u) => {
       const img = new Image();
       img.src = u;
     });
   }
 
-  // Shared with the offline save engine: the same-origin inline-image URLs a
-  // chapter's sanitized HTML references, in origin-relative canonical form.
-  // External origins are deliberately excluded (same privacy rationale as
-  // the prefetch warming above).
-  function chapterImageUrls(html) {
+  // Shared with the offline save engine: the inline-image URLs a chapter's
+  // sanitized HTML references, restricted to THIS book's own rewritten image
+  // route (`/api/books/{id}/images/...`) and returned in origin-relative
+  // canonical form. Anything else — external origins, or same-origin URLs
+  // outside the book's image route — is excluded, so a crafted chapter can't
+  // make the save engine proactively fetch and retain unrelated API
+  // resources (and the prefetch warmer keeps its same-book-only scope).
+  // DOMParser (inert — never executes scripts or loads resources) rather
+  // than a regex: attribute values arrive HTML-entity-encoded (ammonia
+  // serializes '&' in a filename as '&amp;'), and getAttribute returns the
+  // decoded value the browser would actually request — a regex over raw text
+  // would yield URLs that 404.
+  function chapterImageUrls(id, html) {
     const out = [];
-    const re = /<img\b[^>]*?\bsrc\s*=\s*["']([^"']+)["']/gi;
-    let m;
-    while ((m = re.exec(html)) !== null) {
+    let doc;
+    try {
+      doc = new DOMParser().parseFromString(html, "text/html");
+    } catch (e) {
+      return out;
+    }
+    const prefix = `/api/books/${id}/images/`;
+    doc.querySelectorAll("img[src]").forEach((img) => {
       let url;
       try {
-        url = new URL(m[1], window.location.href);
+        url = new URL(img.getAttribute("src"), window.location.href);
       } catch (e) {
-        continue;
+        return;
       }
-      if (url.origin !== window.location.origin) continue;
+      if (url.origin !== window.location.origin) return;
+      if (!url.pathname.startsWith(prefix)) return;
       out.push(url.pathname + url.search);
-    }
+    });
     return out;
   }
 
@@ -3410,7 +3528,7 @@
         // we're still looking at the same cache object.
         if (html != null && readerState && readerState.chapterHtmlCache === cache) {
           cache[index] = html;
-          warmChapterImages(html);
+          warmChapterImages(id, html);
         }
         return html;
       })
