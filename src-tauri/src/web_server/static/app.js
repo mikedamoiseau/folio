@@ -50,6 +50,76 @@
     try { sessionStorage.setItem(key, value); } catch (e) { /* best-effort */ }
   }
 
+  // ── Offline mode: core storage ─────────────────
+  // Spec: docs/superpowers/specs/2026-07-17-web-reader-offline-design.md.
+  // Feature-gated on the full secure-context toolchain (service worker +
+  // Cache Storage + IndexedDB + crypto.subtle). On plain-HTTP LAN none of
+  // these register/exist, every offline affordance stays hidden, and
+  // behavior is exactly the pre-offline app.
+  const OFFLINE_PAGE_WIDTH = 1080; // page-image download width; change here (e.g. 1600)
+  const OFFLINE_CACHE_PREFIX = "folio-offline-book-"; // must mirror sw.js
+  const OFFLINE_MANIFEST_VERSION = 1;
+
+  function offlineSupported() {
+    return "serviceWorker" in navigator &&
+      !!window.indexedDB &&
+      !!window.caches &&
+      !!(window.crypto && window.crypto.subtle);
+  }
+
+  function offlineCacheName(id) { return OFFLINE_CACHE_PREFIX + id; }
+
+  // Lazy singleton connection; a failed open clears the promise so a later
+  // call can retry (e.g. transient quota pressure at first open).
+  let offlineDbPromise = null;
+  function offlineDb() {
+    if (!offlineDbPromise) {
+      offlineDbPromise = new Promise((resolve, reject) => {
+        const req = indexedDB.open("folio-offline", 1);
+        req.onupgradeneeded = () => {
+          const db = req.result;
+          if (!db.objectStoreNames.contains("books")) db.createObjectStore("books", { keyPath: "id" });
+          if (!db.objectStoreNames.contains("pendingSaves")) db.createObjectStore("pendingSaves", { keyPath: "bookId" });
+          if (!db.objectStoreNames.contains("progressQueue")) db.createObjectStore("progressQueue", { keyPath: "bookId" });
+          if (!db.objectStoreNames.contains("meta")) db.createObjectStore("meta", { keyPath: "key" });
+        };
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => { offlineDbPromise = null; reject(req.error); };
+      });
+    }
+    return offlineDbPromise;
+  }
+
+  function idbOp(storeName, mode, fn) {
+    return offlineDb().then((db) => new Promise((resolve, reject) => {
+      const tx = db.transaction(storeName, mode);
+      const req = fn(tx.objectStore(storeName));
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    }));
+  }
+  function idbGet(store, key) { return idbOp(store, "readonly", (s) => s.get(key)); }
+  function idbPut(store, value) { return idbOp(store, "readwrite", (s) => s.put(value)); }
+  function idbDelete(store, key) { return idbOp(store, "readwrite", (s) => s.delete(key)); }
+  function idbGetAll(store) { return idbOp(store, "readonly", (s) => s.getAll()); }
+
+  // Canonical inventory hash: deduplicated, sorted, newline-joined URL set →
+  // hex SHA-256. Save completion and the boot eviction check compare this
+  // against the cache's actual key set, so a half-evicted (or key-
+  // substituted) cache can never masquerade as a fully saved book.
+  async function inventoryHash(urls) {
+    const canonical = Array.from(new Set(urls)).sort().join("\n");
+    const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(canonical));
+    return Array.from(new Uint8Array(buf)).map((b) => b.toString(16).padStart(2, "0")).join("");
+  }
+
+  // cache.keys() → the same canonical form (origin-relative pathname+search)
+  // the inventory uses at save time.
+  async function cachedUrlSet(cache) {
+    const reqs = await cache.keys();
+    return reqs.map((r) => { const u = new URL(r.url); return u.pathname + u.search; });
+  }
+
   // Finding 11: a hand-edited or corrupted stored value must never flow
   // straight into data-theme/aria-label — coerce anything outside the known
   // set to "system".

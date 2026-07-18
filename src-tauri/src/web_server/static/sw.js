@@ -22,7 +22,14 @@
 // activates; app.js's registration call is feature-detected/try-catched so
 // this is silent, not an error. The manifest + icons still work for iOS
 // Safari "Add to Home Screen" over plain HTTP.
-const CACHE_VERSION = "folio-shell-891e14d0d7a9";
+const CACHE_VERSION = "folio-shell-618ff7735f59";
+
+// Offline mode (spec 2026-07-17-web-reader-offline): per-book content caches,
+// written ONLY by app.js's save flow — the SW never writes to them. The SW
+// reads them as a fallback when the network is unreachable. Network-first, so
+// online behavior (auth, session expiry, profile lock, full-size pages) is
+// exactly what the server says, always.
+const OFFLINE_CACHE_PREFIX = "folio-offline-book-";
 
 const SHELL_ASSETS = [
   "/",
@@ -54,7 +61,10 @@ self.addEventListener("activate", (event) => {
     caches.keys().then((keys) =>
       Promise.all(
         keys
-          .filter((key) => key !== CACHE_VERSION)
+          // Shell-version cleanup only — offline book caches are owned by
+          // app.js (saved/deleted there) and MUST survive every SW update,
+          // or each shell deploy would silently wipe the user's downloads.
+          .filter((key) => key !== CACHE_VERSION && !key.startsWith(OFFLINE_CACHE_PREFIX))
           .map((key) => caches.delete(key))
       )
     )
@@ -65,9 +75,41 @@ self.addEventListener("activate", (event) => {
 self.addEventListener("fetch", (event) => {
   const url = new URL(event.request.url);
 
-  // Network-only passthrough for API and OPDS traffic — do not intercept.
-  // Leaving these un-handled lets the browser handle them natively so auth
-  // (cookies/session) and streaming semantics are untouched.
+  // Saved-book offline fallback: network-first. Every HTTP response —
+  // including 401/503 — is returned as-is, so online auth semantics
+  // (session expiry, profile lock, api()'s 401→login) are untouched. The
+  // cache answers only when fetch() itself rejects (server unreachable);
+  // a fallback miss lets the rejection propagate so app.js handles it
+  // exactly as it does today. The book-list route (/api/books, no trailing
+  // segment) never matches — the offline library renders from IndexedDB.
+  const bookMatch =
+    event.request.method === "GET" &&
+    url.origin === self.location.origin &&
+    url.pathname.match(/^\/api\/books\/([^/]+)\//);
+  if (bookMatch) {
+    event.respondWith(
+      fetch(event.request).catch(async (err) => {
+        const cacheName = OFFLINE_CACHE_PREFIX + bookMatch[1];
+        if (await caches.has(cacheName)) {
+          const cache = await caches.open(cacheName);
+          // Page images are cached with ?width=... but requested plain (or
+          // with a ?__reload= retry nonce) — match ignoring the query for
+          // those URLs ONLY. Everything else must match exactly (/cover vs
+          // /cover?size=thumb are distinct entries).
+          const isPage = /^\/api\/books\/[^/]+\/pages\/\d+$/.test(url.pathname);
+          const cached = await cache.match(event.request, isPage ? { ignoreSearch: true } : undefined);
+          if (cached) return cached;
+        }
+        throw err;
+      })
+    );
+    return;
+  }
+
+  // Network-only passthrough for all other API and OPDS traffic — do not
+  // intercept. Leaving these un-handled lets the browser handle them
+  // natively so auth (cookies/session) and streaming semantics are
+  // untouched.
   if (url.pathname.startsWith("/api/") || url.pathname.startsWith("/opds/")) {
     return;
   }
