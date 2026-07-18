@@ -781,6 +781,13 @@
     // shortcuts on it.
     closeShortcutsOverlay();
     const hash = rawHash();
+    // Offline: only saved-book detail/reader work (their content is served
+    // from the M2 cache); every top-level destination — library, stats,
+    // collections, none of which have offline data — returns to the offline
+    // library. The banner's Retry (init) is the only path back online.
+    if (offlineMode && !hash.startsWith("#/book/")) {
+      return showOfflineLibrary();
+    }
     if (hash === "#" || hash === "#/" || hash.startsWith("#/library")) {
       return showLibrary(parseLibraryParams(hash));
     }
@@ -4331,6 +4338,51 @@
     if (btn) btn.onclick = init;
   }
 
+  // True while the app is running against offline storage (server
+  // unreachable at boot but saved books exist). route() restricts navigation
+  // to the offline library + saved-book detail/reader while this holds; a
+  // successful init() clears it.
+  let offlineMode = false;
+
+  // The offline library: the normal grid, fed from IndexedDB manifest rows
+  // (newest save first), with a banner + Retry. Covers and content load
+  // through the M2 service-worker cache fallback. No login gate offline.
+  function renderOfflineLibrary(rows) {
+    offlineMode = true;
+    currentView = "library";
+    document.title = "Folio";
+    offlineBookIds = new Set(rows.map((r) => r.id));
+    const books = rows
+      .slice()
+      .sort((a, b) => (b.savedAt || 0) - (a.savedAt || 0))
+      .map((r) => ({
+        id: r.id,
+        title: r.title,
+        author: r.author,
+        format: r.format,
+        total_chapters: r.totalChapters,
+      }));
+    app().innerHTML = `
+      <div class="header"><h1>Folio</h1></div>
+      <div class="offline-banner" role="status">
+        <span>Offline — showing downloaded books</span>
+        <button class="btn-secondary" id="offline-retry-btn">Retry</button>
+      </div>
+      <div id="library-content">${gridHtml(books)}</div>`;
+    bindGridCardHandlers();
+    const retry = $("#offline-retry-btn");
+    if (retry) retry.onclick = init;
+  }
+
+  // While offline, re-read manifests and re-render the library (used by the
+  // route guard for a top-level navigation). If everything was removed, drop
+  // back to the plain offline card via a fresh init().
+  async function showOfflineLibrary() {
+    const rows = await getAllOfflineManifests();
+    if (rows.length) renderOfflineLibrary(rows);
+    else { offlineMode = false; init(); }
+  }
+
   // ── Init ──────────────────────────────────────
   async function init() {
     // Finding 2: this initial probe is a raw fetch (not api(), which would
@@ -4342,9 +4394,27 @@
     try {
       test = await fetch("/api/books", { credentials: "same-origin" });
     } catch (e) {
+      // Server unreachable. If any books are saved offline, boot into the
+      // offline library instead of the dead-end card — no auth gate (locked
+      // spec decision: the content is already on this device).
+      if (offlineSupported()) {
+        try {
+          const saved = await getAllOfflineManifests();
+          if (saved.length) {
+            offlineMode = true;
+            authenticated = true;
+            // Honor the boot hash: a saved book's URL deep-links straight to
+            // its (SW-served) detail/reader offline; any top-level hash lands
+            // on the offline library. route()'s offline guard decides.
+            route();
+            return;
+          }
+        } catch (err) { /* fall through to the plain offline card */ }
+      }
       renderOfflineState();
       return;
     }
+    offlineMode = false;
     if (test.status === 401) { showLogin(); return; }
     authenticated = true;
     route();

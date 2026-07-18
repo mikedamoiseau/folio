@@ -261,6 +261,7 @@ body:not(:has(.header))::before {
 .offline-save-progress { font-size: 0.85rem; color: var(--ink-muted); align-self: center; }
 .offline-saved-label { font-size: 0.85rem; color: var(--ink-muted); align-self: center; }
 .offline-usage { font-size: 0.78rem; color: var(--ink-muted); align-self: center; flex-basis: 100%; }
+.offline-banner { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 16px; margin: 0 0 12px; background: var(--accent-light); color: var(--ink); border-radius: var(--radius); font-size: 0.9rem; }
 .card { position: relative; }
 .offline-badge { position: absolute; top: 8px; right: 8px; width: 22px; height: 22px; border-radius: 50%; background: var(--accent); color: #fff; font-size: 0.75rem; line-height: 22px; text-align: center; pointer-events: none; }
 .detail .actions a, .detail .actions button { padding: 10px 20px; border-radius: var(--radius); text-decoration: none; font-weight: 600; font-size: 0.9rem; cursor: pointer; border: none; }

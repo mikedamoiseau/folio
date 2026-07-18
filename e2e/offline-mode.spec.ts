@@ -236,3 +236,74 @@ test.describe("offline mode — save / unsave (M3)", () => {
     await expect(card.locator(".offline-badge")).toHaveCount(0);
   });
 });
+
+test.describe("offline mode — boot & offline library (M4)", () => {
+  test("booting offline with saved books shows the offline library and reads", async ({
+    page,
+    context,
+  }) => {
+    await saveBookOffline(page, EPUB_ID);
+
+    // Boot offline from a top-level route: the SW-cached shell loads, init()
+    // probes /api/books, the network fails, and the offline library renders
+    // from IndexedDB.
+    await page.goto("/#/");
+    await context.setOffline(true);
+    await page.reload();
+
+    await expect(page.locator(".offline-banner")).toBeVisible();
+    const card = page.locator(".grid .card", { hasText: "Book 050" });
+    await expect(card).toHaveCount(1); // only the saved book
+
+    // Open it → detail renders offline (cached detail JSON via SW fallback).
+    await card.click();
+    await expect(page.locator(".detail")).toBeVisible();
+    // Read → chapter renders offline.
+    await page.getByRole("button", { name: /^read$/i }).click();
+    await expect(page.locator("#reader-content")).toContainText("chapter zero", { timeout: 15_000 });
+
+    await context.setOffline(false);
+  });
+
+  test("Retry from the offline library recovers the online library", async ({ page, context }) => {
+    await saveBookOffline(page, EPUB_ID);
+    await page.goto("/#/");
+    await context.setOffline(true);
+    await page.reload();
+    await expect(page.locator(".offline-banner")).toBeVisible();
+
+    await context.setOffline(false);
+    await page.locator("#offline-retry-btn").click();
+    // Back online: full library (search box present, offline banner gone).
+    await expect(page.locator("#search")).toBeVisible({ timeout: 15_000 });
+    await expect(page.locator(".offline-banner")).toHaveCount(0);
+  });
+
+  test("booting offline with no saved books shows the offline card", async ({ page, context }) => {
+    // Ensure nothing is saved.
+    await page.goto("/#/");
+    await page.evaluate(async () => {
+      for (const k of await caches.keys()) {
+        if (k.startsWith("folio-offline-book-")) await caches.delete(k);
+      }
+      await new Promise<void>((res) => {
+        const req = indexedDB.open("folio-offline");
+        req.onsuccess = () => {
+          const db = req.result;
+          const tx = db.transaction("books", "readwrite");
+          tx.objectStore("books").clear();
+          tx.oncomplete = () => res();
+          tx.onerror = () => res();
+        };
+        req.onerror = () => res();
+      });
+    });
+
+    await context.setOffline(true);
+    await page.reload();
+    // No manifests → the plain "couldn't reach server" card, not a library.
+    await expect(page.locator("#retry-init-btn")).toBeVisible();
+    await expect(page.locator(".offline-banner")).toHaveCount(0);
+    await context.setOffline(false);
+  });
+});

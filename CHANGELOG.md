@@ -14,8 +14,12 @@ This project adheres to [Semantic Versioning](https://semver.org/).
   endpoint) are downloaded into browser storage, with a progress counter, an
   "available offline" badge on the library grid, and a "Saved · size /
   Remove download" state on the detail page. Reading a saved book falls back
-  to the offline copy automatically when the server is unreachable. (Booting
-  the app fully offline into a saved-books library ships next.)
+  to the offline copy automatically when the server is unreachable, and
+  opening the installed web app with no connection now boots straight into a
+  library of your downloaded books (with an "Offline — showing downloaded
+  books" banner and a Retry) instead of a dead-end error — saved books open
+  and read fully offline, and a saved book's own URL deep-links to it
+  directly. (Reading-progress sync-back and storage housekeeping ship next.)
 
 ### Fixed
 - **Book counts now read "1 book", not "1 books".** The library section headers
