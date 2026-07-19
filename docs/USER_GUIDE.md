@@ -880,6 +880,20 @@ The web UI can be installed like an app, so it opens full-screen without browser
 
 Once installed, the app shell (not your book content) can be cached for faster loads — this only kicks in when the page is served over `https` or accessed as `localhost`. Over a plain HTTP address on your home WiFi (the normal way to reach it, e.g. `http://192.168.1.20:7788`), the app still installs to your home screen and looks the same, it just always fetches the shell fresh rather than caching it offline.
 
+### Reading offline
+
+You can download individual books to a device so they open and read without a connection to the Folio server — handy for reading on the go after saving over your home network.
+
+**Requirements.** Offline saving needs the web UI to be served over a **secure context**: `https` (for example through a Tailscale or reverse-proxy certificate — see the remote-access notes) or `localhost`. Over a plain-HTTP LAN address the browser won't allow the offline machinery, so the **Save offline** button doesn't appear there.
+
+**Saving a book.** Open a book's detail page and tap **Save offline**. Folio downloads its chapters (or comic/PDF pages, stored at a reduced width to save space) with a progress counter; you can **Cancel** mid-download. When it finishes, the detail page shows **Saved · <size>** with a **Remove download** button and your total offline storage use, and the book gets a small ⤓ badge on the library grid.
+
+**Reading offline.** When the server can't be reached, opening the installed app takes you straight to a library of just your downloaded books, with an *"Offline — showing downloaded books"* banner and a **Retry** button. Saved books open and read normally; a saved book's own URL also opens it directly. Ordinary navigation automatically returns to the full library once the connection is back.
+
+**Reading progress** you make offline is remembered and synced back to your library when you reconnect. If you also read the same book on another device while you were offline, Folio keeps the more recent position rather than overwriting it.
+
+**Storage note (especially iOS).** Downloads live in the browser's storage, which the operating system may clear when space runs low or the app hasn't been opened for a long time — this is outside Folio's control. If that happens, the book's badge disappears and Folio tells you some downloads were removed; just save it again. Comics and PDFs (page images) use far more space than EPUBs (text), so download those selectively.
+
 ### Keyboard shortcuts
 
 On a device with a keyboard, the web UI supports the same kind of shortcuts as the desktop app:

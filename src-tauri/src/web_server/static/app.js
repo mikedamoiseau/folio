@@ -50,6 +50,667 @@
     try { sessionStorage.setItem(key, value); } catch (e) { /* best-effort */ }
   }
 
+  // ── Offline mode: core storage ─────────────────
+  // Spec: docs/superpowers/specs/2026-07-17-web-reader-offline-design.md.
+  // Feature-gated on the full secure-context toolchain (service worker +
+  // Cache Storage + IndexedDB + crypto.subtle). On plain-HTTP LAN none of
+  // these register/exist, every offline affordance stays hidden, and
+  // behavior is exactly the pre-offline app.
+  const OFFLINE_PAGE_WIDTH = 1080; // page-image download width; change here (e.g. 1600)
+  const OFFLINE_CACHE_PREFIX = "folio-offline-book-"; // must mirror sw.js
+  const OFFLINE_MANIFEST_VERSION = 1;
+
+  function offlineSupported() {
+    return "serviceWorker" in navigator &&
+      !!window.indexedDB &&
+      !!window.caches &&
+      !!(window.crypto && window.crypto.subtle);
+  }
+
+  function offlineCacheName(id) { return OFFLINE_CACHE_PREFIX + id; }
+
+  // Lazy singleton connection; a failed open clears the promise so a later
+  // call can retry (e.g. transient quota pressure at first open). The open
+  // is raced against a timeout: some browsers' IndexedDB can hang without
+  // ever firing success OR error (Safari lazy-init/private-mode bugs), and
+  // the library/detail render paths await reads on this — a never-settling
+  // open must degrade to "no offline features", never a blank UI.
+  let offlineDbPromise = null;
+  function offlineDb() {
+    if (!offlineDbPromise) {
+      // `settled` guards every side effect below so a late timeout or a late
+      // request event can't null out (or otherwise disturb) a promise that
+      // has already resolved/rejected — including a NEWER singleton created
+      // by a subsequent offlineDb() call after this one was cleared.
+      let settled = false;
+      let timer = null;
+      const thisPromise = new Promise((resolve, reject) => {
+        const clear = () => { if (timer !== null) { clearTimeout(timer); timer = null; } };
+        const req = indexedDB.open("folio-offline", 1);
+        req.onupgradeneeded = () => {
+          const db = req.result;
+          if (!db.objectStoreNames.contains("books")) db.createObjectStore("books", { keyPath: "id" });
+          if (!db.objectStoreNames.contains("pendingSaves")) db.createObjectStore("pendingSaves", { keyPath: "bookId" });
+          if (!db.objectStoreNames.contains("progressQueue")) db.createObjectStore("progressQueue", { keyPath: "bookId" });
+          if (!db.objectStoreNames.contains("meta")) db.createObjectStore("meta", { keyPath: "key" });
+        };
+        req.onsuccess = () => {
+          if (settled) { req.result.close(); return; } // timed out already — don't leak this connection
+          settled = true;
+          clear();
+          const db = req.result;
+          // A future schema bump in another tab must not be blocked forever
+          // by this connection — close so the upgrade can proceed; the next
+          // offlineDb() call reopens at the new version. Only clear the
+          // singleton if it's still THIS promise.
+          db.onversionchange = () => { db.close(); if (offlineDbPromise === thisPromise) offlineDbPromise = null; };
+          // The browser can force-close the connection (storage eviction,
+          // site-data clear in another tab); drop the cached promise so the
+          // next call reopens instead of throwing InvalidStateError forever.
+          db.onclose = () => { if (offlineDbPromise === thisPromise) offlineDbPromise = null; };
+          resolve(db);
+        };
+        req.onblocked = () => { /* an old tab holds the DB; the open resumes when it closes */ };
+        req.onerror = () => {
+          if (settled) return;
+          settled = true;
+          clear();
+          if (offlineDbPromise === thisPromise) offlineDbPromise = null;
+          reject(req.error);
+        };
+        timer = setTimeout(() => {
+          if (settled) return;
+          settled = true;
+          if (offlineDbPromise === thisPromise) offlineDbPromise = null;
+          reject(new Error("IndexedDB open timed out"));
+        }, 5000);
+      });
+      offlineDbPromise = thisPromise;
+      // A synchronous throw from indexedDB.open (e.g. SecurityError when
+      // storage access is blocked) rejects thisPromise before any handler
+      // above runs and would otherwise cache the rejection for the whole
+      // session; null the singleton on any rejection so a later call retries.
+      thisPromise.catch(() => { if (offlineDbPromise === thisPromise) offlineDbPromise = null; });
+    }
+    return offlineDbPromise;
+  }
+
+  function idbOp(storeName, mode, fn) {
+    return offlineDb().then((db) => new Promise((resolve, reject) => {
+      const tx = db.transaction(storeName, mode);
+      const req = fn(tx.objectStore(storeName));
+      let result;
+      req.onsuccess = () => { result = req.result; };
+      // Resolve on transaction commit, not request success — a readwrite
+      // transaction can still abort (e.g. quota) after the request's
+      // onsuccess, and the save flow's manifest-then-delete-pending ordering
+      // must never act on an uncommitted write.
+      tx.oncomplete = () => resolve(result);
+      tx.onabort = () => reject(tx.error || new Error("IndexedDB transaction aborted"));
+      tx.onerror = () => reject(tx.error);
+    }));
+  }
+  function idbGet(store, key) { return idbOp(store, "readonly", (s) => s.get(key)); }
+  function idbPut(store, value) { return idbOp(store, "readwrite", (s) => s.put(value)); }
+  function idbDelete(store, key) { return idbOp(store, "readwrite", (s) => s.delete(key)); }
+  function idbGetAll(store) { return idbOp(store, "readonly", (s) => s.getAll()); }
+
+  // Canonical inventory hash: deduplicated, sorted, newline-joined URL set →
+  // hex SHA-256. Save completion and the boot eviction check compare this
+  // against the cache's actual key set, so a half-evicted (or key-
+  // substituted) cache can never masquerade as a fully saved book.
+  async function inventoryHash(urls) {
+    const canonical = Array.from(new Set(urls)).sort().join("\n");
+    const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(canonical));
+    return Array.from(new Uint8Array(buf)).map((b) => b.toString(16).padStart(2, "0")).join("");
+  }
+
+  // cache.keys() → the same canonical form (origin-relative pathname+search)
+  // the inventory uses at save time.
+  async function cachedUrlSet(cache) {
+    const reqs = await cache.keys();
+    return reqs.map((r) => { const u = new URL(r.url); return u.pathname + u.search; });
+  }
+
+  // ── Offline mode: save / unsave engine ─────────
+  // A book is "saved" iff its manifest row exists in the `books` store; the
+  // row is written last, after every inventory URL is cached and the cache's
+  // key set hash-matches the inventory. A partial cache plus its
+  // `pendingSaves` row is the resume state; retrying skips already-cached
+  // URLs (safe because only response.ok bodies are ever cached).
+  const activeOfflineSaves = {}; // id -> { cancelled: boolean }
+
+  // Text bodies the save loop parses for follow-up URLs (TOC, chapters,
+  // page-count) — single source for the classifier used in two places.
+  const OFFLINE_TEXT_BODY_RE = /\/chapters(\/\d+)?$|\/page-count$/;
+  function offlineUrlIsTextBody(url) {
+    return OFFLINE_TEXT_BODY_RE.test(url.split("?")[0]);
+  }
+
+  function cancelOfflineSave(id) {
+    if (activeOfflineSaves[id]) activeOfflineSaves[id].cancelled = true;
+  }
+
+  function getOfflineManifest(id) {
+    return offlineSupported() ? idbGet("books", id).catch(() => undefined) : Promise.resolve(undefined);
+  }
+  function getAllOfflineManifests() {
+    return offlineSupported() ? idbGetAll("books").catch(() => []) : Promise.resolve([]);
+  }
+
+  // Best-effort storage persistence: asked once, before the first save;
+  // denial just raises eviction risk, which the boot integrity check covers.
+  async function ensurePersistence() {
+    try {
+      if (!navigator.storage || !navigator.storage.persist) return;
+      if (await idbGet("meta", "persistResult")) return;
+      const granted = (await navigator.storage.persisted()) || (await navigator.storage.persist());
+      await idbPut("meta", { key: "persistResult", value: granted });
+    } catch (e) { /* best-effort */ }
+  }
+
+  // Fetch one inventory URL and cache it. Only response.ok bodies are ever
+  // put — resume trusts existing entries on that invariant. A 401 aborts the
+  // whole save (tagged so the UI can say "log in"); a 404 on an `optional`
+  // URL (covers — many imports have none) is a skip, not a failure; other
+  // failures retry ×2. Returns { bytes, text, skipped } — text only for
+  // chapter/TOC/page-count bodies the save loop parses for follow-up URLs.
+  async function offlineFetchIntoCache(cache, url, optional) {
+    let lastErr;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        const resp = await fetch(url, { credentials: "same-origin" });
+        if (resp.status === 401) {
+          const e = new Error("Session expired — log in and retry");
+          e.auth = true;
+          throw e;
+        }
+        if (optional && resp.status === 404) return { bytes: 0, text: null, skipped: true };
+        if (!resp.ok) {
+          // A non-ok HTTP response means the server's view of this book
+          // changed (e.g. a re-import shrank the page count → 404) — the
+          // resume state is genuinely stale, so tag it for self-heal. A
+          // network reject (below) is transient and must NOT wipe progress.
+          const e = new Error(`Server error (${resp.status})`);
+          e.stale = true;
+          throw e;
+        }
+        // One body materialization: buffer once, derive byte count and (for
+        // TOC/chapter/page-count bodies) the parseable text from it, and put
+        // a rebuilt response — never clone the stream three ways.
+        const buf = await resp.arrayBuffer();
+        const text = offlineUrlIsTextBody(url) ? new TextDecoder().decode(buf) : null;
+        await cache.put(new Request(url), new Response(buf, {
+          status: resp.status,
+          statusText: resp.statusText,
+          headers: resp.headers,
+        }));
+        return { bytes: buf.byteLength, text };
+      } catch (e) {
+        if (e.auth) throw e;
+        // Preserve a stale classification across retries: a later transient
+        // network reject must not mask an earlier "server changed" (non-ok
+        // HTTP) signal, or the resume self-heal would be skipped for a run
+        // that is genuinely stale.
+        if (!lastErr || !lastErr.stale) lastErr = e;
+      }
+    }
+    throw lastErr;
+  }
+
+  async function saveBookOffline(book, onProgress) {
+    const id = book.id;
+    const isChapterMode = book.format === "epub" || book.format === "mobi";
+    // A chapter-mode book with an unknown chapter count (total_chapters = 0
+    // is a legitimate "not known yet" state — see Finding G in the reader)
+    // would pass the hash gate having cached zero chapters and publish a
+    // phantom "saved" book that can't actually be read offline. Refuse.
+    if (isChapterMode && !(book.total_chapters > 0)) {
+      throw new Error("Chapter count unknown — open the book online once, then retry");
+    }
+    // Single-flight per book: a second concurrent save (navigate away and
+    // back mid-save re-renders an enabled button) would orphan the first
+    // run's cancellation marker and let a removed save resurrect its
+    // manifest.
+    if (activeOfflineSaves[id]) {
+      const e = new Error("Already downloading");
+      e.silent = true; // the running save owns the state; UI says nothing
+      throw e;
+    }
+    const marker = { cancelled: false };
+    activeOfflineSaves[id] = marker;
+    let wasResume = false;
+    let published = false;
+    try {
+      await ensurePersistence();
+
+      // Resume the same generation if a pending row exists; otherwise start
+      // fresh — and delete any stale cache first, so a re-save (e.g. after
+      // OFFLINE_PAGE_WIDTH changed) can never leave old variants behind for
+      // the SW's ignoreSearch page matching to trip over.
+      let pending = await idbGet("pendingSaves", id);
+      wasResume = !!pending;
+      if (!pending) {
+        await caches.delete(offlineCacheName(id));
+        const seed = [`/api/books/${id}`, `/api/books/${id}/cover`, `/api/books/${id}/cover?size=thumb`];
+        seed.push(isChapterMode ? `/api/books/${id}/chapters` : `/api/books/${id}/page-count`);
+        pending = {
+          bookId: id,
+          generation: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`,
+          urls: seed,
+          completed: 0,
+        };
+        await idbPut("pendingSaves", pending);
+      }
+      const cache = await caches.open(offlineCacheName(id));
+
+      const inventory = new Set(pending.urls);
+      const queue = Array.from(inventory);
+      const addUrl = (u) => {
+        if (!inventory.has(u)) { inventory.add(u); queue.push(u); }
+      };
+      let bytes = 0;
+      let done = 0;
+
+      while (queue.length) {
+        if (marker.cancelled) {
+          const e = new Error("Save cancelled");
+          e.cancelled = true;
+          throw e;
+        }
+        const url = queue.shift();
+        // Covers are optional: a 404 (book imported without one) drops the
+        // URL from the inventory instead of failing the save — the grid/
+        // detail placeholders already handle the missing-cover render.
+        const optional = /\/cover(\?|$)/.test(url);
+        const cached = await cache.match(new Request(url));
+        let text = null;
+        if (cached) {
+          const buf = await cached.clone().arrayBuffer();
+          bytes += buf.byteLength;
+          if (offlineUrlIsTextBody(url)) text = new TextDecoder().decode(buf);
+        } else {
+          const got = await offlineFetchIntoCache(cache, url, optional);
+          if (got.skipped) {
+            inventory.delete(url);
+            continue;
+          }
+          bytes += got.bytes;
+          text = got.text;
+        }
+
+        // Follow-up URL discovery.
+        if (url === `/api/books/${id}/chapters`) {
+          for (let i = 0; i < (book.total_chapters || 0); i++) addUrl(`/api/books/${id}/chapters/${i}`);
+        } else if (/\/chapters\/\d+$/.test(url) && text != null) {
+          chapterImageUrls(id, text).forEach(addUrl);
+        } else if (/\/page-count$/.test(url) && text != null) {
+          let count = 0;
+          try { count = (JSON.parse(text) || {}).count || 0; } catch (e) { /* leave 0 */ }
+          for (let i = 0; i < count; i++) addUrl(`/api/books/${id}/pages/${i}?width=${OFFLINE_PAGE_WIDTH}`);
+        }
+
+        done++;
+        if (onProgress) onProgress({ done, total: inventory.size });
+      }
+
+      // Crash-safe resume state: persist the fully-grown inventory.
+      pending.urls = Array.from(inventory);
+      pending.completed = done;
+      await idbPut("pendingSaves", pending);
+
+      // Publication gate: the cached key set must hash-match the inventory,
+      // and a cancellation (incl. one from removeBookOffline racing this
+      // loop's last iteration) must never publish a manifest for a cache
+      // that was just deleted.
+      if (marker.cancelled) {
+        const e = new Error("Save cancelled");
+        e.cancelled = true;
+        throw e;
+      }
+      const expectHash = await inventoryHash(inventory);
+      const gotHash = await inventoryHash(await cachedUrlSet(cache));
+      if (expectHash !== gotHash) {
+        // The cache holds keys outside the final inventory (or is missing
+        // some) — e.g. stale ?width= variants from a pre-update generation.
+        // Genuinely stale resume state, so tag for self-heal.
+        const e = new Error("Download incomplete — retry");
+        e.stale = true;
+        throw e;
+      }
+
+      // Progress baseline for M5's compare-then-push replay (best-effort).
+      let baseline = null;
+      try {
+        const pr = await fetch(`/api/books/${id}/progress`, { credentials: "same-origin" });
+        if (pr.ok) {
+          const j = await pr.json();
+          baseline = j && j.last_read_at ? j.last_read_at : null;
+        }
+      } catch (e) { /* baseline stays null */ }
+
+      // Final cancellation gate, immediately before the manifest write — a
+      // Cancel click or removeBookOffline() during the hash/baseline awaits
+      // above must not publish (or resurrect) a manifest for a cache that
+      // was just deleted. The window between this check and the write is a
+      // single microtask; removeBookOffline deletes the manifest last, so a
+      // resurrected row would still be a bug, but the marker check closes
+      // the realistic (human-timed) race.
+      if (marker.cancelled) {
+        const e = new Error("Save cancelled");
+        e.cancelled = true;
+        throw e;
+      }
+
+      await idbPut("books", {
+        id,
+        title: book.title,
+        author: book.author,
+        format: book.format,
+        totalChapters: book.total_chapters || 0,
+        pageCount: isChapterMode ? 0 : Array.from(inventory).filter((u) => u.startsWith(`/api/books/${id}/pages/`)).length,
+        savedAt: Date.now(),
+        bytes,
+        inventoryHash: expectHash,
+        generation: pending.generation,
+        baselineLastReadAt: baseline,
+        version: OFFLINE_MANIFEST_VERSION,
+      });
+      published = true;
+      await idbDelete("pendingSaves", id);
+      offlineBookIds.add(id);
+      offlineBookIdsGen++; // invalidate any in-flight refresh snapshot
+    } catch (e) {
+      // Self-heal a poisoned resume: only when a RESUMED run fails because
+      // the state is genuinely STALE (a server-side change → HTTP error, or
+      // a leftover-key hash mismatch), and only before publishing. A
+      // transient network drop is NOT stale — wiping the partial cache then
+      // would throw away every already-downloaded chapter/page and force a
+      // full re-download on the next attempt, so those keep the resume state.
+      if (wasResume && !published && e.stale) {
+        await caches.delete(offlineCacheName(id)).catch(() => {});
+        await idbDelete("pendingSaves", id).catch(() => {});
+      }
+      throw e;
+    } finally {
+      // Delete only our own marker — a newer save's marker must survive.
+      if (activeOfflineSaves[id] === marker) delete activeOfflineSaves[id];
+    }
+  }
+
+  async function removeBookOffline(id) {
+    cancelOfflineSave(id);
+    await caches.delete(offlineCacheName(id)).catch(() => {});
+    await idbDelete("books", id).catch(() => {});
+    await idbDelete("pendingSaves", id).catch(() => {});
+    offlineBookIds.delete(id);
+    offlineBookIdsGen++; // invalidate any in-flight refresh snapshot
+  }
+
+  // ── Offline mode: eviction integrity + library reconciliation ──
+  // Eviction honesty (spec §Eviction honesty): the browser can evict Cache
+  // Storage under pressure while leaving the IndexedDB manifest behind, so a
+  // manifest row is only as true as its cache. On boot (online OR offline),
+  // for each saved book compare the cache's current key set against the
+  // manifest's inventory hash — one cache.keys() per book, no per-URL sweep.
+  // A mismatch (or a vanished cache) means the download is no longer whole:
+  // drop BOTH the row and the cache (a post-eviction partial cache has no
+  // pendingSaves row, so per the save-engine garbage rule it must not linger
+  // as fake resume state; a fresh save rebuilds it).
+  async function verifyOfflineIntegrity() {
+    if (!offlineSupported()) return;
+    let rows;
+    try { rows = await idbGetAll("books"); } catch (e) { return; }
+    let dropped = 0;
+    for (const row of rows) {
+      // A save re-building this book's cache deletes then repopulates it; a
+      // mid-rebuild snapshot would hash-mismatch and wrongly drop a book the
+      // user is actively (re-)saving. Skip it — the save publishes a fresh,
+      // verified manifest itself, and the next boot re-checks.
+      if (activeOfflineSaves[row.id]) continue;
+      let ok = false;
+      try {
+        if (await caches.has(offlineCacheName(row.id))) {
+          const cache = await caches.open(offlineCacheName(row.id));
+          ok = (await inventoryHash(await cachedUrlSet(cache))) === row.inventoryHash;
+        }
+      } catch (e) { ok = false; }
+      if (!ok) {
+        await caches.delete(offlineCacheName(row.id)).catch(() => {});
+        await idbDelete("books", row.id).catch(() => {});
+        offlineBookIds.delete(row.id);
+        dropped++;
+      }
+    }
+    if (dropped) {
+      offlineBookIdsGen++;
+      showToast("Your browser removed some downloaded books");
+    }
+  }
+
+  // Online reconciliation (spec §Library reconciliation): after a successful
+  // boot, compare saved manifests against the live library. A book gone from
+  // the server loses its offline copy; a book still present has its display
+  // metadata + cached detail/cover refreshed unconditionally (covers a
+  // cover-only change with no drift detection). Refresh writes are ok-gated
+  // so a transient 401/503 can never poison a valid cached entry.
+  async function reconcileOfflineBooks(liveBooks) {
+    if (!offlineSupported()) return;
+    let rows;
+    try { rows = await idbGetAll("books"); } catch (e) { return; }
+    if (!rows.length) return;
+    const liveById = new Map((liveBooks || []).map((b) => [b.id, b]));
+    let removed = 0;
+    for (const row of rows) {
+      // Skip a book the user is actively (re-)saving — reconciling its
+      // metadata/cache mid-save would fight the save's own writes.
+      if (activeOfflineSaves[row.id]) continue;
+      const live = liveById.get(row.id);
+      if (!live) { await removeBookOffline(row.id); removed++; continue; }
+      // Patch ONLY the display fields, re-reading the current row in one
+      // transaction — `rows` is a detached snapshot, so writing the whole
+      // snapshot back would clobber a fresh inventoryHash/generation/baseline
+      // a concurrent save published between the snapshot read and here.
+      await patchOfflineDisplayFields(row.id, live.title, live.author, live.format).catch(() => {});
+      const cache = await caches.open(offlineCacheName(row.id)).catch(() => null);
+      if (!cache) continue;
+      for (const url of [
+        `/api/books/${row.id}`,
+        `/api/books/${row.id}/cover`,
+        `/api/books/${row.id}/cover?size=thumb`,
+      ]) {
+        try {
+          const resp = await fetch(url, { credentials: "same-origin" });
+          if (resp.ok) await cache.put(new Request(url), resp);
+        } catch (e) { /* keep the existing cached entry */ }
+      }
+    }
+    if (removed) { offlineBookIdsGen++; showToast("Removed offline copies of deleted books"); }
+  }
+
+  // Grid badges read this set (mirrors progressByBook's pattern); refreshed
+  // by showLibrary and kept current by save/unsave above. The manifest read
+  // in refreshOfflineBookIds is async and can resolve after a save/unsave
+  // has already mutated the set in place — a generation token drops any
+  // snapshot that a later mutation has superseded, so a stale read can't
+  // restore a removed id or drop a just-saved one.
+  let offlineBookIds = new Set();
+  let offlineBookIdsGen = 0;
+  async function refreshOfflineBookIds() {
+    const gen = ++offlineBookIdsGen;
+    const ids = (await getAllOfflineManifests()).map((r) => r.id);
+    if (gen !== offlineBookIdsGen) return; // a save/unsave superseded this snapshot
+    offlineBookIds = new Set(ids);
+  }
+
+  // ── Offline mode: reading-progress queue + replay ──
+  // Progress made while offline is queued (one row per book, latest wins) and
+  // replayed on reconnect with compare-then-push: push only if the server's
+  // progress hasn't advanced past the baseline recorded when the book was
+  // last in sync — so reading the same book elsewhere meanwhile is never
+  // clobbered by a stale offline position.
+
+  // Record the server's current last_read_at as the sync baseline for a saved
+  // book (called after any successful server progress read/write). Best-effort.
+  async function updateOfflineBaseline(id, lastReadAt) {
+    if (!offlineSupported() || !lastReadAt) return;
+    try {
+      // Read-modify-write in ONE transaction: if removeBookOffline deleted
+      // the row in a prior transaction, the get returns undefined and we
+      // don't put — so a baseline update can never resurrect a removed
+      // manifest. (A get-then-separate-put would race that delete.)
+      const db = await offlineDb();
+      await new Promise((resolve, reject) => {
+        const tx = db.transaction("books", "readwrite");
+        const store = tx.objectStore("books");
+        const getReq = store.get(id);
+        getReq.onsuccess = () => {
+          const row = getReq.result;
+          if (row) { row.baselineLastReadAt = lastReadAt; store.put(row); }
+        };
+        tx.oncomplete = () => resolve();
+        tx.onabort = () => reject(tx.error);
+        tx.onerror = () => reject(tx.error);
+      });
+    } catch (e) { /* best-effort */ }
+  }
+
+  // Patch only a saved book's display fields, re-reading the current row in
+  // one transaction so a concurrent save's newer inventoryHash/generation/
+  // baselineLastReadAt is preserved (never clobbered by a stale snapshot).
+  async function patchOfflineDisplayFields(id, title, author, format) {
+    const db = await offlineDb();
+    await new Promise((resolve, reject) => {
+      const tx = db.transaction("books", "readwrite");
+      const store = tx.objectStore("books");
+      const getReq = store.get(id);
+      getReq.onsuccess = () => {
+        const cur = getReq.result;
+        if (cur) { cur.title = title; cur.author = author; cur.format = format; store.put(cur); }
+      };
+      tx.oncomplete = () => resolve();
+      tx.onabort = () => reject(tx.error);
+      tx.onerror = () => reject(tx.error);
+    });
+  }
+
+  // Atomic revision-guarded delete of a queue row: re-reads and deletes in one
+  // transaction, so a newer offline write that lands between a separate
+  // read and delete is never dropped.
+  async function deleteQueueRowIfRevision(id, revision) {
+    const db = await offlineDb();
+    await new Promise((resolve, reject) => {
+      const tx = db.transaction("progressQueue", "readwrite");
+      const store = tx.objectStore("progressQueue");
+      const getReq = store.get(id);
+      getReq.onsuccess = () => {
+        const cur = getReq.result;
+        if (cur && cur.revision === revision) store.delete(id);
+      };
+      tx.oncomplete = () => resolve();
+      tx.onabort = () => reject(tx.error);
+      tx.onerror = () => reject(tx.error);
+    });
+  }
+
+  // Enqueue an offline progress write (the sendProgress network-failure path).
+  async function queueOfflineProgress(id, chapterIndex, scrollPosition) {
+    if (!offlineSupported() || !offlineBookIds.has(id)) return;
+    try {
+      const row = await idbGet("books", id);
+      const prev = await idbGet("progressQueue", id);
+      await idbPut("progressQueue", {
+        bookId: id,
+        chapterIndex,
+        scrollPosition,
+        queuedAt: Date.now(),
+        baselineLastReadAt: row ? row.baselineLastReadAt : null,
+        revision: (prev ? prev.revision : 0) + 1,
+      });
+    } catch (e) { /* best-effort — a dropped offline save matches pre-offline behavior */ }
+  }
+
+  // Replay every queued row, serialized per book through saveChains so a
+  // replay can't interleave with a live save. Triggered on reconnect (the
+  // `online` event and each successful init()).
+  let replayInFlight = false;
+  async function replayProgressQueue() {
+    if (!offlineSupported()) return;
+    // init() and the `online` listener can both fire on a launch-after-
+    // reconnect; a guard avoids replaying every queued row twice (the second
+    // pass would just waste a GET per book hitting the already-drained path).
+    if (replayInFlight) return;
+    replayInFlight = true;
+    try {
+      const rows = await idbGetAll("progressQueue");
+      const chains = rows.map((row) => {
+        const prev = saveChains[row.bookId] || Promise.resolve();
+        const next = prev.then(() => replayOneProgress(row)).catch(() => {});
+        saveChains[row.bookId] = next;
+        return next;
+      });
+      Promise.all(chains).finally(() => { replayInFlight = false; });
+    } catch (e) {
+      // idbGetAll rejected, or a synchronous throw while wiring the chains —
+      // clear the guard so a later trigger can retry (never wedge replay off
+      // for the whole session).
+      replayInFlight = false;
+    }
+  }
+
+  async function replayOneProgress(row) {
+    let resp;
+    try {
+      resp = await fetch(`/api/books/${row.bookId}/progress`, { credentials: "same-origin" });
+    } catch (e) { return; }                 // still offline — keep the row
+    if (resp.status === 401) {
+      // Session expired — surface login (same as a live save) and keep the
+      // row so replay retries after re-auth, instead of failing silently.
+      authenticated = false;
+      showLogin();
+      return;
+    }
+    if (resp.status === 404) { await idbDelete("progressQueue", row.bookId).catch(() => {}); return; }
+    if (!resp.ok) return;                    // 5xx — keep, retry next trigger
+    let server = null;
+    try { server = await resp.json(); } catch (e) { return; } // malformed — keep
+    const serverTs = server && server.last_read_at ? server.last_read_at : null;
+    // Push only if the server hasn't advanced past our baseline (nobody read
+    // this book elsewhere while we were offline). Otherwise discard — server
+    // wins (the locked compare-then-push decision).
+    //
+    // Accepted limitations (single-user app; spec §Progress sync): the
+    // GET→PUT gap is a non-atomic check that another client could interleave,
+    // and last_read_at has 1-second precision so a same-second write from
+    // another device is indistinguishable from "unchanged". Both windows are
+    // milliseconds/one-second wide for one person and the cost is a stale
+    // reading position they can page back from — closing them needs a
+    // server-side conditional (CAS) write, judged disproportionate for v1.
+    if (serverTs === row.baselineLastReadAt || (!serverTs && !row.baselineLastReadAt)) {
+      try {
+        // Direct PUT (not sendProgress) — a queued row is the book's latest
+        // offline intent, so it must bypass the live-session monotonic guard
+        // (an offline Start Over to page 0 must replay, not be dropped).
+        const put = await fetch(`/api/books/${row.bookId}/progress`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ chapter_index: row.chapterIndex, scroll_position: row.scrollPosition }),
+          credentials: "same-origin",
+        });
+        if (!put.ok) return;                 // keep the row; retry next trigger
+        // Advance the live-session high-water mark so a later stale live save
+        // (lower index) can't regress the position replay just committed.
+        lastSentIndex[row.bookId] = row.chapterIndex;
+        const saved = await put.json().catch(() => null);
+        if (saved && saved.last_read_at) await updateOfflineBaseline(row.bookId, saved.last_read_at);
+      } catch (e) { return; }               // network dropped mid-replay — keep
+    }
+    // Pushed or discarded: atomically delete the row only if a newer offline
+    // write hasn't superseded it since we read it (revision guard in one tx).
+    await deleteQueueRowIfRevision(row.bookId, row.revision).catch(() => {});
+  }
+
+
   // Finding 11: a hand-edited or corrupted stored value must never flow
   // straight into data-theme/aria-label — coerce anything outside the known
   // set to "system".
@@ -362,12 +1023,33 @@
     navigate(libraryHash({ ...currentLibraryState(), series: null, collection: null }));
   }
 
+  // Bumped on every route() call; showOfflineLibrary's async re-probe checks
+  // it after each await so a stale continuation can't render the offline
+  // library over a newer navigation (or over a successful reconnect).
+  let routeGen = 0;
+
   function route() {
     // K4: the shortcuts overlay is appended to document.body and must not
     // survive a navigation — it would block the next view and swallow
     // shortcuts on it.
     closeShortcutsOverlay();
+    const gen = ++routeGen;
     const hash = rawHash();
+    // Offline: only a SAVED book's detail/reader work (their content is
+    // served from the M2 cache). Everything else — a top-level destination
+    // (library/stats/collections, none of which have offline data) OR a
+    // deep-link to a book that isn't downloaded — routes to the offline
+    // library instead of dead-ending on a bare error page. showOfflineLibrary
+    // also re-probes the network, so ordinary navigation recovers the full
+    // app once connectivity returns (not only the banner's Retry button).
+    if (offlineMode) {
+      const bm = hash.match(/^#\/book\/([^/]+)/);
+      const savedBook = bm && offlineBookIds.has(decodeURIComponent(bm[1]));
+      if (!savedBook) {
+        if (bm) showToast("That book isn't available offline");
+        return showOfflineLibrary(gen);
+      }
+    }
     if (hash === "#" || hash === "#/" || hash.startsWith("#/library")) {
       return showLibrary(parseLibraryParams(hash));
     }
@@ -1215,6 +1897,9 @@
     const progressPromise = (refreshProgress || progressByBook.size === 0)
       ? refreshProgressByBook(gen)
       : Promise.resolve();
+    // Offline badges: same paint-once-with-badges rationale as the progress
+    // bar above; a failed read just leaves the previous set.
+    const offlineIdsPromise = offlineSupported() ? refreshOfflineBookIds().catch(() => {}) : Promise.resolve();
 
     let url;
     let paginated = false;
@@ -1285,6 +1970,7 @@
     } catch (e) {
       // best-effort — render proceeds with whatever progressByBook already has
     }
+    await offlineIdsPromise; // already .catch-guarded above
     if (gen !== libraryRenderGen) return;
 
     // Finding C: an empty result for an active collection/series filter is
@@ -1405,9 +2091,15 @@
   function bookCardHtml(b) {
     const chapterIndex = progressByBook.get(b.id);
     const bar = progressBarHtml(chapterIndex, b.total_chapters);
+    // Mirrors progressByBook: offlineBookIds is refreshed by showLibrary and
+    // kept current by save/unsave, so the badge always reflects a real
+    // manifest row — never an assumption.
+    const offlineBadge = offlineBookIds.has(b.id)
+      ? '<span class="offline-badge" title="Available offline" aria-label="Available offline">⤓</span>'
+      : "";
     return `
       <div class="card" data-id="${b.id}" tabindex="0" role="button" aria-label="${esc(`Open ${b.title}`)}">
-        <img src="/api/books/${b.id}/cover?size=thumb" alt="" loading="lazy" data-cover-title="${esc(b.title)}">
+        <img src="/api/books/${b.id}/cover?size=thumb" alt="" loading="lazy" data-cover-title="${esc(b.title)}">${offlineBadge}
         <div class="info">
           <div class="title" title="${esc(b.title)}">${esc(b.title)}</div>
           <div class="author">${esc(b.author)}</div>
@@ -1746,6 +2438,11 @@
       if (progResp && progResp.ok) {
         try { progress = await progResp.json(); } catch (e) { progress = null; }
         if (!hashTargetsDetail(id)) return;
+        // A successful server read is a fresh observation of the server's
+        // position — advance the offline sync baseline so a later offline
+        // edit's replay compares against what we actually saw, not a stale
+        // save-time value (else replay could wrongly discard a valid edit).
+        if (progress && progress.last_read_at) updateOfflineBaseline(id, progress.last_read_at);
       }
       progress = mergeProgress(id, progress);
     }
@@ -1767,6 +2464,28 @@
       actionsHtml = `<button class="btn-primary" id="continue-btn">Continue</button><button class="btn-secondary" id="restart-btn">Start Over</button>`;
     } else {
       actionsHtml = `<button class="btn-primary" id="read-btn">Read</button>`;
+    }
+
+    // Offline save/remove (readable books on secure contexts only). The
+    // manifest read is the source of truth — the button never claims a
+    // state storage doesn't hold.
+    let offlineRow;
+    if (isReadable && offlineSupported()) {
+      offlineRow = await getOfflineManifest(id);
+      if (!hashTargetsDetail(id)) return;
+      const offlineSaveable = !isHtmlBook || book.total_chapters > 0;
+      if (offlineRow) {
+        actionsHtml += `<span class="offline-saved-label">Saved · ${esc(formatFileSize(offlineRow.bytes) || "")}</span><button class="btn-secondary" id="offline-remove-btn">Remove download</button><span class="offline-usage" id="offline-usage" role="status"></span>`;
+      } else if (activeOfflineSaves[id]) {
+        // A save started from a previous render of this page is still
+        // running — never offer a second concurrent one, but do offer a
+        // Cancel (the running save's own catch re-renders on completion).
+        actionsHtml += `<button class="btn-secondary" disabled>Downloading…</button><button class="btn-secondary" id="offline-cancel-btn">Cancel</button>`;
+      } else if (offlineSaveable) {
+        actionsHtml += `<button class="btn-secondary" id="offline-save-btn">Save offline</button>`;
+      }
+      // Chapter-mode book with unknown chapter count: no save affordance at
+      // all — the engine would (correctly) refuse it.
     }
 
     const facts = [];
@@ -1828,6 +2547,73 @@
       resetProgress(id);
       readerEntryIntent = { id, action: "restart" };
       navigate(readHash);
+    });
+    const offlineSaveBtn = $("#offline-save-btn");
+    if (offlineSaveBtn) offlineSaveBtn.addEventListener("click", async () => {
+      offlineSaveBtn.disabled = true;
+      offlineSaveBtn.textContent = "Downloading…";
+      const prog = document.createElement("span");
+      prog.className = "offline-save-progress";
+      prog.setAttribute("role", "status");
+      offlineSaveBtn.after(prog);
+      // Cancel affordance (the engine's cancellation marker is honored at
+      // every loop iteration and before publication).
+      const cancelBtn = document.createElement("button");
+      cancelBtn.className = "btn-secondary";
+      cancelBtn.id = "offline-cancel-btn";
+      cancelBtn.textContent = "Cancel";
+      cancelBtn.addEventListener("click", () => {
+        cancelBtn.disabled = true;
+        cancelOfflineSave(id);
+      });
+      prog.after(cancelBtn);
+      try {
+        await saveBookOffline(book, ({ done, total }) => {
+          prog.textContent = ` ${done} / ${total}`;
+        });
+        showToast("Saved for offline reading");
+        if (hashTargetsDetail(id)) showDetail(id); // re-render into the saved state
+      } catch (e) {
+        if (e.silent) return; // a concurrent save owns the UI — say nothing
+        showToast(e.cancelled ? "Download cancelled" : (e.message || "Download failed — retry"));
+        // Re-render rather than mutate these captured elements: if the user
+        // navigated away and back mid-save, showDetail already replaced this
+        // page with a disabled "Downloading…" button bound to nothing —
+        // mutating the detached original would leave that visible button
+        // stuck. A fresh render reflects the real (not-saved) state with a
+        // working Save button.
+        if (hashTargetsDetail(id)) showDetail(id);
+      }
+    });
+    // Cancel button on a mid-save re-render (the save itself was started by
+    // a previous render's handler; cancellation is id-based, and that
+    // handler's catch re-renders the page when the save unwinds).
+    const midSaveCancelBtn = $("#offline-cancel-btn");
+    if (midSaveCancelBtn) midSaveCancelBtn.addEventListener("click", () => {
+      midSaveCancelBtn.disabled = true;
+      cancelOfflineSave(id);
+    });
+    // Total offline storage in use, across all saved books (spec: shown
+    // wherever the saved state is displayed). Best-effort — absent API or a
+    // failure just leaves the line blank.
+    const usageEl = $("#offline-usage");
+    if (usageEl && navigator.storage && navigator.storage.estimate) {
+      navigator.storage.estimate().then((est) => {
+        if (usageEl.isConnected && typeof est.usage === "number") {
+          usageEl.textContent = `Using ${formatFileSize(est.usage) || "0 B"} of offline storage`;
+        }
+      }).catch(() => {});
+    }
+    const offlineRemoveBtn = $("#offline-remove-btn");
+    if (offlineRemoveBtn) offlineRemoveBtn.addEventListener("click", async () => {
+      offlineRemoveBtn.disabled = true;
+      try {
+        await removeBookOffline(id);
+        showToast("Offline copy removed");
+      } catch (e) {
+        showToast("Couldn't remove the offline copy");
+      }
+      if (hashTargetsDetail(id)) showDetail(id);
     });
     const seriesLink = $("#series-link");
     if (seriesLink) seriesLink.addEventListener("click", (e) => {
@@ -1992,6 +2778,10 @@
             savedIndex = clampIndex(progress.chapter_index, count);
             savedScroll = typeof progress.scroll_position === "number" ? progress.scroll_position : 0;
           }
+          // Opening the reader online is a fresh server observation — advance
+          // the offline baseline (same reason as the detail-view GET) so a
+          // later offline edit isn't wrongly discarded as "server advanced".
+          if (progress && progress.last_read_at) updateOfflineBaseline(id, progress.last_read_at);
         }
         if (!hashTargetsReader(id)) return;
       }
@@ -3023,20 +3813,46 @@
   // are deliberately skipped: proactively fetching a third-party image for a
   // chapter the reader may never open would leak reading activity earlier and
   // more broadly than an on-demand load ever did.
-  function warmChapterImages(html) {
-    const re = /<img\b[^>]*?\bsrc\s*=\s*["']([^"']+)["']/gi;
-    let m;
-    while ((m = re.exec(html)) !== null) {
+  function warmChapterImages(id, html) {
+    chapterImageUrls(id, html).forEach((u) => {
+      const img = new Image();
+      img.src = u;
+    });
+  }
+
+  // Shared with the offline save engine: the inline-image URLs a chapter's
+  // sanitized HTML references, restricted to THIS book's own rewritten image
+  // route (`/api/books/{id}/images/...`) and returned in origin-relative
+  // canonical form. Anything else — external origins, or same-origin URLs
+  // outside the book's image route — is excluded, so a crafted chapter can't
+  // make the save engine proactively fetch and retain unrelated API
+  // resources (and the prefetch warmer keeps its same-book-only scope).
+  // DOMParser (inert — never executes scripts or loads resources) rather
+  // than a regex: attribute values arrive HTML-entity-encoded (ammonia
+  // serializes '&' in a filename as '&amp;'), and getAttribute returns the
+  // decoded value the browser would actually request — a regex over raw text
+  // would yield URLs that 404.
+  function chapterImageUrls(id, html) {
+    const out = [];
+    let doc;
+    try {
+      doc = new DOMParser().parseFromString(html, "text/html");
+    } catch (e) {
+      return out;
+    }
+    const prefix = `/api/books/${id}/images/`;
+    doc.querySelectorAll("img[src]").forEach((img) => {
       let url;
       try {
-        url = new URL(m[1], window.location.href);
+        url = new URL(img.getAttribute("src"), window.location.href);
       } catch (e) {
-        continue;
+        return;
       }
-      if (url.origin !== window.location.origin) continue;
-      const img = new Image();
-      img.src = url.href;
-    }
+      if (url.origin !== window.location.origin) return;
+      if (!url.pathname.startsWith(prefix)) return;
+      out.push(url.pathname + url.search);
+    });
+    return out;
   }
 
   function prefetchChapter(id, index, count) {
@@ -3058,7 +3874,7 @@
         // we're still looking at the same cache object.
         if (html != null && readerState && readerState.chapterHtmlCache === cache) {
           cache[index] = html;
-          warmChapterImages(html);
+          warmChapterImages(id, html);
         }
         return html;
       })
@@ -3277,9 +4093,32 @@
       if (resp.ok) {
         lastSentIndex[id] = chapterIndex;
         recordLocalProgress(id, chapterIndex, scrollPosition);
+        // Advance the offline sync baseline so a later offline write's replay
+        // compares against the position we just committed. Awaited so it
+        // commits within this saveChains link, before any later queued write
+        // reads the baseline (sendProgress always runs inside queueProgressSave).
+        // The body read is bounded: on a flaky connection the 200 headers can
+        // arrive while the tiny JSON body stalls, and an unbounded await here
+        // would wedge this book's entire save chain (every later page-turn
+        // save would queue behind it forever). A 2s cap degrades to "baseline
+        // not refreshed this time" — best-effort, self-heals on the next
+        // successful progress GET (detail/reader open also call
+        // updateOfflineBaseline). Accepted residual: if the body hangs past 2s
+        // AND the connection then drops AND a save is queued, all before any
+        // such GET, that row's baseline is stale and replay may discard it —
+        // a pathological triple-coincidence costing one recoverable position.
+        const saved = await Promise.race([
+          resp.json().catch(() => null),
+          new Promise((r) => setTimeout(() => r(null), 2000)),
+        ]);
+        if (saved && saved.last_read_at) await updateOfflineBaseline(id, saved.last_read_at);
       }
     } catch (e) {
-      // Network error: best-effort save, nothing more to do.
+      // Network error: for a saved book, queue the position for
+      // compare-then-push replay on reconnect instead of dropping it. Awaited
+      // so two failed saves (both inside the saveChains link) can't race on
+      // the row's revision and commit out of order.
+      await queueOfflineProgress(id, chapterIndex, scrollPosition);
     }
   }
 
@@ -3793,8 +4632,77 @@
     if (btn) btn.onclick = init;
   }
 
+  // True while the app is running against offline storage (server
+  // unreachable at boot but saved books exist). route() restricts navigation
+  // to the offline library + saved-book detail/reader while this holds; a
+  // successful init() clears it.
+  let offlineMode = false;
+
+  // The offline library: the normal grid, fed from IndexedDB manifest rows
+  // (newest save first), with a banner + Retry. Covers and content load
+  // through the M2 service-worker cache fallback. No login gate offline.
+  function renderOfflineLibrary(rows) {
+    offlineMode = true;
+    currentView = "library";
+    document.title = "Folio";
+    offlineBookIds = new Set(rows.map((r) => r.id));
+    const books = rows
+      .slice()
+      .sort((a, b) => (b.savedAt || 0) - (a.savedAt || 0))
+      .map((r) => ({
+        id: r.id,
+        title: r.title,
+        author: r.author,
+        format: r.format,
+        total_chapters: r.totalChapters,
+      }));
+    app().innerHTML = `
+      <div class="header"><h1>Folio</h1></div>
+      <div class="offline-banner" role="status">
+        <span>Offline — showing downloaded books</span>
+        <button class="btn-secondary" id="offline-retry-btn">Retry</button>
+      </div>
+      <div id="library-content">${gridHtml(books)}</div>`;
+    bindGridCardHandlers();
+    const retry = $("#offline-retry-btn");
+    if (retry) retry.onclick = init;
+  }
+
+  // The offline-library entry point used by the route guard. It first
+  // re-probes the network: if the server is reachable again, it leaves
+  // offline mode and routes normally — so ANY navigation (not just the
+  // banner's Retry) recovers the full library/search/stats/collections once
+  // connectivity returns. Still offline → render from manifests, or the
+  // plain offline card if nothing is saved.
+  async function showOfflineLibrary(gen) {
+    // gen ties this async render to the route() call that triggered it; if a
+    // newer navigation (or a completed reconnect) ran during an await below,
+    // bail so we never paint a stale offline library over the newer view.
+    const superseded = () => typeof gen === "number" && gen !== routeGen;
+    let test;
+    try {
+      test = await fetch("/api/books", { credentials: "same-origin" });
+    } catch (e) {
+      if (superseded()) return;
+      const rows = await getAllOfflineManifests();
+      if (superseded()) return;
+      if (rows.length) renderOfflineLibrary(rows);
+      else { offlineMode = false; renderOfflineState(); }
+      return;
+    }
+    if (superseded()) return;
+    offlineMode = false;
+    if (test.status === 401) return showLogin();
+    authenticated = true;
+    route();
+  }
+
   // ── Init ──────────────────────────────────────
   async function init() {
+    // Eviction honesty first: make the manifest truthful before either boot
+    // path reads it (the offline branch renders straight from it, and the
+    // online grid badges read offlineBookIds). Safe on- or offline.
+    await verifyOfflineIntegrity();
     // Finding 2: this initial probe is a raw fetch (not api(), which would
     // itself call showLogin() on 401 before `authenticated` is known here)
     // — but it needs the same guard: an unhandled rejection (offline PWA
@@ -3804,13 +4712,51 @@
     try {
       test = await fetch("/api/books", { credentials: "same-origin" });
     } catch (e) {
+      // Server unreachable. If any books are saved offline, boot into the
+      // offline library instead of the dead-end card — no auth gate (locked
+      // spec decision: the content is already on this device).
+      if (offlineSupported()) {
+        try {
+          const saved = await getAllOfflineManifests();
+          if (saved.length) {
+            offlineMode = true;
+            authenticated = true;
+            offlineBookIds = new Set(saved.map((r) => r.id));
+            // Honor the boot hash: a saved book's URL deep-links straight to
+            // its (SW-served) detail/reader offline (route()'s guard lets a
+            // saved-book hash through); any top-level hash renders the
+            // offline library directly from the rows we just read (no second
+            // manifest round-trip).
+            if (rawHash().startsWith("#/book/")) route();
+            else renderOfflineLibrary(saved);
+            return;
+          }
+        } catch (err) { /* fall through to the plain offline card */ }
+      }
       renderOfflineState();
       return;
     }
+    offlineMode = false;
     if (test.status === 401) { showLogin(); return; }
     authenticated = true;
+    // Reconnected (or a normal online launch): flush any progress queued
+    // while offline. Fire-and-forget — it serializes per book via saveChains
+    // and never blocks the first render.
+    replayProgressQueue();
+    // Reconcile saved books against the live library (deleted → removed,
+    // metadata/cover → refreshed). Only off a genuinely OK probe — a non-401
+    // error (e.g. 500) is not a trustworthy library list and must not drive
+    // deletions. Fire-and-forget off the probe's own body (nothing else
+    // consumes `test`); never blocks the first render.
+    if (test.ok) {
+      test.clone().json().then((books) => reconcileOfflineBooks(books)).catch(() => {});
+    }
     route();
   }
+
+  // Reconnect signal: the browser fires `online` when connectivity returns —
+  // replay the offline progress queue without waiting for a navigation.
+  window.addEventListener("online", () => { replayProgressQueue(); });
 
   init();
 })();

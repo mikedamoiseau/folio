@@ -903,10 +903,38 @@ fn session_cache_control(state: &WebState) -> &'static str {
     }
 }
 
+/// Tolerant `?width=` parsing (web-reader offline mode downscales page images
+/// on download). Any input that isn't exactly one positive integer resolves to
+/// `None` — byte-identical current behavior — so a malformed query can never
+/// break a page request. Valid values clamp to 64..=2048 — the cap bounds per-request raster cost on this unauthenticated-capable surface (no-PIN mode) close to the old fixed 1200 px render. Zero is rejected (a
+/// zero-width render is meaningless); duplicates are rejected (ambiguous
+/// intent); unrelated params (the reader's `?__reload=` retry nonce) are
+/// ignored.
+fn parse_width(query: Option<&str>) -> Option<u32> {
+    let query = query?;
+    let mut found: Option<u32> = None;
+    // form_urlencoded percent-decodes keys and values (RawQuery is raw), so an
+    // encoded `width=%31%30%38%30` parses normally and an encoded `w%69dth`
+    // still counts toward duplicate detection instead of sneaking past it.
+    for (key, value) in form_urlencoded::parse(query.as_bytes()) {
+        if key != "width" {
+            continue;
+        }
+        let parsed: u32 = value.parse().ok().filter(|w| *w > 0)?;
+        if found.is_some() {
+            return None; // duplicate width params
+        }
+        found = Some(parsed.clamp(64, 2048));
+    }
+    found
+}
+
 async fn get_page_image(
     State(state): State<WebState>,
     Path((id, index)): Path<(String, u32)>,
+    axum::extract::RawQuery(query): axum::extract::RawQuery,
 ) -> Result<Response, (StatusCode, String)> {
+    let width = parse_width(query.as_deref());
     let conn = state.conn().map_err(folio_status)?;
     let book = db::get_book(&conn, &id)
         .map_err(folio_status)?
@@ -918,7 +946,7 @@ async fn get_page_image(
     match book.format {
         BookFormat::Pdf => {
             let (bytes, mime) =
-                crate::pdf::get_page_image_bytes(&file_path, index, None).map_err(folio_status)?;
+                crate::pdf::get_page_image_bytes(&file_path, index, width).map_err(folio_status)?;
             Ok((
                 [
                     (header::CONTENT_TYPE, mime.to_string()),
@@ -930,7 +958,7 @@ async fn get_page_image(
         }
         BookFormat::Cbz => {
             let (bytes, mime) =
-                crate::cbz::get_page_image_bytes(&file_path, index, None).map_err(folio_status)?;
+                crate::cbz::get_page_image_bytes(&file_path, index, width).map_err(folio_status)?;
             Ok((
                 [
                     (header::CONTENT_TYPE, mime),
@@ -942,7 +970,7 @@ async fn get_page_image(
         }
         BookFormat::Cbr => {
             let (bytes, mime) =
-                crate::cbr::get_page_image_bytes(&file_path, index, None).map_err(folio_status)?;
+                crate::cbr::get_page_image_bytes(&file_path, index, width).map_err(folio_status)?;
             Ok((
                 [
                     (header::CONTENT_TYPE, mime),
@@ -1210,6 +1238,43 @@ async fn get_stats(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn width_param_absent_and_invalid_resolve_to_none() {
+        assert_eq!(parse_width(None), None);
+        assert_eq!(parse_width(Some("")), None);
+        assert_eq!(parse_width(Some("width=")), None);
+        assert_eq!(parse_width(Some("width=abc")), None);
+        assert_eq!(parse_width(Some("width=-5")), None);
+        assert_eq!(parse_width(Some("width=0")), None);
+        // u32 overflow
+        assert_eq!(parse_width(Some("width=99999999999999999999")), None);
+        // duplicate width params are ambiguous
+        assert_eq!(parse_width(Some("width=800&width=900")), None);
+        assert_eq!(parse_width(Some("other=1")), None);
+    }
+
+    #[test]
+    fn width_param_valid_values_clamp_to_range() {
+        assert_eq!(parse_width(Some("width=1080")), Some(1080));
+        assert_eq!(parse_width(Some("width=64")), Some(64));
+        assert_eq!(parse_width(Some("width=2048")), Some(2048));
+        assert_eq!(parse_width(Some("width=1")), Some(64)); // clamp low
+        assert_eq!(parse_width(Some("width=8000")), Some(2048)); // clamp high
+                                                                 // other params (e.g. the reader's ?__reload= retry nonce) are ignored
+        assert_eq!(parse_width(Some("width=1080&__reload=123")), Some(1080));
+        assert_eq!(parse_width(Some("__reload=123&width=1080")), Some(1080));
+    }
+
+    #[test]
+    fn width_param_is_percent_decoded() {
+        // RawQuery hands us the undecoded query string — values…
+        assert_eq!(parse_width(Some("width=%31%30%38%30")), Some(1080));
+        // …and keys decode, so an encoded duplicate is still ambiguous.
+        assert_eq!(parse_width(Some("width=800&w%69dth=900")), None);
+        // form-encoding: '+' is a space, so "+800" (" 800") is not a number.
+        assert_eq!(parse_width(Some("width=+800")), None);
+    }
 
     #[test]
     fn test_rewrite_asset_urls() {

@@ -5,6 +5,29 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- **Save books for offline reading in the web reader (in progress).** On
+  HTTPS-served web UIs (e.g. behind a Tailscale/reverse-proxy certificate;
+  service workers require a secure context), a book's detail page now offers
+  "Save offline": chapters, images, and comic/PDF pages (downscaled to
+  1080 px wide via the new optional `?width=` parameter on the page-image
+  endpoint) are downloaded into browser storage, with a progress counter, an
+  "available offline" badge on the library grid, and a "Saved · size /
+  Remove download" state on the detail page. Reading a saved book falls back
+  to the offline copy automatically when the server is unreachable, and
+  opening the installed web app with no connection now boots straight into a
+  library of your downloaded books (with an "Offline — showing downloaded
+  books" banner and a Retry) instead of a dead-end error — saved books open
+  and read fully offline, and a saved book's own URL deep-links to it
+  directly. Reading progress made while offline is queued and synced back to
+  the library when the connection returns — using a compare-then-push rule
+  so a book you also read on another device in the meantime is never
+  overwritten by a stale offline position. If the browser evicts a download
+  under storage pressure, Folio notices on next launch, drops the stale
+  "available offline" badge, and tells you; deleting a book on the desktop
+  removes its offline copy on next connect. Requires the web UI to be served
+  over a secure context (HTTPS or localhost).
+
 ### Fixed
 - **Book counts now read "1 book", not "1 books".** The library section headers
   and the series-stack cards said "1 books" (and "1 livres" in French) when a

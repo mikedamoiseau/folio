@@ -12,6 +12,14 @@ import { test, expect, type Page } from "@playwright/test";
 // URL is aborted (what a broken cached entry looks like to the <img>), while
 // the cache-busted retry URL (…?__reload=N) — a distinct cache key that would
 // reach the network for real — is let through to the server.
+//
+// Offline mode made the service worker intercept /api/books/{id}/... GETs
+// (network-first). Requests issued by an SW-controlled page bypass
+// page.route(), which would silently defeat the abort-based poisoning above —
+// so this spec runs with service workers blocked. That matches its premise:
+// it tests the browser HTTP cache + app.js retry logic, not the SW.
+test.use({ serviceWorkers: "block" });
+
 const READER_BOOK_ID = "e2e-book-130";
 
 // Matches …/pages/1 exactly (not /pages/10, /pages/11), with or without a query.

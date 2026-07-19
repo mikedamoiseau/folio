@@ -34,7 +34,14 @@ export default defineConfig({
   projects: [
     {
       name: "chromium",
-      use: { browserName: "chromium" },
+      // channel:"chromium" runs the full Chromium binary's new headless mode
+      // instead of the stripped chrome-headless-shell. The shell segfaulted
+      // (SIGSEGV) intermittently on the Ubuntu CI runner once the offline-
+      // mode service worker started intercepting book-route fetches
+      // (respondWith on /api/books/{id}/... suite-wide), killing the shared
+      // browser process and failing a random later test with
+      // "browser has been closed". The full binary does not exhibit it.
+      use: { browserName: "chromium", channel: "chromium" },
     },
   ],
   webServer: {

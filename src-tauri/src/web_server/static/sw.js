@@ -22,7 +22,14 @@
 // activates; app.js's registration call is feature-detected/try-catched so
 // this is silent, not an error. The manifest + icons still work for iOS
 // Safari "Add to Home Screen" over plain HTTP.
-const CACHE_VERSION = "folio-shell-891e14d0d7a9";
+const CACHE_VERSION = "folio-shell-704d52c343f0";
+
+// Offline mode (spec 2026-07-17-web-reader-offline): per-book content caches,
+// written ONLY by app.js's save flow — the SW never writes to them. The SW
+// reads them as a fallback when the network is unreachable. Network-first, so
+// online behavior (auth, session expiry, profile lock, full-size pages) is
+// exactly what the server says, always.
+const OFFLINE_CACHE_PREFIX = "folio-offline-book-";
 
 const SHELL_ASSETS = [
   "/",
@@ -54,7 +61,10 @@ self.addEventListener("activate", (event) => {
     caches.keys().then((keys) =>
       Promise.all(
         keys
-          .filter((key) => key !== CACHE_VERSION)
+          // Shell-version cleanup only — offline book caches are owned by
+          // app.js (saved/deleted there) and MUST survive every SW update,
+          // or each shell deploy would silently wipe the user's downloads.
+          .filter((key) => key !== CACHE_VERSION && !key.startsWith(OFFLINE_CACHE_PREFIX))
           .map((key) => caches.delete(key))
       )
     )
@@ -65,9 +75,81 @@ self.addEventListener("activate", (event) => {
 self.addEventListener("fetch", (event) => {
   const url = new URL(event.request.url);
 
-  // Network-only passthrough for API and OPDS traffic — do not intercept.
-  // Leaving these un-handled lets the browser handle them natively so auth
-  // (cookies/session) and streaming semantics are untouched.
+  // Saved-book offline fallback: network-first. Every HTTP response —
+  // including 401/503 — is returned as-is, so online auth semantics
+  // (session expiry, profile lock, api()'s 401→login) are untouched. The
+  // cache answers only when fetch() itself rejects (server unreachable);
+  // a fallback miss lets the rejection propagate so app.js handles it
+  // exactly as it does today. The book-list route (/api/books, no id
+  // segment) never matches — the offline library renders from IndexedDB.
+  // The bare /api/books/{id} detail route MUST match (no trailing slash):
+  // the reader and detail view fetch it, and the saved inventory caches it.
+  // /download is deliberately excluded: whole-file downloads are never in
+  // the offline inventory, and piping a multi-hundred-MB stream through
+  // respondWith would subject it to SW-lifetime termination mid-download.
+  const bookMatch =
+    event.request.method === "GET" &&
+    url.origin === self.location.origin &&
+    !url.pathname.includes("/download") &&
+    url.pathname.match(/^\/api\/books\/([^/]+)(?:\/|$)/);
+  if (bookMatch) {
+    // Page images are cached with ?width=... but requested plain (or with a
+    // ?__reload= retry nonce) — match ignoring the query for those URLs
+    // ONLY. Everything else must match exactly (/cover vs /cover?size=thumb
+    // are distinct entries). caches.match with a cacheName returns undefined
+    // for a nonexistent cache without creating it, so unsaved books just
+    // propagate the network outcome.
+    const isPage = /^\/api\/books\/[^/]+\/pages\/\d+$/.test(url.pathname);
+    const matchOpts = { cacheName: OFFLINE_CACHE_PREFIX + bookMatch[1], ignoreSearch: isPage };
+    if (!self.navigator.onLine) {
+      // The browser definitively reports offline (airplane mode): skip the
+      // network entirely and serve the cache; only touch the (doomed) network
+      // for an unsaved resource so the caller still gets a normal error.
+      event.respondWith(
+        caches.match(event.request, matchOpts).then((cached) => cached || fetch(event.request))
+      );
+      return;
+    }
+    // Online (or navigator.onLine can't be trusted — it stays true under some
+    // engines' emulated-offline and on a LAN whose server has gone away):
+    // network-FIRST so auth/session/profile-lock/freshness always come from
+    // the server when it answers. But a saved book's cached content must not
+    // be held hostage to a fetch that hangs (emulated offline, dead server on
+    // a still-"online" LAN), so race the network against a short timeout and
+    // fall back to the cache if the network hasn't answered by then. Book
+    // content is immutable per id, so serving the cached copy on a slow/hung
+    // network is safe; a real localhost/LAN server answers in tens of ms —
+    // far under the 800ms timeout — so the auth-sensitive path stays
+    // network-first in every normal case.
+    event.respondWith((async () => {
+      const cachedPromise = caches.match(event.request, matchOpts);
+      const netPromise = fetch(event.request);
+      netPromise.catch(() => {}); // may be abandoned below — don't leak an unhandled rejection
+      try {
+        const raced = await Promise.race([
+          netPromise.then((response) => ({ response })),
+          new Promise((resolve) => setTimeout(() => resolve({ timedOut: true }), 800)),
+        ]);
+        if (raced.response) return raced.response;
+        // Network didn't answer within the timeout. Serve the cache if we
+        // have it; otherwise treat the resource as unreachable and fail fast
+        // with a network error — do NOT await the possibly-hung netPromise,
+        // which would stall the caller indefinitely (e.g. an uncached
+        // /progress request the reader/detail issues while offline).
+        return (await cachedPromise) || Response.error();
+      } catch (err) {
+        // fetch() rejected outright (server refused / unreachable) — cache or
+        // propagate the failure.
+        return (await cachedPromise) || Response.error();
+      }
+    })());
+    return;
+  }
+
+  // Network-only passthrough for all other API and OPDS traffic — do not
+  // intercept. Leaving these un-handled lets the browser handle them
+  // natively so auth (cookies/session) and streaming semantics are
+  // untouched.
   if (url.pathname.startsWith("/api/") || url.pathname.startsWith("/opds/")) {
     return;
   }

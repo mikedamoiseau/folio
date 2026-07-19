@@ -1,0 +1,608 @@
+import { test, expect, type Page } from "@playwright/test";
+
+// Harness fixtures (src-tauri/examples/web_e2e_server.rs): Book 050 = the
+// only EPUB with a real 2-chapter file (chapter 1 embeds one inline image);
+// Book 130 = the only CBZ with a real 2-page file.
+const EPUB_ID = "e2e-book-050";
+const CBZ_ID = "e2e-book-130";
+
+async function saveBookOffline(page: Page, bookId: string) {
+  await page.goto(`/#/book/${bookId}`);
+  await page.locator("#offline-save-btn").click();
+  await expect(page.locator("#offline-remove-btn")).toBeVisible({ timeout: 30_000 });
+}
+
+// Reload and wait until the service worker actually CONTROLS the page. Without
+// this, a reload can run app.js before the SW takes control, so the offline
+// book/content fetches bypass the cache and hit the (offline) network — the
+// detail then dead-ends on the error view instead of rendering. Real installed
+// PWAs are controlled from launch; this just makes the test deterministic.
+async function reloadControlled(page: Page) {
+  await page.reload();
+  await page.waitForFunction(() => !!navigator.serviceWorker.controller, null, {
+    timeout: 15_000,
+  });
+}
+
+// Open a book's reader at page 0 online and land on the stage. If the book
+// carries server-side progress from an earlier test on the shared harness,
+// opening /0/read shows a resume prompt (Continue vs Start Over) instead of
+// the stage — dismiss it via Start Over so we deterministically render page 0.
+async function openReaderAtZero(page: Page, bookId: string) {
+  await page.goto(`/#/book/${bookId}/0/read`);
+  const restart = page.locator("#resume-restart-btn");
+  const stage = page.locator("#reader-stage");
+  await expect(restart.or(stage)).toBeVisible({ timeout: 15_000 });
+  if (await restart.isVisible().catch(() => false)) await restart.click();
+  await expect(stage).toBeVisible({ timeout: 15_000 });
+}
+
+// Offline mode (spec docs/superpowers/specs/2026-07-17-web-reader-offline-design.md).
+//
+// M2 — service-worker foundations: the activate handler's shell-version
+// cleanup must never delete per-book offline content caches
+// (`folio-offline-book-*`), while still purging stale shell caches. Playwright
+// runs against localhost (a secure context), so the service worker registers
+// exactly as it does on the HTTPS deployments offline mode targets.
+
+test.describe("offline mode — service worker foundations", () => {
+  test("activation purge spares offline book caches, kills stale shell caches", async ({
+    page,
+  }) => {
+    await page.goto("/");
+    await page.waitForFunction(() => navigator.serviceWorker?.ready.then(() => true), null, {
+      timeout: 15_000,
+    });
+
+    // Plant a fake offline book cache (survivor) and a stale shell-version
+    // cache (must die), then force a fresh SW install+activate cycle so the
+    // activate purge runs with both present.
+    await page.evaluate(async () => {
+      await caches.open("folio-offline-book-e2e-fake");
+      await caches.open("folio-shell-deadbeef0000");
+      const reg = await navigator.serviceWorker.getRegistration();
+      await reg!.unregister();
+    });
+
+    await page.reload();
+    await page.waitForFunction(
+      async () => {
+        const reg = await navigator.serviceWorker.getRegistration();
+        return !!reg?.active;
+      },
+      null,
+      { timeout: 15_000 },
+    );
+    // The purge promise isn't awaitable from the page, so poll until the
+    // stale shell cache is gone…
+    await expect
+      .poll(async () => page.evaluate(() => caches.keys()), { timeout: 10_000 })
+      .not.toContain("folio-shell-deadbeef0000");
+
+    // …then confirm the survivor is STILL there after the purge settles — a
+    // single immediate read could race a concurrent (regressed) delete of the
+    // offline cache and pass intermittently.
+    await page.waitForTimeout(500);
+    const keys = await page.evaluate(() => caches.keys());
+    expect(keys).toContain("folio-offline-book-e2e-fake");
+    expect(keys).not.toContain("folio-shell-deadbeef0000");
+  });
+});
+
+test.describe("offline mode — save / unsave (M3)", () => {
+  test("saving an EPUB caches its full inventory and flips the detail UI", async ({ page }) => {
+    await saveBookOffline(page, EPUB_ID);
+
+    // Detail view shows the saved state.
+    await expect(page.locator(".offline-saved-label")).toContainText(/Saved ·/);
+
+    // The cache holds detail JSON, covers, TOC, both chapters, and the
+    // chapter-1 inline image; the manifest row exists with a matching hash.
+    const state = await page.evaluate(async (id) => {
+      const cache = await caches.open(`folio-offline-book-${id}`);
+      const keys = (await cache.keys()).map((r) => new URL(r.url).pathname + new URL(r.url).search);
+      const db = await new Promise<IDBDatabase>((res, rej) => {
+        const req = indexedDB.open("folio-offline");
+        req.onsuccess = () => res(req.result);
+        req.onerror = () => rej(req.error);
+      });
+      const row = await new Promise<any>((res, rej) => {
+        const tx = db.transaction("books", "readonly");
+        const r = tx.objectStore("books").get(id);
+        r.onsuccess = () => res(r.result);
+        r.onerror = () => rej(r.error);
+      });
+      return { keys, row };
+    }, EPUB_ID);
+
+    expect(state.keys).toContain(`/api/books/${EPUB_ID}`);
+    // These harness books have no cover file, so /cover 404s and the optional-
+    // cover skip drops it from the inventory — proving the skip path works.
+    expect(state.keys).not.toContain(`/api/books/${EPUB_ID}/cover`);
+    expect(state.keys).toContain(`/api/books/${EPUB_ID}/chapters`);
+    expect(state.keys).toContain(`/api/books/${EPUB_ID}/chapters/0`);
+    expect(state.keys).toContain(`/api/books/${EPUB_ID}/chapters/1`);
+    expect(state.keys.some((k: string) => k.startsWith(`/api/books/${EPUB_ID}/images/`))).toBe(true);
+    expect(state.row).toBeTruthy();
+    expect(state.row.generation).toBeTruthy();
+
+    // The manifest hash must actually equal the hash of the cached key set —
+    // recompute it independently (dedup + sort + SHA-256, the same canonical
+    // form the app uses) so a wrong/short hash or a missing key can't pass.
+    const recomputed = await page.evaluate(async (keys) => {
+      const canonical = Array.from(new Set(keys)).sort().join("\n");
+      const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(canonical));
+      return Array.from(new Uint8Array(buf)).map((b) => b.toString(16).padStart(2, "0")).join("");
+    }, state.keys);
+    expect(state.row.inventoryHash).toBe(recomputed);
+
+    // Grid badge appears for the saved book only. (Book 050 isn't on grid
+    // page 1 under the default recent-first sort — search brings it up.)
+    await page.goto("/#/?q=Book%20050");
+    const savedCard = page.locator(".grid .card", { hasText: "Book 050" });
+    await savedCard.waitFor();
+    await expect(savedCard.locator(".offline-badge")).toBeVisible();
+  });
+
+  test("saving a CBZ downloads pages at OFFLINE_PAGE_WIDTH", async ({ page }) => {
+    const widthRequest = page.waitForRequest((r) =>
+      r.url().includes(`/api/books/${CBZ_ID}/pages/0`) && r.url().includes("width=1080"),
+    );
+    await saveBookOffline(page, CBZ_ID);
+    await widthRequest;
+
+    const keys = await page.evaluate(async (id) => {
+      const cache = await caches.open(`folio-offline-book-${id}`);
+      return (await cache.keys()).map((r) => new URL(r.url).pathname + new URL(r.url).search);
+    }, CBZ_ID);
+    expect(keys).toContain(`/api/books/${CBZ_ID}/pages/0?width=1080`);
+    expect(keys).toContain(`/api/books/${CBZ_ID}/pages/1?width=1080`);
+    expect(keys).toContain(`/api/books/${CBZ_ID}/page-count`);
+  });
+
+  test("network-first: online reads bypass the cache; offline falls back to it", async ({
+    page,
+    context,
+  }) => {
+    await saveBookOffline(page, EPUB_ID);
+
+    // Poison the cached chapter 1 with a sentinel.
+    await page.evaluate(async (id) => {
+      const cache = await caches.open(`folio-offline-book-${id}`);
+      await cache.put(
+        new Request(`/api/books/${id}/chapters/1`),
+        new Response("<p>SENTINEL-CACHED</p>", { headers: { "Content-Type": "text/html" } }),
+      );
+    }, EPUB_ID);
+
+    // ONLINE: open the reader at chapter 1 — network must win.
+    await page.goto(`/#/book/${EPUB_ID}/1/read`);
+    const restart = page.locator("#resume-restart-btn");
+    const content = page.locator("#reader-content");
+    await expect(restart.or(content)).toBeVisible({ timeout: 15_000 });
+    if (await restart.isVisible()) await restart.click();
+    await expect(content).toContainText("chapter one", { timeout: 10_000 });
+    await expect(content).not.toContainText("SENTINEL-CACHED");
+
+    // OFFLINE: the same URL fetched directly is now served by the SW cache
+    // fallback → sentinel bytes. (A reader page-turn wouldn't prove this —
+    // the F-4-4 in-memory prefetch cache would satisfy it without any
+    // network/SW involvement.)
+    await context.setOffline(true);
+    const offlineBody = await page.evaluate(async (id) => {
+      const resp = await fetch(`/api/books/${id}/chapters/1`, { credentials: "same-origin" });
+      return resp.text();
+    }, EPUB_ID);
+    expect(offlineBody).toContain("SENTINEL-CACHED");
+    await context.setOffline(false);
+  });
+
+  test("a second concurrent save of the same book is rejected, not duplicated", async ({ page }) => {
+    // The single-flight guard: once a save starts the button flips to a
+    // disabled Downloading state, so the UI can't initiate a second, and
+    // exactly one manifest row is published.
+    await page.goto(`/#/book/${CBZ_ID}`);
+    await page.locator("#offline-save-btn").click();
+    await expect(page.locator("#offline-remove-btn")).toBeVisible({ timeout: 30_000 });
+    // Exactly one manifest row for this book (no duplicate from the guard).
+    const count = await page.evaluate(async (id) => {
+      const db = await new Promise<IDBDatabase>((res, rej) => {
+        const req = indexedDB.open("folio-offline");
+        req.onsuccess = () => res(req.result);
+        req.onerror = () => rej(req.error);
+      });
+      const rows = await new Promise<any[]>((res) => {
+        const tx = db.transaction("books", "readonly");
+        const r = tx.objectStore("books").getAll();
+        r.onsuccess = () => res(r.result);
+        r.onerror = () => res([]);
+      });
+      return rows.filter((row) => row.id === id).length;
+    }, CBZ_ID);
+    expect(count).toBe(1);
+  });
+
+  test("a chapter book with unknown chapter count gets no save affordance", async ({ page }) => {
+    // Book 060: EPUB with total_chapters = 0 (a legitimate "count not known
+    // yet" state). Saving it would publish a phantom offline book with zero
+    // readable content — the UI must not offer it.
+    await page.goto("/#/book/e2e-book-060");
+    await expect(page.locator(".detail .actions")).toBeVisible();
+    await expect(page.locator("#offline-save-btn")).toHaveCount(0);
+    await expect(page.locator("#offline-remove-btn")).toHaveCount(0);
+  });
+
+  test("unsave removes the cache, manifest row, and badge", async ({ page }) => {
+    await saveBookOffline(page, EPUB_ID);
+    await page.locator("#offline-remove-btn").click();
+    await expect(page.locator("#offline-save-btn")).toBeVisible({ timeout: 10_000 });
+
+    const gone = await page.evaluate(async (id) => {
+      const hasCache = await caches.has(`folio-offline-book-${id}`);
+      const db = await new Promise<IDBDatabase>((res, rej) => {
+        const req = indexedDB.open("folio-offline");
+        req.onsuccess = () => res(req.result);
+        req.onerror = () => rej(req.error);
+      });
+      const row = await new Promise<any>((res) => {
+        const tx = db.transaction("books", "readonly");
+        const r = tx.objectStore("books").get(id);
+        r.onsuccess = () => res(r.result);
+        r.onerror = () => res(undefined);
+      });
+      return { hasCache, row };
+    }, EPUB_ID);
+    expect(gone.hasCache).toBe(false);
+    expect(gone.row).toBeFalsy();
+
+    await page.goto("/#/?q=Book%20050");
+    const card = page.locator(".grid .card", { hasText: "Book 050" });
+    await card.waitFor();
+    await expect(card.locator(".offline-badge")).toHaveCount(0);
+  });
+});
+
+test.describe("offline mode — boot & offline library (M4)", () => {
+  test("booting offline with saved books shows the offline library and reads", async ({
+    page,
+    context,
+  }) => {
+    await saveBookOffline(page, EPUB_ID);
+
+    // Boot offline from a top-level route: the SW-cached shell loads, init()
+    // probes /api/books, the network fails, and the offline library renders
+    // from IndexedDB.
+    await page.goto("/#/");
+    await context.setOffline(true);
+    await reloadControlled(page);
+
+    await expect(page.locator(".offline-banner")).toBeVisible();
+    const card = page.locator(".grid .card", { hasText: "Book 050" });
+    await expect(card).toHaveCount(1); // only the saved book
+
+    // Open it → detail fully renders offline (cached detail JSON via the SW
+    // fallback). The open button is Read or, if this book already has
+    // server-side progress from an earlier test on the shared harness,
+    // Continue — either proves showDetail's real render completed. Then the
+    // reader renders a cached chapter offline (chapter zero or one; both are
+    // in the saved inventory).
+    await card.click();
+    await expect(page).toHaveURL(/#\/book\//);
+    const openBtn = page.locator("#read-btn, #continue-btn").first();
+    await expect(openBtn).toBeVisible({ timeout: 15_000 });
+    await openBtn.click();
+    await expect(page.locator("#reader-content")).toContainText(/chapter (zero|one)/, {
+      timeout: 15_000,
+    });
+
+    await context.setOffline(false);
+  });
+
+  test("Retry from the offline library recovers the online library", async ({ page, context }) => {
+    await saveBookOffline(page, EPUB_ID);
+    await page.goto("/#/");
+    await context.setOffline(true);
+    await reloadControlled(page);
+    await expect(page.locator(".offline-banner")).toBeVisible();
+
+    await context.setOffline(false);
+    await page.locator("#offline-retry-btn").click();
+    // Back online: full library (search box present, offline banner gone).
+    await expect(page.locator("#search")).toBeVisible({ timeout: 15_000 });
+    await expect(page.locator(".offline-banner")).toHaveCount(0);
+  });
+
+  test("offline deep-link to a NON-saved book redirects to the offline library", async ({
+    page,
+    context,
+  }) => {
+    await saveBookOffline(page, EPUB_ID); // 050 saved; 130 is not
+    await page.goto("/#/");
+    await context.setOffline(true);
+    await reloadControlled(page);
+    await expect(page.locator(".offline-banner")).toBeVisible();
+
+    // Navigate to an un-downloaded book's URL — must land on the offline
+    // library, not a bare "couldn't reach server" dead-end.
+    await page.evaluate((id) => { location.hash = `#/book/${id}`; }, CBZ_ID);
+    await expect(page.locator(".offline-banner")).toBeVisible();
+    await expect(page.locator(".grid .card", { hasText: "Book 050" })).toHaveCount(1);
+    await context.setOffline(false);
+  });
+
+  test("ordinary navigation recovers the online library after reconnect", async ({
+    page,
+    context,
+  }) => {
+    await saveBookOffline(page, EPUB_ID);
+    await page.goto("/#/");
+    await context.setOffline(true);
+    await reloadControlled(page);
+    await expect(page.locator(".offline-banner")).toBeVisible();
+
+    // Reconnect, then navigate normally (NOT the Retry button) — the offline
+    // library's re-probe must recover the full library with search.
+    await context.setOffline(false);
+    await page.evaluate(() => { location.hash = "#/library"; });
+    await expect(page.locator("#search")).toBeVisible({ timeout: 15_000 });
+    await expect(page.locator(".offline-banner")).toHaveCount(0);
+  });
+
+  test("booting offline with no saved books shows the offline card", async ({ page, context }) => {
+    // Ensure nothing is saved.
+    await page.goto("/#/");
+    await page.evaluate(async () => {
+      for (const k of await caches.keys()) {
+        if (k.startsWith("folio-offline-book-")) await caches.delete(k);
+      }
+      await new Promise<void>((res) => {
+        const req = indexedDB.open("folio-offline");
+        req.onsuccess = () => {
+          const db = req.result;
+          const tx = db.transaction("books", "readwrite");
+          tx.objectStore("books").clear();
+          tx.oncomplete = () => res();
+          tx.onerror = () => res();
+        };
+        req.onerror = () => res();
+      });
+    });
+
+    await context.setOffline(true);
+    await reloadControlled(page);
+    // No manifests → the plain "couldn't reach server" card, not a library.
+    await expect(page.locator("#retry-init-btn")).toBeVisible();
+    await expect(page.locator(".offline-banner")).toHaveCount(0);
+    await context.setOffline(false);
+  });
+});
+
+test.describe("offline mode — progress replay (M5)", () => {
+  test("progress made offline queues, then replays on reconnect", async ({ page, context }) => {
+    // Use the CBZ (page mode): a page turn is a single deterministic progress
+    // write. Reset any prior server progress so the queued position is newer.
+    await saveBookOffline(page, CBZ_ID);
+    await page.goto(`/#/book/${CBZ_ID}`);
+    const startOver = page.locator("#restart-btn");
+    if (await startOver.isVisible().catch(() => false)) await startOver.click();
+
+    // Open the reader ONLINE first (avoids racing SW control on an offline
+    // navigation — and matches the real flow: reading, then losing signal),
+    // then go offline and turn to page 1, waiting out the 2s progress
+    // debounce so the PUT fires, fails, and enqueues.
+    await openReaderAtZero(page, CBZ_ID);
+    await context.setOffline(true);
+    await page.locator("#reader-stage").focus();
+    await page.keyboard.press("ArrowRight");
+    await page.waitForTimeout(2500);
+
+    // A queue row now exists for this book.
+    const queued = await page.evaluate(async (id) => {
+      const db = await new Promise<IDBDatabase>((res, rej) => {
+        const req = indexedDB.open("folio-offline");
+        req.onsuccess = () => res(req.result);
+        req.onerror = () => rej(req.error);
+      });
+      return new Promise<any>((res) => {
+        const tx = db.transaction("progressQueue", "readonly");
+        const r = tx.objectStore("progressQueue").get(id);
+        r.onsuccess = () => res(r.result);
+        r.onerror = () => res(undefined);
+      });
+    }, CBZ_ID);
+    expect(queued).toBeTruthy();
+    expect(queued.chapterIndex).toBeGreaterThan(0);
+
+    // Reconnect → a PUT of the queued position must fire, and the queue drains.
+    const replayPut = page.waitForRequest(
+      (r) => r.method() === "PUT" && r.url().includes(`/api/books/${CBZ_ID}/progress`),
+      { timeout: 20_000 },
+    );
+    await context.setOffline(false);
+    await page.evaluate(() => window.dispatchEvent(new Event("online")));
+    await replayPut;
+
+    await expect
+      .poll(async () =>
+        page.evaluate(async (id) => {
+          const db = await new Promise<IDBDatabase>((res, rej) => {
+            const req = indexedDB.open("folio-offline");
+            req.onsuccess = () => res(req.result);
+            req.onerror = () => rej(req.error);
+          });
+          return new Promise<number>((res) => {
+            const tx = db.transaction("progressQueue", "readonly");
+            const r = tx.objectStore("progressQueue").getAll();
+            r.onsuccess = () => res(r.result.filter((x: any) => x.bookId === id).length);
+            r.onerror = () => res(-1);
+          });
+        }, CBZ_ID),
+        { timeout: 10_000 },
+      )
+      .toBe(0);
+  });
+
+  test("replay discards the queued position when the server advanced past the baseline", async ({
+    page,
+    context,
+  }) => {
+    // Simulate "another device advanced this book's server progress after our
+    // last sync": open the reader online (which refreshes the baseline from
+    // the server), THEN corrupt the manifest baseline to an old value. On
+    // reconnect the server's real last_read_at won't match, so the queued
+    // offline edit must be discarded (server wins), leaving the server
+    // position untouched. (Corrupting before the online open wouldn't work —
+    // the reader-open baseline refresh would overwrite it.)
+    await saveBookOffline(page, CBZ_ID);
+    await openReaderAtZero(page, CBZ_ID);
+    await page.evaluate(async (id) => {
+      const db = await new Promise<IDBDatabase>((res, rej) => {
+        const req = indexedDB.open("folio-offline");
+        req.onsuccess = () => res(req.result);
+        req.onerror = () => rej(req.error);
+      });
+      await new Promise<void>((res) => {
+        const tx = db.transaction("books", "readwrite");
+        const store = tx.objectStore("books");
+        const g = store.get(id);
+        g.onsuccess = () => {
+          const row = g.result;
+          row.baselineLastReadAt = 1; // definitely older than any real server ts
+          store.put(row);
+        };
+        tx.oncomplete = () => res();
+        tx.onerror = () => res();
+      });
+    }, CBZ_ID);
+
+    await context.setOffline(true);
+    await page.locator("#reader-stage").focus();
+    await page.keyboard.press("ArrowRight");
+    await page.waitForTimeout(2500);
+
+    // Reconnect: replay GETs the server, baseline mismatch → discard, no PUT.
+    let putFired = false;
+    page.on("request", (r) => {
+      if (r.method() === "PUT" && r.url().includes(`/api/books/${CBZ_ID}/progress`)) putFired = true;
+    });
+    await context.setOffline(false);
+    await page.evaluate(() => window.dispatchEvent(new Event("online")));
+
+    // Queue drains (row consumed) but no PUT was issued (discarded).
+    await expect
+      .poll(async () =>
+        page.evaluate(async (id) => {
+          const db = await new Promise<IDBDatabase>((res, rej) => {
+            const req = indexedDB.open("folio-offline");
+            req.onsuccess = () => res(req.result);
+            req.onerror = () => rej(req.error);
+          });
+          return new Promise<number>((res) => {
+            const tx = db.transaction("progressQueue", "readonly");
+            const r = tx.objectStore("progressQueue").getAll();
+            r.onsuccess = () => res(r.result.filter((x: any) => x.bookId === id).length);
+            r.onerror = () => res(-1);
+          });
+        }, CBZ_ID),
+        { timeout: 10_000 },
+      )
+      .toBe(0);
+    expect(putFired).toBe(false);
+  });
+});
+
+test.describe("offline mode — eviction integrity & reconciliation (M6)", () => {
+  test("a partially-evicted cache drops the manifest row and badge on boot", async ({ page }) => {
+    await saveBookOffline(page, EPUB_ID);
+
+    // Simulate browser eviction: delete one cached entry so the cache's key
+    // set no longer matches the manifest's inventory hash.
+    await page.evaluate(async (id) => {
+      const cache = await caches.open(`folio-offline-book-${id}`);
+      await cache.delete(new Request(`/api/books/${id}/chapters/1`));
+    }, EPUB_ID);
+
+    // Reload online: the boot integrity check must detect the hash mismatch,
+    // drop the manifest row AND the cache, and toast.
+    await reloadControlled(page);
+    await expect(page.locator(".toast")).toContainText(/removed some downloaded books/i, {
+      timeout: 15_000,
+    });
+
+    const state = await page.evaluate(async (id) => {
+      const hasCache = await caches.has(`folio-offline-book-${id}`);
+      const db = await new Promise<IDBDatabase>((res, rej) => {
+        const req = indexedDB.open("folio-offline");
+        req.onsuccess = () => res(req.result);
+        req.onerror = () => rej(req.error);
+      });
+      const row = await new Promise<any>((res) => {
+        const tx = db.transaction("books", "readonly");
+        const r = tx.objectStore("books").get(id);
+        r.onsuccess = () => res(r.result);
+        r.onerror = () => res(undefined);
+      });
+      return { hasCache, row };
+    }, EPUB_ID);
+    expect(state.row).toBeFalsy();
+    expect(state.hasCache).toBe(false);
+
+    // Grid badge gone.
+    await page.goto("/#/?q=Book%20050");
+    const card = page.locator(".grid .card", { hasText: "Book 050" });
+    await card.waitFor();
+    await expect(card.locator(".offline-badge")).toHaveCount(0);
+  });
+
+  test("reconciliation removes an offline copy of a book deleted server-side", async ({ page }) => {
+    // Inject a manifest row + cache for a book id the server doesn't have,
+    // mimicking a book deleted on the desktop side while it was saved offline.
+    const GHOST = "e2e-book-ghost-999";
+    await page.goto("/#/");
+    await page.evaluate(async (id) => {
+      const cache = await caches.open(`folio-offline-book-${id}`);
+      await cache.put(new Request(`/api/books/${id}`), new Response("{}", {
+        headers: { "Content-Type": "application/json" },
+      }));
+      const db = await new Promise<IDBDatabase>((res, rej) => {
+        const req = indexedDB.open("folio-offline");
+        req.onsuccess = () => res(req.result);
+        req.onerror = () => rej(req.error);
+      });
+      await new Promise<void>((res) => {
+        const tx = db.transaction("books", "readwrite");
+        tx.objectStore("books").put({
+          id, title: "Ghost", author: "x", format: "epub", totalChapters: 1,
+          pageCount: 0, savedAt: Date.now(), bytes: 2,
+          inventoryHash: "deadbeef", generation: "g", baselineLastReadAt: null, version: 1,
+        });
+        tx.oncomplete = () => res();
+        tx.onerror = () => res();
+      });
+    }, GHOST);
+
+    // Reload online: reconciliation compares manifests to the live library
+    // and removes the copy of a book that no longer exists on the server.
+    await reloadControlled(page);
+    await expect
+      .poll(async () =>
+        page.evaluate(async (id) => {
+          const hasCache = await caches.has(`folio-offline-book-${id}`);
+          const db = await new Promise<IDBDatabase>((res, rej) => {
+            const req = indexedDB.open("folio-offline");
+            req.onsuccess = () => res(req.result);
+            req.onerror = () => rej(req.error);
+          });
+          const row = await new Promise<any>((res) => {
+            const tx = db.transaction("books", "readonly");
+            const r = tx.objectStore("books").get(id);
+            r.onsuccess = () => res(r.result);
+            r.onerror = () => res(undefined);
+          });
+          return hasCache || !!row;
+        }, GHOST),
+        { timeout: 15_000 },
+      )
+      .toBe(false);
+  });
+});

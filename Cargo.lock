@@ -1870,6 +1870,7 @@ dependencies = [
  "chrono",
  "dirs 5.0.1",
  "folio-core",
+ "form_urlencoded",
  "image",
  "keyring",
  "log",
