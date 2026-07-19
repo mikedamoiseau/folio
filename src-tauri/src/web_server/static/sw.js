@@ -101,47 +101,39 @@ self.addEventListener("fetch", (event) => {
     // propagate the network outcome.
     const isPage = /^\/api\/books\/[^/]+\/pages\/\d+$/.test(url.pathname);
     const matchOpts = { cacheName: OFFLINE_CACHE_PREFIX + bookMatch[1], ignoreSearch: isPage };
-    if (!self.navigator.onLine) {
-      // The browser definitively reports offline (airplane mode): skip the
-      // network entirely and serve the cache; only touch the (doomed) network
-      // for an unsaved resource so the caller still gets a normal error.
-      event.respondWith(
-        caches.match(event.request, matchOpts).then((cached) => cached || fetch(event.request))
-      );
-      return;
-    }
-    // Online (or navigator.onLine can't be trusted — it stays true under some
-    // engines' emulated-offline and on a LAN whose server has gone away):
-    // network-FIRST so auth/session/profile-lock/freshness always come from
-    // the server when it answers. But a saved book's cached content must not
-    // be held hostage to a fetch that hangs (emulated offline, dead server on
-    // a still-"online" LAN), so race the network against a short timeout and
-    // fall back to the cache if the network hasn't answered by then. Book
-    // content is immutable per id, so serving the cached copy on a slow/hung
-    // network is safe; a real localhost/LAN server answers in tens of ms —
-    // far under the 800ms timeout — so the auth-sensitive path stays
-    // network-first in every normal case.
     event.respondWith((async () => {
-      const cachedPromise = caches.match(event.request, matchOpts);
+      // Is this exact request in the book's offline cache?
+      const cached = await caches.match(event.request, matchOpts);
+
+      // No cache to fall back to — the ONLY correct behavior is a plain
+      // network fetch that runs to its natural success or failure. This is
+      // the common online case (reading a book that isn't saved offline);
+      // fabricating any timeout/error here would turn a merely-slow request
+      // (routine over a phone's Tailscale/VPN link) into a bogus "couldn't
+      // reach server". No cache also means nothing to serve offline, so a
+      // genuine failure propagates normally.
+      if (!cached) return fetch(event.request);
+
+      // A cached copy EXISTS (a saved book). If the browser reports offline,
+      // don't even try the network — serve the cache instantly.
+      if (!self.navigator.onLine) return cached;
+
+      // Online with a cached copy: network-FIRST so auth/session/freshness
+      // come from the server when it answers, but never let saved content be
+      // held hostage to a hung/dead-but-"online" network. Race the network
+      // against a short timeout; on timeout OR outright failure, fall back to
+      // the cache we already have. (Book content is immutable per id, so
+      // serving the cached copy on a slow network is safe.) The timeout only
+      // ever costs a fresh re-validation of an already-downloaded book — it
+      // can never manufacture an error, because we only reach here holding a
+      // cache to return.
       const netPromise = fetch(event.request);
-      netPromise.catch(() => {}); // may be abandoned below — don't leak an unhandled rejection
-      try {
-        const raced = await Promise.race([
-          netPromise.then((response) => ({ response })),
-          new Promise((resolve) => setTimeout(() => resolve({ timedOut: true }), 800)),
-        ]);
-        if (raced.response) return raced.response;
-        // Network didn't answer within the timeout. Serve the cache if we
-        // have it; otherwise treat the resource as unreachable and fail fast
-        // with a network error — do NOT await the possibly-hung netPromise,
-        // which would stall the caller indefinitely (e.g. an uncached
-        // /progress request the reader/detail issues while offline).
-        return (await cachedPromise) || Response.error();
-      } catch (err) {
-        // fetch() rejected outright (server refused / unreachable) — cache or
-        // propagate the failure.
-        return (await cachedPromise) || Response.error();
-      }
+      netPromise.catch(() => {}); // may be abandoned — don't leak an unhandled rejection
+      const raced = await Promise.race([
+        netPromise.then((response) => ({ response })).catch(() => ({ failed: true })),
+        new Promise((resolve) => setTimeout(() => resolve({ timedOut: true }), 2500)),
+      ]);
+      return raced.response || cached;
     })());
     return;
   }
