@@ -149,6 +149,10 @@ pub fn routes(state: WebState) -> Router<WebState> {
         .route("/books/{id}/pages/{index}", get(get_page_image))
         .route("/books/{id}/page-count", get(get_page_count))
         .route("/books/{id}/progress", get(get_progress).put(put_progress))
+        .route(
+            "/books/{id}/want-to-read",
+            axum::routing::put(put_want_to_read),
+        )
         .route("/reading-progress", get(get_all_progress))
         .route("/books/{id}/download", get(download_book))
         // OPDS feeds emit `/download/{book_id}.{ext}` so clients using URL-
@@ -301,6 +305,13 @@ struct BookQuery {
     // before (OPDS/desktop and any other caller never sends it).
     limit: Option<usize>,
     offset: Option<usize>,
+    /// Presence-only: `?want_to_read=true` enables the filter; any other value
+    /// or absence leaves it off. Typed as `String` (not `bool`) deliberately —
+    /// axum's `Query` extraction is all-or-nothing, so a `bool` field would
+    /// 400 the whole listing on a malformed/empty value (`want_to_read=`,
+    /// `want_to_read=1`) that a proxy or OPDS client might append. Lenient
+    /// parsing keeps the catalog serving, matching the Item-14 param convention.
+    want_to_read: Option<String>,
 }
 
 async fn list_books(
@@ -329,6 +340,11 @@ async fn list_books(
                 })
                 .collect()
         }
+        _ => books,
+    };
+
+    let books = match params.want_to_read.as_deref() {
+        Some("true") => books.into_iter().filter(|b| b.want_to_read).collect(),
         _ => books,
     };
 
@@ -1091,6 +1107,33 @@ async fn put_progress(
     .map_err(folio_status)?;
 
     Ok(Json(progress))
+}
+
+#[derive(serde::Deserialize)]
+struct WantToReadUpdate {
+    want_to_read: bool,
+}
+
+async fn put_want_to_read(
+    State(state): State<WebState>,
+    Path(id): Path<String>,
+    body: Bytes,
+) -> Result<StatusCode, (StatusCode, String)> {
+    // Parsed manually (like `put_progress`) so malformed bodies map to 400
+    // rather than axum's built-in 422.
+    let body: WantToReadUpdate = serde_json::from_slice(&body).map_err(|e| {
+        (
+            StatusCode::BAD_REQUEST,
+            format!("Invalid request body: {e}"),
+        )
+    })?;
+
+    let conn = state.conn().map_err(folio_status)?;
+    db::get_book(&conn, &id)
+        .map_err(folio_status)?
+        .ok_or_else(|| (StatusCode::NOT_FOUND, "Book not found".to_string()))?;
+    db::set_want_to_read(&conn, &id, body.want_to_read).map_err(folio_status)?;
+    Ok(StatusCode::OK)
 }
 
 /// Item 15: bulk progress rows for the library grid's progress badges.

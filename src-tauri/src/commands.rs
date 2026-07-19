@@ -1756,6 +1756,18 @@ pub async fn update_book_metadata(
     Ok(book)
 }
 
+/// Toggle the manual "want to read" flag. Deliberately separate from
+/// `update_book_metadata` so a stale metadata edit cannot clobber the flag.
+#[tauri::command]
+pub async fn set_want_to_read(
+    book_id: String,
+    want: bool,
+    state: State<'_, AppState>,
+) -> FolioResult<()> {
+    let conn = state.active_db()?.get()?;
+    Ok(db::set_want_to_read(&conn, &book_id, want)?)
+}
+
 // --- Recently Read ---
 
 #[tauri::command]

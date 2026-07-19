@@ -2191,6 +2191,257 @@ mod tests {
         let _ = tx.send(());
     }
 
+    // ── "Want to read" flag: PUT endpoint + filter param ─────────────────────
+
+    // `books.file_path` is UNIQUE, so each seeded book needs a distinct path.
+    fn want_test_book(id: &str) -> crate::models::Book {
+        let mut b = progress_test_book(id, 1);
+        b.file_path = format!("/nonexistent/{id}.cbz");
+        b
+    }
+
+    #[tokio::test]
+    async fn put_want_to_read_then_filter() {
+        let state = test_state();
+        {
+            let conn = state.conn().unwrap();
+            crate::db::insert_book(&conn, &want_test_book("wt-1")).unwrap();
+            crate::db::insert_book(&conn, &want_test_book("wt-2")).unwrap();
+        }
+        let (_state, port, tx) = spawn_progress_test_server(state).await;
+        let client = reqwest::Client::new();
+
+        let resp = client
+            .put(format!(
+                "http://127.0.0.1:{port}/api/books/wt-1/want-to-read"
+            ))
+            .json(&serde_json::json!({"want_to_read": true}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+
+        let resp = client
+            .get(format!(
+                "http://127.0.0.1:{port}/api/books?want_to_read=true"
+            ))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+        let body: serde_json::Value = resp.json().await.unwrap();
+        let ids: Vec<String> = body
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|b| b["id"].as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(ids, vec!["wt-1"]);
+
+        let _ = tx.send(());
+    }
+
+    #[tokio::test]
+    async fn put_want_to_read_malformed_400_and_missing_404() {
+        let state = test_state();
+        {
+            let conn = state.conn().unwrap();
+            crate::db::insert_book(&conn, &want_test_book("wt-3")).unwrap();
+        }
+        let (_state, port, tx) = spawn_progress_test_server(state).await;
+        let client = reqwest::Client::new();
+
+        let resp = client
+            .put(format!(
+                "http://127.0.0.1:{port}/api/books/wt-3/want-to-read"
+            ))
+            .header("content-type", "application/json")
+            .body("not json")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 400);
+
+        let resp = client
+            .put(format!(
+                "http://127.0.0.1:{port}/api/books/nope/want-to-read"
+            ))
+            .json(&serde_json::json!({"want_to_read": true}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 404);
+
+        let _ = tx.send(());
+    }
+
+    #[tokio::test]
+    async fn put_want_to_read_requires_auth_when_pin_set() {
+        let state = test_state();
+        *state.pin_hash.lock().unwrap() = Some(auth::hash_pin("1234"));
+        {
+            let conn = state.conn().unwrap();
+            crate::db::insert_book(&conn, &want_test_book("wt-4")).unwrap();
+        }
+        let (_state, port, tx) = spawn_progress_test_server(state).await;
+        let client = reqwest::Client::new();
+
+        let resp = client
+            .put(format!(
+                "http://127.0.0.1:{port}/api/books/wt-4/want-to-read"
+            ))
+            .json(&serde_json::json!({"want_to_read": true}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 401);
+
+        let _ = tx.send(());
+    }
+
+    #[tokio::test]
+    async fn want_to_read_filter_composes_with_series_and_q() {
+        let state = test_state();
+        {
+            let conn = state.conn().unwrap();
+            // Two books in series "S"; one also matches a title search.
+            let mut s1 = want_test_book("wt-s1");
+            s1.series = Some("S".to_string());
+            s1.title = "Alpha".to_string();
+            let mut s2 = want_test_book("wt-s2");
+            s2.series = Some("S".to_string());
+            s2.title = "Beta".to_string();
+            // A flagged book NOT in series "S" — must be excluded by the series filter.
+            let mut other = want_test_book("wt-other");
+            other.series = Some("T".to_string());
+            crate::db::insert_book(&conn, &s1).unwrap();
+            crate::db::insert_book(&conn, &s2).unwrap();
+            crate::db::insert_book(&conn, &other).unwrap();
+        }
+        let (_state, port, tx) = spawn_progress_test_server(state).await;
+        let client = reqwest::Client::new();
+
+        // Flag wt-s1 (series S) and wt-other (series T).
+        for id in ["wt-s1", "wt-other"] {
+            let resp = client
+                .put(format!(
+                    "http://127.0.0.1:{port}/api/books/{id}/want-to-read"
+                ))
+                .json(&serde_json::json!({"want_to_read": true}))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), 200);
+        }
+
+        // want_to_read ∩ series=S → only wt-s1 (wt-other flagged but wrong series;
+        // wt-s2 in series but not flagged).
+        let resp = client
+            .get(format!(
+                "http://127.0.0.1:{port}/api/books?want_to_read=true&series=S"
+            ))
+            .send()
+            .await
+            .unwrap();
+        let body: serde_json::Value = resp.json().await.unwrap();
+        let ids: Vec<String> = body
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|b| b["id"].as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(ids, vec!["wt-s1"]);
+
+        // want_to_read ∩ q=Beta → empty (wt-s2 matches q but isn't flagged).
+        let resp = client
+            .get(format!(
+                "http://127.0.0.1:{port}/api/books?want_to_read=true&q=Beta"
+            ))
+            .send()
+            .await
+            .unwrap();
+        let body: serde_json::Value = resp.json().await.unwrap();
+        assert!(
+            body.as_array().unwrap().is_empty(),
+            "want_to_read ∩ q=Beta must be empty, got {body:?}"
+        );
+
+        let _ = tx.send(());
+    }
+
+    #[tokio::test]
+    async fn want_to_read_filter_is_lenient_and_paginates() {
+        let state = test_state();
+        {
+            let conn = state.conn().unwrap();
+            crate::db::insert_book(&conn, &want_test_book("wt-a")).unwrap();
+            crate::db::insert_book(&conn, &want_test_book("wt-b")).unwrap();
+            crate::db::insert_book(&conn, &want_test_book("wt-c")).unwrap();
+        }
+        let (_state, port, tx) = spawn_progress_test_server(state).await;
+        let client = reqwest::Client::new();
+
+        // Flag two of the three books.
+        for id in ["wt-a", "wt-b"] {
+            let resp = client
+                .put(format!(
+                    "http://127.0.0.1:{port}/api/books/{id}/want-to-read"
+                ))
+                .json(&serde_json::json!({"want_to_read": true}))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), 200);
+        }
+
+        // Malformed / empty / non-"true" values must NOT 400 the listing — they
+        // leave the filter off and return the full library. Regression guard:
+        // an `Option<bool>` field made axum's Query extraction 400 the whole
+        // catalog on these inputs.
+        for q in ["want_to_read=", "want_to_read=1", "want_to_read=false"] {
+            let resp = client
+                .get(format!("http://127.0.0.1:{port}/api/books?{q}"))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), 200, "query `{q}` must not 400");
+            let body: serde_json::Value = resp.json().await.unwrap();
+            assert_eq!(
+                body.as_array().unwrap().len(),
+                3,
+                "query `{q}` leaves the filter off (full library)"
+            );
+        }
+
+        // `want_to_read=true` composes with pagination: X-Total-Count reflects
+        // the filtered set (2), and `limit` slices it.
+        let resp = client
+            .get(format!(
+                "http://127.0.0.1:{port}/api/books?want_to_read=true&limit=1"
+            ))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+        assert_eq!(
+            resp.headers()
+                .get("x-total-count")
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            "2",
+            "total reflects the flagged set, not the whole library"
+        );
+        let body: serde_json::Value = resp.json().await.unwrap();
+        assert_eq!(
+            body.as_array().unwrap().len(),
+            1,
+            "limit slices the flagged set"
+        );
+
+        let _ = tx.send(());
+    }
+
     // F4: `total_chapters` can be stale relative to the reader's live
     // /page-count (e.g. re-paginated PDF/CBZ). Rejecting indices beyond the
     // stored total made saves beyond that stale bound silently fail. The web
