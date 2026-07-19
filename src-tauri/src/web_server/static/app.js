@@ -2475,12 +2475,12 @@
       if (!hashTargetsDetail(id)) return;
       const offlineSaveable = !isHtmlBook || book.total_chapters > 0;
       if (offlineRow) {
-        actionsHtml += `<span class="offline-saved-label">Saved · ${esc(formatFileSize(offlineRow.bytes) || "")}</span><button class="btn-secondary" id="offline-remove-btn">Remove download</button><span class="offline-usage" id="offline-usage" role="status"></span>`;
+        actionsHtml += `<span class="offline-saved-label">Saved · ${esc(formatFileSize(offlineRow.bytes) || "")}</span><button class="btn-secondary" id="offline-remove-btn">Remove offline copy</button><span class="offline-usage" id="offline-usage" role="status"></span>`;
       } else if (activeOfflineSaves[id]) {
         // A save started from a previous render of this page is still
         // running — never offer a second concurrent one, but do offer a
         // Cancel (the running save's own catch re-renders on completion).
-        actionsHtml += `<button class="btn-secondary" disabled>Downloading…</button><button class="btn-secondary" id="offline-cancel-btn">Cancel</button>`;
+        actionsHtml += `<button class="btn-secondary" disabled>Saving…</button><button class="btn-secondary" id="offline-cancel-btn">Cancel</button>`;
       } else if (offlineSaveable) {
         actionsHtml += `<button class="btn-secondary" id="offline-save-btn">Save offline</button>`;
       }
@@ -2551,7 +2551,7 @@
     const offlineSaveBtn = $("#offline-save-btn");
     if (offlineSaveBtn) offlineSaveBtn.addEventListener("click", async () => {
       offlineSaveBtn.disabled = true;
-      offlineSaveBtn.textContent = "Downloading…";
+      offlineSaveBtn.textContent = "Saving…";
       const prog = document.createElement("span");
       prog.className = "offline-save-progress";
       prog.setAttribute("role", "status");
@@ -2578,7 +2578,7 @@
         showToast(e.cancelled ? "Download cancelled" : (e.message || "Download failed — retry"));
         // Re-render rather than mutate these captured elements: if the user
         // navigated away and back mid-save, showDetail already replaced this
-        // page with a disabled "Downloading…" button bound to nothing —
+        // page with a disabled "Saving…" button bound to nothing —
         // mutating the detached original would leave that visible button
         // stuck. A fresh render reflects the real (not-saved) state with a
         // working Save button.
