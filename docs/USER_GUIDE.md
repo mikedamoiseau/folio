@@ -130,7 +130,9 @@ The status badge (top-right of the cover) reflects where you are with a book:
 - **Finished** (a checkmark) — read to the end
 - **Unread** books show no badge
 
-In the full library view, a **"Continue Reading"** row at the top shows your most recently read books, and a **"Discover"** row shows popular titles from your configured OPDS catalogs. Both sections are hidden when viewing a collection or series, so you see only the relevant books.
+In the full library view, a **"Continue Reading"** row at the top shows your most recently read books, and a **"Discover"** row shows popular titles from your configured OPDS catalogs. An optional **"Want to Read"** row (enabled in Settings → General) lists the books you've flagged as want-to-read. These sections are hidden when viewing a collection or series, so you see only the relevant books.
+
+Mark a book as **want to read** from the bookmark button on its detail modal, or hover its cover and click the bookmark quick-action. It's a manual flag, independent of a book's reading progress, and it's preserved when you back up and restore your library.
 
 The grid is built for large libraries: covers are stored as lightweight thumbnails and only the rows currently on screen are rendered, so scrolling stays smooth even with thousands of books.
 
@@ -142,6 +144,7 @@ The grid is built for large libraries: covers are stored as lightweight thumbnai
 - **Rating filter:** Filter by minimum star rating (1+ through 5 stars).
 - **Sorting:** Sort by date added, title, author, last read, progress, rating, or series — ascending or descending.
 - **Source filter:** Filter by All, Imported, or Linked books.
+- **Want-to-read filter:** Click the bookmark button next to the status filter to show only books you've flagged as want to read. Your choice persists between sessions.
 - **Tag filter:** Click the "Tags" button to open a searchable dropdown of all your tags. Select one or more tags to filter — only books with all selected tags are shown (AND logic). Selected tags appear as chips on the button. Your tag selection persists between sessions.
 
 All filters combine, so you can search for "asimov" within "epub" books tagged "sci-fi" that are "in progress."

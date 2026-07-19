@@ -105,6 +105,7 @@ const libraryBook = {
   language: null,
   publish_year: null,
   is_imported: true,
+  want_to_read: false,
 };
 
 function discoverEntry(id: string, title: string, author: string) {

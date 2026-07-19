@@ -7,6 +7,7 @@ const NONE = {
   filterStatus: "all",
   filterRating: "all",
   filterSource: "all",
+  filterWantToRead: false,
   filterTagIds: [] as string[],
 };
 
@@ -24,6 +25,7 @@ describe("hasActiveLibraryFilters (F2f empty-state cause)", () => {
     ["filterStatus", { filterStatus: "finished" }],
     ["filterRating", { filterRating: "4" }],
     ["filterSource", { filterSource: "linked" }],
+    ["filterWantToRead", { filterWantToRead: true }],
   ])("returns true when %s is set", (_label, override) => {
     expect(hasActiveLibraryFilters({ ...NONE, ...override })).toBe(true);
   });

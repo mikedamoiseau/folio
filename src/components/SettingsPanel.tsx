@@ -414,6 +414,9 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
   // Discover section visibility
   const [showDiscover, setShowDiscover] = useState(() => localStorage.getItem("folio-show-discover") === "true");
 
+  // Want to Read section visibility
+  const [showWantToRead, setShowWantToRead] = useState(() => localStorage.getItem("folio-show-want-to-read") === "true");
+
   // Auto-focus new imported books (default off)
   const [autoFocusNewBooks, setAutoFocusNewBooks] = useState(() => localStorage.getItem("folio-auto-focus-new-books") === "true");
   const [updateCheckStartup, setUpdateCheckStartup] = useState(true);
@@ -1481,6 +1484,29 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                 >
                   <span
                     className={`absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full shadow transition-transform ${showDiscover ? "translate-x-4" : ""}`}
+                  />
+                </button>
+              </label>
+              <label className="flex items-center justify-between gap-3 bg-warm-subtle rounded-xl px-3 py-2.5">
+                <div>
+                  <span className="text-sm text-ink">{t("settings.showWantToRead")}</span>
+                  <p className="text-[11px] text-ink-muted/60 mt-0.5">{t("settings.showWantToReadHint")}</p>
+                </div>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={showWantToRead}
+                  data-testid="show-want-to-read-toggle"
+                  onClick={() => {
+                    const next = !showWantToRead;
+                    setShowWantToRead(next);
+                    localStorage.setItem("folio-show-want-to-read", String(next));
+                    window.dispatchEvent(new Event("folio-show-want-to-read-changed"));
+                  }}
+                  className={`relative w-10 h-6 rounded-full transition-colors shrink-0 ${showWantToRead ? "bg-accent" : "bg-warm-border"}`}
+                >
+                  <span
+                    className={`absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full shadow transition-transform ${showWantToRead ? "translate-x-4" : ""}`}
                   />
                 </button>
               </label>

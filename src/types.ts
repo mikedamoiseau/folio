@@ -18,6 +18,7 @@ export interface Book {
   publisher: string | null;
   publish_year: number | null;
   is_imported: boolean;
+  want_to_read: boolean;
 }
 
 /** Lightweight book data for grid/list display — no description, genres, isbn, etc. */
@@ -35,4 +36,5 @@ export interface BookGridItem {
   language: string | null;
   publish_year: number | null;
   is_imported: boolean;
+  want_to_read: boolean;
 }

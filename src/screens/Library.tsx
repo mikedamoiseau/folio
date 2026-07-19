@@ -82,6 +82,7 @@ export default function Library({ catalogImportedBookIds }: LibraryProps = {}) {
   const [filterStatus, setFilterStatus] = useState<string>(() => localStorage.getItem("folio-library-filter-status") ?? "all");
   const [filterRating, setFilterRating] = useState<string>(() => localStorage.getItem("folio-library-filter-rating") ?? "all");
   const [filterSource, setFilterSource] = useState<string>(() => localStorage.getItem("folio-library-filter-source") ?? "all");
+  const [filterWantToRead, setFilterWantToRead] = useState(() => localStorage.getItem("folio-library-filter-want-to-read") === "true");
   const [filterTagIds, setFilterTagIds] = useState<string[]>(() => {
     try {
       const stored = localStorage.getItem("folio-library-filter-tags");
@@ -100,6 +101,7 @@ export default function Library({ catalogImportedBookIds }: LibraryProps = {}) {
   useEffect(() => { localStorage.setItem("folio-library-filter-status", filterStatus); }, [filterStatus]);
   useEffect(() => { localStorage.setItem("folio-library-filter-rating", filterRating); }, [filterRating]);
   useEffect(() => { localStorage.setItem("folio-library-filter-source", filterSource); }, [filterSource]);
+  useEffect(() => { localStorage.setItem("folio-library-filter-want-to-read", String(filterWantToRead)); }, [filterWantToRead]);
   useEffect(() => { localStorage.setItem("folio-library-filter-tags", JSON.stringify(filterTagIds)); }, [filterTagIds]);
 
   const [fileNotAvailableBookId, setFileNotAvailableBookId] = useState<string | null>(null);
@@ -165,6 +167,7 @@ export default function Library({ catalogImportedBookIds }: LibraryProps = {}) {
   // Discover — popular/new books from catalogs (loaded lazily, cached 24h)
   interface DiscoverEntry { id: string; title: string; author: string; summary: string; coverUrl: string | null; links: { href: string; mimeType: string; rel: string }[]; navUrl: string | null }
   const [showDiscover, setShowDiscover] = useState(() => localStorage.getItem("folio-show-discover") === "true");
+  const [showWantToRead, setShowWantToRead] = useState(() => localStorage.getItem("folio-show-want-to-read") === "true");
   const [discoverBooks, setDiscoverBooks] = useState<DiscoverEntry[]>([]);
   const [discoverInfo, setDiscoverInfo] = useState<{ id: string; rect: DOMRect } | null>(null);
   const [discoverLoading, setDiscoverLoading] = useState(true);
@@ -186,6 +189,13 @@ export default function Library({ catalogImportedBookIds }: LibraryProps = {}) {
     const handler = () => setShowDiscover(localStorage.getItem("folio-show-discover") === "true");
     window.addEventListener("folio-show-discover-changed", handler);
     return () => window.removeEventListener("folio-show-discover-changed", handler);
+  }, []);
+
+  // Sync showWantToRead when changed from SettingsPanel
+  useEffect(() => {
+    const handler = () => setShowWantToRead(localStorage.getItem("folio-show-want-to-read") === "true");
+    window.addEventListener("folio-show-want-to-read-changed", handler);
+    return () => window.removeEventListener("folio-show-want-to-read-changed", handler);
   }, []);
 
   // Collections state
@@ -580,12 +590,13 @@ export default function Library({ catalogImportedBookIds }: LibraryProps = {}) {
         if (filterSource === "imported" && book.is_imported === false) return false;
         if (filterSource === "linked" && book.is_imported !== false) return false;
       }
+      if (filterWantToRead && !book.want_to_read) return false;
       return true;
     })
     .filter((book) => {
       if (!activeSeries) return true;
       return book.series === activeSeries;
-    }), [books, pendingRemovalIds, debouncedSearch, filterFormat, filterStatus, filterRating, filterSource, progressMap, activeSeries]);
+    }), [books, pendingRemovalIds, debouncedSearch, filterFormat, filterStatus, filterRating, filterSource, filterWantToRead, progressMap, activeSeries]);
 
   // Per-tag counts reflecting all OTHER active filters (excluding the tag
   // filter itself, so they stay meaningful while multi-selecting tags).
@@ -667,7 +678,27 @@ export default function Library({ catalogImportedBookIds }: LibraryProps = {}) {
     volume: book.volume,
     rating: book.rating,
     isImported: book.is_imported,
+    wantToRead: book.want_to_read,
   }), [progressMap, lastReadMap]);
+
+  // Reflect a want-to-read toggle in local state so the filter and home shelf
+  // update without a reload. WantToReadToggle awaits set_want_to_read, then
+  // calls this on success (or onError -> handleWantToReadError's toast on
+  // failure). We update local state optimistically post-commit, mirroring the
+  // flag onto the grid item and open detail modal. A full-library reload
+  // (import/scan/collection switch) that was already in flight can momentarily
+  // show a stale flag until the next load; it always converges to DB truth and
+  // never pins a value, so we accept it rather than add reload sequencing here.
+  const handleWantToReadChange = useCallback((bookId: string, want: boolean) => {
+    setBooks((prev) => prev.map((b) => (b.id === bookId ? { ...b, want_to_read: want } : b)));
+    setDetailBook((prev) => (prev && prev.id === bookId ? { ...prev, want_to_read: want } : prev));
+  }, []);
+
+  // Surface a toast when the set_want_to_read write fails; the flag is left
+  // unchanged by the toggle, so no local state to revert.
+  const handleWantToReadError = useCallback(() => {
+    addToast(t("library.wantToReadFailed"), "error");
+  }, [addToast, t]);
 
   // Drag ghost: track mouse position and drag state
   const bookDragging = useSyncExternalStore(subscribe, isDragging);
@@ -781,6 +812,25 @@ export default function Library({ catalogImportedBookIds }: LibraryProps = {}) {
 
   const hasBooks = books.length > 0;
   const hasResults = filtered.length > 0;
+  const hasActiveFilters = hasActiveLibraryFilters({
+    search,
+    filterFormat,
+    filterStatus,
+    filterRating,
+    filterSource,
+    filterWantToRead,
+    filterTagIds,
+  });
+  // The home shelf only shows on the unfiltered "all books" view, so compute
+  // its list lazily — the filter runs only when the shelf would actually
+  // render (and excludes mid-deletion books, like the grid's filteredBeforeTags).
+  const wantToReadBooks = useMemo(
+    () =>
+      showWantToRead && !search && !activeCollectionId && !activeSeries && !hasActiveFilters
+        ? books.filter((b) => b.want_to_read && !pendingRemovalIds.has(b.id))
+        : [],
+    [showWantToRead, search, activeCollectionId, activeSeries, hasActiveFilters, books, pendingRemovalIds],
+  );
 
   // Determine if we're in a manual collection view (enables remove-from-collection)
   const activeCollection = collections.find((c) => c.id === activeCollectionId) ?? null;
@@ -914,6 +964,24 @@ export default function Library({ catalogImportedBookIds }: LibraryProps = {}) {
             <option value="imported">{t("library.sourceImported")}</option>
             <option value="linked">{t("library.sourceLinked")}</option>
           </select>
+
+          {/* Filter: want to read */}
+          <button
+            type="button"
+            onClick={() => setFilterWantToRead((v) => !v)}
+            aria-pressed={filterWantToRead}
+            title={t("library.wantToRead")}
+            aria-label={t("library.wantToRead")}
+            className={`shrink-0 h-9 w-9 flex items-center justify-center rounded-lg border border-transparent transition-colors ${
+              filterWantToRead
+                ? "text-accent bg-accent-light"
+                : "text-ink-muted bg-warm-subtle hover:text-ink"
+            }`}
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill={filterWantToRead ? "currentColor" : "none"} stroke="currentColor" strokeWidth="1.5">
+              <path d="M6 3h12a1 1 0 011 1v17l-7-4-7 4V4a1 1 0 011-1z" strokeLinejoin="round" />
+            </svg>
+          </button>
 
           {/* Filter: tags */}
           <TagFilter
@@ -1139,6 +1207,45 @@ export default function Library({ catalogImportedBookIds }: LibraryProps = {}) {
               <h2 className="text-sm font-semibold text-ink-muted uppercase tracking-wide mb-3">{t("library.continueReading")}</h2>
               <div className="flex gap-4 overflow-x-auto pb-2">
                 {recentlyRead.map((book) => (
+                  <button
+                    key={book.id}
+                    onClick={() => openBook(book.id)}
+                    className="shrink-0 w-28 group text-left rounded-lg overflow-hidden bg-surface border border-warm-border hover:shadow-md hover:-translate-y-0.5 transition-all duration-200"
+                  >
+                    <div className="aspect-[2/3] bg-warm-subtle overflow-hidden">
+                      {book.cover_path ? (
+                        <img
+                          src={convertFileSrc(book.cover_path)}
+                          alt={book.title}
+                          className="w-full h-full object-cover"
+                        />
+                      ) : (
+                        <div className="flex items-center justify-center w-full h-full">
+                          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" className="text-ink-muted opacity-40">
+                            <path d="M4 19.5v-15A2.5 2.5 0 016.5 2H20v20H6.5a2.5 2.5 0 010-5H20" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                          </svg>
+                        </div>
+                      )}
+                    </div>
+                    <div className="px-2 py-1.5">
+                      <p className="text-xs font-medium text-ink truncate">{book.title}</p>
+                      {progressMap[book.id] > 0 && (
+                        <div className="mt-1 h-0.5 rounded-full bg-warm-subtle">
+                          <div className="h-full rounded-full bg-accent" style={{ width: `${progressMap[book.id]}%` }} />
+                        </div>
+                      )}
+                    </div>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+          {/* Want to Read — books manually flagged to read next */}
+          {showWantToRead && !search && !activeCollectionId && !activeSeries && !hasActiveFilters && wantToReadBooks.length > 0 && (
+            <div className="mb-1 col-[1/-1]" data-testid="want-to-read-section">
+              <h2 className="text-sm font-semibold text-ink-muted uppercase tracking-wide mb-3">{t("library.wantToReadShelf")}</h2>
+              <div className="flex gap-4 overflow-x-auto pb-2">
+                {wantToReadBooks.map((book) => (
                   <button
                     key={book.id}
                     onClick={() => openBook(book.id)}
@@ -1408,6 +1515,8 @@ export default function Library({ catalogImportedBookIds }: LibraryProps = {}) {
                               },
                               onDelete: selectMode ? undefined : handleRemoveBook,
                               onInfo: handleShowBookDetail,
+                              onWantToReadChange: selectMode ? undefined : handleWantToReadChange,
+                              onWantToReadError: handleWantToReadError,
                             }}
                             isScanning={scanningBookId === book.id}
                             isSelected={selectMode && selectedIds.has(book.id)}
@@ -1471,6 +1580,8 @@ export default function Library({ catalogImportedBookIds }: LibraryProps = {}) {
                                 },
                                 onDelete: selectMode ? undefined : handleRemoveBook,
                                 onInfo: handleShowBookDetail,
+                                onWantToReadChange: selectMode ? undefined : handleWantToReadChange,
+                                onWantToReadError: handleWantToReadError,
                                 onRemoveFromCollection:
                                   isManualCollectionView && activeCollectionId
                                     ? () => handleRemoveFromCollection(book.id)
@@ -1532,6 +1643,8 @@ export default function Library({ catalogImportedBookIds }: LibraryProps = {}) {
                             },
                             onDelete: selectMode ? undefined : handleRemoveBook,
                             onInfo: handleShowBookDetail,
+                            onWantToReadChange: selectMode ? undefined : handleWantToReadChange,
+                            onWantToReadError: handleWantToReadError,
                           }}
                           isScanning={scanningBookId === book.id}
                           isSelected={selectMode && selectedIds.has(book.id)}
@@ -1575,6 +1688,8 @@ export default function Library({ catalogImportedBookIds }: LibraryProps = {}) {
                       },
                       onDelete: selectMode ? undefined : handleRemoveBook,
                       onInfo: handleShowBookDetail,
+                      onWantToReadChange: selectMode ? undefined : handleWantToReadChange,
+                      onWantToReadError: handleWantToReadError,
                       onRemoveFromCollection:
                         isManualCollectionView && activeCollectionId
                           ? () => handleRemoveFromCollection(book.id)
@@ -1590,14 +1705,6 @@ export default function Library({ catalogImportedBookIds }: LibraryProps = {}) {
           })()
         ) : (
           (() => {
-            const hasActiveFilters = hasActiveLibraryFilters({
-              search,
-              filterFormat,
-              filterStatus,
-              filterRating,
-              filterSource,
-              filterTagIds,
-            });
             return (
               <div className="flex flex-col items-center justify-center h-full text-center">
                 <p className="text-base font-medium text-ink">
@@ -1615,7 +1722,7 @@ export default function Library({ catalogImportedBookIds }: LibraryProps = {}) {
                 {hasActiveFilters && (
                   <button
                     type="button"
-                    onClick={() => { setSearch(""); setFilterFormat("all"); setFilterStatus("all"); setFilterRating("all"); setFilterSource("all"); setFilterTagIds([]); }}
+                    onClick={() => { setSearch(""); setFilterFormat("all"); setFilterStatus("all"); setFilterRating("all"); setFilterSource("all"); setFilterWantToRead(false); setFilterTagIds([]); }}
                     className="mt-3 px-4 py-1.5 text-sm text-accent hover:text-accent-hover transition-colors"
                   >
                     {t("library.clearAllFilters")}
@@ -1699,6 +1806,8 @@ export default function Library({ catalogImportedBookIds }: LibraryProps = {}) {
             openBook(id);
           }}
           onEdit={handleEditBook}
+          onWantToReadChange={selectMode ? undefined : handleWantToReadChange}
+          onWantToReadError={handleWantToReadError}
           onScan={async (id) => {
             setScanningBookId(id);
             try {
