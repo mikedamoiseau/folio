@@ -871,6 +871,23 @@ On a phone or tablet the main sections — Library, Collections, and Reading Sta
 
 The web interface works entirely on your local network. No internet connection needed, no data leaves your WiFi.
 
+### Access from outside your network
+
+By default the server is reachable only from devices on the same WiFi, over a plain `http://<your-ip>:7788` address. To reach your library while away from home — and to serve it over **`https`**, which some features need — put the server behind a secure tunnel or reverse proxy that terminates TLS. Two things unlock once the web UI is served over `https`:
+
+- **App-shell caching** for faster loads (see *Installing to your home screen* below).
+- **Save offline** — downloading books to read without a connection (see *Reading offline* below). The **Save offline** button only appears on a secure-context (`https` or `localhost`) address.
+
+**Example — a mesh VPN (Tailscale).** Install it on both the host running Folio and the device you want to read from, so they share a private network. Then, on the host, expose the web-server port over `https` with a single command:
+
+```bash
+tailscale serve --bg 7788
+```
+
+This gives you a private `https://<your-host>.<your-tailnet>.ts.net` URL. Open that in the browser on your other device instead of the LAN IP — the PIN login still applies, and the `https` address enables offline saving and shell caching. Other mesh VPNs, or a reverse proxy (Caddy, nginx, …) with a valid certificate, work the same way.
+
+Whichever route you pick, the PIN is still required. Exposing the server beyond a private VPN (i.e. straight to the public internet) widens the attack surface — prefer a VPN or an authenticated reverse proxy over a bare port-forward.
+
 ### Installing to your home screen
 
 The web UI can be installed like an app, so it opens full-screen without browser chrome and gets its own icon:
