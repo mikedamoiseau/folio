@@ -643,6 +643,7 @@ mod tests {
             publisher: None,
             publish_year: None,
             is_imported: false,
+            want_to_read: false,
         };
         db::insert_book(&conn, &book).unwrap();
         (conn, book_id)

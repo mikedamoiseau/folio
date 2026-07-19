@@ -1338,6 +1338,7 @@ mod tests {
             publisher: None,
             publish_year: None,
             is_imported: false,
+            want_to_read: false,
         }
     }
 
@@ -1536,6 +1537,7 @@ mod tests {
             publisher: None,
             publish_year: None,
             is_imported: false,
+            want_to_read: false,
         }
     }
 
@@ -2032,6 +2034,7 @@ mod tests {
             publisher: None,
             publish_year: None,
             is_imported: false,
+            want_to_read: false,
         }
     }
 

@@ -64,6 +64,8 @@ pub struct Book {
     pub publisher: Option<String>,
     pub publish_year: Option<u16>,
     pub is_imported: bool,
+    #[serde(default)]
+    pub want_to_read: bool,
 }
 
 /// Lightweight subset of Book for grid/list display — omits heavy fields
@@ -83,6 +85,8 @@ pub struct BookGridItem {
     pub language: Option<String>,
     pub publish_year: Option<u16>,
     pub is_imported: bool,
+    #[serde(default)]
+    pub want_to_read: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -364,6 +368,19 @@ mod tests {
         let err = "xyz".parse::<BookFormat>().unwrap_err();
         assert!(err.contains("unknown book format"));
         assert!(err.contains("xyz"));
+    }
+
+    #[test]
+    fn book_deserializes_without_want_to_read_field() {
+        // Legacy library.json / metadata/books.json predate the field.
+        let json = r#"{"id":"b1","title":"T","author":"A","file_path":"b1.epub",
+            "cover_path":null,"total_chapters":1,"added_at":0,"format":"epub",
+            "file_hash":null,"description":null,"genres":null,"rating":null,
+            "isbn":null,"openlibrary_key":null,"enrichment_status":null,
+            "series":null,"volume":null,"language":null,"publisher":null,
+            "publish_year":null,"is_imported":true}"#;
+        let book: Book = serde_json::from_str(json).unwrap();
+        assert!(!book.want_to_read, "missing field defaults to false");
     }
 
     #[test]

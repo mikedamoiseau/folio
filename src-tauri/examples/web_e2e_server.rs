@@ -255,6 +255,7 @@ fn new_book(n: u32, cbz_path: &Path, epub_path: &Path) -> Book {
         publisher: None,
         publish_year: None,
         is_imported: false,
+        want_to_read: false,
         id,
     }
 }

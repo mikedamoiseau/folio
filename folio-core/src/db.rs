@@ -328,6 +328,9 @@ fn run_schema(conn: &Connection) -> Result<()> {
     // Linked-books: is_imported flag (1 = copied into library, 0 = linked in-place)
     let _ =
         conn.execute_batch("ALTER TABLE books ADD COLUMN is_imported INTEGER NOT NULL DEFAULT 1;");
+    // "Want to read" manual flag (0 = no, 1 = yes). Additive default 0.
+    let _ =
+        conn.execute_batch("ALTER TABLE books ADD COLUMN want_to_read INTEGER NOT NULL DEFAULT 0;");
 
     // Sync: add deleted_at for soft-delete support
     let _ = conn.execute_batch("ALTER TABLE bookmarks ADD COLUMN deleted_at INTEGER;");
@@ -491,8 +494,8 @@ pub fn init_db(db_path: &Path) -> Result<Connection> {
 
 pub fn insert_book(conn: &Connection, book: &Book) -> Result<()> {
     conn.execute(
-        "INSERT INTO books (id, title, author, file_path, cover_path, total_chapters, added_at, format, file_hash, description, genres, rating, isbn, openlibrary_key, updated_at, enrichment_status, series, volume, language, publisher, publish_year, is_imported)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22)",
+        "INSERT INTO books (id, title, author, file_path, cover_path, total_chapters, added_at, format, file_hash, description, genres, rating, isbn, openlibrary_key, updated_at, enrichment_status, series, volume, language, publisher, publish_year, is_imported, want_to_read)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23)",
         params![
             book.id,
             book.title,
@@ -516,6 +519,7 @@ pub fn insert_book(conn: &Connection, book: &Book) -> Result<()> {
             book.publisher,
             book.publish_year,
             book.is_imported as i32,
+            book.want_to_read as i32,
         ],
     )?;
     Ok(())
@@ -741,10 +745,10 @@ pub fn restore_secondary_data(conn: &Connection, data: &SecondaryImport) -> Rest
     counts
 }
 
-const GRID_COLUMNS: &str = "id, title, author, cover_path, total_chapters, added_at, format, series, volume, rating, language, publish_year, is_imported";
+const GRID_COLUMNS: &str = "id, title, author, cover_path, total_chapters, added_at, format, series, volume, rating, language, publish_year, is_imported, want_to_read";
 
 /// Grid columns prefixed with table alias `b.` for JOIN queries.
-const GRID_COLUMNS_B: &str = "b.id, b.title, b.author, b.cover_path, b.total_chapters, b.added_at, b.format, b.series, b.volume, b.rating, b.language, b.publish_year, b.is_imported";
+const GRID_COLUMNS_B: &str = "b.id, b.title, b.author, b.cover_path, b.total_chapters, b.added_at, b.format, b.series, b.volume, b.rating, b.language, b.publish_year, b.is_imported, b.want_to_read";
 
 fn row_to_grid_item(row: &rusqlite::Row) -> rusqlite::Result<BookGridItem> {
     let format_str: String = row.get("format")?;
@@ -764,6 +768,7 @@ fn row_to_grid_item(row: &rusqlite::Row) -> rusqlite::Result<BookGridItem> {
         language: row.get("language")?,
         publish_year: row.get("publish_year")?,
         is_imported: row.get::<_, i32>("is_imported").unwrap_or(1) != 0,
+        want_to_read: row.get::<_, i32>("want_to_read").unwrap_or(0) != 0,
     })
 }
 
@@ -1007,6 +1012,24 @@ pub fn update_book_file_path(conn: &Connection, book_id: &str, new_path: &str) -
     conn.execute(
         "UPDATE books SET file_path = ?2, updated_at = ?3 WHERE id = ?1",
         params![book_id, new_path, now],
+    )?;
+    Ok(())
+}
+
+/// Set the manual "want to read" flag. The only writer of `want_to_read`
+/// (deliberately excluded from `update_book` so a stale metadata edit cannot
+/// clobber a newer toggle). `updated_at` is bumped MONOTONICALLY — timestamps
+/// are second-resolution, so an immediate toggle within the same second would
+/// otherwise reuse the old value and be missed by backup's `updated_at > since`
+/// change-detection.
+pub fn set_want_to_read(conn: &Connection, book_id: &str, want: bool) -> Result<()> {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64;
+    conn.execute(
+        "UPDATE books SET want_to_read = ?2, updated_at = MAX(?3, updated_at) + 1 WHERE id = ?1",
+        params![book_id, want as i32, now],
     )?;
     Ok(())
 }
@@ -1310,10 +1333,10 @@ pub fn update_bookmark_name(conn: &Connection, id: &str, name: Option<&str>) -> 
 // --- Collections CRUD ---
 
 /// Standard column list for SELECT queries on books.
-const BOOK_COLUMNS: &str = "id, title, author, file_path, cover_path, total_chapters, added_at, format, file_hash, description, genres, rating, isbn, openlibrary_key, enrichment_status, series, volume, language, publisher, publish_year, is_imported";
+const BOOK_COLUMNS: &str = "id, title, author, file_path, cover_path, total_chapters, added_at, format, file_hash, description, genres, rating, isbn, openlibrary_key, enrichment_status, series, volume, language, publisher, publish_year, is_imported, want_to_read";
 
 /// Standard column list prefixed with table alias `b.`.
-const BOOK_COLUMNS_B: &str = "b.id, b.title, b.author, b.file_path, b.cover_path, b.total_chapters, b.added_at, b.format, b.file_hash, b.description, b.genres, b.rating, b.isbn, b.openlibrary_key, b.enrichment_status, b.series, b.volume, b.language, b.publisher, b.publish_year, b.is_imported";
+const BOOK_COLUMNS_B: &str = "b.id, b.title, b.author, b.file_path, b.cover_path, b.total_chapters, b.added_at, b.format, b.file_hash, b.description, b.genres, b.rating, b.isbn, b.openlibrary_key, b.enrichment_status, b.series, b.volume, b.language, b.publisher, b.publish_year, b.is_imported, b.want_to_read";
 
 fn row_to_book(row: &rusqlite::Row) -> rusqlite::Result<Book> {
     let format_str: String = row.get("format")?;
@@ -1341,6 +1364,7 @@ fn row_to_book(row: &rusqlite::Row) -> rusqlite::Result<Book> {
         publisher: row.get("publisher")?,
         publish_year: row.get("publish_year")?,
         is_imported: row.get::<_, i32>("is_imported").unwrap_or(1) != 0,
+        want_to_read: row.get::<_, i32>("want_to_read").unwrap_or(0) != 0,
     })
 }
 
@@ -2924,6 +2948,7 @@ mod tests {
             publisher: None,
             publish_year: None,
             is_imported: true,
+            want_to_read: false,
         }
     }
 
@@ -4212,6 +4237,68 @@ mod tests {
             })
             .unwrap();
         assert_eq!(is_imported, 0);
+    }
+
+    #[test]
+    fn migration_adds_want_to_read_column() {
+        let conn = Connection::open_in_memory().unwrap();
+        run_schema(&conn).unwrap();
+        // PRAGMA is required because run_schema swallows ALTER errors — a missing
+        // column would otherwise go unnoticed.
+        let mut stmt = conn.prepare("PRAGMA table_info(books)").unwrap();
+        let cols: Vec<(String, String, i64)> = stmt
+            .query_map([], |r| {
+                Ok((
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, i64>(4).unwrap_or(0),
+                ))
+            })
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect();
+        let col = cols.iter().find(|(name, _, _)| name == "want_to_read");
+        assert!(col.is_some(), "want_to_read column must exist");
+        let (_, ty, dflt) = col.unwrap();
+        assert_eq!(ty, "INTEGER");
+        assert_eq!(*dflt, 0, "default must be 0");
+    }
+
+    #[test]
+    fn set_want_to_read_roundtrips_and_advances_updated_at() {
+        let conn = Connection::open_in_memory().unwrap();
+        run_schema(&conn).unwrap();
+        insert_book(&conn, &sample_book("b1")).unwrap(); // sets updated_at from added_at
+        let before: i64 = conn
+            .query_row("SELECT updated_at FROM books WHERE id='b1'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+
+        set_want_to_read(&conn, "b1", true).unwrap();
+        let want: i32 = conn
+            .query_row("SELECT want_to_read FROM books WHERE id='b1'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        let after: i64 = conn
+            .query_row("SELECT updated_at FROM books WHERE id='b1'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(want, 1);
+        assert!(
+            after > before,
+            "updated_at must strictly advance ({after} > {before})"
+        );
+
+        set_want_to_read(&conn, "b1", false).unwrap();
+        let want2: i32 = conn
+            .query_row("SELECT want_to_read FROM books WHERE id='b1'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(want2, 0);
     }
 
     #[test]

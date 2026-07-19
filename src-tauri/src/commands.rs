@@ -1057,6 +1057,7 @@ pub(crate) fn import_book_inner(
                 publisher: None,
                 publish_year: None,
                 is_imported,
+                want_to_read: false,
             }
         }
         BookFormat::Cbz => {
@@ -1107,6 +1108,7 @@ pub(crate) fn import_book_inner(
                 publisher: meta.publisher,
                 publish_year: meta.year,
                 is_imported,
+                want_to_read: false,
             }
         }
         BookFormat::Cbr => {
@@ -1157,6 +1159,7 @@ pub(crate) fn import_book_inner(
                 publisher: meta.publisher,
                 publish_year: meta.year,
                 is_imported,
+                want_to_read: false,
             }
         }
         BookFormat::Pdf => {
@@ -1211,6 +1214,7 @@ pub(crate) fn import_book_inner(
                 publisher: None,
                 publish_year: None,
                 is_imported,
+                want_to_read: false,
             }
         }
         BookFormat::Mobi => {
@@ -1285,6 +1289,7 @@ pub(crate) fn import_book_inner(
                     publisher: None,
                     publish_year: None,
                     is_imported,
+                    want_to_read: false,
                 }
             }
             // Unreachable in practice: the extension-detection arm above
@@ -7787,6 +7792,7 @@ mod tests {
             publisher: None,
             publish_year: None,
             is_imported: false,
+            want_to_read: false,
         }
     }
 
