@@ -886,7 +886,7 @@ You can download individual books to a device so they open and read without a co
 
 **Requirements.** Offline saving needs the web UI to be served over a **secure context**: `https` (for example through a Tailscale or reverse-proxy certificate — see the remote-access notes) or `localhost`. Over a plain-HTTP LAN address the browser won't allow the offline machinery, so the **Save offline** button doesn't appear there.
 
-**Saving a book.** Open a book's detail page and tap **Save offline**. Folio downloads its chapters (or comic/PDF pages, stored at a reduced width to save space) with a progress counter; you can **Cancel** mid-download. When it finishes, the detail page shows **Saved · <size>** with a **Remove download** button and your total offline storage use, and the book gets a small ⤓ badge on the library grid.
+**Saving a book.** Open a book's detail page and tap **Save offline**. Folio downloads its chapters (or comic/PDF pages, stored at a reduced width to save space) with a progress counter; you can **Cancel** mid-save. When it finishes, the detail page shows **Saved · <size>** with a **Remove offline copy** button and your total offline storage use, and the book gets a small ⤓ badge on the library grid. (This is separate from the **Download** button, which exports the original full-size book file to your device.)
 
 **Reading offline.** When the server can't be reached, opening the installed app takes you straight to a library of just your downloaded books, with an *"Offline — showing downloaded books"* banner and a **Retry** button. Saved books open and read normally; a saved book's own URL also opens it directly. Ordinary navigation automatically returns to the full library once the connection is back.
 
