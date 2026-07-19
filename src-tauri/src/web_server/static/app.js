@@ -463,6 +463,11 @@
     try { rows = await idbGetAll("books"); } catch (e) { return; }
     let dropped = 0;
     for (const row of rows) {
+      // A save re-building this book's cache deletes then repopulates it; a
+      // mid-rebuild snapshot would hash-mismatch and wrongly drop a book the
+      // user is actively (re-)saving. Skip it — the save publishes a fresh,
+      // verified manifest itself, and the next boot re-checks.
+      if (activeOfflineSaves[row.id]) continue;
       let ok = false;
       try {
         if (await caches.has(offlineCacheName(row.id))) {
@@ -497,12 +502,16 @@
     const liveById = new Map((liveBooks || []).map((b) => [b.id, b]));
     let removed = 0;
     for (const row of rows) {
+      // Skip a book the user is actively (re-)saving — reconciling its
+      // metadata/cache mid-save would fight the save's own writes.
+      if (activeOfflineSaves[row.id]) continue;
       const live = liveById.get(row.id);
       if (!live) { await removeBookOffline(row.id); removed++; continue; }
-      row.title = live.title;
-      row.author = live.author;
-      row.format = live.format;
-      await idbPut("books", row).catch(() => {});
+      // Patch ONLY the display fields, re-reading the current row in one
+      // transaction — `rows` is a detached snapshot, so writing the whole
+      // snapshot back would clobber a fresh inventoryHash/generation/baseline
+      // a concurrent save published between the snapshot read and here.
+      await patchOfflineDisplayFields(row.id, live.title, live.author, live.format).catch(() => {});
       const cache = await caches.open(offlineCacheName(row.id)).catch(() => null);
       if (!cache) continue;
       for (const url of [
@@ -564,6 +573,25 @@
         tx.onerror = () => reject(tx.error);
       });
     } catch (e) { /* best-effort */ }
+  }
+
+  // Patch only a saved book's display fields, re-reading the current row in
+  // one transaction so a concurrent save's newer inventoryHash/generation/
+  // baselineLastReadAt is preserved (never clobbered by a stale snapshot).
+  async function patchOfflineDisplayFields(id, title, author, format) {
+    const db = await offlineDb();
+    await new Promise((resolve, reject) => {
+      const tx = db.transaction("books", "readwrite");
+      const store = tx.objectStore("books");
+      const getReq = store.get(id);
+      getReq.onsuccess = () => {
+        const cur = getReq.result;
+        if (cur) { cur.title = title; cur.author = author; cur.format = format; store.put(cur); }
+      };
+      tx.oncomplete = () => resolve();
+      tx.onabort = () => reject(tx.error);
+      tx.onerror = () => reject(tx.error);
+    });
   }
 
   // Atomic revision-guarded delete of a queue row: re-reads and deletes in one
@@ -4716,9 +4744,13 @@
     // and never blocks the first render.
     replayProgressQueue();
     // Reconcile saved books against the live library (deleted → removed,
-    // metadata/cover → refreshed). Fire-and-forget off the probe's own body
-    // (nothing else consumes `test`); never blocks the first render.
-    test.clone().json().then((books) => reconcileOfflineBooks(books)).catch(() => {});
+    // metadata/cover → refreshed). Only off a genuinely OK probe — a non-401
+    // error (e.g. 500) is not a trustworthy library list and must not drive
+    // deletions. Fire-and-forget off the probe's own body (nothing else
+    // consumes `test`); never blocks the first render.
+    if (test.ok) {
+      test.clone().json().then((books) => reconcileOfflineBooks(books)).catch(() => {});
+    }
     route();
   }
 
