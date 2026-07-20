@@ -1,4 +1,5 @@
 import { test, expect } from "@playwright/test";
+import { enterReaderAtStart } from "./detail-actions";
 
 // Item C (app-feel Tier 1): fixed app shell + kill overscroll.
 //
@@ -75,14 +76,7 @@ test.describe("App shell — bottom tab bar (narrow)", () => {
 
   test("tab bar is absent in the immersive reader", async ({ page }) => {
     await page.goto(`/#/book/${TAB_READER_BOOK_ID}`);
-    const readBtn = page.locator("#read-btn");
-    const restartBtn = page.locator("#restart-btn");
-    await expect(readBtn.or(restartBtn)).toBeVisible({ timeout: 15_000 });
-    if (await readBtn.count()) {
-      await readBtn.click();
-    } else {
-      await restartBtn.click();
-    }
+    await enterReaderAtStart(page);
     await page.locator("#reader-stage").waitFor();
     await expect(page.locator(".tab-bar")).toHaveCount(0);
     // The reader has no tab bar, so its header must KEEP the Collections/Stats

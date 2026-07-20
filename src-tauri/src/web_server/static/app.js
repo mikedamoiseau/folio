@@ -1159,6 +1159,17 @@
       return;
     }
 
+    // Esc closes an open detail-view "More" menu first (before the detail
+    // view's Esc-goes-Back handler), returning focus to the More button.
+    const detailMenuEl = $("#detail-menu");
+    if (e.key === "Escape" && detailMenuEl && !detailMenuEl.hidden) {
+      e.preventDefault();
+      closeDetailMenu();
+      const mb = $("#detail-more-btn");
+      if (mb) mb.focus();
+      return;
+    }
+
     if (e.key === "Escape" && currentView === "library" && e.target && e.target.id === "search") {
       e.preventDefault();
       e.target.value = "";
@@ -1296,6 +1307,7 @@
   // open panel when the click lands outside it.
   document.addEventListener("click", (e) => {
     if (!e.target.closest(".filter-dropdown")) closeAllFilterPanels();
+    if (!e.target.closest(".detail-more")) closeDetailMenu();
   });
 
   function selectFilter(key, value) {
@@ -2413,6 +2425,26 @@
       </div>`;
   }
 
+  // Inline SVGs for the detail action row (primary button + overflow menu).
+  // No icon library / build step — hand-authored, colored via currentColor.
+  const DETAIL_ICONS = {
+    play: '<svg class="mi" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 5l12 7-12 7z" fill="currentColor"/></svg>',
+    restart: '<svg class="mi" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 5v14L8 12z"/><line x1="6" y1="5" x2="6" y2="19"/></svg>',
+    cloud: '<svg class="mi" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 18a4 4 0 010-8 5 5 0 019.6-1.3A3.5 3.5 0 0117 18"/><path d="M12 11v6m0 0l-2.5-2.5M12 17l2.5-2.5"/></svg>',
+    download: '<svg class="mi" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12m0 0l-4-4m4 4l4-4"/><path d="M5 21h14"/></svg>',
+    trash: '<svg class="mi" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></svg>',
+    more: '<svg class="mi" viewBox="0 0 24 24" aria-hidden="true" fill="currentColor"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg>',
+  };
+
+  // Close the detail-view overflow menu (if open). Bound once at module scope
+  // (outside-click + Esc) and reused by showDetail's toggle handler.
+  function closeDetailMenu() {
+    const menu = $("#detail-menu");
+    const btn = $("#detail-more-btn");
+    if (menu) menu.hidden = true;
+    if (btn) btn.setAttribute("aria-expanded", "false");
+  }
+
   async function showDetail(id) {
     currentView = "detail";
     flushProgressSave();
@@ -2504,36 +2536,56 @@
       if (!hashTargetsDetail(id)) return;
     }
 
-    let actionsHtml;
-    if (!isReadable) {
-      actionsHtml = "";
-    } else if (hasProgress) {
-      actionsHtml = `<button class="btn-primary" id="continue-btn">Continue</button><button class="btn-secondary" id="restart-btn">Start Over</button>`;
-    } else {
-      actionsHtml = `<button class="btn-primary" id="read-btn">Read</button>`;
+    // The reading action is the always-visible accent primary button; a book
+    // with saved progress > 0 gets "Continue" (jumps to the saved position),
+    // otherwise "Read" (from the start). Both carry the ▶ play icon.
+    let primaryHtml = "";
+    if (isReadable) {
+      primaryHtml = hasProgress
+        ? `<button class="btn-primary detail-primary" id="continue-btn">${DETAIL_ICONS.play}Continue</button>`
+        : `<button class="btn-primary detail-primary" id="read-btn">${DETAIL_ICONS.play}Read</button>`;
+    }
+
+    // Everything else lives in the "More" overflow menu as icon+label rows,
+    // in order: Start Over (only with progress), the offline state row(s),
+    // then Download (always). The ids/handlers are unchanged from the old flat
+    // row — the controls are relocated and re-skinned, not reimplemented.
+    let menuItems = "";
+    if (isReadable && hasProgress) {
+      menuItems += `<button class="detail-menu-item" role="menuitem" id="restart-btn">${DETAIL_ICONS.restart}Start Over</button>`;
     }
 
     // Offline save/remove (readable books on secure contexts only). The
-    // manifest read is the source of truth — the button never claims a
-    // state storage doesn't hold.
+    // manifest read is the source of truth — the row never claims a state
+    // storage doesn't hold. Its state machine (Save offline → Saving…/Cancel →
+    // Saved · <size> + Remove) is preserved verbatim; only the markup wrapper
+    // and icon changed.
     let offlineRow;
     if (isReadable && offlineSupported()) {
       offlineRow = await getOfflineManifest(id);
       if (!hashTargetsDetail(id)) return;
       const offlineSaveable = !isHtmlBook || book.total_chapters > 0;
       if (offlineRow) {
-        actionsHtml += `<span class="offline-saved-label">Saved · ${esc(formatFileSize(offlineRow.bytes) || "")}</span><button class="btn-secondary" id="offline-remove-btn">Remove offline copy</button><span class="offline-usage" id="offline-usage" role="status"></span>`;
+        menuItems += `<span class="detail-menu-info offline-saved-label">Saved · ${esc(formatFileSize(offlineRow.bytes) || "")}</span><button class="detail-menu-item" role="menuitem" id="offline-remove-btn">${DETAIL_ICONS.trash}Remove offline copy</button><span class="detail-menu-info offline-usage" id="offline-usage" role="status"></span>`;
       } else if (activeOfflineSaves[id]) {
         // A save started from a previous render of this page is still
         // running — never offer a second concurrent one, but do offer a
         // Cancel (the running save's own catch re-renders on completion).
-        actionsHtml += `<button class="btn-secondary" disabled>Saving…</button><button class="btn-secondary" id="offline-cancel-btn">Cancel</button>`;
+        menuItems += `<button class="detail-menu-item" disabled>${DETAIL_ICONS.cloud}Saving…</button><button class="detail-menu-item" role="menuitem" id="offline-cancel-btn">Cancel</button>`;
       } else if (offlineSaveable) {
-        actionsHtml += `<button class="btn-secondary" id="offline-save-btn">Save offline</button>`;
+        menuItems += `<button class="detail-menu-item" role="menuitem" id="offline-save-btn">${DETAIL_ICONS.cloud}Save offline</button>`;
       }
       // Chapter-mode book with unknown chapter count: no save affordance at
       // all — the engine would (correctly) refuse it.
     }
+
+    // Download is available for every book (readable or not).
+    menuItems += `<a class="detail-menu-item" role="menuitem" href="/api/books/${id}/download">${DETAIL_ICONS.download}Download</a>`;
+
+    const moreHtml = `<span class="detail-more">
+      <button class="btn-secondary detail-more-btn" id="detail-more-btn" aria-haspopup="menu" aria-expanded="false" aria-label="More actions">${DETAIL_ICONS.more}</button>
+      <div class="detail-menu" id="detail-menu" role="menu" hidden>${menuItems}</div>
+    </span>`;
 
     const facts = [];
     if (book.total_chapters) facts.push(`${book.total_chapters} ${isPageBased ? "pages" : "chapters"}`);
@@ -2567,8 +2619,8 @@
             ${book.description ? `<p class="detail-description">${esc(book.description)}</p>` : ""}
             ${progressBlockHtml(book, progress, hasProgress, isPageBased)}
             <div class="actions">
-              ${actionsHtml}
-              <a class="btn-secondary" href="/api/books/${id}/download">Download</a>
+              ${primaryHtml}
+              ${moreHtml}
               ${wantToReadBtnHtml(book.want_to_read)}
             </div>
           </div>
@@ -2578,6 +2630,28 @@
     bindNavIcons();
     const coverImg = $(".detail .cover img");
     if (coverImg) bindCoverFallback(coverImg);
+    // "More" overflow menu. Toggle open/closed; outside-click and Esc dismiss
+    // it via the module-scope listeners (see closeDetailMenu). stopPropagation
+    // keeps this click from reaching the outside-click listener.
+    const moreBtn = $("#detail-more-btn");
+    const detailMenu = $("#detail-menu");
+    if (moreBtn && detailMenu) {
+      moreBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const opening = detailMenu.hidden;
+        detailMenu.hidden = !opening;
+        moreBtn.setAttribute("aria-expanded", opening ? "true" : "false");
+        if (opening) {
+          const first = detailMenu.querySelector("[role='menuitem']:not([disabled])");
+          if (first) first.focus();
+        }
+      });
+      // Download navigates the browser to a file response (no re-render), so
+      // close the menu explicitly on that click. Every other row either
+      // navigates away or re-renders the page, which tears the menu down.
+      const dl = detailMenu.querySelector("a[href*='/download']");
+      if (dl) dl.addEventListener("click", () => closeDetailMenu());
+    }
     const readBtn = $("#read-btn");
     if (readBtn) readBtn.addEventListener("click", () => navigate(readHash));
     const continueBtn = $("#continue-btn");
@@ -2601,13 +2675,13 @@
       offlineSaveBtn.disabled = true;
       offlineSaveBtn.textContent = "Saving…";
       const prog = document.createElement("span");
-      prog.className = "offline-save-progress";
+      prog.className = "detail-menu-info offline-save-progress";
       prog.setAttribute("role", "status");
       offlineSaveBtn.after(prog);
       // Cancel affordance (the engine's cancellation marker is honored at
       // every loop iteration and before publication).
       const cancelBtn = document.createElement("button");
-      cancelBtn.className = "btn-secondary";
+      cancelBtn.className = "detail-menu-item";
       cancelBtn.id = "offline-cancel-btn";
       cancelBtn.textContent = "Cancel";
       cancelBtn.addEventListener("click", () => {

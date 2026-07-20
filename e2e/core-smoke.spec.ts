@@ -1,4 +1,5 @@
 import { test, expect } from "@playwright/test";
+import { enterReaderAtStart } from "./detail-actions";
 
 // Core smoke flows against the real client (app.js / index.html), run
 // against the deterministic harness (src-tauri/examples/web_e2e_server.rs).
@@ -57,14 +58,7 @@ test.describe("Core smoke", () => {
     // this spec against an already-seeded harness turns "Read" into
     // "Continue"/"Start Over" on the second run — use whichever chapter-0
     // entry point is present so the test is idempotent across repeated runs.
-    const readBtn = page.locator("#read-btn");
-    const restartBtn = page.locator("#restart-btn");
-    await expect(readBtn.or(restartBtn)).toBeVisible({ timeout: 15_000 });
-    if (await readBtn.count()) {
-      await readBtn.click();
-    } else {
-      await restartBtn.click();
-    }
+    await enterReaderAtStart(page);
 
     await expect(page).toHaveURL(new RegExp(`#/book/${READER_BOOK_ID}/0/read`));
     await page.locator("#reader-stage").waitFor();

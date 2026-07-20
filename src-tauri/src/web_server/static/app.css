@@ -235,7 +235,8 @@ body:not(:has(.header))::before {
 .detail .cover img { width: 100%; border-radius: var(--radius); border: 1px solid var(--warm-border); background: var(--warm-subtle); }
 .detail .cover .cover-placeholder { border-radius: var(--radius); padding: 20px; }
 .detail .cover .cover-placeholder span { font-size: 1rem; }
-.detail .info h2 { margin-bottom: 8px; }
+.detail .info { min-width: 0; }
+.detail .info h2 { margin-bottom: 8px; overflow-wrap: anywhere; }
 .detail .info p { color: var(--ink-muted); margin-bottom: 4px; font-size: 0.9rem; }
 .detail-author { font-size: 1rem !important; }
 .detail-badges { display: flex; align-items: center; gap: 10px; margin: 6px 0; }
@@ -269,11 +270,31 @@ body:not(:has(.header))::before {
    any cover. */
 .want-badge { position: absolute; top: 8px; left: 8px; width: 22px; height: 22px; border-radius: 50%; background: var(--surface); font-size: 0.8rem; line-height: 22px; text-align: center; pointer-events: none; box-shadow: 0 1px 3px var(--shadow); }
 .want-to-read-btn[aria-pressed="true"] { background: var(--accent-hover); color: var(--on-accent); }
-.detail .actions a, .detail .actions button { padding: 10px 20px; border-radius: var(--radius); text-decoration: none; font-weight: 600; font-size: 0.9rem; cursor: pointer; border: none; }
+/* Row-level controls only (direct children): the accent primary, the "More"
+   button, and the want-to-read toggle. Menu items nested in .detail-menu are
+   styled separately below. */
+.detail .actions > a, .detail .actions > button { padding: 10px 20px; border-radius: var(--radius); text-decoration: none; font-weight: 600; font-size: 0.9rem; cursor: pointer; border: none; }
 .btn-primary { background: var(--accent-hover); color: var(--on-accent); }
 .btn-primary:hover { background: var(--accent-hover); }
 .btn-secondary { background: var(--surface); color: var(--ink); border: 1px solid var(--warm-border) !important; }
 .btn-secondary:hover { background: var(--warm-subtle); }
+/* Primary reading button (icon + label). */
+.detail-primary { display: inline-flex; align-items: center; gap: 8px; }
+.mi { width: 18px; height: 18px; flex-shrink: 0; }
+/* "More" overflow button + its popover menu. Mirrors the .filter-dropdown /
+   .filter-panel anchoring pattern: relative wrapper, absolutely-positioned
+   menu, re-centered under .actions on narrow screens so it can't clip. */
+.detail-more { position: relative; display: inline-flex; }
+.detail-more-btn { display: inline-flex; align-items: center; justify-content: center; padding: 10px 14px; border-radius: var(--radius); font-weight: 600; font-size: 0.9rem; cursor: pointer; }
+.detail-more-btn .mi { width: 20px; height: 20px; }
+.detail-menu { position: absolute; z-index: 30; top: calc(100% + 6px); right: 0; min-width: 210px; max-width: calc(100vw - 24px); background: var(--surface); border: 1px solid var(--warm-border); border-radius: var(--radius); box-shadow: 0 12px 32px var(--shadow); padding: 6px; display: flex; flex-direction: column; gap: 2px; }
+/* The author `display:flex` above outranks the UA `[hidden]{display:none}`
+   rule, so the `hidden` attribute alone wouldn't hide the menu — restore it. */
+.detail-menu[hidden] { display: none; }
+.detail-menu-item { display: flex; align-items: center; gap: 10px; width: 100%; padding: 10px 12px; background: none; border: none; border-radius: 6px; color: var(--ink); font-size: 0.9rem; font-weight: 500; text-align: left; text-decoration: none; cursor: pointer; }
+.detail-menu-item:hover { background: var(--warm-subtle); }
+.detail-menu-item[disabled] { color: var(--ink-muted); cursor: default; }
+.detail-menu-info { display: block; padding: 6px 12px; font-size: 0.8rem; color: var(--ink-muted); }
 
 /* ── Resume Prompt (Item 4) ────────────────────── */
 .resume-prompt { display: flex; align-items: center; justify-content: center; min-height: 100vh; min-height: 100dvh; padding: var(--gap); }
@@ -527,6 +548,8 @@ body:not(:has(.header))::before {
   .header select { min-height: 44px; }
   .filter-reset, .filter-dropdown-btn, .filter-want-toggle { min-height: 44px; }
   .filter-panel-item { min-height: 44px; }
+  .detail-more-btn { min-width: 44px; min-height: 44px; }
+  .detail-menu-item { min-height: 44px; }
   .collections-toolbar .sort-btn { min-height: 44px; }
   .reader-toolbar button { min-height: 44px; }
   /* The chrome-toggle FAB sits outside the toolbar and is explicitly 40x40. */
@@ -566,6 +589,11 @@ body:not(:has(.header))::before {
   .filter-bar { position: relative; }
   .filter-dropdown { position: static; }
   .filter-panel { left: 50%; transform: translateX(-50%); width: min(320px, calc(100vw - 24px)); max-width: none; }
+  /* Same trick for the detail "More" menu: anchor to the (centered) actions
+     row instead of the button so a phone-width menu can't clip off-screen. */
+  .detail .actions { position: relative; justify-content: center; }
+  .detail-more { position: static; }
+  .detail-menu { left: 50%; right: auto; transform: translateX(-50%); width: min(300px, calc(100vw - 24px)); max-width: none; }
 }
 
 /* ── Reduced Motion (Item 10) ───────────────────── */
