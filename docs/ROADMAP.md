@@ -31,6 +31,12 @@ These features fix core limitations and unlock future work.
 - ~~Autocomplete from existing tags when assigning~~
 - ~~Filterable in library view — searchable multi-select tag filter in toolbar (AND logic), chip-on-comma tag input in edit dialog~~
 
+### 5b. Want to Read — **Done**
+- ~~Dedicated per-book "want to read" flag (a column, not a tag), independent of reading progress~~
+- ~~Mark/unmark from the book detail modal and a card hover action (desktop) and the book detail view (web UI)~~
+- ~~Library filter for flagged books plus an optional home shelf (desktop toggle in Settings; web shows it when non-empty)~~
+- ~~Preserved across backup/restore; consistent between the desktop app and the web UI (shared DB)~~
+
 ## Phase 2: Reading Experience
 
 Improve the core activity — actually reading books.

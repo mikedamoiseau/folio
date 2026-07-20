@@ -45,7 +45,8 @@ Folio is for the opposite case: you already have the files, and you want a bette
 - Undo for accidental deletes (single, bulk, and remove-from-collection)
 - Search by title or author
 - Sort by date added, last read, title, author, progress, or rating
-- Filter by format, reading status, and minimum rating
+- Filter by format, reading status, minimum rating, and "want to read"
+- "Want to read" flag — mark books to read next, with a dedicated filter and an optional home shelf (desktop and web UI)
 - Manual and rule-based collections
 - Tags with autocomplete
 - Metadata editing: title, author, series, language, publisher, cover, rating, tags
