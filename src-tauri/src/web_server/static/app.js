@@ -18,6 +18,7 @@
   let activeSeries = null;
   let activeQuery = "";
   let activeSort = DEFAULT_SORT;
+  let activeWantToRead = false;
 
   // Item 6: theme mode is "light" | "dark" | "system", persisted to
   // localStorage. "system" means no data-theme attribute is set at all —
@@ -981,6 +982,7 @@
       series: params.get("series") || null,
       collection: params.get("collection") || null,
       sort: params.get("sort") || DEFAULT_SORT,
+      want_to_read: params.get("want_to_read") === "true",
     };
   }
 
@@ -994,6 +996,8 @@
     if (state.series) params.set("series", state.series);
     if (state.collection) params.set("collection", state.collection);
     if (state.sort && state.sort !== DEFAULT_SORT) params.set("sort", state.sort);
+    // Presence-only: emit `want_to_read=true` to enable, omit it to disable.
+    if (state.want_to_read) params.set("want_to_read", "true");
     const qs = params.toString();
     return qs ? "#/library?" + qs : "#";
   }
@@ -1003,14 +1007,14 @@
   // of "current state", spread and overridden by callers that only change
   // one or two fields.
   function currentLibraryState() {
-    return { q: activeQuery, series: activeSeries, collection: activeCollectionId, sort: activeSort };
+    return { q: activeQuery, series: activeSeries, collection: activeCollectionId, sort: activeSort, want_to_read: activeWantToRead };
   }
 
   // Finding C: every explicit "go back to the home screen" action (header
   // back buttons, Esc/Backspace from detail) must clear any active
-  // collection/series filter — otherwise a filter set on a previous library
-  // visit silently survives into an unrelated round trip through
-  // detail/stats/collections, landing back on a filtered grid with the
+  // collection/series/want-to-read filter — otherwise a filter set on a
+  // previous library visit silently survives into an unrelated round trip
+  // through detail/stats/collections, landing back on a filtered grid with the
   // shelves suppressed. This is deliberately distinct from navigations that
   // set a filter on purpose right before going home (showDetail's series
   // link, showCollections' collection/series rows) — those must keep working
@@ -1020,7 +1024,7 @@
   // the rest of the library state. libraryHash() collapses back to the bare
   // "#" on its own when query/sort are also at their defaults.
   function goHome() {
-    navigate(libraryHash({ ...currentLibraryState(), series: null, collection: null }));
+    navigate(libraryHash({ ...currentLibraryState(), series: null, collection: null, want_to_read: false }));
   }
 
   // Bumped on every route() call; showOfflineLibrary's async re-probe checks
@@ -1295,7 +1299,11 @@
   });
 
   function selectFilter(key, value) {
-    const next = { ...currentLibraryState(), series: null, collection: null };
+    // Choosing a collection/series from the dropdown is collection/series
+    // navigation, so it clears the top-level want-to-read filter (same rule as
+    // goHome and the detail-view series link) — otherwise the spread would
+    // carry it into an unintended combined filter.
+    const next = { ...currentLibraryState(), series: null, collection: null, want_to_read: false };
     next[key] = value;
     const hash = libraryHash(next);
     // Finding 5: re-selecting the already-active filter produces the exact
@@ -1400,6 +1408,13 @@
     if (collBtn) collBtn.classList.toggle("active", !!activeCollectionId);
     const seriesBtn = $("#series-dropdown-btn");
     if (seriesBtn) seriesBtn.classList.toggle("active", !!activeSeries);
+    // Back/forward (and any hash change without a DOM rebuild) re-syncs the
+    // always-visible "Want to read" toggle's active state from the URL.
+    const wantBtn = $("#filter-want-btn");
+    if (wantBtn) {
+      wantBtn.classList.toggle("active", activeWantToRead);
+      wantBtn.setAttribute("aria-pressed", activeWantToRead ? "true" : "false");
+    }
   }
 
   async function renderFilterBar() {
@@ -1416,14 +1431,13 @@
     cachedCollections = collectionsResp && collectionsResp.ok ? await collectionsResp.json() : [];
     cachedSeries = seriesResp && seriesResp.ok ? await seriesResp.json() : [];
 
-    // Don't show bar if nothing to filter
-    if (cachedCollections.length === 0 && cachedSeries.length === 0) {
-      bar.innerHTML = "";
-      return;
-    }
-
+    // The bar always renders: the "Want to read" toggle is always available,
+    // even for a library with no collections/series (otherwise it would
+    // vanish for the many libraries that have neither). The collection/series
+    // dropdowns only appear when there's something to put in them.
     bar.innerHTML = `
       <button type="button" class="filter-reset" id="filter-reset-btn">All Books</button>
+      <button type="button" class="filter-want-toggle" id="filter-want-btn" aria-pressed="false">🔖 Want to read</button>
       ${cachedCollections.length > 0 ? filterDropdownHtml("collection", "Collections") : ""}
       ${cachedSeries.length > 0 ? filterDropdownHtml("series", "Series") : ""}
       <div class="filter-chips" id="filter-chips"></div>`;
@@ -1431,8 +1445,9 @@
     // Finding 4: "All Books" clears the collection/series filter ONLY —
     // it must preserve the active query/sort, not reset the whole library
     // state. libraryHash() collapses back to the bare "#" on its own when
-    // query/sort are also at their defaults.
-    $("#filter-reset-btn").onclick = () => navigate(libraryHash({ ...currentLibraryState(), series: null, collection: null }));
+    // query/sort are also at their defaults. It also clears "Want to read".
+    $("#filter-reset-btn").onclick = () => navigate(libraryHash({ ...currentLibraryState(), series: null, collection: null, want_to_read: false }));
+    $("#filter-want-btn").onclick = () => navigate(libraryHash({ ...currentLibraryState(), want_to_read: !activeWantToRead }));
 
     if (cachedCollections.length > 0) {
       bindFilterDropdown("collection", cachedCollections, (c) => ({ value: c.id, label: c.name, count: c.bookCount }));
@@ -1467,6 +1482,7 @@
     activeSeries = params.series || null;
     activeCollectionId = params.collection || null;
     activeSort = params.sort || DEFAULT_SORT;
+    activeWantToRead = !!params.want_to_read;
 
     const existing = $("#search");
     // Fix 6: only a fresh entry into the library (from detail/reader/stats/
@@ -1680,6 +1696,7 @@
     if (activeSeries) params.set("series", activeSeries);
     if (query) params.set("q", query);
     if (activeSort && activeSort !== "date_added") params.set("sort", activeSort);
+    if (activeWantToRead) params.set("want_to_read", "true");
     params.set("limit", String(limit || LIBRARY_PAGE_SIZE));
     params.set("offset", String(offset));
     return params;
@@ -1995,6 +2012,15 @@
       }
     }
 
+    // The `/api/collections/{id}/books` endpoint accepts no query params, so
+    // when a collection is active the "Want to read" filter is applied
+    // client-side to its result set (the `/api/books` path filters server-side
+    // via booksPageParams). Applied after the empty-heal check above so an
+    // empty want-filtered-but-still-valid collection doesn't trigger healing.
+    if (activeCollectionId && activeWantToRead) {
+      books = books.filter(b => b.want_to_read);
+    }
+
     // If collection is active and search is typed, filter client-side
     if (activeCollectionId && query) {
       const q = query.toLowerCase();
@@ -2014,7 +2040,7 @@
     // Item 5: shelves only appear on the unfiltered "home" view — any active
     // search/series/collection filter (or an empty library) falls back to
     // the plain grid, matching the pre-Item-5 behavior exactly.
-    const showShelves = !query && !activeCollectionId && !activeSeries && books.length > 0;
+    const showShelves = !query && !activeCollectionId && !activeSeries && !activeWantToRead && books.length > 0;
 
     // Finding F: render the plain grid as soon as the main books fetch
     // resolves. The shelves below are strictly best-effort decoration on top
@@ -2046,15 +2072,16 @@
     // page 0 is already the most-recently-added books in date order, so
     // "Recently Added" is just the first 12 of it — only fall back to the
     // dedicated date_added-sorted fetch when a different sort is active.
-    const [continueBooks, recentBooks] = await Promise.all([
+    const [continueBooks, wantBooks, recentBooks] = await Promise.all([
       fetchShelfBooks("/api/books/continue-reading?limit=12"),
+      fetchShelfBooks("/api/books?want_to_read=true&limit=12"),
       activeSort === "date_added"
         ? Promise.resolve(books.slice(0, 12))
         : fetchShelfBooks("/api/books?sort=date_added&limit=12&offset=0"),
     ]);
     if (gen !== libraryRenderGen) return;
 
-    renderLibraryWithShelves(books, continueBooks, recentBooks);
+    renderLibraryWithShelves(books, continueBooks, recentBooks, wantBooks);
     // Finding 5: restore once the layout has settled into its final shape
     // (grid-only or grid+shelves) — restoring earlier, right after the plain
     // grid render, would be undone by the shelves rendering on top of it.
@@ -2069,6 +2096,7 @@
     if (activeQuery) return `<div class="empty">No books match "${esc(activeQuery)}"</div>`;
     if (activeCollectionId) return '<div class="empty">This collection is empty.</div>';
     if (activeSeries) return '<div class="empty">No books found in this series.</div>';
+    if (activeWantToRead) return '<div class="empty">No books marked &ldquo;Want to read&rdquo;.</div>';
     return '<div class="empty">Your library is empty. Import some books to get started.</div>';
   }
 
@@ -2097,9 +2125,14 @@
     const offlineBadge = offlineBookIds.has(b.id)
       ? '<span class="offline-badge" title="Available offline" aria-label="Available offline">⤓</span>'
       : "";
+    // Read-only indicator (the web card has no toggle — the flag is set on the
+    // book detail view). Renders straight from the fetched server value.
+    const wantBadge = b.want_to_read
+      ? '<span class="want-badge" title="Want to read" aria-label="Want to read">🔖</span>'
+      : "";
     return `
       <div class="card" data-id="${b.id}" tabindex="0" role="button" aria-label="${esc(`Open ${b.title}`)}">
-        <img src="/api/books/${b.id}/cover?size=thumb" alt="" loading="lazy" data-cover-title="${esc(b.title)}">${offlineBadge}
+        <img src="/api/books/${b.id}/cover?size=thumb" alt="" loading="lazy" data-cover-title="${esc(b.title)}">${offlineBadge}${wantBadge}
         <div class="info">
           <div class="title" title="${esc(b.title)}">${esc(b.title)}</div>
           <div class="author">${esc(b.author)}</div>
@@ -2242,11 +2275,15 @@
     $$(".shelf-card img").forEach(bindCoverFallback);
   }
 
-  function renderLibraryWithShelves(allBooks, continueBooks, recentBooks) {
+  function renderLibraryWithShelves(allBooks, continueBooks, recentBooks, wantBooks) {
     const contentEl = $("#library-content");
     if (!contentEl) return;
 
     let html = shelfSectionHtml("Continue Reading", continueBooks, "continue");
+    // "Want to read" cards open the detail view (like Recently Added). The
+    // shelf renders only when non-empty (shelfSectionHtml returns "" for []),
+    // and only on the unfiltered home view (the showShelves guard upstream).
+    html += shelfSectionHtml("Want to read", wantBooks || [], "detail");
     html += shelfSectionHtml("Recently Added", recentBooks, "detail");
     html += '<h2 class="shelf-heading all-books-heading">All Books</h2>';
     html += gridHtml(allBooks);
@@ -2333,6 +2370,16 @@
     let stars = "";
     for (let i = 1; i <= 5; i++) stars += i <= rounded ? "★" : "☆";
     return `<span class="detail-rating" title="Rating: ${rounded} of 5" aria-label="Rating: ${rounded} out of 5 stars">${stars}</span>`;
+  }
+
+  // The one write surface for the flag on the web UI (the cards are
+  // read-only). `aria-pressed` carries the on/off state to assistive tech;
+  // the label + CSS reflect it visually.
+  function wantToReadBtnLabel(on) {
+    return `🔖 ${on ? "In Want to read" : "Want to read"}`;
+  }
+  function wantToReadBtnHtml(on) {
+    return `<button type="button" class="btn-secondary want-to-read-btn" id="want-btn" aria-pressed="${on ? "true" : "false"}">${wantToReadBtnLabel(on)}</button>`;
   }
 
   function seriesNavHtml(book, nav) {
@@ -2522,6 +2569,7 @@
             <div class="actions">
               ${actionsHtml}
               <a class="btn-secondary" href="/api/books/${id}/download">Download</a>
+              ${wantToReadBtnHtml(book.want_to_read)}
             </div>
           </div>
         </div>
@@ -2615,12 +2663,56 @@
       }
       if (hashTargetsDetail(id)) showDetail(id);
     });
+    // "Want to read" toggle — the web UI's only writer of the flag.
+    // await-then-set: PUT first, then update the in-memory book + the button
+    // only on success. No optimistic pre-flip; on failure the flag is left
+    // untouched and a toast explains why. Returning to the library re-fetches
+    // from the server (the PUT is already committed), so the badge/filter/
+    // shelf converge to truth with no client-side override machinery.
+    const wantBtn = $("#want-btn");
+    if (wantBtn) {
+      let wantInFlight = false;
+      wantBtn.addEventListener("click", async () => {
+        // Guard re-entry with a flag + aria-busy, NOT the native `disabled`
+        // attribute (which would blur the button and drop keyboard focus).
+        if (wantInFlight) return;
+        const next = !book.want_to_read;
+        wantInFlight = true;
+        wantBtn.setAttribute("aria-busy", "true");
+        let resp;
+        try {
+          resp = await fetch(`/api/books/${id}/want-to-read`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ want_to_read: next }),
+            credentials: "same-origin",
+          });
+        } catch (e) {
+          wantInFlight = false;
+          if (wantBtn.isConnected) wantBtn.removeAttribute("aria-busy");
+          showToast("Couldn't reach Folio server");
+          return;
+        }
+        if (resp.status === 401) { authenticated = false; showLogin(); return; }
+        wantInFlight = false;
+        if (wantBtn.isConnected) wantBtn.removeAttribute("aria-busy");
+        if (!resp.ok) {
+          showToast(httpErrorToastMessage(resp.status));
+          return;
+        }
+        book.want_to_read = next;
+        if (wantBtn.isConnected) {
+          wantBtn.setAttribute("aria-pressed", next ? "true" : "false");
+          wantBtn.textContent = wantToReadBtnLabel(next);
+        }
+      });
+    }
     const seriesLink = $("#series-link");
     if (seriesLink) seriesLink.addEventListener("click", (e) => {
       e.preventDefault();
       // Item 7: the URL carries the filter directly — no pending-intent
       // variable needed between this click and the library rendering it.
-      navigate(libraryHash({ ...currentLibraryState(), q: "", series: book.series, collection: null }));
+      navigate(libraryHash({ ...currentLibraryState(), q: "", series: book.series, collection: null, want_to_read: false }));
     });
     const seriesPrevBtn = $("#series-prev-btn");
     if (seriesPrevBtn && seriesNav && seriesNav.prevId) {

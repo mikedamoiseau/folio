@@ -11,7 +11,11 @@ This project adheres to [Semantic Versioning](https://semver.org/).
   the reading-status filter narrows the grid to flagged books, and an
   optional "Want to Read" home shelf (toggled in Settings → General, off by
   default) surfaces them at the top of the library. The flag is independent
-  of computed reading status and is preserved across backup/restore.
+  of computed reading status and is preserved across backup/restore. The
+  phone web UI has the same feature: mark or unmark a book from its book
+  page, an always-visible "Want to read" toggle in the filter bar narrows
+  the grid, flagged books show a 🔖 badge on their cover, and a "Want to
+  read" shelf appears on the home view.
 - **Save books for offline reading in the web reader.** On
   HTTPS-served web UIs (e.g. behind a Tailscale/reverse-proxy certificate;
   service workers require a secure context), a book's detail page now offers
