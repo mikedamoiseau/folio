@@ -235,7 +235,8 @@ body:not(:has(.header))::before {
 .detail .cover img { width: 100%; border-radius: var(--radius); border: 1px solid var(--warm-border); background: var(--warm-subtle); }
 .detail .cover .cover-placeholder { border-radius: var(--radius); padding: 20px; }
 .detail .cover .cover-placeholder span { font-size: 1rem; }
-.detail .info h2 { margin-bottom: 8px; }
+.detail .info { min-width: 0; }
+.detail .info h2 { margin-bottom: 8px; overflow-wrap: anywhere; }
 .detail .info p { color: var(--ink-muted); margin-bottom: 4px; font-size: 0.9rem; }
 .detail-author { font-size: 1rem !important; }
 .detail-badges { display: flex; align-items: center; gap: 10px; margin: 6px 0; }

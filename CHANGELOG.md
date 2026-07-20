@@ -39,6 +39,7 @@ This project adheres to [Semantic Versioning](https://semver.org/).
   over a secure context (HTTPS or localhost).
 
 ### Fixed
+- **Mobile web reader: book-detail action buttons no longer clip off-screen and long titles wrap.** A long unbroken title (e.g. an underscore-heavy filename) forced the detail info column wider than the viewport, clipping the leftmost action button on narrow screens; the title now wraps and the action row reflows.
 - **Book counts now read "1 book", not "1 books".** The library section headers
   and the series-stack cards said "1 books" (and "1 livres" in French) when a
   section or series held a single book; they now use the correct singular in
