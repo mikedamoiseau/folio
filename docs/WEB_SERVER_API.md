@@ -52,7 +52,7 @@ If no PIN is configured, all endpoints are accessible without authentication.
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/api/books` | List books. Supports `?q=` search, `?series=` filter, `?sort=` (`date_added` \| `title` \| `author` \| `last_read` \| `rating`), and pagination via `?limit=&offset=` — the response carries an `X-Total-Count` header with the post-filter total. Omitting `limit` returns the full filtered/sorted list unchanged (backward-compatible). |
+| GET | `/api/books` | List books. Supports `?q=` search, `?series=` filter, `?want_to_read=true` (show only books flagged "want to read"; presence-only — any other value or omission leaves the filter off), `?sort=` (`date_added` \| `title` \| `author` \| `last_read` \| `rating`), and pagination via `?limit=&offset=` — the response carries an `X-Total-Count` header with the post-filter total. Omitting `limit` returns the full filtered/sorted list unchanged (backward-compatible). |
 | GET | `/api/books/:id` | Get a single book by ID |
 | GET | `/api/books/:id/cover` | Cover image (binary). Add `?size=thumb` for a downscaled thumbnail (falls back to the full cover if a thumbnail can't be generated). |
 | GET | `/api/books/:id/download` | Download the original file |
@@ -81,6 +81,12 @@ If no PIN is configured, all endpoints are accessible without authentication.
 | GET | `/api/books/:id/progress` | Current reading progress for a book (`null` if none saved) |
 | PUT | `/api/books/:id/progress` | Save reading progress. Body: `{ "chapter_index": N, "scroll_position": 0..1 }` (`chapter_index` doubles as the page index for PDF/CBZ/CBR) |
 | GET | `/api/reading-progress` | All reading-progress rows, keyed by book ID — used to render progress badges on library grid cards |
+
+### Want to Read
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| PUT | `/api/books/:id/want-to-read` | Set the manual "want to read" flag. Body: `{ "want_to_read": true \| false }`. Returns `400` on a malformed body and `404` for an unknown book. Combine with `GET /api/books?want_to_read=true` to list flagged books. |
 
 ### Collections
 
