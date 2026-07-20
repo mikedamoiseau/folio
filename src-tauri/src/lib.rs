@@ -421,6 +421,7 @@ pub fn run() {
             commands::get_library_grid,
             commands::get_recently_read,
             commands::update_book_metadata,
+            commands::set_want_to_read,
             commands::get_all_tags,
             commands::get_book_tags,
             commands::add_tag_to_book,

@@ -120,6 +120,7 @@ export function hasActiveLibraryFilters(f: {
   filterStatus: string;
   filterRating: string;
   filterSource: string;
+  filterWantToRead: boolean;
   filterTagIds: string[];
 }): boolean {
   return (
@@ -128,6 +129,7 @@ export function hasActiveLibraryFilters(f: {
     f.filterStatus !== "all" ||
     f.filterRating !== "all" ||
     f.filterSource !== "all" ||
+    f.filterWantToRead ||
     f.filterTagIds.length > 0
   );
 }

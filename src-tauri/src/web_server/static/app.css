@@ -177,9 +177,9 @@ body:not(:has(.header))::before {
 /* Replaces the old horizontal pill strip (unusable past ~25 series) with
    two searchable dropdown panels + removable chips. */
 .filter-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 8px var(--gap); border-bottom: 1px solid var(--warm-border); }
-.filter-reset, .filter-dropdown-btn { padding: 6px 14px; background: var(--surface); border: 1px solid var(--warm-border); border-radius: 20px; color: var(--ink-muted); font-size: 0.8rem; cursor: pointer; white-space: nowrap; }
-.filter-reset:hover, .filter-dropdown-btn:hover { color: var(--ink); border-color: var(--accent); }
-.filter-dropdown-btn.active { background: var(--accent-hover); color: var(--on-accent); border-color: var(--accent-hover); font-weight: 600; }
+.filter-reset, .filter-dropdown-btn, .filter-want-toggle { padding: 6px 14px; background: var(--surface); border: 1px solid var(--warm-border); border-radius: 20px; color: var(--ink-muted); font-size: 0.8rem; cursor: pointer; white-space: nowrap; }
+.filter-reset:hover, .filter-dropdown-btn:hover, .filter-want-toggle:hover { color: var(--ink); border-color: var(--accent); }
+.filter-dropdown-btn.active, .filter-want-toggle.active { background: var(--accent-hover); color: var(--on-accent); border-color: var(--accent-hover); font-weight: 600; }
 .filter-dropdown { position: relative; }
 .filter-panel { position: absolute; top: calc(100% + 6px); left: 0; z-index: 30; width: 260px; max-width: 80vw; background: var(--surface); border: 1px solid var(--warm-border); border-radius: var(--radius); box-shadow: 0 12px 32px var(--shadow); padding: 10px; }
 .filter-panel-search { width: 100%; padding: 8px 10px; margin-bottom: 8px; background: var(--paper); border: 1px solid var(--warm-border); border-radius: 6px; color: var(--ink); font-size: 0.85rem; }
@@ -264,6 +264,11 @@ body:not(:has(.header))::before {
 .offline-banner { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 16px; margin: 0 0 12px; background: var(--accent-light); color: var(--ink); border-radius: var(--radius); font-size: 0.9rem; }
 .card { position: relative; }
 .offline-badge { position: absolute; top: 8px; right: 8px; width: 22px; height: 22px; border-radius: 50%; background: var(--accent); color: #fff; font-size: 0.75rem; line-height: 22px; text-align: center; pointer-events: none; }
+/* Read-only "want to read" indicator — top-left so it never collides with the
+   top-right offline badge. A surface-colored disc keeps the emoji legible on
+   any cover. */
+.want-badge { position: absolute; top: 8px; left: 8px; width: 22px; height: 22px; border-radius: 50%; background: var(--surface); font-size: 0.8rem; line-height: 22px; text-align: center; pointer-events: none; box-shadow: 0 1px 3px var(--shadow); }
+.want-to-read-btn[aria-pressed="true"] { background: var(--accent-hover); color: var(--on-accent); }
 .detail .actions a, .detail .actions button { padding: 10px 20px; border-radius: var(--radius); text-decoration: none; font-weight: 600; font-size: 0.9rem; cursor: pointer; border: none; }
 .btn-primary { background: var(--accent-hover); color: var(--on-accent); }
 .btn-primary:hover { background: var(--accent-hover); }
@@ -520,7 +525,7 @@ body:not(:has(.header))::before {
   .nav-icon { min-width: 44px; min-height: 44px; justify-content: center; }
   .header .back-btn { min-width: 44px; min-height: 44px; }
   .header select { min-height: 44px; }
-  .filter-reset, .filter-dropdown-btn { min-height: 44px; }
+  .filter-reset, .filter-dropdown-btn, .filter-want-toggle { min-height: 44px; }
   .filter-panel-item { min-height: 44px; }
   .collections-toolbar .sort-btn { min-height: 44px; }
   .reader-toolbar button { min-height: 44px; }

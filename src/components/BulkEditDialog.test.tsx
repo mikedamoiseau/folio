@@ -16,8 +16,8 @@ import { render, screen, cleanup, fireEvent, act } from "@testing-library/react"
 import BulkEditDialog from "./BulkEditDialog";
 
 const mockBooks = [
-  { id: "1", title: "A", author: "Same Author", cover_path: null, total_chapters: 1, added_at: 0, format: "epub" as const, series: "S1", volume: null, rating: null, language: "en", publish_year: 2020, is_imported: true },
-  { id: "2", title: "B", author: "Same Author", cover_path: null, total_chapters: 1, added_at: 0, format: "epub" as const, series: "S2", volume: null, rating: null, language: "en", publish_year: 2020, is_imported: true },
+  { id: "1", title: "A", author: "Same Author", cover_path: null, total_chapters: 1, added_at: 0, format: "epub" as const, series: "S1", volume: null, rating: null, language: "en", publish_year: 2020, is_imported: true, want_to_read: false },
+  { id: "2", title: "B", author: "Same Author", cover_path: null, total_chapters: 1, added_at: 0, format: "epub" as const, series: "S2", volume: null, rating: null, language: "en", publish_year: 2020, is_imported: true, want_to_read: false },
 ];
 
 beforeEach(() => invoke.mockReset());

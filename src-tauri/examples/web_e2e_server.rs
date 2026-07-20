@@ -89,6 +89,11 @@ const EPUB_N: u32 = 50;
 const TIE_LOW_N: u32 = 99;
 const TIE_HIGH_N: u32 = 100;
 
+/// `Book 042` — seeded with the manual "want to read" flag set, so the
+/// want-to-read filter/shelf/badge have a baseline DB-backed member on a fresh
+/// load. Chosen to sit outside every other count/ordering/progress fixture.
+const WANT_TO_READ_N: u32 = 42;
+
 const TOTAL_BOOKS: u32 = 130;
 
 fn added_at_for(n: u32) -> i64 {
@@ -255,6 +260,7 @@ fn new_book(n: u32, cbz_path: &Path, epub_path: &Path) -> Book {
         publisher: None,
         publish_year: None,
         is_imported: false,
+        want_to_read: n == WANT_TO_READ_N,
         id,
     }
 }

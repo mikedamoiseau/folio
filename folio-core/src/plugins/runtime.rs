@@ -582,6 +582,7 @@ mod tests {
             publisher: None,
             publish_year: None,
             is_imported: true,
+            want_to_read: false,
         }
     }
 

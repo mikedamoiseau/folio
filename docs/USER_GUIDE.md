@@ -130,7 +130,9 @@ The status badge (top-right of the cover) reflects where you are with a book:
 - **Finished** (a checkmark) — read to the end
 - **Unread** books show no badge
 
-In the full library view, a **"Continue Reading"** row at the top shows your most recently read books, and a **"Discover"** row shows popular titles from your configured OPDS catalogs. Both sections are hidden when viewing a collection or series, so you see only the relevant books.
+In the full library view, a **"Continue Reading"** row at the top shows your most recently read books, and a **"Discover"** row shows popular titles from your configured OPDS catalogs. An optional **"Want to Read"** row (enabled in Settings → General) lists the books you've flagged as want-to-read. These sections are hidden when viewing a collection or series, so you see only the relevant books.
+
+Mark a book as **want to read** from the bookmark button on its detail modal, or hover its cover and click the bookmark quick-action. It's a manual flag, independent of a book's reading progress, and it's preserved when you back up and restore your library.
 
 The grid is built for large libraries: covers are stored as lightweight thumbnails and only the rows currently on screen are rendered, so scrolling stays smooth even with thousands of books.
 
@@ -142,6 +144,7 @@ The grid is built for large libraries: covers are stored as lightweight thumbnai
 - **Rating filter:** Filter by minimum star rating (1+ through 5 stars).
 - **Sorting:** Sort by date added, title, author, last read, progress, rating, or series — ascending or descending.
 - **Source filter:** Filter by All, Imported, or Linked books.
+- **Want-to-read filter:** Click the bookmark button next to the status filter to show only books you've flagged as want to read. Your choice persists between sessions.
 - **Tag filter:** Click the "Tags" button to open a searchable dropdown of all your tags. Select one or more tags to filter — only books with all selected tags are shown (AND logic). Selected tags appear as chips on the button. Your tag selection persists between sessions.
 
 All filters combine, so you can search for "asimov" within "epub" books tagged "sci-fi" that are "in progress."
@@ -860,9 +863,9 @@ The server runs on port 7788 by default. The port input is editable while the se
 When **Web UI** is enabled, open the URL in a browser. It looks and behaves like the desktop app — same warm color palette, light/dark/system theme, and typography — not a stripped-down mobile page. You'll see:
 
 - **Login screen** — enter the PIN you set in the desktop app
-- **Home** — "Continue Reading" and "Recently Added" shelves for quick access to what you're currently in the middle of
-- **Library** — a grid of book covers with search, series/collection filters, and a sort dropdown (date added, title, author, last read, rating). The grid loads more books automatically as you scroll, so it stays fast even on large libraries. Books you've started show a small progress badge on the cover. Tap any book to see its details.
-- **Book detail** — shows cover, title, author, format, and a progress bar. Tap **Continue** to pick up where you left off (or **Start Over** to read from the beginning), or **Download** to save the file to your device.
+- **Home** — "Continue Reading", "Want to read", and "Recently Added" shelves for quick access to what you're currently in the middle of (the "Want to read" shelf appears once you've flagged at least one book)
+- **Library** — a grid of book covers with search, series/collection filters, and a sort dropdown (date added, title, author, last read, rating). The grid loads more books automatically as you scroll, so it stays fast even on large libraries. Books you've started show a small progress badge on the cover, and books you've flagged as want-to-read show a 🔖 badge. An always-visible **"Want to read"** toggle in the filter bar narrows the grid to just your flagged books. Tap any book to see its details.
+- **Book detail** — shows cover, title, author, format, and a progress bar. Tap **Continue** to pick up where you left off (or **Start Over** to read from the beginning), **Download** to save the file to your device, or the **🔖 Want to read** button to mark or unmark the book (the change is saved instantly and shared with the desktop app).
 - **Reader** — EPUBs show chapter content with prev/next navigation; Folio prefetches the neighbouring chapters in the background, so turning to the next chapter is instant even over the network. PDFs and comics show page images with prev/next buttons, and swiping left/right on a touch screen turns the page with a short animation. You can zoom into a page up to 5× with Ctrl+scroll (or a Mac trackpad pinch) and pan around it by scrolling — on a touch screen, pinch with two fingers to zoom and drag with one finger to pan, or double-tap to jump to 2.5× and double-tap again to zoom back out; zoom resets when you turn the page or switch fit mode. (Tap-to-turn waits a fraction of a second to distinguish a double-tap.) Your reading position is saved as you go, so opening the same book later — on this device or another — resumes where you stopped. Note: "Don't track this session" is a single app-wide switch shared with the desktop app, so if it's on there, reading here pauses tracking too, even though the web UI has no toggle or indicator of its own for it.
 - **Reading Stats** — open it from the bottom tab bar (on a phone or tablet) or the bar chart icon in the header (on a desktop browser) to view your reading stats: total books, time read, sessions, pages, books finished, current and longest streaks, and a 30-day daily reading chart.
 - **Collections** — open it from the bottom tab bar (on a phone or tablet) or the folder icon in the header (on a desktop browser) to browse your collections and series. Filter by name, sort alphabetically, and tap any collection or series to jump to a filtered library view.

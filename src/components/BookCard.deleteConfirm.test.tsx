@@ -37,6 +37,7 @@ describe("BookCard delete confirmation (F2c)", () => {
           author: "Jane Author",
           coverPath,
           totalChapters: 3,
+          wantToRead: false,
         }}
         actions={{ onClick: () => {}, onDelete: () => {} }}
         // Force the action buttons to mount: focusing the card sets `interactive`.

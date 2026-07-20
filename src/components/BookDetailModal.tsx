@@ -3,6 +3,7 @@ import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { useTranslation } from "react-i18next";
 import type { Book } from "../types";
 import { formatDuration, formatDate } from "../lib/utils";
+import WantToReadToggle from "./WantToReadToggle";
 
 interface BookReadingStats {
   totalReadingTimeSecs: number;
@@ -19,6 +20,10 @@ interface BookDetailModalProps {
   onOpen?: (id: string) => void;
   onEdit?: (id: string) => void;
   onScan?: (id: string) => Promise<void>;
+  // Marks/unmarks the book as "want to read". Present only for the actionable
+  // library modal; the reader's read-only popup omits it (and the footer).
+  onWantToReadChange?: (id: string, want: boolean) => void;
+  onWantToReadError?: (err: unknown) => void;
 }
 
 function ScanButton({ bookId, onScan }: { bookId: string; onScan: (id: string) => Promise<void> }) {
@@ -46,7 +51,7 @@ function ScanButton({ bookId, onScan }: { bookId: string; onScan: (id: string) =
   );
 }
 
-export default function BookDetailModal({ book, onClose, onOpen, onEdit, onScan }: BookDetailModalProps) {
+export default function BookDetailModal({ book, onClose, onOpen, onEdit, onScan, onWantToReadChange, onWantToReadError }: BookDetailModalProps) {
   const { t } = useTranslation();
   const dialogRef = useRef<HTMLDivElement>(null);
   // Read-only variant (e.g. the reader's info popup) has no action footer, so
@@ -248,7 +253,15 @@ export default function BookDetailModal({ book, onClose, onOpen, onEdit, onScan 
 
         {/* Actions — omitted entirely for the read-only (reader) variant */}
         {(onOpen || onEdit || onScan) && (
-          <div className="flex gap-3 px-5 py-4 border-t border-warm-border">
+          <div className="flex gap-3 items-center px-5 py-4 border-t border-warm-border">
+            {onWantToReadChange && (
+              <WantToReadToggle
+                bookId={book.id}
+                value={book.want_to_read}
+                onChange={(next) => onWantToReadChange(book.id, next)}
+                onError={onWantToReadError}
+              />
+            )}
             {onOpen && (
               <button
                 type="button"

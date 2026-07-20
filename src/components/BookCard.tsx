@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { formatMetadataPills, type ReadingStatus } from "../lib/utils";
 import StarRating from "./StarRating";
+import WantToReadToggle from "./WantToReadToggle";
 
 export interface BookCardData {
   id: string;
@@ -20,6 +21,7 @@ export interface BookCardData {
   rating?: number | null;
   isImported?: boolean;
   status?: ReadingStatus;
+  wantToRead: boolean;
 }
 
 export interface BookCardActions {
@@ -29,6 +31,8 @@ export interface BookCardActions {
   onInfo?: (id: string) => void;
   onRemoveFromCollection?: () => void;
   onScanForMetadata?: (id: string) => void;
+  onWantToReadChange?: (id: string, want: boolean) => void;
+  onWantToReadError?: (err: unknown) => void;
 }
 
 interface BookCardProps {
@@ -39,8 +43,8 @@ interface BookCardProps {
 }
 
 export default function BookCard({ book, actions, isScanning, isSelected }: BookCardProps) {
-  const { id, title, author, coverPath, format, progress, language, publishYear, series, volume, rating, isImported, status } = book;
-  const { onClick, onDelete, onEdit, onInfo, onRemoveFromCollection, onScanForMetadata } = actions;
+  const { id, title, author, coverPath, format, progress, language, publishYear, series, volume, rating, isImported, status, wantToRead } = book;
+  const { onClick, onDelete, onEdit, onInfo, onRemoveFromCollection, onScanForMetadata, onWantToReadChange, onWantToReadError } = actions;
   const { t } = useTranslation();
   const coverSrc = coverPath ? convertFileSrc(coverPath) : null;
   const [confirming, setConfirming] = useState(false);
@@ -189,6 +193,16 @@ export default function BookCard({ book, actions, isScanning, isSelected }: Book
             Mounted only while hovered/focused to keep off-hover cards light. */}
         {interactive && !confirming && (
           <div className="absolute top-2 left-2 flex flex-col gap-1 opacity-0 group-hover:opacity-100 transition-opacity duration-150">
+            {onWantToReadChange && (
+              <span className="w-6 h-6 flex items-center justify-center rounded-full bg-ink/60 hover:bg-accent [&>button]:text-paper">
+                <WantToReadToggle
+                  bookId={id}
+                  value={wantToRead}
+                  onChange={(next) => onWantToReadChange(id, next)}
+                  onError={onWantToReadError}
+                />
+              </span>
+            )}
             {onEdit && (
               <button
                 type="button"

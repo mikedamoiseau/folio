@@ -256,6 +256,7 @@ mod tests {
             publisher: None,
             publish_year: None,
             is_imported: true,
+            want_to_read: false,
         }
     }
 
@@ -297,6 +298,7 @@ mod tests {
             publisher: None,
             publish_year: None,
             is_imported: true,
+            want_to_read: false,
         };
 
         let entry = book_to_entry(&book, &fixed_urls());

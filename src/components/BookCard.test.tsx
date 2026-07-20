@@ -26,6 +26,7 @@ describe("BookCard", () => {
           author: "Test Author",
           coverPath: "/covers/test.jpg",
           totalChapters: 10,
+          wantToRead: false,
         }}
         actions={{ onClick: () => {} }}
       />
@@ -45,6 +46,7 @@ describe("BookCard", () => {
           author: "Test Author",
           coverPath: null,
           totalChapters: 5,
+          wantToRead: false,
         }}
         actions={{ onClick: () => {} }}
       />
@@ -62,6 +64,7 @@ describe("BookCard", () => {
           author: "Author",
           coverPath: null,
           totalChapters: 1,
+          wantToRead: false,
           format: "pdf",
           rating: 4,
           series: "My Series",

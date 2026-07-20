@@ -1057,6 +1057,7 @@ pub(crate) fn import_book_inner(
                 publisher: None,
                 publish_year: None,
                 is_imported,
+                want_to_read: false,
             }
         }
         BookFormat::Cbz => {
@@ -1107,6 +1108,7 @@ pub(crate) fn import_book_inner(
                 publisher: meta.publisher,
                 publish_year: meta.year,
                 is_imported,
+                want_to_read: false,
             }
         }
         BookFormat::Cbr => {
@@ -1157,6 +1159,7 @@ pub(crate) fn import_book_inner(
                 publisher: meta.publisher,
                 publish_year: meta.year,
                 is_imported,
+                want_to_read: false,
             }
         }
         BookFormat::Pdf => {
@@ -1211,6 +1214,7 @@ pub(crate) fn import_book_inner(
                 publisher: None,
                 publish_year: None,
                 is_imported,
+                want_to_read: false,
             }
         }
         BookFormat::Mobi => {
@@ -1285,6 +1289,7 @@ pub(crate) fn import_book_inner(
                     publisher: None,
                     publish_year: None,
                     is_imported,
+                    want_to_read: false,
                 }
             }
             // Unreachable in practice: the extension-detection arm above
@@ -1749,6 +1754,18 @@ pub async fn update_book_metadata(
     }
 
     Ok(book)
+}
+
+/// Toggle the manual "want to read" flag. Deliberately separate from
+/// `update_book_metadata` so a stale metadata edit cannot clobber the flag.
+#[tauri::command]
+pub async fn set_want_to_read(
+    book_id: String,
+    want: bool,
+    state: State<'_, AppState>,
+) -> FolioResult<()> {
+    let conn = state.active_db()?.get()?;
+    Ok(db::set_want_to_read(&conn, &book_id, want)?)
 }
 
 // --- Recently Read ---
@@ -7787,6 +7804,7 @@ mod tests {
             publisher: None,
             publish_year: None,
             is_imported: false,
+            want_to_read: false,
         }
     }
 

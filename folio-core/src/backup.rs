@@ -655,7 +655,7 @@ pub fn run_incremental_backup_with_progress(
     }
 
     // Books — always write full metadata, but only upload files for changed books
-    let book_query = "SELECT id, title, author, file_path, cover_path, total_chapters, added_at, format, file_hash, description, genres, rating, isbn, openlibrary_key, enrichment_status, series, volume, language, publisher, publish_year, is_imported FROM books";
+    let book_query = "SELECT id, title, author, file_path, cover_path, total_chapters, added_at, format, file_hash, description, genres, rating, isbn, openlibrary_key, enrichment_status, series, volume, language, publisher, publish_year, is_imported, want_to_read FROM books";
     let book_mapper = |row: &rusqlite::Row| {
         let format_str: String = row.get(7)?;
         Ok(crate::models::Book {
@@ -682,6 +682,7 @@ pub fn run_incremental_backup_with_progress(
             publisher: row.get(18)?,
             publish_year: row.get(19)?,
             is_imported: row.get::<_, i32>(20).unwrap_or(1) != 0,
+            want_to_read: row.get::<_, i32>(21).unwrap_or(0) != 0,
         })
     };
 
@@ -861,6 +862,57 @@ pub fn run_incremental_backup_with_progress(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn backup_restore_preserves_want_to_read() {
+        // Backup side: incremental backup serializes books.json via the
+        // positional book SELECT + mapper. Restore side: books.json is read
+        // back and each row is re-inserted via `db::insert_book` (the same
+        // path `import_library_backup` uses).
+        let remote_dir = tempfile::tempdir().unwrap();
+        let config = BackupConfig {
+            provider_type: ProviderType::Fs,
+            values: [(
+                "root".to_string(),
+                remote_dir.path().to_string_lossy().to_string(),
+            )]
+            .into(),
+        };
+        let op = build_operator(&config).unwrap();
+
+        let src_dir = tempfile::tempdir().unwrap();
+        let src = crate::db::init_db(src_dir.path().join("src.db").as_path()).unwrap();
+        for id in ["b1", "b2"] {
+            src.execute(
+                "INSERT INTO books (id, title, author, file_path, total_chapters, added_at, format, updated_at) VALUES (?1, 'T', 'A', ?2, 1, 100, 'epub', 100)",
+                rusqlite::params![id, format!("/nonexistent/{id}.epub")],
+            )
+            .unwrap();
+        }
+        crate::db::set_want_to_read(&src, "b1", true).unwrap();
+
+        run_incremental_backup(&op, &src, None).unwrap();
+        let books: Vec<crate::models::Book> = pull_json(&op, "metadata/books.json").unwrap();
+
+        let dst_dir = tempfile::tempdir().unwrap();
+        let dst = crate::db::init_db(dst_dir.path().join("dst.db").as_path()).unwrap();
+        for book in &books {
+            crate::db::insert_book(&dst, book).unwrap();
+        }
+
+        let b1: i32 = dst
+            .query_row("SELECT want_to_read FROM books WHERE id='b1'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        let b2: i32 = dst
+            .query_row("SELECT want_to_read FROM books WHERE id='b2'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(b1, 1, "flagged book restores flagged");
+        assert_eq!(b2, 0, "unflagged book restores unflagged");
+    }
 
     #[test]
     fn provider_schemas_returns_all_providers() {
