@@ -1,4 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
+import { openDetailMenu } from "./detail-actions";
 
 // Harness fixtures (src-tauri/examples/web_e2e_server.rs): Book 050 = the
 // only EPUB with a real 2-chapter file (chapter 1 embeds one inline image);
@@ -8,8 +9,15 @@ const CBZ_ID = "e2e-book-130";
 
 async function saveBookOffline(page: Page, bookId: string) {
   await page.goto(`/#/book/${bookId}`);
+  // Save offline now lives in the detail "More" overflow menu.
+  await openDetailMenu(page);
   await page.locator("#offline-save-btn").click();
-  await expect(page.locator("#offline-remove-btn")).toBeVisible({ timeout: 30_000 });
+  // The save flow re-renders the detail page into the saved state on
+  // completion, which closes the menu — wait for the Remove row to exist, then
+  // reopen the menu so callers see the saved state (Saved label + Remove).
+  await expect(page.locator("#offline-remove-btn")).toBeAttached({ timeout: 30_000 });
+  await openDetailMenu(page);
+  await expect(page.locator("#offline-remove-btn")).toBeVisible();
 }
 
 // Reload and wait until the service worker actually CONTROLS the page. Without
@@ -201,9 +209,7 @@ test.describe("offline mode — save / unsave (M3)", () => {
     // The single-flight guard: once a save starts the button flips to a
     // disabled Downloading state, so the UI can't initiate a second, and
     // exactly one manifest row is published.
-    await page.goto(`/#/book/${CBZ_ID}`);
-    await page.locator("#offline-save-btn").click();
-    await expect(page.locator("#offline-remove-btn")).toBeVisible({ timeout: 30_000 });
+    await saveBookOffline(page, CBZ_ID);
     // Exactly one manifest row for this book (no duplicate from the guard).
     const count = await page.evaluate(async (id) => {
       const db = await new Promise<IDBDatabase>((res, rej) => {
@@ -235,7 +241,11 @@ test.describe("offline mode — save / unsave (M3)", () => {
   test("unsave removes the cache, manifest row, and badge", async ({ page }) => {
     await saveBookOffline(page, EPUB_ID);
     await page.locator("#offline-remove-btn").click();
-    await expect(page.locator("#offline-save-btn")).toBeVisible({ timeout: 10_000 });
+    // Remove re-renders the detail page (menu closes) back to the unsaved
+    // "Save offline" row — wait for it, then reopen the menu to see it.
+    await expect(page.locator("#offline-save-btn")).toBeAttached({ timeout: 10_000 });
+    await openDetailMenu(page);
+    await expect(page.locator("#offline-save-btn")).toBeVisible();
 
     const gone = await page.evaluate(async (id) => {
       const hasCache = await caches.has(`folio-offline-book-${id}`);
@@ -383,6 +393,8 @@ test.describe("offline mode — progress replay (M5)", () => {
     // write. Reset any prior server progress so the queued position is newer.
     await saveBookOffline(page, CBZ_ID);
     await page.goto(`/#/book/${CBZ_ID}`);
+    // Start Over lives in the More menu now; open it and reset if present.
+    await openDetailMenu(page);
     const startOver = page.locator("#restart-btn");
     if (await startOver.isVisible().catch(() => false)) await startOver.click();
 

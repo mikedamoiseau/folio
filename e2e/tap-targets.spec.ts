@@ -1,4 +1,5 @@
 import { test, expect } from "@playwright/test";
+import { enterReaderAtStart } from "./detail-actions";
 
 // Item E (app-feel Tier 2): 44px minimum tap targets.
 //
@@ -34,14 +35,7 @@ test.describe("Tap targets — 44px floor (narrow)", () => {
 
   test("reader toolbar buttons meet the 44px floor", async ({ page }) => {
     await page.goto(`/#/book/${READER_BOOK_ID}`);
-    const readBtn = page.locator("#read-btn");
-    const restartBtn = page.locator("#restart-btn");
-    await expect(readBtn.or(restartBtn)).toBeVisible({ timeout: 15_000 });
-    if (await readBtn.count()) {
-      await readBtn.click();
-    } else {
-      await restartBtn.click();
-    }
+    await enterReaderAtStart(page);
     await page.locator("#reader-stage").waitFor();
 
     const btn = page.locator(".reader-toolbar button").first();

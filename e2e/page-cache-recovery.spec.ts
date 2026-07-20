@@ -1,4 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
+import { enterReaderAtStart } from "./detail-actions";
 
 // Reader page-image cache recovery. A poisoned browser HTTP cache entry (a
 // bad/truncated 200 for /api/books/:id/pages/:index) re-serves broken bytes
@@ -27,14 +28,7 @@ const PAGE_1_RE = /\/api\/books\/[^/]+\/pages\/1(?:\?|$)/;
 
 async function openCbzReader(page: Page) {
   await page.goto(`/#/book/${READER_BOOK_ID}`);
-  const readBtn = page.locator("#read-btn");
-  const restartBtn = page.locator("#restart-btn");
-  await expect(readBtn.or(restartBtn)).toBeVisible({ timeout: 15_000 });
-  if (await readBtn.count()) {
-    await readBtn.click();
-  } else {
-    await restartBtn.click();
-  }
+  await enterReaderAtStart(page);
   await expect(page).toHaveURL(new RegExp(`#/book/${READER_BOOK_ID}/0/read`));
   const pageImg = page.locator("#page-img");
   await expect(pageImg).toBeVisible();

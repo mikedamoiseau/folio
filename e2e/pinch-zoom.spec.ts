@@ -1,4 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
+import { enterReaderAtStart } from "./detail-actions";
 
 // Pinch-to-zoom coverage for reader page mode. See
 // docs/superpowers/specs/2026-07-13-web-ui-pinch-zoom-design.md.
@@ -12,15 +13,8 @@ const READER_BOOK_ID = "e2e-book-130";
 async function openCbzReader(page: Page) {
   await page.goto(`/#/book/${READER_BOOK_ID}`);
   // Same idempotent entry as core-smoke.spec.ts: a prior run leaves progress,
-  // turning "Read" into "Continue"/"Start Over".
-  const readBtn = page.locator("#read-btn");
-  const restartBtn = page.locator("#restart-btn");
-  await expect(readBtn.or(restartBtn)).toBeVisible({ timeout: 15_000 });
-  if (await readBtn.count()) {
-    await readBtn.click();
-  } else {
-    await restartBtn.click();
-  }
+  // turning "Read" into "Continue" (with "Start Over" in the More menu).
+  await enterReaderAtStart(page);
   await expect(page).toHaveURL(new RegExp(`#/book/${READER_BOOK_ID}/0/read`));
   const pageImg = page.locator("#page-img");
   await expect(pageImg).toBeVisible();
