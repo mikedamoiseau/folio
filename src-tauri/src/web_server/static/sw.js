@@ -22,7 +22,7 @@
 // activates; app.js's registration call is feature-detected/try-catched so
 // this is silent, not an error. The manifest + icons still work for iOS
 // Safari "Add to Home Screen" over plain HTTP.
-const CACHE_VERSION = "folio-shell-170778879b68";
+const CACHE_VERSION = "folio-shell-b8ef89206504";
 
 // Offline mode (spec 2026-07-17-web-reader-offline): per-book content caches,
 // written ONLY by app.js's save flow — the SW never writes to them. The SW
@@ -39,19 +39,48 @@ const SHELL_ASSETS = [
   "/manifest.json",
   "/icon-192.png",
   "/icon-512.png",
+  // Reader typography fonts — kept in lockstep with web_ui.rs FONT_ASSETS by
+  // mod::tests::font_assets_are_public_and_precached. cache.addAll() is atomic,
+  // so a missing/renamed entry here breaks the whole SW install.
+  "/fonts/lora-latin-normal-ddb8c6603510.woff2",
+  "/fonts/lora-latin-italic-d824d807d4d8.woff2",
+  "/fonts/lora-latinext-normal-2a2d9c22c986.woff2",
+  "/fonts/lora-latinext-italic-45f989df83f3.woff2",
+  "/fonts/literata-latin-normal-9adbeac5b167.woff2",
+  "/fonts/literata-latin-italic-ab198d6616c7.woff2",
+  "/fonts/literata-latinext-normal-46792f7cd10b.woff2",
+  "/fonts/literata-latinext-italic-ba0e6a12e2f0.woff2",
+  "/fonts/dmsans-latin-normal-9fea608a947e.woff2",
+  "/fonts/dmsans-latin-italic-f1a235db5bcb.woff2",
+  "/fonts/dmsans-latinext-normal-a5d38fe99f93.woff2",
+  "/fonts/dmsans-latinext-italic-6e646d202280.woff2",
+  "/fonts/opendyslexic-regular-f007004af3cd.woff2",
+  "/fonts/opendyslexic-bold-dd9fa9c79911.woff2",
+  "/fonts/opendyslexic-italic-eb6a1bacf7e7.woff2",
+  "/fonts/opendyslexic-bolditalic-a20d82c2a1a0.woff2",
 ];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
-    caches.open(CACHE_VERSION).then((cache) =>
+    caches.open(CACHE_VERSION).then(async (cache) => {
       // Finding 8: web_ui.rs serves these with `Cache-Control: public,
-      // max-age=3600` — a plain `cache.addAll(SHELL_ASSETS)` lets the
-      // browser's own HTTP cache satisfy the fetch, which can populate a
-      // freshly-versioned SW cache with an hour-old copy of app.js/app.css
-      // right after a deploy. `cache: "reload"` forces each request past the
-      // HTTP cache to the network.
-      cache.addAll(SHELL_ASSETS.map((url) => new Request(url, { cache: "reload" })))
-    )
+      // max-age=3600` — a plain `cache.addAll(...)` lets the browser's own
+      // HTTP cache satisfy the fetch, which can populate a freshly-versioned
+      // SW cache with an hour-old copy of app.js/app.css right after a deploy.
+      // `cache: "reload"` forces each request past the HTTP cache.
+      const reload = (url) => new Request(url, { cache: "reload" });
+      // Core shell (the app itself) is precached ATOMICALLY — install fails and
+      // retries if any of these can't be fetched. Reader fonts are precached
+      // BEST-EFFORT: cache.addAll is all-or-nothing, so folding 15+ font files
+      // into it would let one flaky font fetch abort the whole SW update and
+      // strand the user on the stale core shell. Fonts are still in
+      // SHELL_ASSETS, so a best-effort miss is repopulated cache-first by the
+      // fetch handler on the first request for that face.
+      const fonts = SHELL_ASSETS.filter((url) => url.startsWith("/fonts/"));
+      const core = SHELL_ASSETS.filter((url) => !url.startsWith("/fonts/"));
+      await cache.addAll(core.map(reload));
+      await Promise.allSettled(fonts.map((url) => cache.add(reload(url))));
+    })
   );
   self.skipWaiting();
 });

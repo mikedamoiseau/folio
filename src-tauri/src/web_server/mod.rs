@@ -3184,6 +3184,11 @@ mod tests {
         hasher.update(APP_JS.as_bytes());
         hasher.update(APP_CSS.as_bytes());
         hasher.update(MANIFEST_JSON.as_bytes());
+        // Fold the embedded reader-font bytes too, so swapping a font forces a
+        // CACHE_VERSION bump (the SW precaches these; stale caches would 404).
+        for (_p, bytes) in web_ui::FONT_ASSETS {
+            hasher.update(bytes);
+        }
         let digest = format!("{:x}", hasher.finalize());
         let expected_fragment = &digest[..12];
 
@@ -3343,6 +3348,131 @@ mod tests {
         }
 
         let _ = tx.send(());
+    }
+
+    // ── Web reader typography fonts ─────────────────────────────────────────
+    // The four reading faces are embedded, content-addressed woff2 served as
+    // public shell assets and precached by sw.js. If a font path is missing
+    // from either public list, sw.js's atomic `cache.addAll()` rejects and the
+    // service worker never installs — so both lists are asserted, driven off
+    // the single FONT_ASSETS table so they cannot silently drift.
+    #[test]
+    fn font_assets_are_public_and_precached() {
+        let sw = include_str!("static/sw.js");
+        // Scope the SW check to the SHELL_ASSETS array body, not the whole
+        // file, so a path appearing only in a comment/OFFLINE list can't
+        // false-pass.
+        // Scope to the `const SHELL_ASSETS = [ ... ]` array body specifically
+        // (not any comment that merely mentions SHELL_ASSETS/PUBLIC_SHELL_ASSETS)
+        // so a path in a comment or the OFFLINE list can't false-pass.
+        let shell = sw
+            .split("const SHELL_ASSETS")
+            .nth(1)
+            .and_then(|s| s.split(']').next())
+            .expect("sw.js must define `const SHELL_ASSETS = [ ... ]`");
+        for (path, _bytes) in web_ui::FONT_ASSETS {
+            assert!(
+                web_ui::PUBLIC_SHELL_ASSETS.contains(path),
+                "{path} missing from PUBLIC_SHELL_ASSETS"
+            );
+            assert!(
+                shell.contains(&format!("\"{path}\"")),
+                "{path} missing from sw.js SHELL_ASSETS array"
+            );
+        }
+        assert!(!web_ui::FONT_ASSETS.is_empty(), "no fonts registered");
+
+        // Reverse direction: no STALE font entry may linger in either public
+        // list after a font is renamed/removed from FONT_ASSETS. A leftover
+        // "/fonts/..." path that no longer resolves would 404 and break the
+        // atomic core install (PUBLIC_SHELL_ASSETS) or the precache add.
+        let font_paths: HashSet<&str> = web_ui::FONT_ASSETS.iter().map(|(p, _)| *p).collect();
+        for path in web_ui::PUBLIC_SHELL_ASSETS {
+            if path.starts_with("/fonts/") {
+                assert!(
+                    font_paths.contains(path),
+                    "{path} is a stale font entry in PUBLIC_SHELL_ASSETS (not in FONT_ASSETS)"
+                );
+            }
+        }
+        // Split on either quote char so a single-quoted entry can't slip a
+        // stale font path past the reverse check.
+        for token in shell.split(['"', '\'']) {
+            if token.starts_with("/fonts/") {
+                assert!(
+                    font_paths.contains(token),
+                    "{token} is a stale font entry in sw.js SHELL_ASSETS (not in FONT_ASSETS)"
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn font_routes_public_under_pin() {
+        for (path, _b) in web_ui::FONT_ASSETS {
+            assert_public_route_ok(path, "font/woff2").await;
+        }
+    }
+
+    #[tokio::test]
+    async fn font_routes_public_under_locked_profile() {
+        // profile_lock_gate 503s when active_profile_name is NOT in
+        // unlocked_profiles, EXCEPT for PUBLIC_SHELL_ASSETS. test_state() seeds
+        // unlocked_profiles = {"default"}; set the active profile to one that
+        // is NOT unlocked to simulate "locked", then assert fonts still 200.
+        let state = test_state();
+        *state.active_profile_name.lock().unwrap() = "locked-acct".to_string();
+        // (do NOT add "locked-acct" to unlocked_profiles)
+        let (_state, port, tx) = spawn_progress_test_server(state).await;
+        let client = reqwest::Client::new();
+        // sanity: a non-public route IS gated
+        let gated = client
+            .get(format!("http://127.0.0.1:{port}/api/books"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(gated.status(), 503, "non-public route must be locked");
+        for (path, _b) in web_ui::FONT_ASSETS {
+            let resp = client
+                .get(format!("http://127.0.0.1:{port}{path}"))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(
+                resp.status(),
+                200,
+                "{path} must be public even under a locked profile"
+            );
+            assert_eq!(resp.headers()["content-type"], "font/woff2");
+        }
+        let _ = tx.send(());
+    }
+
+    // Content-addressing is the cache-safety contract for the plain-HTTP LAN
+    // path (no service worker): filenames carry a 12-char sha256 prefix and are
+    // served `immutable`. Assert the fragment is exactly 12 lowercase hex chars
+    // AND equals sha256(bytes)[..12], so a swapped font body without a renamed
+    // file is caught.
+    #[test]
+    fn font_filenames_are_content_addressed() {
+        use sha2::{Digest, Sha256};
+        for (path, bytes) in web_ui::FONT_ASSETS {
+            let fname = path.rsplit('/').next().unwrap();
+            let frag = fname.trim_end_matches(".woff2").rsplit('-').next().unwrap();
+            assert!(
+                frag.len() == 12
+                    && frag
+                        .bytes()
+                        .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase()),
+                "{path}: hash fragment must be 12 lowercase hex chars, got {frag:?}"
+            );
+            let digest = format!("{:x}", Sha256::digest(bytes));
+            assert_eq!(
+                &digest[..12],
+                frag,
+                "{path}: filename hash != sha256 prefix"
+            );
+        }
     }
 
     #[tokio::test]

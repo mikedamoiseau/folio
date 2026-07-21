@@ -19,6 +19,114 @@ const SW_JS: &str = include_str!("static/sw.js");
 const ICON_192: &[u8] = include_bytes!("static/icon-192.png");
 const ICON_512: &[u8] = include_bytes!("static/icon-512.png");
 
+// Reader typography faces (web reader typography controls). Content-addressed
+// woff2 (filename carries a 12-char sha256 prefix), served `immutable`. Each
+// entry's path MUST also appear in PUBLIC_SHELL_ASSETS below and in sw.js's
+// SHELL_ASSETS array (enforced by mod::tests::font_assets_are_public_and_precached);
+// the filename<->content-hash link is enforced by font_filenames_are_content_addressed
+// and folded into the CACHE_VERSION hash by cache_version_embeds_shell_asset_content_hash.
+const FONT_LORA_LATIN_NORMAL: &[u8] =
+    include_bytes!("static/fonts/lora-latin-normal-ddb8c6603510.woff2");
+const FONT_LORA_LATIN_ITALIC: &[u8] =
+    include_bytes!("static/fonts/lora-latin-italic-d824d807d4d8.woff2");
+const FONT_LORA_LATINEXT_NORMAL: &[u8] =
+    include_bytes!("static/fonts/lora-latinext-normal-2a2d9c22c986.woff2");
+const FONT_LORA_LATINEXT_ITALIC: &[u8] =
+    include_bytes!("static/fonts/lora-latinext-italic-45f989df83f3.woff2");
+const FONT_LITERATA_LATIN_NORMAL: &[u8] =
+    include_bytes!("static/fonts/literata-latin-normal-9adbeac5b167.woff2");
+const FONT_LITERATA_LATIN_ITALIC: &[u8] =
+    include_bytes!("static/fonts/literata-latin-italic-ab198d6616c7.woff2");
+const FONT_LITERATA_LATINEXT_NORMAL: &[u8] =
+    include_bytes!("static/fonts/literata-latinext-normal-46792f7cd10b.woff2");
+const FONT_LITERATA_LATINEXT_ITALIC: &[u8] =
+    include_bytes!("static/fonts/literata-latinext-italic-ba0e6a12e2f0.woff2");
+const FONT_DMSANS_LATIN_NORMAL: &[u8] =
+    include_bytes!("static/fonts/dmsans-latin-normal-9fea608a947e.woff2");
+const FONT_DMSANS_LATIN_ITALIC: &[u8] =
+    include_bytes!("static/fonts/dmsans-latin-italic-f1a235db5bcb.woff2");
+const FONT_DMSANS_LATINEXT_NORMAL: &[u8] =
+    include_bytes!("static/fonts/dmsans-latinext-normal-a5d38fe99f93.woff2");
+const FONT_DMSANS_LATINEXT_ITALIC: &[u8] =
+    include_bytes!("static/fonts/dmsans-latinext-italic-6e646d202280.woff2");
+const FONT_OPENDYSLEXIC_REGULAR: &[u8] =
+    include_bytes!("static/fonts/opendyslexic-regular-f007004af3cd.woff2");
+const FONT_OPENDYSLEXIC_BOLD: &[u8] =
+    include_bytes!("static/fonts/opendyslexic-bold-dd9fa9c79911.woff2");
+const FONT_OPENDYSLEXIC_ITALIC: &[u8] =
+    include_bytes!("static/fonts/opendyslexic-italic-eb6a1bacf7e7.woff2");
+const FONT_OPENDYSLEXIC_BOLDITALIC: &[u8] =
+    include_bytes!("static/fonts/opendyslexic-bolditalic-a20d82c2a1a0.woff2");
+
+/// The embedded reader fonts, as (route path, bytes). Single source of truth
+/// for route registration, the public-asset lists, and the content-hash tests.
+pub(crate) const FONT_ASSETS: &[(&str, &[u8])] = &[
+    (
+        "/fonts/lora-latin-normal-ddb8c6603510.woff2",
+        FONT_LORA_LATIN_NORMAL,
+    ),
+    (
+        "/fonts/lora-latin-italic-d824d807d4d8.woff2",
+        FONT_LORA_LATIN_ITALIC,
+    ),
+    (
+        "/fonts/lora-latinext-normal-2a2d9c22c986.woff2",
+        FONT_LORA_LATINEXT_NORMAL,
+    ),
+    (
+        "/fonts/lora-latinext-italic-45f989df83f3.woff2",
+        FONT_LORA_LATINEXT_ITALIC,
+    ),
+    (
+        "/fonts/literata-latin-normal-9adbeac5b167.woff2",
+        FONT_LITERATA_LATIN_NORMAL,
+    ),
+    (
+        "/fonts/literata-latin-italic-ab198d6616c7.woff2",
+        FONT_LITERATA_LATIN_ITALIC,
+    ),
+    (
+        "/fonts/literata-latinext-normal-46792f7cd10b.woff2",
+        FONT_LITERATA_LATINEXT_NORMAL,
+    ),
+    (
+        "/fonts/literata-latinext-italic-ba0e6a12e2f0.woff2",
+        FONT_LITERATA_LATINEXT_ITALIC,
+    ),
+    (
+        "/fonts/dmsans-latin-normal-9fea608a947e.woff2",
+        FONT_DMSANS_LATIN_NORMAL,
+    ),
+    (
+        "/fonts/dmsans-latin-italic-f1a235db5bcb.woff2",
+        FONT_DMSANS_LATIN_ITALIC,
+    ),
+    (
+        "/fonts/dmsans-latinext-normal-a5d38fe99f93.woff2",
+        FONT_DMSANS_LATINEXT_NORMAL,
+    ),
+    (
+        "/fonts/dmsans-latinext-italic-6e646d202280.woff2",
+        FONT_DMSANS_LATINEXT_ITALIC,
+    ),
+    (
+        "/fonts/opendyslexic-regular-f007004af3cd.woff2",
+        FONT_OPENDYSLEXIC_REGULAR,
+    ),
+    (
+        "/fonts/opendyslexic-bold-dd9fa9c79911.woff2",
+        FONT_OPENDYSLEXIC_BOLD,
+    ),
+    (
+        "/fonts/opendyslexic-italic-eb6a1bacf7e7.woff2",
+        FONT_OPENDYSLEXIC_ITALIC,
+    ),
+    (
+        "/fonts/opendyslexic-bolditalic-a20d82c2a1a0.woff2",
+        FONT_OPENDYSLEXIC_BOLDITALIC,
+    ),
+];
+
 /// Finding 11: every path this module serves as a public, unauthenticated
 /// static shell asset — the single source of truth shared by [`routes`]
 /// below (each path here must have a matching `.route(...)` registration,
@@ -37,11 +145,29 @@ pub(crate) const PUBLIC_SHELL_ASSETS: &[&str] = &[
     "/sw.js",
     "/icon-192.png",
     "/icon-512.png",
+    // Reader typography fonts — kept in lockstep with FONT_ASSETS by
+    // mod::tests::font_assets_are_public_and_precached.
+    "/fonts/lora-latin-normal-ddb8c6603510.woff2",
+    "/fonts/lora-latin-italic-d824d807d4d8.woff2",
+    "/fonts/lora-latinext-normal-2a2d9c22c986.woff2",
+    "/fonts/lora-latinext-italic-45f989df83f3.woff2",
+    "/fonts/literata-latin-normal-9adbeac5b167.woff2",
+    "/fonts/literata-latin-italic-ab198d6616c7.woff2",
+    "/fonts/literata-latinext-normal-46792f7cd10b.woff2",
+    "/fonts/literata-latinext-italic-ba0e6a12e2f0.woff2",
+    "/fonts/dmsans-latin-normal-9fea608a947e.woff2",
+    "/fonts/dmsans-latin-italic-f1a235db5bcb.woff2",
+    "/fonts/dmsans-latinext-normal-a5d38fe99f93.woff2",
+    "/fonts/dmsans-latinext-italic-6e646d202280.woff2",
+    "/fonts/opendyslexic-regular-f007004af3cd.woff2",
+    "/fonts/opendyslexic-bold-dd9fa9c79911.woff2",
+    "/fonts/opendyslexic-italic-eb6a1bacf7e7.woff2",
+    "/fonts/opendyslexic-bolditalic-a20d82c2a1a0.woff2",
 ];
 
 /// Build routes for the embedded web UI.
 pub fn routes() -> Router<WebState> {
-    Router::new()
+    let mut router = Router::new()
         .route("/", get(index))
         .route("/app.js", get(serve_js))
         .route("/app.css", get(serve_css))
@@ -50,7 +176,13 @@ pub fn routes() -> Router<WebState> {
         .route("/manifest.json", get(serve_manifest))
         .route("/sw.js", get(serve_sw))
         .route("/icon-192.png", get(serve_icon_192))
-        .route("/icon-512.png", get(serve_icon_512))
+        .route("/icon-512.png", get(serve_icon_512));
+    // Register the content-addressed reader fonts from the single FONT_ASSETS
+    // table so routes, public list, and precache list cannot drift.
+    for &(path, bytes) in FONT_ASSETS {
+        router = router.route(path, get(move || serve_font(bytes)));
+    }
+    router
 }
 
 async fn index() -> Response {
@@ -152,6 +284,17 @@ async fn serve_icon_192() -> Response {
             (header::CACHE_CONTROL, "public, max-age=86400"),
         ],
         ICON_192,
+    )
+        .into_response()
+}
+
+async fn serve_font(bytes: &'static [u8]) -> Response {
+    (
+        [
+            (header::CONTENT_TYPE, "font/woff2"),
+            (header::CACHE_CONTROL, "public, max-age=31536000, immutable"),
+        ],
+        bytes,
     )
         .into_response()
 }
