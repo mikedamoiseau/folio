@@ -188,13 +188,19 @@ fn build_test_epub(path: &Path) -> Result<(), Box<dyn Error>> {
     zip.start_file("OEBPS/ch0.xhtml", deflated)?;
     zip.write_all(chapter("Ch0", "<p>E2E chapter zero content.</p>").as_bytes())?;
     zip.start_file("OEBPS/ch1.xhtml", deflated)?;
-    zip.write_all(
-        chapter(
-            "Ch1",
-            r#"<p>E2E chapter one content.</p><img src="pic.png" alt="inline"/>"#,
-        )
-        .as_bytes(),
-    )?;
+    // Long enough that `#reader-stage` actually scrolls at the test viewport,
+    // so the typography reflow-anchor e2e can measure a mid-chapter position.
+    // Keeps the "chapter one" marker (asserted by the F-4-4 prefetch spec) and
+    // the inline <img> (its image-prefetch spec). Chapter COUNT is unchanged
+    // (still 2) — only ch1's body grows.
+    let mut ch1_body = String::from("<p>E2E chapter one content.</p>");
+    for i in 0..60 {
+        ch1_body.push_str(&format!(
+            "<p>Paragraph {i} — lorem ipsum dolor sit amet, consectetur adipiscing elit.</p>"
+        ));
+    }
+    ch1_body.push_str(r#"<img src="pic.png" alt="inline"/>"#);
+    zip.write_all(chapter("Ch1", &ch1_body).as_bytes())?;
 
     // A tiny valid PNG for the inline image referenced by chapter 1.
     let img = image::RgbImage::from_pixel(4, 4, image::Rgb([10, 120, 200]));

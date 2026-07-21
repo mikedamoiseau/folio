@@ -41,6 +41,162 @@
     try { localStorage.setItem(key, value); } catch (e) { /* best-effort */ }
   }
 
+  // Web reader typography (font size / line spacing / font family / column
+  // width). One JSON localStorage key, global across books, applied as inline
+  // styles on #reader-content for reflowable books (mode !== "page"). Held in
+  // an in-memory object so a change still applies for the session even when
+  // the persist is denied (private mode / quota). Values are validated on the
+  // way in — clamp to range THEN snap to the control's step grid.
+  const TYPO_KEY = "folio-web-typography";
+  const TYPO_DEFAULTS = { fontSize: 18, lineHeight: 1.8, fontFamily: "lora", columnWidth: 700 };
+  const FONT_STACKS = {
+    lora: '"Lora Variable", Georgia, serif',
+    literata: '"Literata Variable", Georgia, serif',
+    "dm-sans": '"DM Sans Variable", system-ui, sans-serif',
+    opendyslexic: '"OpenDyslexic", sans-serif',
+  };
+  const COLUMN_WIDTHS = [600, 700, 860];
+  const okNum = (n) => typeof n === "number" && Number.isFinite(n);
+
+  function validateTypography(raw) {
+    const o = (raw && typeof raw === "object" && !Array.isArray(raw)) ? raw : {};
+    // font size: clamp to [14,24] then snap to even
+    let fs = okNum(o.fontSize) ? Math.min(24, Math.max(14, o.fontSize)) : TYPO_DEFAULTS.fontSize;
+    fs = Math.round(fs / 2) * 2;
+    // line height: clamp to [1.2,2.4] then snap to the 0.2 grid
+    let lh = okNum(o.lineHeight) ? Math.min(2.4, Math.max(1.2, o.lineHeight)) : TYPO_DEFAULTS.lineHeight;
+    lh = Math.round(lh * 5) / 5;
+    return {
+      fontSize: fs,
+      lineHeight: Math.round(lh * 10) / 10,
+      fontFamily: Object.prototype.hasOwnProperty.call(FONT_STACKS, o.fontFamily)
+        ? o.fontFamily
+        : TYPO_DEFAULTS.fontFamily,
+      columnWidth: COLUMN_WIDTHS.includes(o.columnWidth) ? o.columnWidth : TYPO_DEFAULTS.columnWidth,
+    };
+  }
+
+  // In-memory source of truth; initialized once from storage on first read.
+  let typoState = null;
+  function getTypography() {
+    if (!typoState) {
+      let parsed = null;
+      try { parsed = JSON.parse(safeStorageGet(TYPO_KEY)); } catch (e) { parsed = null; }
+      typoState = validateTypography(parsed);
+    }
+    return typoState;
+  }
+  function setTypography(patch) {
+    typoState = validateTypography({ ...getTypography(), ...patch }); // live regardless of storage
+    safeStorageSet(TYPO_KEY, JSON.stringify(typoState));              // best-effort persist
+    return typoState;
+  }
+  // Apply the current typography to a reflowable chapter column as inline
+  // styles. Inline styles on #reader-content survive renderReaderContent()'s
+  // innerHTML swaps (only the children are replaced), so a single apply at
+  // chrome-build time persists across chapter turns.
+  function applyTypography(el) {
+    if (!el) return;
+    const t = getTypography();
+    el.style.fontSize = t.fontSize + "px";
+    el.style.lineHeight = String(t.lineHeight);
+    el.style.maxWidth = t.columnWidth + "px";
+    el.style.fontFamily = FONT_STACKS[t.fontFamily];
+  }
+  // Reading-position preservation across a typography reflow. Changing font
+  // size/spacing/family/width reflows the chapter, which would otherwise shift
+  // whatever the reader was looking at. We keep the paragraph at the top of the
+  // scroll viewport pinned to its offset, measured against the SCROLL CONTAINER
+  // (#reader-stage), not #reader-content (the non-scrolling inner column).
+  // A unique token identifying the reanchor currently allowed to fire. Each
+  // schedule (a typography change OR the initial-load font restore) overwrites
+  // it, so an older deferred callback finds its token superseded and bails; a
+  // genuine user scroll sets it to null, cancelling any pending reanchor.
+  let pendingReanchor = null;
+
+  function captureAnchor(stage, content) {
+    const stageTop = stage.getBoundingClientRect().top;
+    const kids = content.children;
+    for (let i = 0; i < kids.length; i++) {
+      const r = kids[i].getBoundingClientRect();
+      if (r.bottom > stageTop) return { el: kids[i], offset: r.top - stageTop };
+    }
+    const denom = stage.scrollHeight - stage.clientHeight;
+    return { ratio: denom > 0 ? stage.scrollTop / denom : 0 };
+  }
+
+  // Arm suppressScrollSave ONLY when the write actually changes scrollTop —
+  // otherwise no scroll event fires and the stale flag would swallow the user's
+  // next real scroll. Clamp the target to the real scrollable range FIRST so a
+  // request the browser would clamp to the current position (e.g. an anchor
+  // overshoot after content shrinks near the bottom) doesn't arm the flag with
+  // no scroll event to consume it.
+  function setScrollTop(stage, target) {
+    const max = Math.max(0, stage.scrollHeight - stage.clientHeight);
+    const next = Math.round(Math.min(Math.max(target, 0), max));
+    if (next === Math.round(stage.scrollTop)) return;
+    readerState.suppressScrollSave = true; // one-shot, consumed by the listener
+    stage.scrollTop = next;
+  }
+
+  // Re-derive the saved progress ratio from the current scroll offset. A
+  // reflow (typography change) keeps the reader at the same paragraph but
+  // changes chapter height, so the pre-reflow ratio no longer points there —
+  // recompute it, or a later nav-away flush would persist a stale location.
+  function syncScrollPosition(stage) {
+    if (!readerState) return;
+    const max = stage.scrollHeight - stage.clientHeight;
+    readerState.scrollPosition = max > 0 ? clampScrollRatio(stage.scrollTop / max) : 0;
+  }
+
+  function restoreAnchor(stage, content, a) {
+    if (a.el && content.contains(a.el)) {
+      const stageTop = stage.getBoundingClientRect().top;
+      const cur = a.el.getBoundingClientRect().top - stageTop;
+      setScrollTop(stage, stage.scrollTop + (cur - a.offset));
+    } else if (typeof a.ratio === "number") {
+      setScrollTop(stage, a.ratio * (stage.scrollHeight - stage.clientHeight));
+    }
+  }
+
+  function changeTypography(patch) {
+    const stage = $("#reader-stage");
+    const content = $("#reader-content");
+    if (!stage || !content) { setTypography(patch); return; }
+    const gen = readerState.renderGen;               // reader's own render generation
+    const anchor = captureAnchor(stage, content);
+    setTypography(patch);
+    applyTypography(content);
+    restoreAnchor(stage, content, anchor);           // after synchronous layout
+    syncScrollPosition(stage);                        // saved ratio now matches the reflowed layout
+    const establishedTop = Math.round(stage.scrollTop);
+    const token = (pendingReanchor = {});            // unique per change — a newer change/user scroll supersedes
+    document.fonts.ready.then(() => {
+      // bail if: superseded by a newer schedule or a user scroll (token no
+      // longer ours), the reader re-rendered/changed book (renderGen bumped),
+      // it left chapter mode, or the content left the DOM.
+      if (pendingReanchor !== token) return;
+      if (!readerState || readerState.renderGen !== gen || readerState.mode !== "chapter" || !content.isConnected) { pendingReanchor = null; return; }
+      // Only re-anchor if the offset is still exactly where we left it. A pure
+      // font-metric reflow leaves scrollTop numerically unchanged (paragraph
+      // drifts, we correct it); a genuine user scroll OR the browser's own
+      // scroll-anchoring moves it — in either case, don't fight it. This is
+      // robust even if a coalesced scroll event slipped past suppressScrollSave.
+      if (Math.round(stage.scrollTop) !== establishedTop) { pendingReanchor = null; return; }
+      restoreAnchor(stage, content, anchor);
+      syncScrollPosition(stage);
+      pendingReanchor = null;
+    });
+  }
+  // Test-only hook: app.js is an IIFE, so nothing is reachable from
+  // Playwright's page.evaluate unless explicitly exposed. app.js is served
+  // byte-identically to production and the e2e harness, so this is gated on a
+  // flag the specs set via addInitScript before load — it never ships to the
+  // production reader (whose M3 controls call changeTypography directly).
+  if (window.__folioExposeTypoHook) {
+    window.__folioTypo = { validate: validateTypography, get: getTypography, set: setTypography, change: changeTypography };
+  }
+
   // Item 10: same guarded pattern as safeStorageGet/Set, but backed by
   // sessionStorage — used for the per-hash library scroll-position memory
   // (tab-scoped, meant to be forgotten across sessions).
@@ -3773,6 +3929,10 @@
       // book, so this listener stays bound across chapter turns — only the
       // stage's content is swapped by renderReaderContent().
       bindChapterScrollTracking($("#reader-stage"));
+      // Web typography: apply saved font/spacing/family/width to the chapter
+      // column once here (inline styles persist across chapter-turn innerHTML
+      // swaps). EPUB + MOBI both reach this branch (mode !== "page").
+      applyTypography($("#reader-content"));
     }
 
     applyChromeVisibility();
@@ -3794,6 +3954,9 @@
       // restore (renderReaderContent) — it reflects data already saved,
       // not a new user action.
       if (readerState.suppressScrollSave) { readerState.suppressScrollSave = false; return; }
+      // A genuine user scroll wins over any deferred font-ready re-anchor from
+      // a typography change still in flight.
+      pendingReanchor = null;
       const max = stage.scrollHeight - stage.clientHeight;
       readerState.scrollPosition = max > 0 ? clampScrollRatio(stage.scrollTop / max) : 0;
       scheduleProgressSave();
@@ -3895,16 +4058,36 @@
         // chapter turn, which just lands at the top like before.
         const restoreRatio = readerState.pendingScrollRestore || 0;
         readerState.pendingScrollRestore = 0;
+        let establishedTop = null;
         requestAnimationFrame(() => {
           if (!readerState || readerState.renderGen !== gen) return;
           const max = stage.scrollHeight - stage.clientHeight;
           if (restoreRatio > 0 && max > 0) {
-            readerState.suppressScrollSave = true;
-            stage.scrollTop = restoreRatio * max;
+            setScrollTop(stage, restoreRatio * max);
           } else {
             stage.scrollTop = 0;
           }
+          establishedTop = Math.round(stage.scrollTop);
         });
+        // The reading font may load after first paint (font-display: swap),
+        // changing chapter height so the ratio-restore above lands short. Re-
+        // apply the saved ratio once fonts settle — but ONLY if the reader is
+        // still exactly where the rAF restore left it. A genuine user scroll or
+        // the browser's own scroll-anchoring moving the offset means: leave it
+        // alone (this is robust even if a coalesced scroll slipped past
+        // suppressScrollSave). Also guarded by the same render generation and a
+        // unique token a user scroll cancels.
+        if (restoreRatio > 0) {
+          const token = (pendingReanchor = {});
+          document.fonts.ready.then(() => {
+            if (pendingReanchor !== token) return;
+            if (!readerState || readerState.renderGen !== gen || readerState.mode !== "chapter" || !stage.isConnected) { pendingReanchor = null; return; }
+            if (establishedTop === null || Math.round(stage.scrollTop) !== establishedTop) { pendingReanchor = null; return; }
+            const max = stage.scrollHeight - stage.clientHeight;
+            if (max > 0) setScrollTop(stage, restoreRatio * max);
+            pendingReanchor = null;
+          });
+        }
       }
       // F-4-4: now that this chapter is on screen, prefetch its neighbours
       // (next first) into the cache so the next forward turn is instant.
