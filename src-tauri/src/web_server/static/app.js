@@ -114,6 +114,21 @@
   // genuine user scroll sets it to null, cancelling any pending reanchor.
   let pendingReanchor = null;
 
+  // Whether the Aa typography popover is open. Reset on every chrome (re)build
+  // and on chrome-hide so it can't outlive its DOM.
+  let typoPanelOpen = false;
+
+  const TYPO_FAMILY_ORDER = ["lora", "literata", "dm-sans", "opendyslexic"];
+  const TYPO_FAMILY_LABELS = {
+    lora: "Lora",
+    literata: "Literata",
+    "dm-sans": "DM Sans",
+    opendyslexic: "OpenDyslexic",
+  };
+  const TYPO_WIDTH_LABELS = { 600: "Narrow", 700: "Medium", 860: "Wide" };
+  const TYPO_FS_MIN = 14, TYPO_FS_MAX = 24, TYPO_FS_STEP = 2;
+  const TYPO_LH_MIN = 1.2, TYPO_LH_MAX = 2.4, TYPO_LH_STEP = 0.2;
+
   function captureAnchor(stage, content) {
     const stageTop = stage.getBoundingClientRect().top;
     const kids = content.children;
@@ -3264,6 +3279,9 @@
   function applyChromeVisibility() {
     const root = $("#reader-root");
     if (root) root.classList.toggle("chrome-hidden", readerState.chromeHidden);
+    // The Aa popover lives in the bottom chrome; hiding the chrome must also
+    // dismiss it (and clear the open flag) so it can't linger invisibly.
+    if (readerState.chromeHidden && typoPanelOpen) closeTypoPanel(false);
     // Showing/hiding the chrome rows resizes the stage without a window
     // resize event — re-clamp a zoomed pan against the new bounds so no
     // gap opens at an edge.
@@ -3849,12 +3867,203 @@
     }, { passive: true });
   }
 
+  // Build the Aa typography popover markup (reflowable books only). Values and
+  // selected/disabled state are set live by renderTypoPanelState() so this can
+  // stay a static template.
+  function typoPanelHtml() {
+    const familyRadios = TYPO_FAMILY_ORDER.map(
+      // FONT_STACKS values contain double quotes ('"Lora Variable", …'); the
+      // style attribute MUST be single-quoted or the inner quotes truncate it
+      // (breaking the in-face preview). No stack contains a single quote.
+      (k) =>
+        `<button type="button" class="typo-radio" role="radio" data-family="${k}" aria-checked="false" tabindex="-1" style='font-family:${FONT_STACKS[k]}'>${esc(TYPO_FAMILY_LABELS[k])}</button>`
+    ).join("");
+    const widthSegs = COLUMN_WIDTHS.map(
+      (w) =>
+        `<button type="button" class="typo-seg" data-width="${w}" aria-pressed="false" aria-label="${esc(TYPO_WIDTH_LABELS[w])} column">${esc(TYPO_WIDTH_LABELS[w])}</button>`
+    ).join("");
+    return `
+      <div class="typo-panel" id="typo-panel" role="dialog" aria-label="Text settings" hidden>
+        <div class="typo-row">
+          <span class="typo-row-label" id="typo-fontsize-label">Font size</span>
+          <div class="typo-stepper" role="group" aria-labelledby="typo-fontsize-label">
+            <button type="button" id="typo-fontsize-dec" aria-label="Decrease font size">A&minus;</button>
+            <span id="typo-fontsize-val" aria-live="polite"></span>
+            <button type="button" id="typo-fontsize-inc" aria-label="Increase font size">A+</button>
+          </div>
+        </div>
+        <div class="typo-row">
+          <span class="typo-row-label" id="typo-linespacing-label">Line spacing</span>
+          <div class="typo-stepper" role="group" aria-labelledby="typo-linespacing-label">
+            <button type="button" id="typo-linespacing-dec" aria-label="Decrease line spacing">&minus;</button>
+            <span id="typo-linespacing-val" aria-live="polite"></span>
+            <button type="button" id="typo-linespacing-inc" aria-label="Increase line spacing">+</button>
+          </div>
+        </div>
+        <div class="typo-row typo-row-col">
+          <span class="typo-row-label" id="typo-family-label">Reading font</span>
+          <div class="typo-family" id="typo-family" role="radiogroup" aria-labelledby="typo-family-label">${familyRadios}</div>
+        </div>
+        <div class="typo-row">
+          <span class="typo-row-label" id="typo-width-label">Width</span>
+          <div class="typo-width" id="typo-width" role="group" aria-labelledby="typo-width-label">${widthSegs}</div>
+        </div>
+      </div>`;
+  }
+
+  // Sync every control's displayed value / selected / disabled state from the
+  // current typography. Updates the radiogroup IN PLACE (never innerHTML —
+  // that would drop keyboard focus).
+  function renderTypoPanelState() {
+    const t = getTypography();
+    const fsVal = $("#typo-fontsize-val");
+    if (fsVal) fsVal.textContent = `${t.fontSize} px`;
+    const lhVal = $("#typo-linespacing-val");
+    if (lhVal) lhVal.textContent = t.lineHeight.toFixed(1);
+    // Disable at range ends — but if the focused stepper is the one being
+    // disabled, hand focus to its still-enabled sibling first (only one end
+    // ever disables), so keyboard focus never escapes to <body> mid-adjust.
+    const setDisabled = (btn, shouldDisable, sibling) => {
+      if (!btn) return;
+      if (shouldDisable && document.activeElement === btn && sibling && !sibling.disabled) {
+        sibling.focus();
+      }
+      btn.disabled = shouldDisable;
+    };
+    const fsDec = $("#typo-fontsize-dec"), fsInc = $("#typo-fontsize-inc");
+    setDisabled(fsDec, t.fontSize <= TYPO_FS_MIN, fsInc);
+    setDisabled(fsInc, t.fontSize >= TYPO_FS_MAX, fsDec);
+    const lhDec = $("#typo-linespacing-dec"), lhInc = $("#typo-linespacing-inc");
+    setDisabled(lhDec, t.lineHeight <= TYPO_LH_MIN + 1e-9, lhInc);
+    setDisabled(lhInc, t.lineHeight >= TYPO_LH_MAX - 1e-9, lhDec);
+    const group = $("#typo-family");
+    if (group) {
+      group.querySelectorAll('[role="radio"]').forEach((r) => {
+        const sel = r.getAttribute("data-family") === t.fontFamily;
+        r.setAttribute("aria-checked", sel ? "true" : "false");
+        r.tabIndex = sel ? 0 : -1;
+      });
+    }
+    const widthGroup = $("#typo-width");
+    if (widthGroup) {
+      widthGroup.querySelectorAll("[data-width]").forEach((b) => {
+        b.setAttribute("aria-pressed", Number(b.getAttribute("data-width")) === t.columnWidth ? "true" : "false");
+      });
+    }
+  }
+
+  function closeTypoPanel(restoreFocus) {
+    const panel = $("#typo-panel");
+    const btn = $("#typo-btn");
+    if (panel) panel.hidden = true;
+    if (btn) btn.setAttribute("aria-expanded", "false");
+    typoPanelOpen = false;
+    if (restoreFocus && btn) btn.focus();
+  }
+
+  function openTypoPanel() {
+    const panel = $("#typo-panel");
+    const btn = $("#typo-btn");
+    if (!panel || !btn) return;
+    renderTypoPanelState();
+    panel.hidden = false;
+    btn.setAttribute("aria-expanded", "true");
+    typoPanelOpen = true;
+    // Move focus into the panel (the selected font radio, tabindex 0).
+    const sel = panel.querySelector('[role="radio"][aria-checked="true"]') || panel.querySelector("button");
+    if (sel) sel.focus();
+  }
+
+  // Roving-tabindex + Space/Enter activation for the font radiogroup. Handled
+  // keys call preventDefault + stopPropagation so Arrow keys don't reach the
+  // global reader handler (chapter nav) and Space doesn't page-scroll.
+  function onTypoFamilyKeydown(e) {
+    const keys = ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", " ", "Spacebar", "Enter"];
+    if (!keys.includes(e.key)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const t = getTypography();
+    let i = TYPO_FAMILY_ORDER.indexOf(t.fontFamily);
+    if (i < 0) i = 0;
+    if (e.key === "ArrowDown" || e.key === "ArrowRight") i = (i + 1) % TYPO_FAMILY_ORDER.length;
+    else if (e.key === "ArrowUp" || e.key === "ArrowLeft") i = (i - 1 + TYPO_FAMILY_ORDER.length) % TYPO_FAMILY_ORDER.length;
+    const nextFamily = TYPO_FAMILY_ORDER[i];
+    if (nextFamily !== t.fontFamily) {
+      changeTypography({ fontFamily: nextFamily });
+      renderTypoPanelState();
+    }
+    const nextRadio = $("#typo-family").querySelector(`[data-family="${nextFamily}"]`);
+    if (nextRadio) nextRadio.focus();
+  }
+
+  // Keep the global reader shortcuts (Arrow = chapter turn, Space = page
+  // scroll, Home/End/f) from firing while the user is operating the Aa button
+  // or panel. stopPropagation ONLY — never preventDefault — so native button
+  // activation (Enter/Space) and the radiogroup's own arrow handling still
+  // work. Escape is deliberately NOT contained: it must bubble to #reader-root
+  // to close the panel. The font radiogroup stops its own keys first (deeper
+  // target), so this never double-handles them.
+  const TYPO_CONTAINED_KEYS = ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End", " ", "Spacebar", "f", "F"];
+  function containReaderKeys(e) {
+    if (TYPO_CONTAINED_KEYS.includes(e.key)) e.stopPropagation();
+  }
+
+  function wireTypoControls() {
+    const btn = $("#typo-btn");
+    if (!btn) return;
+    btn.addEventListener("keydown", containReaderKeys);
+    $("#typo-panel").addEventListener("keydown", containReaderKeys);
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      if (typoPanelOpen) closeTypoPanel(true);
+      else openTypoPanel();
+    });
+    const step = (patch) => { changeTypography(patch); renderTypoPanelState(); };
+    $("#typo-fontsize-dec").addEventListener("click", () => step({ fontSize: getTypography().fontSize - TYPO_FS_STEP }));
+    $("#typo-fontsize-inc").addEventListener("click", () => step({ fontSize: getTypography().fontSize + TYPO_FS_STEP }));
+    $("#typo-linespacing-dec").addEventListener("click", () => step({ lineHeight: getTypography().lineHeight - TYPO_LH_STEP }));
+    $("#typo-linespacing-inc").addEventListener("click", () => step({ lineHeight: getTypography().lineHeight + TYPO_LH_STEP }));
+    const family = $("#typo-family");
+    family.addEventListener("click", (e) => {
+      const radio = e.target.closest("[data-family]");
+      if (!radio) return;
+      step({ fontFamily: radio.getAttribute("data-family") });
+      radio.focus();
+    });
+    family.addEventListener("keydown", onTypoFamilyKeydown);
+    $("#typo-width").addEventListener("click", (e) => {
+      const seg = e.target.closest("[data-width]");
+      if (seg) step({ columnWidth: Number(seg.getAttribute("data-width")) });
+    });
+
+    // Dismissal listeners live on #reader-root so they die when any view swaps
+    // app().innerHTML (no document-level leak). Esc closes the panel BEFORE the
+    // global reader Esc-back handler (this runs in the bubble phase on a
+    // descendant of document, so stopPropagation pre-empts it).
+    const root = $("#reader-root");
+    root.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && typoPanelOpen) {
+        e.preventDefault();
+        e.stopPropagation();
+        closeTypoPanel(true);
+      }
+    });
+    root.addEventListener("click", (e) => {
+      if (typoPanelOpen && !e.target.closest("#typo-panel") && !e.target.closest("#typo-btn")) {
+        closeTypoPanel(false);
+      }
+    });
+  }
+
   function renderReaderChrome() {
     // A deferred tap from a previous reader (or a previous book's chrome)
     // must not fire against the freshly built one — the prev/next zones are
     // already epoch-guarded, but a stale chrome toggle would still hide the
     // new reader's chrome.
     cancelPendingTap();
+    // The Aa popover is rebuilt with the chrome; never carry open state across.
+    typoPanelOpen = false;
+    pendingReanchor = null;
     const { book, mode, count, index, fitMode } = readerState;
     const rootClass = mode === "page" ? `reader-page ${fitMode}` : "reader-chapter";
     // Item 12: `page-img-incoming` is the animated overlay for a committed
@@ -3865,6 +4074,11 @@
     const fitToggleBtn = mode === "page"
       ? `<button id="fit-toggle-btn">${fitMode === "fit-height" ? "Fit: Height" : "Fit: Width"}</button>`
       : "";
+    // Aa typography control — reflowable books only (EPUB + MOBI).
+    const typoBtn = mode === "page"
+      ? ""
+      : `<button id="typo-btn" aria-label="Text settings" aria-haspopup="dialog" aria-expanded="false">Aa</button>`;
+    const typoPanel = mode === "page" ? "" : typoPanelHtml();
 
     app().innerHTML = `
       <div class="${rootClass}" id="reader-root">
@@ -3882,8 +4096,10 @@
             <input type="range" id="page-slider" min="0" max="${count - 1}" value="${index}" aria-label="${mode === "page" ? "Page" : "Chapter"} slider">
             <span id="page-label"></span>
             <button id="next-btn">Next</button>
+            ${typoBtn}
             ${fitToggleBtn}
           </div>
+          ${typoPanel}
         </div>
         <button class="chrome-toggle-fab" id="chrome-toggle-btn" title="Toggle toolbar" aria-label="Toggle toolbar">&#8942;</button>
       </div>`;
@@ -3933,6 +4149,7 @@
       // column once here (inline styles persist across chapter-turn innerHTML
       // swaps). EPUB + MOBI both reach this branch (mode !== "page").
       applyTypography($("#reader-content"));
+      wireTypoControls();
     }
 
     applyChromeVisibility();

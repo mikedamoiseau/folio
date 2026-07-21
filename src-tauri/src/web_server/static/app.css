@@ -515,6 +515,14 @@ body:not(:has(.header))::before {
 /* Item B: the reader has no tab bar, so its bottom toolbar clears the home
    indicator itself via the bottom inset (0 off-notch). */
 .reader-toolbar { display: flex; align-items: center; gap: 10px; padding: 10px var(--gap) calc(10px + env(safe-area-inset-bottom)); border-top: 1px solid var(--warm-border); background: var(--paper); }
+/* Reserve clearance at the toolbar's right edge for the fixed chrome-toggle FAB
+   (position:fixed, bottom-right) so its last control — the Aa button in chapter
+   mode, Fit toggle in page mode — is never overlapped and stays tappable. The
+   FAB is 44px wide on touch/coarse-pointer (see the media query below) at
+   right:16px, so its left edge sits 60px from the viewport edge; reserve 64px
+   (60 + a small gap). Re-asserted in the narrow rule, whose padding shorthand
+   would otherwise reset this. */
+.reader-toolbar { padding-right: calc(64px + env(safe-area-inset-right)); }
 .reader-toolbar button { padding: 6px 16px; background: var(--surface); border: 1px solid var(--warm-border); border-radius: var(--radius); color: var(--ink); cursor: pointer; white-space: nowrap; }
 .reader-toolbar button:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
 .reader-toolbar button:disabled { opacity: 0.55; cursor: default; }
@@ -523,6 +531,59 @@ body:not(:has(.header))::before {
 
 .chrome-toggle-fab { position: fixed; right: calc(16px + env(safe-area-inset-right)); bottom: calc(16px + env(safe-area-inset-bottom)); width: 40px; height: 40px; border-radius: 50%; background: var(--surface); border: 1px solid var(--warm-border); color: var(--ink-muted); cursor: pointer; display: flex; align-items: center; justify-content: center; box-shadow: 0 4px 12px var(--shadow); z-index: 20; font-size: 1.2rem; }
 .chrome-toggle-fab:hover { color: var(--accent); border-color: var(--accent); }
+
+/* Aa typography popover (web reader typography controls). Anchored above the
+   bottom chrome; scrolls internally if it exceeds the viewport. */
+.typo-panel {
+  position: absolute;
+  right: calc(12px + env(safe-area-inset-right));
+  bottom: calc(100% + 8px);
+  z-index: 30;
+  width: min(320px, calc(100vw - 24px));
+  max-height: 70vh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 14px;
+  padding-bottom: calc(14px + env(safe-area-inset-bottom));
+  background: var(--surface);
+  border: 1px solid var(--warm-border);
+  border-radius: var(--radius);
+  box-shadow: 0 12px 32px var(--shadow);
+}
+/* The author display:flex above outranks the UA [hidden]{display:none};
+   restore it explicitly (same precedent as .detail-menu[hidden]). */
+.typo-panel[hidden] { display: none; }
+.reader-chrome-bottom { position: relative; }
+.typo-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.typo-row-col { flex-direction: column; align-items: stretch; gap: 8px; }
+.typo-row-label { font-size: 0.85rem; font-weight: 600; color: var(--ink-muted); }
+.typo-stepper { display: flex; align-items: center; gap: 8px; }
+.typo-stepper span { min-width: 3.2em; text-align: center; font-variant-numeric: tabular-nums; color: var(--ink); font-size: 0.9rem; }
+.typo-stepper button {
+  min-width: 44px; min-height: 44px;
+  background: var(--paper); border: 1px solid var(--warm-border); border-radius: var(--radius);
+  color: var(--ink); cursor: pointer; font-size: 1rem;
+}
+.typo-stepper button:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.typo-stepper button:disabled { opacity: 0.45; cursor: default; }
+.typo-family { display: flex; flex-direction: column; gap: 6px; }
+.typo-radio {
+  display: flex; align-items: center; min-height: 44px;
+  padding: 6px 12px; background: var(--paper);
+  border: 1px solid var(--warm-border); border-radius: var(--radius);
+  color: var(--ink); cursor: pointer; font-size: 1rem; text-align: left;
+}
+.typo-radio[aria-checked="true"] { border-color: var(--accent); color: var(--accent); background: var(--accent-light); }
+.typo-width { display: flex; gap: 6px; }
+.typo-seg {
+  flex: 1; min-height: 44px; min-width: 44px;
+  background: var(--paper); border: 1px solid var(--warm-border); border-radius: var(--radius);
+  color: var(--ink); cursor: pointer; font-size: 0.85rem;
+}
+.typo-seg[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); background: var(--accent-light); }
+.typo-panel :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 /* ── Shortcuts Overlay ─────────────────────────── */
 .shortcuts-overlay { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.5); display: flex; align-items: center; justify-content: center; z-index: 100; }
@@ -701,6 +762,8 @@ body:not(:has(.header))::before {
   /* Item B: keep the home-indicator inset that the base .reader-toolbar rule
      sets — this same-specificity narrow override would otherwise reset it. */
   .reader-toolbar { flex-wrap: wrap; padding: 8px 12px calc(8px + env(safe-area-inset-bottom)); }
+  /* Keep the FAB clearance the base rule set (the shorthand above resets it). */
+  .reader-toolbar { padding-right: calc(64px + env(safe-area-inset-right)); }
   .reader-toolbar input[type="range"] { order: 1; flex-basis: 100%; }
   /* Item 6/7: the header row (title + search + sort + nav icons, now one
      icon wider with the theme toggle) is too tight to fit on one line at

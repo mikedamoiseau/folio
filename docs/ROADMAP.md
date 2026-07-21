@@ -283,6 +283,7 @@ Manual sharing via the existing Markdown / JSON export is sufficient.
 - ~~Configurable port (default `7788`); editable while running~~
 - ~~PIN/password protection (required to connect)~~
 - ~~Read-only web UI: browse library, view covers/metadata, read books in-browser~~
+- ~~Adjustable reading typography in the web reader (font size, line spacing, font family incl. OpenDyslexic, column width) for EPUB/MOBI — embedded fonts, reflow-preserving, remembered across books~~
 - ~~Display the access URL + QR code in settings for easy connection from phones/tablets~~
 - ~~LAN only (no internet tunneling or port forwarding)~~
 

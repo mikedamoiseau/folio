@@ -6,6 +6,16 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- **Adjustable reading typography in the web reader.** The phone/web reader
+  now has an **Aa** button in its toolbar (reflowable books only — EPUB and
+  MOBI) opening a popover with four controls: **font size** (14–24 px),
+  **line spacing** (1.2–2.4), **reading font** (Lora, Literata, DM Sans, and
+  the dyslexia-friendly OpenDyslexic — all embedded and served by Folio, no
+  external fonts), and **column width** (Narrow / Medium / Wide). Changes
+  apply live and are remembered across books and sessions; your reading
+  position is preserved when the text reflows. The four fonts are precached
+  so a saved-offline book still renders in your chosen face on a secure
+  context (HTTPS/localhost); over plain-HTTP LAN they load on first use.
 - **"Want to read" flag.** Mark any book as want-to-read from its detail
   modal or the hover bookmark on its library card. A bookmark filter next to
   the reading-status filter narrows the grid to flagged books, and an

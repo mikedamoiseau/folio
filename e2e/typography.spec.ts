@@ -1,4 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
+import { enterReaderAtStart } from "./detail-actions";
 
 // Web reader typography controls (M2/M3). The settings model, live apply, and
 // reflow-preservation are exercised against the real client (app.js) on the
@@ -215,5 +216,242 @@ test.describe("Web reader typography — reflow preservation", () => {
     expect(Number.isFinite(after)).toBe(true);
     expect(after).toBeGreaterThan(0.1);
     expect(Math.abs(after - before)).toBeLessThan(0.2);
+  });
+});
+
+const CBZ_ID = "e2e-book-130"; // page-image reader — no typography controls
+
+test.describe("Web reader typography — Aa control", () => {
+  test("Aa button present in chapter reader, absent in a page reader", async ({ page }) => {
+    await openEpubChapter(page);
+    await expect(page.locator("#typo-btn")).toBeVisible();
+
+    // Page-image (CBZ) reader must NOT offer typography.
+    await page.goto(`/#/book/${CBZ_ID}`);
+    await enterReaderAtStart(page); // idempotent across shared-harness re-runs
+    await page.locator("#page-img").waitFor({ timeout: 15_000 });
+    await expect(page.locator("#typo-btn")).toHaveCount(0);
+  });
+
+  test("Aa toggles the panel and aria-expanded", async ({ page }) => {
+    await openEpubChapter(page);
+    const btn = page.locator("#typo-btn");
+    const panel = page.locator("#typo-panel");
+    await expect(btn).toHaveAttribute("aria-expanded", "false");
+    await expect(panel).toBeHidden();
+
+    await btn.click();
+    await expect(btn).toHaveAttribute("aria-expanded", "true");
+    await expect(panel).toBeVisible();
+
+    await btn.click();
+    await expect(btn).toHaveAttribute("aria-expanded", "false");
+    await expect(panel).toBeHidden();
+  });
+
+  test("each control changes #reader-content live and persists across reload", async ({ page }) => {
+    await openEpubChapter(page);
+    await page.locator("#typo-btn").click();
+
+    // Font size +2 (18 -> 20)
+    await page.locator("#typo-fontsize-inc").click();
+    expect((await readerContentStyle(page)).fontSize).toBe("20px");
+
+    // Line spacing +0.2 (1.8 -> 2)
+    await page.locator("#typo-linespacing-inc").click();
+    expect((await readerContentStyle(page)).lineHeight).toBe("2");
+
+    // Font family -> Literata
+    await page.locator('#typo-family [data-family="literata"]').click();
+    expect((await readerContentStyle(page)).fontFamily).toContain("Literata Variable");
+
+    // Column width -> Wide (860)
+    await page.locator('#typo-width [data-width="860"]').click();
+    expect((await readerContentStyle(page)).maxWidth).toBe("860px");
+
+    // Persisted across reload.
+    await page.reload();
+    await openEpubChapter(page);
+    const cs = await readerContentStyle(page);
+    expect(cs.fontSize).toBe("20px");
+    expect(cs.lineHeight).toBe("2");
+    expect(cs.fontFamily).toContain("Literata Variable");
+    expect(cs.maxWidth).toBe("860px");
+  });
+
+  test("steppers disable at the maximum", async ({ page }) => {
+    await page.addInitScript(() =>
+      localStorage.setItem(
+        "folio-web-typography",
+        JSON.stringify({ fontSize: 24, lineHeight: 2.4, fontFamily: "lora", columnWidth: 700 })
+      )
+    );
+    await openEpubChapter(page);
+    await page.locator("#typo-btn").click();
+    await expect(page.locator("#typo-fontsize-inc")).toBeDisabled();
+    await expect(page.locator("#typo-linespacing-inc")).toBeDisabled();
+    await expect(page.locator("#typo-fontsize-dec")).toBeEnabled();
+    await expect(page.locator("#typo-linespacing-dec")).toBeEnabled();
+  });
+
+  test("steppers disable at the minimum", async ({ page }) => {
+    await page.addInitScript(() =>
+      localStorage.setItem(
+        "folio-web-typography",
+        JSON.stringify({ fontSize: 14, lineHeight: 1.2, fontFamily: "lora", columnWidth: 700 })
+      )
+    );
+    await openEpubChapter(page);
+    await page.locator("#typo-btn").click();
+    await expect(page.locator("#typo-fontsize-dec")).toBeDisabled();
+    await expect(page.locator("#typo-linespacing-dec")).toBeDisabled();
+    await expect(page.locator("#typo-fontsize-inc")).toBeEnabled();
+    await expect(page.locator("#typo-linespacing-inc")).toBeEnabled();
+  });
+
+  test("font radiogroup: arrow keys move selection, Space activates", async ({ page }) => {
+    await openEpubChapter(page);
+    await page.locator("#typo-btn").click();
+    const group = page.locator("#typo-family");
+    await expect(group).toHaveAttribute("role", "radiogroup");
+
+    // Focus the selected radio (lora), arrow down to the next family, activate.
+    await page.locator('#typo-family [data-family="lora"]').focus();
+    await page.keyboard.press("ArrowDown");
+    await page.keyboard.press(" ");
+    // Whatever is now checked must be reflected on #reader-content and the URL
+    // must NOT have changed (arrow keys were contained, not chapter nav).
+    await expect(page).toHaveURL(new RegExp(`#/book/${EPUB_ID}/0/read`));
+    const checked = await page.locator('#typo-family [aria-checked="true"]').getAttribute("data-family");
+    expect(["literata", "dm-sans", "opendyslexic"]).toContain(checked);
+  });
+
+  test("Esc closes the panel, keeps the reader open, returns focus to Aa", async ({ page }) => {
+    await openEpubChapter(page);
+    const btn = page.locator("#typo-btn");
+    await btn.click();
+    await expect(page.locator("#typo-panel")).toBeVisible();
+
+    await page.keyboard.press("Escape");
+    await expect(page.locator("#typo-panel")).toBeHidden();
+    // Reader still open (Esc did NOT navigate back to detail).
+    await expect(page).toHaveURL(new RegExp(`#/book/${EPUB_ID}/0/read`));
+    await expect(btn).toBeFocused();
+  });
+
+  test("each font radio previews in its own typeface", async ({ page }) => {
+    await openEpubChapter(page);
+    await page.locator("#typo-btn").click();
+    // The style attribute must survive parsing (single-quoted so the stack's
+    // inner double-quotes don't truncate it) and resolve to the face.
+    for (const [fam, face] of [
+      ["lora", "Lora Variable"],
+      ["literata", "Literata Variable"],
+      ["dm-sans", "DM Sans Variable"],
+      ["opendyslexic", "OpenDyslexic"],
+    ] as const) {
+      const ff = await page
+        .locator(`#typo-family [data-family="${fam}"]`)
+        .evaluate((el) => getComputedStyle(el as HTMLElement).fontFamily);
+      expect(ff).toContain(face);
+    }
+  });
+
+  test("arrow keys on a stepper do not turn the chapter", async ({ page }) => {
+    await openEpubChapter(page);
+    await page.locator("#typo-btn").click();
+    await page.locator("#typo-fontsize-inc").focus();
+    await page.keyboard.press("ArrowRight");
+    await page.keyboard.press("ArrowLeft");
+    await page.waitForTimeout(100);
+    // Contained — still on chapter 0, panel still open.
+    await expect(page).toHaveURL(new RegExp(`#/book/${EPUB_ID}/0/read`));
+    await expect(page.locator("#typo-panel")).toBeVisible();
+  });
+
+  test("keyboard focus stays in the panel when a stepper disables at its bound", async ({ page }) => {
+    await page.addInitScript(() =>
+      localStorage.setItem(
+        "folio-web-typography",
+        JSON.stringify({ fontSize: 22, lineHeight: 1.8, fontFamily: "lora", columnWidth: 700 })
+      )
+    );
+    await openEpubChapter(page);
+    await page.locator("#typo-btn").click();
+    await page.locator("#typo-fontsize-inc").focus();
+    // 22 -> 24: inc becomes disabled; focus must move to the sibling (dec), not <body>.
+    await page.keyboard.press("Enter");
+    await expect(page.locator("#typo-fontsize-inc")).toBeDisabled();
+    const focusInPanel = await page.evaluate(
+      () => !!document.activeElement?.closest("#typo-panel")
+    );
+    expect(focusInPanel).toBe(true);
+  });
+
+  test("all popover controls meet the 44px minimum tap target", async ({ page }) => {
+    await openEpubChapter(page);
+    await page.locator("#typo-btn").click();
+    const controls = page.locator("#typo-panel button, #typo-panel [role=radio]");
+    const n = await controls.count();
+    expect(n).toBeGreaterThan(0);
+    for (let i = 0; i < n; i++) {
+      const box = await controls.nth(i).boundingBox();
+      expect(box, `control ${i} has a box`).not.toBeNull();
+      expect(box!.height).toBeGreaterThanOrEqual(43.5);
+      expect(box!.width).toBeGreaterThanOrEqual(43.5);
+    }
+  });
+});
+
+test.describe("Web reader typography — font-load race & layout", () => {
+  test("a user scroll during a pending font-ready re-anchor wins", async ({ page, context }) => {
+    // The e2e host is loopback = a secure context, so sw.js precaches the fonts
+    // and a Cache-Storage hit can bypass a page.route network delay. Disable the
+    // SW and clear caches so the font fetch really goes through the delayed
+    // route, keeping document.fonts.ready pending long enough to interleave a
+    // user scroll. Register the route BEFORE navigation.
+    await context.addInitScript(() => {
+      navigator.serviceWorker?.getRegistrations?.().then((rs) => rs.forEach((r) => r.unregister()));
+      caches?.keys?.().then((ks) => ks.forEach((k) => caches.delete(k)));
+    });
+    await page.route("**/fonts/*.woff2", async (route) => {
+      await new Promise((r) => setTimeout(r, 600));
+      await route.continue();
+    });
+
+    await openEpubChapter(page);
+    await page.locator("#reader-stage").focus();
+    await page.keyboard.press("ArrowRight");
+    await expect(page.locator("#reader-content")).toContainText("chapter one", { timeout: 10_000 });
+
+    // Trigger a typography change (schedules a fonts.ready re-anchor), then
+    // immediately scroll as the user would while the font is still loading.
+    await page.evaluate(() =>
+      (window as unknown as { __folioTypo: TypoHook }).__folioTypo.change({ fontSize: 22 })
+    );
+    await page.locator("#reader-stage").evaluate((s) => { s.scrollTop = s.scrollHeight - s.clientHeight; });
+    const userTop = await page.locator("#reader-stage").evaluate((s) => Math.round(s.scrollTop));
+
+    // Wait past the font delay so the deferred re-anchor would fire if not cancelled.
+    await page.waitForTimeout(900);
+    const afterTop = await page.locator("#reader-stage").evaluate((s) => Math.round(s.scrollTop));
+    // The user's scroll position is preserved — the deferred re-anchor did not
+    // yank it back.
+    expect(Math.abs(afterTop - userTop)).toBeLessThan(4);
+  });
+
+  test("no horizontal overflow at a narrow viewport with the panel open", async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await openEpubChapter(page);
+    await page.locator("#typo-btn").click();
+    await expect(page.locator("#typo-panel")).toBeVisible();
+    const overflow = await page.evaluate(
+      () => document.scrollingElement!.scrollWidth - window.innerWidth
+    );
+    expect(overflow).toBeLessThanOrEqual(1); // ≤1px rounding tolerance
+    // The panel itself stays within the viewport.
+    const box = await page.locator("#typo-panel").boundingBox();
+    expect(box!.x).toBeGreaterThanOrEqual(-1);
+    expect(box!.x + box!.width).toBeLessThanOrEqual(391);
   });
 });
