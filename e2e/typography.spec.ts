@@ -424,20 +424,32 @@ test.describe("Web reader typography — font-load race & layout", () => {
     await page.keyboard.press("ArrowRight");
     await expect(page.locator("#reader-content")).toContainText("chapter one", { timeout: 10_000 });
 
-    // Trigger a typography change (schedules a fonts.ready re-anchor), then
-    // immediately scroll as the user would while the font is still loading.
+    // Trigger a typography change AT THE TOP (schedules a fonts.ready re-anchor
+    // whose captured anchor is the first paragraph), then — while the font is
+    // still loading — the user scrolls down to a mid paragraph.
     await page.evaluate(() =>
       (window as unknown as { __folioTypo: TypoHook }).__folioTypo.change({ fontSize: 22 })
     );
-    await page.locator("#reader-stage").evaluate((s) => { s.scrollTop = s.scrollHeight - s.clientHeight; });
-    const userTop = await page.locator("#reader-stage").evaluate((s) => Math.round(s.scrollTop));
+    await page.locator("#reader-stage").evaluate((s) => {
+      s.scrollTop = Math.round((s.scrollHeight - s.clientHeight) / 2);
+    });
+    // The paragraph the user parked at the top of the viewport.
+    const userAnchor = await topAnchor(page);
+    expect(userAnchor).not.toBeNull();
 
-    // Wait past the font delay so the deferred re-anchor would fire if not cancelled.
+    // Wait past the 600ms font delay so the deferred re-anchor fires if not
+    // cancelled. Assert SEMANTICALLY (paragraph identity + offset), not by
+    // absolute scrollTop: the late font swap reflows the chapter and the
+    // browser's own scroll-anchoring shifts absolute offsets, so an exact
+    // scrollTop check is environment-brittle. What must hold is that the view
+    // stayed with the USER's paragraph and did NOT snap back to the top
+    // (the change-time anchor).
     await page.waitForTimeout(900);
-    const afterTop = await page.locator("#reader-stage").evaluate((s) => Math.round(s.scrollTop));
-    // The user's scroll position is preserved — the deferred re-anchor did not
-    // yank it back.
-    expect(Math.abs(afterTop - userTop)).toBeLessThan(4);
+    const after = await offsetOf(page, userAnchor!.text as string);
+    expect(after).not.toBeNull();
+    // Still near the top edge where the user left it (tolerant of reflow), not
+    // pushed a full viewport down by a re-anchor to the first paragraph.
+    expect(Math.abs((after as number) - userAnchor!.offset)).toBeLessThan(150);
   });
 
   test("no horizontal overflow at a narrow viewport with the panel open", async ({ page }) => {
