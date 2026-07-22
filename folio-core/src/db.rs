@@ -1330,6 +1330,43 @@ pub fn update_bookmark_name(conn: &Connection, id: &str, name: Option<&str>) -> 
     Ok(())
 }
 
+/// Soft-delete a bookmark only if it belongs to `book_id` and is still live.
+/// Returns rows affected (0 → unknown/foreign/already-deleted id). Web routes
+/// are book-scoped, so this prevents `DELETE /books/{A}/bookmarks/{B's id}`
+/// from touching book B's row.
+pub fn soft_delete_bookmark_scoped(conn: &Connection, book_id: &str, id: &str) -> Result<usize> {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64;
+    let n = conn.execute(
+        "UPDATE bookmarks SET deleted_at = ?1, updated_at = ?1 \
+         WHERE id = ?2 AND book_id = ?3 AND deleted_at IS NULL",
+        params![now, id, book_id],
+    )?;
+    Ok(n)
+}
+
+/// Rename (or clear, `name = None`) a bookmark only if it belongs to `book_id`
+/// and is still live. Returns rows affected (0 → 404-eligible in the route).
+pub fn update_bookmark_name_scoped(
+    conn: &Connection,
+    book_id: &str,
+    id: &str,
+    name: Option<&str>,
+) -> Result<usize> {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64;
+    let n = conn.execute(
+        "UPDATE bookmarks SET name = ?1, updated_at = ?2 \
+         WHERE id = ?3 AND book_id = ?4 AND deleted_at IS NULL",
+        params![name, now, id, book_id],
+    )?;
+    Ok(n)
+}
+
 // --- Collections CRUD ---
 
 /// Standard column list for SELECT queries on books.
@@ -3636,6 +3673,90 @@ mod tests {
         update_bookmark_name(&conn, "bm-name-1", None).unwrap();
         let bookmarks = list_bookmarks(&conn, "book-bm-name").unwrap();
         assert_eq!(bookmarks[0].name, None);
+    }
+
+    #[test]
+    fn test_soft_delete_bookmark_scoped_wrong_book_is_noop() {
+        let (_dir, conn) = setup();
+        insert_book(&conn, &sample_book("book-A")).unwrap();
+        // books.file_path is UNIQUE and sample_book reuses one path — a second
+        // insert with the same path fails. Override it.
+        insert_book(
+            &conn,
+            &Book {
+                file_path: "/tmp/test-b.epub".to_string(),
+                ..sample_book("book-B")
+            },
+        )
+        .unwrap();
+        let bm = Bookmark {
+            id: "bm-1".to_string(),
+            book_id: "book-A".to_string(),
+            chapter_index: 0,
+            scroll_position: 0.0,
+            name: None,
+            note: None,
+            created_at: 1700000000,
+            updated_at: 1700000000,
+            deleted_at: None,
+        };
+        insert_bookmark(&conn, &bm).unwrap();
+
+        // Wrong book: no rows affected, bookmark still live.
+        let n = soft_delete_bookmark_scoped(&conn, "book-B", "bm-1").unwrap();
+        assert_eq!(n, 0);
+        assert_eq!(list_bookmarks(&conn, "book-A").unwrap().len(), 1);
+
+        // Correct book: one row affected, gone from the live list.
+        let n = soft_delete_bookmark_scoped(&conn, "book-A", "bm-1").unwrap();
+        assert_eq!(n, 1);
+        assert_eq!(list_bookmarks(&conn, "book-A").unwrap().len(), 0);
+
+        // Idempotent: deleting again affects nothing.
+        let n = soft_delete_bookmark_scoped(&conn, "book-A", "bm-1").unwrap();
+        assert_eq!(n, 0);
+    }
+
+    #[test]
+    fn test_update_bookmark_name_scoped_wrong_book_is_noop() {
+        let (_dir, conn) = setup();
+        insert_book(&conn, &sample_book("book-A")).unwrap();
+        insert_book(
+            &conn,
+            &Book {
+                file_path: "/tmp/test-b.epub".to_string(),
+                ..sample_book("book-B")
+            },
+        )
+        .unwrap();
+        let bm = Bookmark {
+            id: "bm-2".to_string(),
+            book_id: "book-A".to_string(),
+            chapter_index: 0,
+            scroll_position: 0.0,
+            name: None,
+            note: None,
+            created_at: 1700000000,
+            updated_at: 1700000000,
+            deleted_at: None,
+        };
+        insert_bookmark(&conn, &bm).unwrap();
+
+        let n = update_bookmark_name_scoped(&conn, "book-B", "bm-2", Some("x")).unwrap();
+        assert_eq!(n, 0);
+        assert_eq!(list_bookmarks(&conn, "book-A").unwrap()[0].name, None);
+
+        let n = update_bookmark_name_scoped(&conn, "book-A", "bm-2", Some("Chapter note")).unwrap();
+        assert_eq!(n, 1);
+        assert_eq!(
+            list_bookmarks(&conn, "book-A").unwrap()[0].name,
+            Some("Chapter note".to_string())
+        );
+
+        // A soft-deleted row can't be renamed.
+        soft_delete_bookmark_scoped(&conn, "book-A", "bm-2").unwrap();
+        let n = update_bookmark_name_scoped(&conn, "book-A", "bm-2", Some("later")).unwrap();
+        assert_eq!(n, 0);
     }
 
     #[test]
