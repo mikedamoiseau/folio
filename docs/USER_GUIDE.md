@@ -441,6 +441,8 @@ Press `B` in the reader to bookmark the current position. Bookmarks are listed a
 
 ![Bookmarks panel](../screenshots/13-reader-bookmarks.png)
 
+**Web reader:** the phone/web reader has a bookmark button (🔖) in the reader toolbar, in every format. Tap it to open a slide-in panel, then **Add bookmark here** to save your current spot; each bookmark shows its chapter (or page) and how far through it is. Tap a bookmark to jump straight back to it, or use the ✕ to delete one. Bookmarks sync with the desktop app and your other devices.
+
 ---
 
 ## 6. Book Metadata and Enrichment

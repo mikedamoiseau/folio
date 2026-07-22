@@ -22,7 +22,7 @@
 // activates; app.js's registration call is feature-detected/try-catched so
 // this is silent, not an error. The manifest + icons still work for iOS
 // Safari "Add to Home Screen" over plain HTTP.
-const CACHE_VERSION = "folio-shell-58825e61cea6";
+const CACHE_VERSION = "folio-shell-79f3d29f0d6f";
 
 // Offline mode (spec 2026-07-17-web-reader-offline): per-book content caches,
 // written ONLY by app.js's save flow — the SW never writes to them. The SW
@@ -120,6 +120,11 @@ self.addEventListener("fetch", (event) => {
     event.request.method === "GET" &&
     url.origin === self.location.origin &&
     !url.pathname.includes("/download") &&
+    // Anchor to the endpoint segment after the book id, so a book whose id
+    // merely contains "bookmarks" (e.g. /api/books/bookmarks-x/chapters/0)
+    // still gets the offline fallback — only the real bookmarks endpoint is
+    // excluded (it's live-only, never cached).
+    !/^\/api\/books\/[^/]+\/bookmarks(?:\/|$)/.test(url.pathname) &&
     url.pathname.match(/^\/api\/books\/([^/]+)(?:\/|$)/);
   if (bookMatch) {
     // Page images are cached with ?width=... but requested plain (or with a
