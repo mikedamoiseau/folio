@@ -8,8 +8,9 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 ### Added
 - **Bookmarks in the web reader.** The phone/web reader now has a bookmark
   button (🔖) in its toolbar, in every format. It opens a slide-in drawer:
-  **Add bookmark here** saves your current spot, each entry shows its chapter
-  (or page) and progress, tapping one jumps straight back, and ✕ deletes it.
+  **Add bookmark here** saves your current spot (and immediately lets you name
+  it), each entry shows its chapter (or page) and progress, tapping one jumps
+  straight back, ✏️ renames it, and ✕ deletes it.
   Bookmarks are book-scoped, persist regardless of private mode (matching the
   desktop app), and sync across devices. Backed by new web endpoints
   (`GET`/`POST /api/books/:id/bookmarks`,

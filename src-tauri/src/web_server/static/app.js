@@ -121,6 +121,10 @@
   let tocPanelOpen = false;
   // Whether the bookmarks drawer is open. Same lifecycle as above.
   let bookmarkPanelOpen = false;
+  // True while an inline rename input is focused/editing — opportunistic
+  // re-renders (a late loadBookmarks/loadToc completion) must skip while this
+  // is set, or they'd rebuild the list innerHTML and destroy the field mid-edit.
+  let bookmarkRenaming = false;
   // Bookmarks for the current book: { bookId, loaded, items }. Fetched lazily
   // on first panel open; cleared on every chrome (re)build.
   let bookmarksState = null;
@@ -4138,8 +4142,9 @@
     if (readerState && readerState.id === bookId) buildTocTrigger();
     // If the bookmark panel is open, its auto-labels may have rendered with the
     // "Chapter N" fallback before the TOC arrived — re-render now so they pick
-    // up the real chapter titles.
-    if (readerState && readerState.id === bookId && bookmarkPanelOpen) renderBookmarkList();
+    // up the real chapter titles (but not while a rename input is active).
+    if (readerState && readerState.id === bookId && bookmarkPanelOpen && !bookmarkRenaming)
+      renderBookmarkList();
   }
 
   // Build the trigger to match tocStatus. Interactive (button) only when the
@@ -4277,26 +4282,28 @@
       if (resp && resp.ok) {
         const rows = await resp.json();
         if (!readerState || readerState.id !== bookId) return;
-        // Backend returns oldest-first; the UI shows newest-first. Merge with
-        // any bookmarks added locally while this GET was in flight — their ids
-        // won't be in a snapshot the server took before their POST committed,
-        // so a wholesale replace would drop a concurrent add-here. Keep such
-        // local-only rows on top (they're the newest).
+        // Backend returns oldest-first; the UI shows newest-first. LOCAL-
+        // preferred merge: an item added OR renamed locally while this GET was
+        // in flight (or a rename committed just before it resolved) must win
+        // over the older server snapshot — keep every local item, append only
+        // server rows we don't already hold. A wholesale replace would drop a
+        // concurrent add-here or revert a just-committed rename.
         const serverRows = Array.isArray(rows) ? rows.slice().reverse() : [];
-        const localExtra =
-          bookmarksState && bookmarksState.bookId === bookId
-            ? bookmarksState.items.filter((local) => !serverRows.some((s) => s.id === local.id))
-            : [];
+        const localItems =
+          bookmarksState && bookmarksState.bookId === bookId ? bookmarksState.items : [];
+        const localIds = new Set(localItems.map((b) => b.id));
         bookmarksState = {
           bookId,
           loaded: true,
-          items: [...localExtra, ...serverRows],
+          items: [...localItems, ...serverRows.filter((s) => !localIds.has(s.id))],
         };
       }
     } catch (e) {
       if (readerState && readerState.id === bookId) bookmarksState = { bookId, loaded: true, items: [] };
     }
-    if (readerState && readerState.id === bookId && bookmarkPanelOpen) renderBookmarkList();
+    // Skip the re-render while a rename input is active (see bookmarkRenaming).
+    if (readerState && readerState.id === bookId && bookmarkPanelOpen && !bookmarkRenaming)
+      renderBookmarkList();
   }
 
   function buildBookmarkTrigger() {
@@ -4343,6 +4350,7 @@
         return `
       <div class="bookmark-entry" data-id="${esc(bm.id)}" data-index="${esc(idx)}" data-scroll="${esc(scroll)}" tabindex="0" role="button">
         <span class="bookmark-entry-label">${bookmarkLabel(bm)}</span>
+        <button class="bookmark-rename" data-id="${esc(bm.id)}" aria-label="Rename bookmark">&#9998;</button>
         <button class="bookmark-del" data-id="${esc(bm.id)}" aria-label="Delete bookmark">&times;</button>
       </div>`;
       })
@@ -4434,8 +4442,13 @@
       const created = await resp.json();
       // Race guard: a book switch during the POST must not mutate another book.
       if (!readerState || readerState.id !== bookId || !bookmarksState || bookmarksState.bookId !== bookId) return;
+      // Upsert: a concurrent initial GET may have already merged this id — drop
+      // any existing copy before prepending so the list can't show a duplicate.
+      bookmarksState.items = bookmarksState.items.filter((b) => b.id !== created.id);
       bookmarksState.items.unshift(created); // newest-first
       renderBookmarkList();
+      const firstEntry = $("#bookmark-list .bookmark-entry");
+      if (firstEntry) beginRename(firstEntry, created.id);
     } catch (e) { /* offline: bookmarks are live-only; ignore */ }
   }
 
@@ -4455,6 +4468,81 @@
     } catch (e) { /* ignore */ }
   }
 
+  function beginRename(entry, id) {
+    const labelEl = entry.querySelector(".bookmark-entry-label");
+    if (!labelEl) return;
+    const bm = bookmarksState && bookmarksState.items.find((b) => b.id === id);
+    const current = (bm && bm.name) || "";
+    const input = document.createElement("input");
+    input.type = "text";
+    input.className = "bookmark-name-input";
+    input.maxLength = 100; // server truncates too; cap the input to match
+    input.value = current;
+    bookmarkRenaming = true;
+    labelEl.replaceWith(input);
+    input.focus();
+    input.select();
+    // A click/tap inside the field (to place the cursor) would otherwise bubble
+    // to the #bookmark-list handler, match .bookmark-entry, and fire
+    // jumpToBookmark — closing the panel and discarding the edit. Stop it here.
+    input.addEventListener("mousedown", (e) => e.stopPropagation());
+    input.addEventListener("click", (e) => e.stopPropagation());
+    let done = false;
+    const commit = async () => {
+      if (done) return;
+      done = true;
+      bookmarkRenaming = false;
+      // No change → no needless PUT (covers the common auto-rename-then-click-
+      // away with an untouched empty field); just drop the input.
+      if (input.value === current) {
+        renderBookmarkList();
+        return;
+      }
+      await renameBookmark(id, input.value);
+    };
+    input.addEventListener("keydown", (e) => {
+      e.stopPropagation(); // don't let typing reach reader shortcuts
+      if (e.key === "Enter") {
+        e.preventDefault();
+        commit();
+      } else if (e.key === "Escape") {
+        e.preventDefault();
+        done = true;
+        bookmarkRenaming = false;
+        renderBookmarkList();
+      }
+    });
+    input.addEventListener("blur", commit);
+  }
+
+  async function renameBookmark(id, rawName) {
+    if (!readerState) {
+      renderBookmarkList();
+      return;
+    }
+    const bookId = readerState.id;
+    try {
+      const resp = await fetch(`/api/books/${bookId}/bookmarks/${id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: rawName }),
+        credentials: "same-origin",
+      });
+      if (resp.status === 401) { authenticated = false; showLogin(); return; }
+      if (resp.ok) {
+        const updated = await resp.json();
+        if (!readerState || readerState.id !== bookId || !bookmarksState || bookmarksState.bookId !== bookId) return;
+        const i = bookmarksState.items.findIndex((b) => b.id === id);
+        if (i >= 0) bookmarksState.items[i] = updated;
+      }
+    } catch (e) { /* ignore; fall through to re-render */ }
+    // Re-render (a failed PUT reverts the entry to its stored name — an honest
+    // "didn't save" signal). Guard against a book switch mid-PUT so we never
+    // rebuild another book's list.
+    if (readerState && bookmarksState && readerState.id === bookId && bookmarksState.bookId === bookId)
+      renderBookmarkList();
+  }
+
   function wireBookmarkControls() {
     const closeBtn = $("#bookmark-close");
     if (closeBtn) closeBtn.addEventListener("click", () => closeBookmarkPanel(true));
@@ -4463,8 +4551,18 @@
     const list = $("#bookmark-list");
     if (list)
       list.addEventListener("click", (e) => {
+        // A click inside an active rename input must not be treated as an entry
+        // tap (belt-and-suspenders with the input's own stopPropagation).
+        if (e.target.closest(".bookmark-name-input")) return;
         const del = e.target.closest(".bookmark-del");
         if (del) { e.stopPropagation(); deleteBookmark(del.getAttribute("data-id")); return; }
+        const ren = e.target.closest(".bookmark-rename");
+        if (ren) {
+          e.stopPropagation();
+          const en = ren.closest(".bookmark-entry");
+          if (en) beginRename(en, ren.getAttribute("data-id"));
+          return;
+        }
         const entry = e.target.closest(".bookmark-entry");
         if (!entry) return;
         const idx = parseInt(entry.getAttribute("data-index"), 10);

@@ -672,6 +672,16 @@ body:not(:has(.header))::before {
   color: var(--ink-muted); font-size: 1.2rem; line-height: 1; cursor: pointer;
 }
 .bookmark-del:hover, .bookmark-del:focus-visible { color: var(--accent); }
+.bookmark-rename {
+  flex: none; min-width: 32px; min-height: 32px; background: none; border: none;
+  color: var(--ink-muted); font-size: 1rem; line-height: 1; cursor: pointer;
+}
+.bookmark-rename:hover, .bookmark-rename:focus-visible { color: var(--accent); }
+.bookmark-name-input {
+  flex: 1; min-width: 0; padding: 4px 8px;
+  background: var(--surface); border: 1px solid var(--accent); border-radius: var(--radius);
+  color: var(--ink); font: inherit;
+}
 .bookmark-empty { padding: 16px; color: var(--ink-muted); }
 
 /* ── Shortcuts Overlay ─────────────────────────── */
