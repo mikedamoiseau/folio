@@ -117,6 +117,8 @@
   // Whether the Aa typography popover is open. Reset on every chrome (re)build
   // and on chrome-hide so it can't outlive its DOM.
   let typoPanelOpen = false;
+  // Whether the table-of-contents panel is open. Same lifecycle as above.
+  let tocPanelOpen = false;
 
   const TYPO_FAMILY_ORDER = ["lora", "literata", "dm-sans", "opendyslexic"];
   const TYPO_FAMILY_LABELS = {
@@ -3279,9 +3281,11 @@
   function applyChromeVisibility() {
     const root = $("#reader-root");
     if (root) root.classList.toggle("chrome-hidden", readerState.chromeHidden);
-    // The Aa popover lives in the bottom chrome; hiding the chrome must also
-    // dismiss it (and clear the open flag) so it can't linger invisibly.
+    // The Aa popover and TOC panel live in the bottom chrome; hiding the
+    // chrome must also dismiss them (and clear their open flags) so they can't
+    // linger invisibly and reappear when the chrome is shown again.
     if (readerState.chromeHidden && typoPanelOpen) closeTypoPanel(false);
+    if (readerState.chromeHidden && tocPanelOpen) closeTocPanel(false);
     // Showing/hiding the chrome rows resizes the stage without a window
     // resize event — re-clamp a zoomed pan against the new bounds so no
     // gap opens at an edge.
@@ -3965,6 +3969,7 @@
     const panel = $("#typo-panel");
     const btn = $("#typo-btn");
     if (!panel || !btn) return;
+    if (tocPanelOpen) closeTocPanel(false); // only one bottom-chrome panel open
     renderTypoPanelState();
     panel.hidden = false;
     btn.setAttribute("aria-expanded", "true");
@@ -4036,22 +4041,200 @@
       if (seg) step({ columnWidth: Number(seg.getAttribute("data-width")) });
     });
 
-    // Dismissal listeners live on #reader-root so they die when any view swaps
-    // app().innerHTML (no document-level leak). Esc closes the panel BEFORE the
-    // global reader Esc-back handler (this runs in the bubble phase on a
-    // descendant of document, so stopPropagation pre-empts it).
+    wirePanelRootDismissal({
+      isOpen: () => typoPanelOpen,
+      close: closeTypoPanel,
+      panelSel: "#typo-panel",
+      btnSel: "#typo-btn",
+    });
+  }
+
+  // Shared #reader-root dismissal for a bottom-chrome popover (Aa panel, TOC
+  // drawer). Listeners live on #reader-root so they die when a view swaps
+  // app().innerHTML (no document-level leak). Escape closes the panel BEFORE
+  // the global reader Esc-back handler — this runs in the bubble phase on a
+  // descendant of document, so stopPropagation pre-empts it. An outside click
+  // dismisses, except clicks on the trigger (btnSel) or any keepOpenSel
+  // element (e.g. the reader's Prev/Next buttons, so a chapter turn keeps the
+  // panel open). `isOpen` is a getter so the current flag value is read at
+  // event time, not captured stale.
+  function wirePanelRootDismissal({ isOpen, close, panelSel, btnSel, keepOpenSel }) {
     const root = $("#reader-root");
+    if (!root) return;
     root.addEventListener("keydown", (e) => {
-      if (e.key === "Escape" && typoPanelOpen) {
+      if (e.key === "Escape" && isOpen()) {
         e.preventDefault();
         e.stopPropagation();
-        closeTypoPanel(true);
+        close(true);
       }
     });
     root.addEventListener("click", (e) => {
-      if (typoPanelOpen && !e.target.closest("#typo-panel") && !e.target.closest("#typo-btn")) {
-        closeTypoPanel(false);
+      if (!isOpen()) return;
+      if (e.target.closest(panelSel) || e.target.closest(btnSel)) return;
+      if (keepOpenSel && e.target.closest(keepOpenSel)) return;
+      close(false);
+    });
+  }
+
+  // ── Table of contents (flat — the backend never nests children) ─────────
+  function tocEntryCount(entries) {
+    if (!Array.isArray(entries)) return 0;
+    return entries.reduce((n, e) => n + 1 + tocEntryCount(e.children), 0);
+  }
+  function maxChapterIndex(entries) {
+    if (!Array.isArray(entries)) return -1;
+    return entries.reduce(
+      (m, e) => Math.max(m, e.chapter_index, maxChapterIndex(e.children)),
+      -1
+    );
+  }
+  // Pre-order flat projection (children after their parent). children is
+  // always [] today, but recurse defensively so a future nested backend
+  // still lists every entry.
+  function flattenToc(entries, out) {
+    out = out || [];
+    if (!Array.isArray(entries)) return out;
+    for (const e of entries) {
+      out.push({ label: e.label, chapter_index: e.chapter_index });
+      flattenToc(e.children, out);
+    }
+    return out;
+  }
+  // Fetch the TOC once per book open. Navigable only when there's more than
+  // one entry AND every index fits the reader's chapter range (count =
+  // total_chapters||1, and gotoReaderIndex refuses index>=count) — otherwise
+  // taps would dead-clamp to 0, so we degrade to a plain label instead.
+  async function loadToc() {
+    if (!readerState || readerState.mode === "page") return;
+    const bookId = readerState.id;
+    readerState.tocStatus = "loading";
+    readerState.toc = null;
+    try {
+      const resp = await api(`/api/books/${bookId}/chapters`);
+      if (!readerState || readerState.id !== bookId) return; // superseded
+      if (resp && resp.ok) {
+        const toc = await resp.json();
+        // Re-check after the second await: a book switch during resp.json()
+        // must not let book A's TOC overwrite book B's state.
+        if (!readerState || readerState.id !== bookId) return;
+        readerState.toc = Array.isArray(toc) ? toc : [];
+        const navigable =
+          tocEntryCount(readerState.toc) > 1 &&
+          maxChapterIndex(readerState.toc) < readerState.count;
+        readerState.tocStatus = navigable ? "ready" : "none";
+      } else {
+        readerState.tocStatus = "none";
       }
+    } catch (e) {
+      if (readerState && readerState.id === bookId) readerState.tocStatus = "none";
+    }
+    if (readerState && readerState.id === bookId) buildTocTrigger();
+  }
+
+  // Build the trigger to match tocStatus. Interactive (button) only when the
+  // TOC is navigable; otherwise a plain, non-interactive label — never a
+  // disabled button (disabled .reader-toolbar buttons still show chrome).
+  function buildTocTrigger() {
+    const slot = $("#toc-slot");
+    if (!slot) return;
+    const ready = readerState && readerState.tocStatus === "ready";
+    slot.innerHTML = ready
+      ? `<button id="toc-btn" class="toc-trigger" aria-haspopup="dialog" aria-expanded="false"><span id="page-label"></span><span class="toc-caret" aria-hidden="true">&#9662;</span></button>`
+      : `<span class="toc-plain"><span id="page-label"></span></span>`;
+    if (ready) {
+      const btn = $("#toc-btn");
+      btn.addEventListener("keydown", containReaderKeys);
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        if (tocPanelOpen) closeTocPanel(true);
+        else openTocPanel();
+      });
+    }
+    updateProgressUI(); // repopulate #page-label / prev-next disabled state
+  }
+
+  function tocPanelHtml() {
+    return `
+      <div class="toc-panel" id="toc-panel" role="dialog" aria-label="Table of contents">
+        <div class="toc-head">
+          <span class="toc-title">Contents</span>
+          <button type="button" id="toc-close" class="toc-close" aria-label="Close contents">&times;</button>
+        </div>
+        <ul class="toc-list" id="toc-list"></ul>
+      </div>`;
+  }
+
+  function renderTocList() {
+    const list = $("#toc-list");
+    if (!list || !readerState || !Array.isArray(readerState.toc)) return;
+    const cur = readerState.index;
+    list.innerHTML = flattenToc(readerState.toc)
+      .map((e) => {
+        const isCur = e.chapter_index === cur;
+        return (
+          `<li><button type="button" class="toc-entry${isCur ? " current" : ""}"` +
+          `${isCur ? ' aria-current="true"' : ""} data-index="${e.chapter_index}">${esc(e.label)}</button></li>`
+        );
+      })
+      .join("");
+  }
+
+  function closeTocPanel(restoreFocus) {
+    const panel = $("#toc-panel");
+    const btn = $("#toc-btn");
+    if (panel) panel.classList.remove("open");
+    if (btn) btn.setAttribute("aria-expanded", "false");
+    tocPanelOpen = false;
+    if (restoreFocus && btn) btn.focus();
+  }
+
+  function openTocPanel() {
+    const panel = $("#toc-panel");
+    const btn = $("#toc-btn");
+    if (!panel || !btn || !readerState || readerState.tocStatus !== "ready") return;
+    if (typoPanelOpen) closeTypoPanel(false); // only one bottom-chrome panel open
+    renderTocList();
+    panel.classList.add("open");
+    btn.setAttribute("aria-expanded", "true");
+    tocPanelOpen = true;
+    const current = panel.querySelector(".toc-entry.current");
+    const target = current || panel.querySelector(".toc-entry");
+    if (current) current.scrollIntoView({ block: "nearest" });
+    if (target) target.focus();
+  }
+
+  // Panel DOM is static (built with the chrome), so its close-button and list
+  // listeners bind once here. The trigger button (dynamic) is wired in
+  // buildTocTrigger.
+  function wireTocControls() {
+    const closeBtn = $("#toc-close");
+    if (closeBtn) closeBtn.addEventListener("click", () => closeTocPanel(true));
+    const list = $("#toc-list");
+    if (list)
+      list.addEventListener("click", (e) => {
+        const entry = e.target.closest(".toc-entry");
+        if (!entry) return;
+        let idx = parseInt(entry.getAttribute("data-index"), 10);
+        if (!Number.isFinite(idx)) return;
+        idx = Math.min(Math.max(idx, 0), readerState.count - 1);
+        closeTocPanel(false);
+        gotoReaderIndex(idx, { instant: true });
+      });
+    // Arrow/Home/End/Space/f inside the open panel must not reach the global
+    // reader shortcuts (chapter turns / scroll) — same containment as the Aa
+    // panel. Escape is deliberately NOT contained: it bubbles to #reader-root
+    // (below) to close the panel before the global Esc-back handler.
+    const panel = $("#toc-panel");
+    if (panel) panel.addEventListener("keydown", containReaderKeys);
+    // Esc + outside-click dismissal, shared with the Aa panel. Prev/Next are
+    // exempt (keepOpenSel) so a chapter turn keeps the panel open and its
+    // current-chapter highlight re-syncs (see updateProgressUI).
+    wirePanelRootDismissal({
+      isOpen: () => tocPanelOpen,
+      close: closeTocPanel,
+      panelSel: "#toc-panel",
+      btnSel: "#toc-btn",
+      keepOpenSel: "#prev-btn, #next-btn",
     });
   }
 
@@ -4061,8 +4244,10 @@
     // already epoch-guarded, but a stale chrome toggle would still hide the
     // new reader's chrome.
     cancelPendingTap();
-    // The Aa popover is rebuilt with the chrome; never carry open state across.
+    // The Aa popover and TOC panel are rebuilt with the chrome; never carry
+    // open state across.
     typoPanelOpen = false;
+    tocPanelOpen = false;
     pendingReanchor = null;
     const { book, mode, count, index, fitMode } = readerState;
     const rootClass = mode === "page" ? `reader-page ${fitMode}` : "reader-chapter";
@@ -4079,6 +4264,7 @@
       ? ""
       : `<button id="typo-btn" aria-label="Text settings" aria-haspopup="dialog" aria-expanded="false">Aa</button>`;
     const typoPanel = mode === "page" ? "" : typoPanelHtml();
+    const tocPanel = mode === "page" ? "" : tocPanelHtml();
 
     app().innerHTML = `
       <div class="${rootClass}" id="reader-root">
@@ -4093,13 +4279,15 @@
         <div class="reader-chrome-bottom">
           <div class="reader-toolbar">
             <button id="prev-btn">Prev</button>
-            <input type="range" id="page-slider" min="0" max="${count - 1}" value="${index}" aria-label="${mode === "page" ? "Page" : "Chapter"} slider">
-            <span id="page-label"></span>
+            ${mode === "page"
+              ? `<input type="range" id="page-slider" min="0" max="${count - 1}" value="${index}" aria-label="Page slider"><span id="page-label"></span>`
+              : `<span id="toc-slot" class="toc-slot"></span>`}
             <button id="next-btn">Next</button>
             ${typoBtn}
             ${fitToggleBtn}
           </div>
           ${typoPanel}
+          ${tocPanel}
         </div>
         <button class="chrome-toggle-fab" id="chrome-toggle-btn" title="Toggle toolbar" aria-label="Toggle toolbar">&#8942;</button>
       </div>`;
@@ -4108,7 +4296,8 @@
     $("#prev-btn").addEventListener("click", () => readerState.handlers.prev());
     $("#next-btn").addEventListener("click", () => readerState.handlers.next());
     $("#chrome-toggle-btn").addEventListener("click", () => readerState.handlers.toggleChrome());
-    $("#page-slider").addEventListener("change", (e) => {
+    const pageSlider = $("#page-slider");
+    if (pageSlider) pageSlider.addEventListener("change", (e) => {
       // K2: return focus to the document so shortcuts work immediately
       // after a slider drag, without waiting on isTypingTarget special-casing.
       e.target.blur();
@@ -4150,6 +4339,13 @@
       // swaps). EPUB + MOBI both reach this branch (mode !== "page").
       applyTypography($("#reader-content"));
       wireTypoControls();
+      // TOC: static panel listeners bind once; the trigger starts as a plain
+      // label and upgrades to interactive when the fetch lands.
+      readerState.toc = null;
+      readerState.tocStatus = "loading";
+      wireTocControls();
+      buildTocTrigger();
+      loadToc();
     }
 
     applyChromeVisibility();
@@ -4800,6 +4996,9 @@
     const nextBtn = $("#next-btn");
     if (prevBtn) prevBtn.disabled = index <= 0;
     if (nextBtn) nextBtn.disabled = index >= count - 1;
+    // Keep the TOC's current-chapter highlight in sync when a Prev/Next turn
+    // happens with the panel already open.
+    if (tocPanelOpen) renderTocList();
   }
 
   // ── Stats ──────────────────────────────────────
