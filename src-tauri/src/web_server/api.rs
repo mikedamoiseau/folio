@@ -11,6 +11,7 @@ use super::auth::{log_login_attempt, LoginOutcome, WebAuthMethod};
 use super::{folio_status, WebState};
 use crate::db;
 use crate::models::BookFormat;
+use folio_core::events::{self, FolioEvent};
 
 /// Settings keys excluded from the GDPR export. Defense-in-depth: the web PIN
 /// and backup credentials live in the OS keyring (not in settings), but two
@@ -1200,9 +1201,7 @@ async fn create_bookmark(
         .unwrap_or_default()
         .as_secs() as i64;
     // Bookmarks are explicit user actions: persisted regardless of private mode,
-    // matching desktop `add_bookmark` (which does not check the flag). No
-    // `BookmarkCreated` event is emitted: `WebState` carries no event bus —
-    // consistent with every other web-side write (progress included).
+    // matching desktop `add_bookmark` (which does not check the flag).
     let bookmark = crate::models::Bookmark {
         id: uuid::Uuid::new_v4().to_string(),
         book_id: id.clone(),
@@ -1215,6 +1214,16 @@ async fn create_bookmark(
         deleted_at: None,
     };
     db::insert_bookmark(&conn, &bookmark).map_err(folio_status)?;
+
+    // Emit the same bus event as desktop `add_bookmark` so hooks/plugins fire
+    // for web-created bookmarks too. `events::bus()` is a folio-core global
+    // singleton (not tied to a Tauri handle), already used by the web progress
+    // path (`apply_reading_progress` emits `BookFinished` on it).
+    events::bus().emit(FolioEvent::BookmarkCreated {
+        book_id: bookmark.book_id.clone(),
+        bookmark_id: bookmark.id.clone(),
+    });
+
     Ok((StatusCode::CREATED, Json(bookmark)))
 }
 
@@ -1239,16 +1248,11 @@ async fn rename_bookmark(
         .map(|s| s.chars().take(100).collect::<String>());
 
     let conn = state.conn().map_err(folio_status)?;
-    let rows = db::update_bookmark_name_scoped(&conn, &id, &bookmark_id, normalized.as_deref())
-        .map_err(folio_status)?;
-    if rows == 0 {
-        return Err((StatusCode::NOT_FOUND, "Bookmark not found".to_string()));
-    }
-    // Return the updated row so the client reconciles against server truth.
-    let updated = db::list_bookmarks(&conn, &id)
+    // Atomic update-and-return (RETURNING): a concurrent delete can't turn a
+    // committed rename into a spurious 404, and there's no second query. None =>
+    // no live bookmark with this id in this book => 404.
+    let updated = db::update_bookmark_name_scoped(&conn, &id, &bookmark_id, normalized.as_deref())
         .map_err(folio_status)?
-        .into_iter()
-        .find(|b| b.id == bookmark_id)
         .ok_or_else(|| (StatusCode::NOT_FOUND, "Bookmark not found".to_string()))?;
     Ok(Json(updated))
 }

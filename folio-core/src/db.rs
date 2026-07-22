@@ -1348,23 +1348,42 @@ pub fn soft_delete_bookmark_scoped(conn: &Connection, book_id: &str, id: &str) -
 }
 
 /// Rename (or clear, `name = None`) a bookmark only if it belongs to `book_id`
-/// and is still live. Returns rows affected (0 → 404-eligible in the route).
+/// and is still live. Returns the updated row, or `None` if no live matching
+/// row exists (→ 404-eligible in the route). `UPDATE ... RETURNING` makes the
+/// write-and-read one atomic statement, so a concurrent soft-delete cannot turn
+/// a committed rename into a spurious 404, and there is no second re-fetch.
 pub fn update_bookmark_name_scoped(
     conn: &Connection,
     book_id: &str,
     id: &str,
     name: Option<&str>,
-) -> Result<usize> {
+) -> Result<Option<Bookmark>> {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs() as i64;
-    let n = conn.execute(
+    let mut stmt = conn.prepare(
         "UPDATE bookmarks SET name = ?1, updated_at = ?2 \
-         WHERE id = ?3 AND book_id = ?4 AND deleted_at IS NULL",
-        params![name, now, id, book_id],
+         WHERE id = ?3 AND book_id = ?4 AND deleted_at IS NULL \
+         RETURNING id, book_id, chapter_index, scroll_position, name, note, created_at, updated_at, deleted_at",
     )?;
-    Ok(n)
+    let mut rows = stmt.query_map(params![name, now, id, book_id], |row| {
+        Ok(Bookmark {
+            id: row.get(0)?,
+            book_id: row.get(1)?,
+            chapter_index: row.get(2)?,
+            scroll_position: row.get(3)?,
+            name: row.get(4)?,
+            note: row.get(5)?,
+            created_at: row.get(6)?,
+            updated_at: row.get(7)?,
+            deleted_at: row.get(8)?,
+        })
+    })?;
+    match rows.next() {
+        Some(row) => Ok(Some(row?)),
+        None => Ok(None),
+    }
 }
 
 // --- Collections CRUD ---
@@ -3742,12 +3761,14 @@ mod tests {
         };
         insert_bookmark(&conn, &bm).unwrap();
 
-        let n = update_bookmark_name_scoped(&conn, "book-B", "bm-2", Some("x")).unwrap();
-        assert_eq!(n, 0);
+        // Wrong book: no row returned, name unchanged.
+        let r = update_bookmark_name_scoped(&conn, "book-B", "bm-2", Some("x")).unwrap();
+        assert!(r.is_none());
         assert_eq!(list_bookmarks(&conn, "book-A").unwrap()[0].name, None);
 
-        let n = update_bookmark_name_scoped(&conn, "book-A", "bm-2", Some("Chapter note")).unwrap();
-        assert_eq!(n, 1);
+        // Correct book: returns the updated row.
+        let r = update_bookmark_name_scoped(&conn, "book-A", "bm-2", Some("Chapter note")).unwrap();
+        assert_eq!(r.unwrap().name, Some("Chapter note".to_string()));
         assert_eq!(
             list_bookmarks(&conn, "book-A").unwrap()[0].name,
             Some("Chapter note".to_string())
@@ -3755,8 +3776,8 @@ mod tests {
 
         // A soft-deleted row can't be renamed.
         soft_delete_bookmark_scoped(&conn, "book-A", "bm-2").unwrap();
-        let n = update_bookmark_name_scoped(&conn, "book-A", "bm-2", Some("later")).unwrap();
-        assert_eq!(n, 0);
+        let r = update_bookmark_name_scoped(&conn, "book-A", "bm-2", Some("later")).unwrap();
+        assert!(r.is_none());
     }
 
     #[test]
