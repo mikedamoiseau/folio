@@ -150,6 +150,14 @@ pub fn routes(state: WebState) -> Router<WebState> {
         .route("/books/{id}/page-count", get(get_page_count))
         .route("/books/{id}/progress", get(get_progress).put(put_progress))
         .route(
+            "/books/{id}/bookmarks",
+            get(list_book_bookmarks).post(create_bookmark),
+        )
+        .route(
+            "/books/{id}/bookmarks/{bookmark_id}",
+            axum::routing::put(rename_bookmark).delete(delete_bookmark),
+        )
+        .route(
             "/books/{id}/want-to-read",
             axum::routing::put(put_want_to_read),
         )
@@ -1134,6 +1142,126 @@ async fn put_want_to_read(
         .ok_or_else(|| (StatusCode::NOT_FOUND, "Book not found".to_string()))?;
     db::set_want_to_read(&conn, &id, body.want_to_read).map_err(folio_status)?;
     Ok(StatusCode::OK)
+}
+
+// ── Bookmarks ────────────────────────────────────────────────────────────────
+
+/// POST body for creating a bookmark. `note` is optional (desktop persists it;
+/// the web UI does not edit it yet, but accept it for parity).
+#[derive(serde::Deserialize)]
+struct BookmarkCreate {
+    chapter_index: u32,
+    scroll_position: f64,
+    #[serde(default)]
+    note: Option<String>,
+}
+
+/// PUT body for renaming a bookmark.
+#[derive(serde::Deserialize)]
+struct BookmarkRename {
+    name: Option<String>,
+}
+
+async fn list_book_bookmarks(
+    State(state): State<WebState>,
+    Path(id): Path<String>,
+) -> Result<Json<Vec<crate::models::Bookmark>>, (StatusCode, String)> {
+    let conn = state.conn().map_err(folio_status)?;
+    db::get_book(&conn, &id)
+        .map_err(folio_status)?
+        .ok_or_else(|| (StatusCode::NOT_FOUND, "Book not found".to_string()))?;
+    let bookmarks = db::list_bookmarks(&conn, &id).map_err(folio_status)?;
+    Ok(Json(bookmarks))
+}
+
+async fn create_bookmark(
+    State(state): State<WebState>,
+    Path(id): Path<String>,
+    body: Bytes,
+) -> Result<(StatusCode, Json<crate::models::Bookmark>), (StatusCode, String)> {
+    // Manual parse (like `put_progress`) so malformed bodies map to 400.
+    let body: BookmarkCreate = serde_json::from_slice(&body).map_err(|e| {
+        (
+            StatusCode::BAD_REQUEST,
+            format!("Invalid request body: {e}"),
+        )
+    })?;
+
+    let conn = state.conn().map_err(folio_status)?;
+    db::get_book(&conn, &id)
+        .map_err(folio_status)?
+        .ok_or_else(|| (StatusCode::NOT_FOUND, "Book not found".to_string()))?;
+
+    let scroll_position =
+        crate::commands::validate_scroll_position(body.scroll_position).map_err(folio_status)?;
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64;
+    // Bookmarks are explicit user actions: persisted regardless of private mode,
+    // matching desktop `add_bookmark` (which does not check the flag). No
+    // `BookmarkCreated` event is emitted: `WebState` carries no event bus —
+    // consistent with every other web-side write (progress included).
+    let bookmark = crate::models::Bookmark {
+        id: uuid::Uuid::new_v4().to_string(),
+        book_id: id.clone(),
+        chapter_index: body.chapter_index,
+        scroll_position,
+        name: None,
+        note: body.note,
+        created_at: now,
+        updated_at: now,
+        deleted_at: None,
+    };
+    db::insert_bookmark(&conn, &bookmark).map_err(folio_status)?;
+    Ok((StatusCode::CREATED, Json(bookmark)))
+}
+
+async fn rename_bookmark(
+    State(state): State<WebState>,
+    Path((id, bookmark_id)): Path<(String, String)>,
+    body: Bytes,
+) -> Result<Json<crate::models::Bookmark>, (StatusCode, String)> {
+    let body: BookmarkRename = serde_json::from_slice(&body).map_err(|e| {
+        (
+            StatusCode::BAD_REQUEST,
+            format!("Invalid request body: {e}"),
+        )
+    })?;
+
+    // Desktop parity (commands.rs `update_bookmark`): trim only to detect empty;
+    // store the ORIGINAL string truncated to 100 chars (not the trimmed value).
+    let normalized: Option<String> = body
+        .name
+        .as_deref()
+        .filter(|s| !s.trim().is_empty())
+        .map(|s| s.chars().take(100).collect::<String>());
+
+    let conn = state.conn().map_err(folio_status)?;
+    let rows = db::update_bookmark_name_scoped(&conn, &id, &bookmark_id, normalized.as_deref())
+        .map_err(folio_status)?;
+    if rows == 0 {
+        return Err((StatusCode::NOT_FOUND, "Bookmark not found".to_string()));
+    }
+    // Return the updated row so the client reconciles against server truth.
+    let updated = db::list_bookmarks(&conn, &id)
+        .map_err(folio_status)?
+        .into_iter()
+        .find(|b| b.id == bookmark_id)
+        .ok_or_else(|| (StatusCode::NOT_FOUND, "Bookmark not found".to_string()))?;
+    Ok(Json(updated))
+}
+
+async fn delete_bookmark(
+    State(state): State<WebState>,
+    Path((id, bookmark_id)): Path<(String, String)>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    let conn = state.conn().map_err(folio_status)?;
+    // Idempotent: unknown/foreign/already-deleted ids affect 0 rows and still
+    // return 204. The book_id scope prevents touching another book's row.
+    db::soft_delete_bookmark_scoped(&conn, &id, &bookmark_id).map_err(folio_status)?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 /// Item 15: bulk progress rows for the library grid's progress badges.

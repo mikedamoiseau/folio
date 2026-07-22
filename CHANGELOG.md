@@ -6,6 +6,11 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- **Bookmarks in the web reader (API).** The web server now exposes bookmark
+  endpoints (`GET`/`POST /api/books/:id/bookmarks`,
+  `PUT`/`DELETE /api/books/:id/bookmarks/:bookmark_id`) backing the phone/web
+  reader's bookmark drawer. Mutations are book-scoped and, like the desktop
+  app, bookmarks persist regardless of private mode.
 - **Table of contents in the web reader.** The phone/web reader's chapter
   toolbar now has a **Contents** button (reflowable books only — EPUB and
   MOBI) in place of the old numeric chapter slider. It opens a slide-in panel

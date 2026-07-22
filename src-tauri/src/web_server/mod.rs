@@ -2580,6 +2580,254 @@ mod tests {
         let _ = tx.send(());
     }
 
+    // ── Bookmarks ───────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn bookmark_crud_round_trip() {
+        let state = test_state();
+        {
+            let conn = state.conn().unwrap();
+            crate::db::insert_book(&conn, &progress_test_book("bm-book-1", 50)).unwrap();
+        }
+        let (_state, port, tx) = spawn_progress_test_server(state).await;
+        let client = reqwest::Client::new();
+        let base = format!("http://127.0.0.1:{port}/api/books/bm-book-1/bookmarks");
+
+        // create
+        let resp = client
+            .post(&base)
+            .json(&serde_json::json!({"chapter_index": 1, "scroll_position": 0.5}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 201);
+        let created: serde_json::Value = resp.json().await.unwrap();
+        let id = created["id"].as_str().unwrap().to_string();
+        assert_eq!(created["chapter_index"], 1);
+        assert_eq!(created["name"], serde_json::Value::Null);
+
+        // list
+        let resp = client.get(&base).send().await.unwrap();
+        assert_eq!(resp.status(), 200);
+        let list: serde_json::Value = resp.json().await.unwrap();
+        assert_eq!(list.as_array().unwrap().len(), 1);
+
+        // rename
+        let resp = client
+            .put(format!("{base}/{id}"))
+            .json(&serde_json::json!({"name": "My spot"}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+        let renamed: serde_json::Value = resp.json().await.unwrap();
+        assert_eq!(renamed["name"], "My spot");
+
+        // delete
+        let resp = client.delete(format!("{base}/{id}")).send().await.unwrap();
+        assert_eq!(resp.status(), 204);
+        let resp = client.get(&base).send().await.unwrap();
+        let list: serde_json::Value = resp.json().await.unwrap();
+        assert!(list.as_array().unwrap().is_empty());
+        let _ = tx.send(());
+    }
+
+    #[tokio::test]
+    async fn bookmark_malformed_body_is_400() {
+        let state = test_state();
+        {
+            let conn = state.conn().unwrap();
+            crate::db::insert_book(&conn, &progress_test_book("bm-book-2", 50)).unwrap();
+        }
+        let (_state, port, tx) = spawn_progress_test_server(state).await;
+        let client = reqwest::Client::new();
+        let resp = client
+            .post(format!(
+                "http://127.0.0.1:{port}/api/books/bm-book-2/bookmarks"
+            ))
+            .header("Content-Type", "application/json")
+            .body("not json")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 400);
+        let _ = tx.send(());
+    }
+
+    #[tokio::test]
+    async fn bookmark_unknown_book_is_404() {
+        let state = test_state();
+        let (_state, port, tx) = spawn_progress_test_server(state).await;
+        let client = reqwest::Client::new();
+        let resp = client
+            .get(format!("http://127.0.0.1:{port}/api/books/ghost/bookmarks"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 404);
+        let resp = client
+            .post(format!("http://127.0.0.1:{port}/api/books/ghost/bookmarks"))
+            .json(&serde_json::json!({"chapter_index": 0, "scroll_position": 0.0}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 404);
+        let _ = tx.send(());
+    }
+
+    #[tokio::test]
+    async fn bookmark_cross_book_mutation_is_rejected() {
+        let state = test_state();
+        {
+            let conn = state.conn().unwrap();
+            crate::db::insert_book(&conn, &progress_test_book("bm-A", 50)).unwrap();
+            // Distinct file_path — books.file_path is UNIQUE (see cr_test_book).
+            crate::db::insert_book(
+                &conn,
+                &crate::models::Book {
+                    file_path: "/nonexistent/bm-B.cbz".to_string(),
+                    ..progress_test_book("bm-B", 50)
+                },
+            )
+            .unwrap();
+        }
+        let (state, port, tx) = spawn_progress_test_server(state).await;
+        let client = reqwest::Client::new();
+        // Create under A.
+        let created: serde_json::Value = client
+            .post(format!("http://127.0.0.1:{port}/api/books/bm-A/bookmarks"))
+            .json(&serde_json::json!({"chapter_index": 0, "scroll_position": 0.0}))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        let id = created["id"].as_str().unwrap().to_string();
+        // Delete via B's URL: idempotent 204, A's row survives.
+        let resp = client
+            .delete(format!(
+                "http://127.0.0.1:{port}/api/books/bm-B/bookmarks/{id}"
+            ))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 204);
+        {
+            let conn = state.conn().unwrap();
+            assert_eq!(crate::db::list_bookmarks(&conn, "bm-A").unwrap().len(), 1);
+        }
+        // Rename via B's URL: 404.
+        let resp = client
+            .put(format!(
+                "http://127.0.0.1:{port}/api/books/bm-B/bookmarks/{id}"
+            ))
+            .json(&serde_json::json!({"name": "x"}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 404);
+        let _ = tx.send(());
+    }
+
+    #[tokio::test]
+    async fn bookmark_rename_empty_clears_and_long_truncates() {
+        let state = test_state();
+        {
+            let conn = state.conn().unwrap();
+            crate::db::insert_book(&conn, &progress_test_book("bm-book-3", 50)).unwrap();
+        }
+        let (_state, port, tx) = spawn_progress_test_server(state).await;
+        let client = reqwest::Client::new();
+        let created: serde_json::Value = client
+            .post(format!(
+                "http://127.0.0.1:{port}/api/books/bm-book-3/bookmarks"
+            ))
+            .json(&serde_json::json!({"chapter_index": 0, "scroll_position": 0.0}))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        let id = created["id"].as_str().unwrap().to_string();
+        let base = format!("http://127.0.0.1:{port}/api/books/bm-book-3/bookmarks/{id}");
+        // 150-char name → truncated to 100.
+        let renamed: serde_json::Value = client
+            .put(&base)
+            .json(&serde_json::json!({"name": "a".repeat(150)}))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(renamed["name"].as_str().unwrap().chars().count(), 100);
+        // whitespace-only → cleared.
+        let cleared: serde_json::Value = client
+            .put(&base)
+            .json(&serde_json::json!({"name": "   "}))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(cleared["name"], serde_json::Value::Null);
+        let _ = tx.send(());
+    }
+
+    #[tokio::test]
+    async fn bookmark_persists_in_private_mode() {
+        let state = test_state();
+        state
+            .private_mode
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        {
+            let conn = state.conn().unwrap();
+            crate::db::insert_book(&conn, &progress_test_book("bm-priv", 50)).unwrap();
+        }
+        let (state, port, tx) = spawn_progress_test_server(state).await;
+        let client = reqwest::Client::new();
+        let resp = client
+            .post(format!(
+                "http://127.0.0.1:{port}/api/books/bm-priv/bookmarks"
+            ))
+            .json(&serde_json::json!({"chapter_index": 2, "scroll_position": 0.1}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 201);
+        // Persisted despite private mode (explicit action; desktop parity).
+        let conn = state.conn().unwrap();
+        assert_eq!(
+            crate::db::list_bookmarks(&conn, "bm-priv").unwrap().len(),
+            1
+        );
+        let _ = tx.send(());
+    }
+
+    #[tokio::test]
+    async fn bookmark_routes_require_auth_when_pin_configured() {
+        let state = test_state();
+        *state.pin_hash.lock().unwrap() = Some(auth::hash_pin("4321"));
+        {
+            let conn = state.conn().unwrap();
+            crate::db::insert_book(&conn, &progress_test_book("bm-auth", 50)).unwrap();
+        }
+        let (_state, port, tx) = spawn_progress_test_server(state).await;
+        let client = reqwest::Client::new();
+        let resp = client
+            .get(format!(
+                "http://127.0.0.1:{port}/api/books/bm-auth/bookmarks"
+            ))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 401);
+        let _ = tx.send(());
+    }
+
     // ── Item 5: Continue Reading shelf ──────────────────────────────────────
 
     /// `progress_test_book` reuses one fixed `file_path` for every call — fine

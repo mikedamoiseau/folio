@@ -81,6 +81,10 @@ If no PIN is configured, all endpoints are accessible without authentication.
 | GET | `/api/books/:id/progress` | Current reading progress for a book (`null` if none saved) |
 | PUT | `/api/books/:id/progress` | Save reading progress. Body: `{ "chapter_index": N, "scroll_position": 0..1 }` (`chapter_index` doubles as the page index for PDF/CBZ/CBR) |
 | GET | `/api/reading-progress` | All reading-progress rows, keyed by book ID — used to render progress badges on library grid cards |
+| GET | `/api/books/:id/bookmarks` | List a book's bookmarks (oldest first). 404 if the book is unknown |
+| POST | `/api/books/:id/bookmarks` | Create a bookmark. Body: `{ "chapter_index": N, "scroll_position": 0..1, "note"?: string }`. Returns the created bookmark (201). Persisted regardless of private mode |
+| PUT | `/api/books/:id/bookmarks/:bookmark_id` | Rename a bookmark. Body: `{ "name": string \| null }` (empty/whitespace clears the name; truncated to 100 chars). 404 if the bookmark isn't in this book |
+| DELETE | `/api/books/:id/bookmarks/:bookmark_id` | Soft-delete a bookmark (idempotent; 204). Scoped to the book, so it can't delete another book's bookmark |
 
 ### Want to Read
 
