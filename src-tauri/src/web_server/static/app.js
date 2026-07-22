@@ -3281,9 +3281,11 @@
   function applyChromeVisibility() {
     const root = $("#reader-root");
     if (root) root.classList.toggle("chrome-hidden", readerState.chromeHidden);
-    // The Aa popover lives in the bottom chrome; hiding the chrome must also
-    // dismiss it (and clear the open flag) so it can't linger invisibly.
+    // The Aa popover and TOC panel live in the bottom chrome; hiding the
+    // chrome must also dismiss them (and clear their open flags) so they can't
+    // linger invisibly and reappear when the chrome is shown again.
     if (readerState.chromeHidden && typoPanelOpen) closeTypoPanel(false);
+    if (readerState.chromeHidden && tocPanelOpen) closeTocPanel(false);
     // Showing/hiding the chrome rows resizes the stage without a window
     // resize event — re-clamp a zoomed pan against the new bounds so no
     // gap opens at an edge.
@@ -3967,6 +3969,7 @@
     const panel = $("#typo-panel");
     const btn = $("#typo-btn");
     if (!panel || !btn) return;
+    if (tocPanelOpen) closeTocPanel(false); // only one bottom-chrome panel open
     renderTypoPanelState();
     panel.hidden = false;
     btn.setAttribute("aria-expanded", "true");
@@ -4038,22 +4041,38 @@
       if (seg) step({ columnWidth: Number(seg.getAttribute("data-width")) });
     });
 
-    // Dismissal listeners live on #reader-root so they die when any view swaps
-    // app().innerHTML (no document-level leak). Esc closes the panel BEFORE the
-    // global reader Esc-back handler (this runs in the bubble phase on a
-    // descendant of document, so stopPropagation pre-empts it).
+    wirePanelRootDismissal({
+      isOpen: () => typoPanelOpen,
+      close: closeTypoPanel,
+      panelSel: "#typo-panel",
+      btnSel: "#typo-btn",
+    });
+  }
+
+  // Shared #reader-root dismissal for a bottom-chrome popover (Aa panel, TOC
+  // drawer). Listeners live on #reader-root so they die when a view swaps
+  // app().innerHTML (no document-level leak). Escape closes the panel BEFORE
+  // the global reader Esc-back handler — this runs in the bubble phase on a
+  // descendant of document, so stopPropagation pre-empts it. An outside click
+  // dismisses, except clicks on the trigger (btnSel) or any keepOpenSel
+  // element (e.g. the reader's Prev/Next buttons, so a chapter turn keeps the
+  // panel open). `isOpen` is a getter so the current flag value is read at
+  // event time, not captured stale.
+  function wirePanelRootDismissal({ isOpen, close, panelSel, btnSel, keepOpenSel }) {
     const root = $("#reader-root");
+    if (!root) return;
     root.addEventListener("keydown", (e) => {
-      if (e.key === "Escape" && typoPanelOpen) {
+      if (e.key === "Escape" && isOpen()) {
         e.preventDefault();
         e.stopPropagation();
-        closeTypoPanel(true);
+        close(true);
       }
     });
     root.addEventListener("click", (e) => {
-      if (typoPanelOpen && !e.target.closest("#typo-panel") && !e.target.closest("#typo-btn")) {
-        closeTypoPanel(false);
-      }
+      if (!isOpen()) return;
+      if (e.target.closest(panelSel) || e.target.closest(btnSel)) return;
+      if (keepOpenSel && e.target.closest(keepOpenSel)) return;
+      close(false);
     });
   }
 
@@ -4173,6 +4192,7 @@
     const panel = $("#toc-panel");
     const btn = $("#toc-btn");
     if (!panel || !btn || !readerState || readerState.tocStatus !== "ready") return;
+    if (typoPanelOpen) closeTypoPanel(false); // only one bottom-chrome panel open
     renderTocList();
     panel.classList.add("open");
     btn.setAttribute("aria-expanded", "true");
@@ -4200,6 +4220,22 @@
         closeTocPanel(false);
         gotoReaderIndex(idx, { instant: true });
       });
+    // Arrow/Home/End/Space/f inside the open panel must not reach the global
+    // reader shortcuts (chapter turns / scroll) — same containment as the Aa
+    // panel. Escape is deliberately NOT contained: it bubbles to #reader-root
+    // (below) to close the panel before the global Esc-back handler.
+    const panel = $("#toc-panel");
+    if (panel) panel.addEventListener("keydown", containReaderKeys);
+    // Esc + outside-click dismissal, shared with the Aa panel. Prev/Next are
+    // exempt (keepOpenSel) so a chapter turn keeps the panel open and its
+    // current-chapter highlight re-syncs (see updateProgressUI).
+    wirePanelRootDismissal({
+      isOpen: () => tocPanelOpen,
+      close: closeTocPanel,
+      panelSel: "#toc-panel",
+      btnSel: "#toc-btn",
+      keepOpenSel: "#prev-btn, #next-btn",
+    });
   }
 
   function renderReaderChrome() {

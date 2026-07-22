@@ -125,3 +125,76 @@ test.describe("web reader TOC — panel", () => {
     });
   }
 });
+
+test.describe("web reader TOC — accessibility & dismissal", () => {
+  test("Escape closes the panel without navigating back", async ({ page }) => {
+    await openEpubReader(page);
+    await page.locator("#toc-btn").click();
+    await expect(page.locator("#toc-panel")).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(page.locator("#toc-panel")).toBeHidden();
+    // Still in the reader, not navigated back to the detail/library view.
+    await expect(page.locator("#reader-content")).toBeVisible();
+  });
+
+  test("clicking outside the panel closes it", async ({ page }) => {
+    await openEpubReader(page);
+    await page.locator("#toc-btn").click();
+    await expect(page.locator("#toc-panel")).toBeVisible();
+    // A click inside the panel must NOT dismiss it.
+    await page.locator("#toc-panel").click({ position: { x: 10, y: 10 } });
+    await expect(page.locator("#toc-panel")).toBeVisible();
+    // Click well to the right of the ~320px left drawer, so the click lands
+    // outside the panel — that dismisses.
+    await page.locator("#reader-stage").click({ position: { x: 600, y: 300 } });
+    await expect(page.locator("#toc-panel")).toBeHidden();
+  });
+
+  test("Prev/Next keeps the panel open and re-syncs the highlight", async ({ page }) => {
+    await openEpubReader(page);
+    await page.locator("#toc-btn").click();
+    await expect(page.locator("#toc-panel")).toBeVisible();
+    await page.locator("#next-btn").click();
+    // Wait for the turn to complete, then assert the panel stayed open and the
+    // current-chapter highlight advanced to index 1 (Chapter One + Section 1.1
+    // both map to it).
+    await expect(page.locator("#reader-content")).toContainText("chapter one");
+    await expect(page.locator("#toc-panel")).toBeVisible();
+    await expect(page.locator(".toc-entry.current")).toHaveCount(2);
+  });
+
+  test("opening one bottom-chrome panel closes the other", async ({ page }) => {
+    await openEpubReader(page);
+    // Open Aa, then Contents — only Contents should remain open.
+    await page.locator("#typo-btn").click();
+    await expect(page.locator("#typo-panel")).toBeVisible();
+    await page.locator("#toc-btn").click();
+    await expect(page.locator("#toc-panel")).toBeVisible();
+    await expect(page.locator("#typo-panel")).toBeHidden();
+    // And the reverse.
+    await page.locator("#typo-btn").click();
+    await expect(page.locator("#typo-panel")).toBeVisible();
+    await expect(page.locator("#toc-panel")).toBeHidden();
+  });
+
+  test("hiding the chrome closes the panel and it stays closed when shown again", async ({ page }) => {
+    await openEpubReader(page);
+    await page.locator("#toc-btn").click();
+    await expect(page.locator("#toc-panel")).toBeVisible();
+    await page.locator("#chrome-toggle-btn").click();
+    await expect(page.locator("#toc-panel")).toBeHidden();
+    // Showing the chrome again must NOT re-reveal the panel (state was cleared,
+    // not just visually masked by the hidden chrome row).
+    await page.locator("#chrome-toggle-btn").click();
+    await expect(page.locator("#toc-panel")).toBeHidden();
+    await expect(page.locator("#toc-btn")).toHaveAttribute("aria-expanded", "false");
+  });
+
+  test("arrow keys don't turn the chapter while the panel is open", async ({ page }) => {
+    await openEpubReader(page);
+    await page.locator("#toc-btn").click();
+    await page.locator("#toc-panel").press("ArrowRight");
+    await expect(page.locator("#reader-content")).toContainText("chapter zero");
+    await expect(page.locator("#toc-panel")).toBeVisible();
+  });
+});
