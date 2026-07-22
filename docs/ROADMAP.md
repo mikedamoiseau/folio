@@ -284,6 +284,7 @@ Manual sharing via the existing Markdown / JSON export is sufficient.
 - ~~PIN/password protection (required to connect)~~
 - ~~Read-only web UI: browse library, view covers/metadata, read books in-browser~~
 - ~~Adjustable reading typography in the web reader (font size, line spacing, font family incl. OpenDyslexic, column width) for EPUB/MOBI — embedded fonts, reflow-preserving, remembered across books~~
+- ~~Table of contents in the web reader for EPUB/MOBI — Contents panel replacing the numeric chapter slider, tap-to-jump with current-chapter highlight, plain-label fallback for degenerate TOCs~~
 - ~~Display the access URL + QR code in settings for easy connection from phones/tablets~~
 - ~~LAN only (no internet tunneling or port forwarding)~~
 

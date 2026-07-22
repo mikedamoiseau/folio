@@ -6,6 +6,13 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- **Table of contents in the web reader.** The phone/web reader's chapter
+  toolbar now has a **Contents** button (reflowable books only — EPUB and
+  MOBI) in place of the old numeric chapter slider. It opens a slide-in panel
+  listing the book's chapters; tap one to jump straight there, with the
+  current chapter highlighted. Books with no usable table of contents (a
+  single chapter, or a TOC that can't be read) show a plain chapter label
+  instead. (Page-image formats — PDF, CBZ, CBR — keep their page slider.)
 - **Adjustable reading typography in the web reader.** The phone/web reader
   now has an **Aa** button in its toolbar (reflowable books only — EPUB and
   MOBI) opening a popover with four controls: **font size** (14–24 px),

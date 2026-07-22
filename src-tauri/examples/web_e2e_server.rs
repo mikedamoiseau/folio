@@ -167,6 +167,7 @@ fn build_test_epub(path: &Path) -> Result<(), Box<dyn Error>> {
     <dc:identifier id="bookid">e2e-epub-prefetch</dc:identifier>
   </metadata>
   <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
     <item id="ch0" href="ch0.xhtml" media-type="application/xhtml+xml"/>
     <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
     <item id="pic" href="pic.png" media-type="image/png"/>
@@ -201,6 +202,28 @@ fn build_test_epub(path: &Path) -> Result<(), Box<dyn Error>> {
     }
     ch1_body.push_str(r#"<img src="pic.png" alt="inline"/>"#);
     zip.write_all(chapter("Ch1", &ch1_body).as_bytes())?;
+
+    // EPUB3 nav document — gives the TOC real labels for the web-reader TOC
+    // e2e (toc.spec.ts). The parser flattens, so all three appear flat in
+    // document order; `Section 1.1`'s `#sec` fragment is stripped and it
+    // resolves to spine index 1 (same as Chapter One) — a duplicate-index
+    // entry the highlight test relies on. Not in the spine, so total_chapters
+    // stays 2.
+    zip.start_file("OEBPS/nav.xhtml", deflated)?;
+    zip.write_all(
+        br#"<?xml version="1.0" encoding="UTF-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
+<head><title>Contents</title></head>
+<body>
+  <nav epub:type="toc" id="toc">
+    <ol>
+      <li><a href="ch0.xhtml">Chapter Zero</a></li>
+      <li><a href="ch1.xhtml">Chapter One</a></li>
+      <li><a href="ch1.xhtml#sec">Section 1.1</a></li>
+    </ol>
+  </nav>
+</body></html>"#,
+    )?;
 
     // A tiny valid PNG for the inline image referenced by chapter 1.
     let img = image::RgbImage::from_pixel(4, 4, image::Rgb([10, 120, 200]));
