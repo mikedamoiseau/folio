@@ -119,6 +119,15 @@
   let typoPanelOpen = false;
   // Whether the table-of-contents panel is open. Same lifecycle as above.
   let tocPanelOpen = false;
+  // Whether the bookmarks drawer is open. Same lifecycle as above.
+  let bookmarkPanelOpen = false;
+  // True while an inline rename input is focused/editing — opportunistic
+  // re-renders (a late loadBookmarks/loadToc completion) must skip while this
+  // is set, or they'd rebuild the list innerHTML and destroy the field mid-edit.
+  let bookmarkRenaming = false;
+  // Bookmarks for the current book: { bookId, loaded, items }. Fetched lazily
+  // on first panel open; cleared on every chrome (re)build.
+  let bookmarksState = null;
 
   const TYPO_FAMILY_ORDER = ["lora", "literata", "dm-sans", "opendyslexic"];
   const TYPO_FAMILY_LABELS = {
@@ -3286,6 +3295,7 @@
     // linger invisibly and reappear when the chrome is shown again.
     if (readerState.chromeHidden && typoPanelOpen) closeTypoPanel(false);
     if (readerState.chromeHidden && tocPanelOpen) closeTocPanel(false);
+    if (readerState.chromeHidden && bookmarkPanelOpen) closeBookmarkPanel(false);
     // Showing/hiding the chrome rows resizes the stage without a window
     // resize event — re-clamp a zoomed pan against the new bounds so no
     // gap opens at an edge.
@@ -3970,6 +3980,7 @@
     const btn = $("#typo-btn");
     if (!panel || !btn) return;
     if (tocPanelOpen) closeTocPanel(false); // only one bottom-chrome panel open
+    if (bookmarkPanelOpen) closeBookmarkPanel(false);
     renderTypoPanelState();
     panel.hidden = false;
     btn.setAttribute("aria-expanded", "true");
@@ -4129,6 +4140,11 @@
       if (readerState && readerState.id === bookId) readerState.tocStatus = "none";
     }
     if (readerState && readerState.id === bookId) buildTocTrigger();
+    // If the bookmark panel is open, its auto-labels may have rendered with the
+    // "Chapter N" fallback before the TOC arrived — re-render now so they pick
+    // up the real chapter titles (but not while a rename input is active).
+    if (readerState && readerState.id === bookId && bookmarkPanelOpen && !bookmarkRenaming)
+      renderBookmarkList();
   }
 
   // Build the trigger to match tocStatus. Interactive (button) only when the
@@ -4193,6 +4209,7 @@
     const btn = $("#toc-btn");
     if (!panel || !btn || !readerState || readerState.tocStatus !== "ready") return;
     if (typoPanelOpen) closeTypoPanel(false); // only one bottom-chrome panel open
+    if (bookmarkPanelOpen) closeBookmarkPanel(false);
     renderTocList();
     panel.classList.add("open");
     btn.setAttribute("aria-expanded", "true");
@@ -4238,6 +4255,331 @@
     });
   }
 
+  // ── Bookmarks (left slide-in drawer, present in both reader modes) ───────
+  function bookmarkPanelHtml() {
+    return `
+      <div class="bookmark-panel" id="bookmark-panel" role="dialog" aria-label="Bookmarks">
+        <div class="bookmark-head">
+          <span class="bookmark-title">Bookmarks</span>
+          <button id="bookmark-close" class="bookmark-close" aria-label="Close">&times;</button>
+        </div>
+        <button id="bookmark-add-btn" class="bookmark-add">+ Add bookmark here</button>
+        <div class="bookmark-list" id="bookmark-list"></div>
+      </div>`;
+  }
+
+  // Fetch bookmarks once per book, lazily on first panel open. Guarded by an
+  // id-recheck after resp.json() so a book switch mid-fetch can't overwrite
+  // another book's state (same guard as loadToc).
+  async function loadBookmarks() {
+    if (!readerState) return;
+    const bookId = readerState.id;
+    if (bookmarksState && bookmarksState.bookId === bookId && bookmarksState.loaded) return;
+    bookmarksState = { bookId, loaded: false, items: [] };
+    try {
+      const resp = await api(`/api/books/${bookId}/bookmarks`);
+      if (!readerState || readerState.id !== bookId) return;
+      if (resp && resp.ok) {
+        const rows = await resp.json();
+        if (!readerState || readerState.id !== bookId) return;
+        // Backend returns oldest-first; the UI shows newest-first. LOCAL-
+        // preferred merge: an item added OR renamed locally while this GET was
+        // in flight (or a rename committed just before it resolved) must win
+        // over the older server snapshot — keep every local item, append only
+        // server rows we don't already hold. A wholesale replace would drop a
+        // concurrent add-here or revert a just-committed rename.
+        const serverRows = Array.isArray(rows) ? rows.slice().reverse() : [];
+        const localItems =
+          bookmarksState && bookmarksState.bookId === bookId ? bookmarksState.items : [];
+        const localIds = new Set(localItems.map((b) => b.id));
+        bookmarksState = {
+          bookId,
+          loaded: true,
+          items: [...localItems, ...serverRows.filter((s) => !localIds.has(s.id))],
+        };
+      }
+    } catch (e) {
+      if (readerState && readerState.id === bookId) bookmarksState = { bookId, loaded: true, items: [] };
+    }
+    // Skip the re-render while a rename input is active (see bookmarkRenaming).
+    if (readerState && readerState.id === bookId && bookmarkPanelOpen && !bookmarkRenaming)
+      renderBookmarkList();
+  }
+
+  function buildBookmarkTrigger() {
+    const btn = $("#bookmark-btn");
+    if (!btn) return;
+    btn.addEventListener("keydown", containReaderKeys);
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      if (bookmarkPanelOpen) closeBookmarkPanel(true);
+      else openBookmarkPanel();
+    });
+  }
+
+  // Auto-label for an unnamed bookmark: chapter title from the TOC if present
+  // (chapter mode only — page-mode books have no TOC), else "Chapter N" /
+  // "Page N" per reader mode; plus the "% through" from scroll_position.
+  function bookmarkLabel(bm) {
+    if (bm.name && bm.name.trim()) return esc(bm.name);
+    const isPage = readerState && readerState.mode === "page";
+    let label = null;
+    if (!isPage && readerState && Array.isArray(readerState.toc)) {
+      const entry = readerState.toc.find((e) => e.chapter_index === bm.chapter_index);
+      if (entry && entry.label) label = entry.label;
+    }
+    if (!label) label = `${isPage ? "Page" : "Chapter"} ${bm.chapter_index + 1}`;
+    const pct = Math.round(clampScrollRatio(bm.scroll_position) * 100);
+    return `${esc(label)} <span class="bookmark-pct">· ${pct}% through</span>`;
+  }
+
+  function renderBookmarkList() {
+    const list = $("#bookmark-list");
+    if (!list) return;
+    const items = (bookmarksState && bookmarksState.items) || [];
+    if (!items.length) {
+      list.innerHTML = `<p class="bookmark-empty">No bookmarks yet</p>`;
+      return;
+    }
+    list.innerHTML = items
+      .map((bm) => {
+        // Numbers today, but escape+stringify so the attribute-safety invariant
+        // holds even if malformed state ever reaches here.
+        const idx = Number.isFinite(bm.chapter_index) ? String(bm.chapter_index) : "0";
+        const scroll = Number.isFinite(bm.scroll_position) ? String(bm.scroll_position) : "0";
+        return `
+      <div class="bookmark-entry" data-id="${esc(bm.id)}" data-index="${esc(idx)}" data-scroll="${esc(scroll)}" tabindex="0" role="button">
+        <span class="bookmark-entry-label">${bookmarkLabel(bm)}</span>
+        <button class="bookmark-rename" data-id="${esc(bm.id)}" aria-label="Rename bookmark">&#9998;</button>
+        <button class="bookmark-del" data-id="${esc(bm.id)}" aria-label="Delete bookmark">&times;</button>
+      </div>`;
+      })
+      .join("");
+  }
+
+  function closeBookmarkPanel(restoreFocus) {
+    const panel = $("#bookmark-panel");
+    const btn = $("#bookmark-btn");
+    if (panel) panel.classList.remove("open");
+    if (btn) btn.setAttribute("aria-expanded", "false");
+    bookmarkPanelOpen = false;
+    if (restoreFocus && btn) btn.focus();
+  }
+
+  function openBookmarkPanel() {
+    const panel = $("#bookmark-panel");
+    const btn = $("#bookmark-btn");
+    if (!panel || !btn || !readerState) return;
+    // Mutual exclusion with the other bottom-chrome panels.
+    if (typoPanelOpen) closeTypoPanel(false);
+    if (tocPanelOpen) closeTocPanel(false);
+    renderBookmarkList();
+    panel.classList.add("open");
+    btn.setAttribute("aria-expanded", "true");
+    bookmarkPanelOpen = true;
+    loadBookmarks(); // lazy fetch; re-renders on completion if still open
+  }
+
+  // Jump to a bookmark. Different chapter: navigate + let the render path
+  // consume pendingScrollRestore. SAME chapter: gotoReaderIndex would
+  // re-navigate to an unchanged hash (no hashchange -> no render -> restore
+  // never runs), so restore the scroll directly.
+  function jumpToBookmark(chapterIndex, scrollPosition) {
+    if (!readerState) return;
+    const idx = Math.min(Math.max(chapterIndex, 0), readerState.count - 1);
+    closeBookmarkPanel(false);
+    if (readerState.mode === "chapter" && idx === readerState.index) {
+      restoreChapterScroll(scrollPosition);
+    } else {
+      const r = readerState.mode === "chapter" ? clampScrollRatio(scrollPosition || 0) : 0;
+      // Set BOTH: pendingScrollRestore drives the post-render scroll, and
+      // scrollPosition must match it or a later progress save would persist the
+      // previous chapter's ratio (the restore's synthetic scroll is suppressed,
+      // so the scroll handler never updates scrollPosition itself).
+      readerState.pendingScrollRestore = r;
+      readerState.scrollPosition = r;
+      gotoReaderIndex(idx, { instant: true });
+    }
+  }
+
+  // Apply an in-chapter scroll fraction to the already-rendered stage (the
+  // same-chapter jump case — no re-render happens). The chapter is already on
+  // screen with fonts settled, so a single rAF is enough (no fonts.ready
+  // re-anchor needed like renderReaderContent's first paint). Do NOT set
+  // suppressScrollSave manually — setScrollTop arms it itself, and only when
+  // scrollTop actually changes (app.js:151); forcing it would swallow the
+  // user's next real scroll. Update readerState.scrollPosition so a later
+  // progress save (which reads it) isn't stale.
+  function restoreChapterScroll(ratio) {
+    const stage = $("#reader-stage");
+    if (!stage) return;
+    const r = clampScrollRatio(ratio || 0);
+    readerState.scrollPosition = r;
+    requestAnimationFrame(() => {
+      const max = stage.scrollHeight - stage.clientHeight;
+      if (r > 0 && max > 0) setScrollTop(stage, r * max);
+      else stage.scrollTop = 0;
+    });
+  }
+
+  async function addBookmarkHere() {
+    if (!readerState) return;
+    const bookId = readerState.id;
+    const chapterIndex = readerState.index;
+    const scrollPosition =
+      readerState.mode === "chapter"
+        ? clampScrollRatio(readerState.scrollPosition || 0)
+        : (readerState.count > 1 ? readerState.index / readerState.count : 0);
+    try {
+      const resp = await fetch(`/api/books/${bookId}/bookmarks`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ chapter_index: chapterIndex, scroll_position: scrollPosition }),
+        credentials: "same-origin",
+      });
+      if (resp.status === 401) { authenticated = false; showLogin(); return; }
+      if (!resp.ok) return;
+      const created = await resp.json();
+      // Race guard: a book switch during the POST must not mutate another book.
+      if (!readerState || readerState.id !== bookId || !bookmarksState || bookmarksState.bookId !== bookId) return;
+      // Upsert: a concurrent initial GET may have already merged this id — drop
+      // any existing copy before prepending so the list can't show a duplicate.
+      bookmarksState.items = bookmarksState.items.filter((b) => b.id !== created.id);
+      bookmarksState.items.unshift(created); // newest-first
+      renderBookmarkList();
+      const firstEntry = $("#bookmark-list .bookmark-entry");
+      if (firstEntry) beginRename(firstEntry, created.id);
+    } catch (e) { /* offline: bookmarks are live-only; ignore */ }
+  }
+
+  async function deleteBookmark(id) {
+    if (!readerState) return;
+    const bookId = readerState.id;
+    try {
+      const resp = await fetch(`/api/books/${bookId}/bookmarks/${id}`, {
+        method: "DELETE",
+        credentials: "same-origin",
+      });
+      if (resp.status === 401) { authenticated = false; showLogin(); return; }
+      if (!(resp.ok || resp.status === 204)) return;
+      if (!readerState || readerState.id !== bookId || !bookmarksState || bookmarksState.bookId !== bookId) return;
+      bookmarksState.items = bookmarksState.items.filter((b) => b.id !== id);
+      renderBookmarkList();
+    } catch (e) { /* ignore */ }
+  }
+
+  function beginRename(entry, id) {
+    const labelEl = entry.querySelector(".bookmark-entry-label");
+    if (!labelEl) return;
+    const bm = bookmarksState && bookmarksState.items.find((b) => b.id === id);
+    const current = (bm && bm.name) || "";
+    const input = document.createElement("input");
+    input.type = "text";
+    input.className = "bookmark-name-input";
+    input.maxLength = 100; // server truncates too; cap the input to match
+    input.value = current;
+    bookmarkRenaming = true;
+    labelEl.replaceWith(input);
+    input.focus();
+    input.select();
+    // A click/tap inside the field (to place the cursor) would otherwise bubble
+    // to the #bookmark-list handler, match .bookmark-entry, and fire
+    // jumpToBookmark — closing the panel and discarding the edit. Stop it here.
+    input.addEventListener("mousedown", (e) => e.stopPropagation());
+    input.addEventListener("click", (e) => e.stopPropagation());
+    let done = false;
+    const commit = async () => {
+      if (done) return;
+      done = true;
+      bookmarkRenaming = false;
+      // No change → no needless PUT (covers the common auto-rename-then-click-
+      // away with an untouched empty field); just drop the input.
+      if (input.value === current) {
+        renderBookmarkList();
+        return;
+      }
+      await renameBookmark(id, input.value);
+    };
+    input.addEventListener("keydown", (e) => {
+      e.stopPropagation(); // don't let typing reach reader shortcuts
+      if (e.key === "Enter") {
+        e.preventDefault();
+        commit();
+      } else if (e.key === "Escape") {
+        e.preventDefault();
+        done = true;
+        bookmarkRenaming = false;
+        renderBookmarkList();
+      }
+    });
+    input.addEventListener("blur", commit);
+  }
+
+  async function renameBookmark(id, rawName) {
+    if (!readerState) {
+      renderBookmarkList();
+      return;
+    }
+    const bookId = readerState.id;
+    try {
+      const resp = await fetch(`/api/books/${bookId}/bookmarks/${id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: rawName }),
+        credentials: "same-origin",
+      });
+      if (resp.status === 401) { authenticated = false; showLogin(); return; }
+      if (resp.ok) {
+        const updated = await resp.json();
+        if (!readerState || readerState.id !== bookId || !bookmarksState || bookmarksState.bookId !== bookId) return;
+        const i = bookmarksState.items.findIndex((b) => b.id === id);
+        if (i >= 0) bookmarksState.items[i] = updated;
+      }
+    } catch (e) { /* ignore; fall through to re-render */ }
+    // Re-render (a failed PUT reverts the entry to its stored name — an honest
+    // "didn't save" signal). Guard against a book switch mid-PUT so we never
+    // rebuild another book's list.
+    if (readerState && bookmarksState && readerState.id === bookId && bookmarksState.bookId === bookId)
+      renderBookmarkList();
+  }
+
+  function wireBookmarkControls() {
+    const closeBtn = $("#bookmark-close");
+    if (closeBtn) closeBtn.addEventListener("click", () => closeBookmarkPanel(true));
+    const addBtn = $("#bookmark-add-btn");
+    if (addBtn) addBtn.addEventListener("click", (e) => { e.stopPropagation(); addBookmarkHere(); });
+    const list = $("#bookmark-list");
+    if (list)
+      list.addEventListener("click", (e) => {
+        // A click inside an active rename input must not be treated as an entry
+        // tap (belt-and-suspenders with the input's own stopPropagation).
+        if (e.target.closest(".bookmark-name-input")) return;
+        const del = e.target.closest(".bookmark-del");
+        if (del) { e.stopPropagation(); deleteBookmark(del.getAttribute("data-id")); return; }
+        const ren = e.target.closest(".bookmark-rename");
+        if (ren) {
+          e.stopPropagation();
+          const en = ren.closest(".bookmark-entry");
+          if (en) beginRename(en, ren.getAttribute("data-id"));
+          return;
+        }
+        const entry = e.target.closest(".bookmark-entry");
+        if (!entry) return;
+        const idx = parseInt(entry.getAttribute("data-index"), 10);
+        const scroll = parseFloat(entry.getAttribute("data-scroll"));
+        if (!Number.isFinite(idx)) return;
+        jumpToBookmark(idx, Number.isFinite(scroll) ? scroll : 0);
+      });
+    const panel = $("#bookmark-panel");
+    if (panel) panel.addEventListener("keydown", containReaderKeys);
+    wirePanelRootDismissal({
+      isOpen: () => bookmarkPanelOpen,
+      close: closeBookmarkPanel,
+      panelSel: "#bookmark-panel",
+      btnSel: "#bookmark-btn",
+    });
+  }
+
   function renderReaderChrome() {
     // A deferred tap from a previous reader (or a previous book's chrome)
     // must not fire against the freshly built one — the prev/next zones are
@@ -4248,6 +4590,7 @@
     // open state across.
     typoPanelOpen = false;
     tocPanelOpen = false;
+    bookmarkPanelOpen = false;
     pendingReanchor = null;
     const { book, mode, count, index, fitMode } = readerState;
     const rootClass = mode === "page" ? `reader-page ${fitMode}` : "reader-chapter";
@@ -4265,6 +4608,10 @@
       : `<button id="typo-btn" aria-label="Text settings" aria-haspopup="dialog" aria-expanded="false">Aa</button>`;
     const typoPanel = mode === "page" ? "" : typoPanelHtml();
     const tocPanel = mode === "page" ? "" : tocPanelHtml();
+    // Bookmark control — present in BOTH reader modes (chapter + page).
+    const bookmarkBtn =
+      `<button id="bookmark-btn" aria-label="Bookmarks" aria-haspopup="dialog" aria-expanded="false">&#128278;</button>`;
+    const bookmarkPanel = bookmarkPanelHtml();
 
     app().innerHTML = `
       <div class="${rootClass}" id="reader-root">
@@ -4285,9 +4632,11 @@
             <button id="next-btn">Next</button>
             ${typoBtn}
             ${fitToggleBtn}
+            ${bookmarkBtn}
           </div>
           ${typoPanel}
           ${tocPanel}
+          ${bookmarkPanel}
         </div>
         <button class="chrome-toggle-fab" id="chrome-toggle-btn" title="Toggle toolbar" aria-label="Toggle toolbar">&#8942;</button>
       </div>`;
@@ -4347,6 +4696,13 @@
       buildTocTrigger();
       loadToc();
     }
+
+    // Bookmarks: present in BOTH reader modes. Wire once here (the block was
+    // identical in both branches). loadBookmarks() is lazy (first panel open),
+    // so it is NOT called here.
+    bookmarksState = null;
+    wireBookmarkControls();
+    buildBookmarkTrigger();
 
     applyChromeVisibility();
   }

@@ -187,7 +187,17 @@ fn build_test_epub(path: &Path) -> Result<(), Box<dyn Error>> {
         )
     };
     zip.start_file("OEBPS/ch0.xhtml", deflated)?;
-    zip.write_all(chapter("Ch0", "<p>E2E chapter zero content.</p>").as_bytes())?;
+    // Long enough that `#reader-stage` scrolls at the test viewport, so the
+    // same-chapter bookmark scroll-restore e2e (bookmarks.spec.ts) can measure
+    // a non-zero scrollTop. Keeps the "chapter zero" marker (asserted by
+    // several specs) as the first paragraph.
+    let mut ch0_body = String::from("<p>E2E chapter zero content.</p>");
+    for i in 0..60 {
+        ch0_body.push_str(&format!(
+            "<p>Paragraph {i} — lorem ipsum dolor sit amet, consectetur adipiscing elit.</p>"
+        ));
+    }
+    zip.write_all(chapter("Ch0", &ch0_body).as_bytes())?;
     zip.start_file("OEBPS/ch1.xhtml", deflated)?;
     // Long enough that `#reader-stage` actually scrolls at the test viewport,
     // so the typography reflow-anchor e2e can measure a mid-chapter position.
