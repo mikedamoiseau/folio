@@ -913,3 +913,7 @@ body:not(:has(.header))::before {
     animation: none;
   }
 }
+
+/* ── Highlights (spec 2026-07-23) ─────────────────────────────────────────
+   Highlight marks: reset UA yellow; tint comes from the inline style. */
+.hl-mark { background-color: transparent; color: inherit; }

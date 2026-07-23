@@ -4704,6 +4704,19 @@
     wireBookmarkControls();
     buildBookmarkTrigger();
 
+    // Highlights: reset per book entry (mirrors the bookmarksState reset
+    // above), then — chapter mode only — fetch this book's highlights and
+    // rebuild the on-screen chapter when the GET resolves (spec §3: full
+    // rebuild from clean HTML, never incremental).
+    highlightsState = { bookId: null, items: [], loaded: false, failed: false };
+    currentChapterCleanHtml = null;
+    currentChapterIndex = -1;
+    if (readerState.mode !== "page") {
+      loadHighlightsForBook(readerState.id).then(() => {
+        rerenderChapterHighlights();
+      });
+    }
+
     applyChromeVisibility();
   }
 
@@ -4730,6 +4743,137 @@
       readerState.scrollPosition = max > 0 ? clampScrollRatio(stage.scrollTop / max) : 0;
       scheduleProgressSave();
     }, { passive: true });
+  }
+
+  // ── Highlights (spec 2026-07-23) ─────────────────────────────────────────
+  // Frozen-snapshot renderer for stored text highlights (chapter mode only).
+  // Marks are injected into the live DOM; the prefetch/chapter caches keep
+  // storing clean HTML, and every re-render rebuilds from that clean HTML —
+  // never incrementally (idempotent by construction, spec §3).
+
+  const HIGHLIGHT_COLORS = ["#f6c445", "#7bc47f", "#6ba3d6", "#e88baf", "#e8a55d"];
+  let highlightsState = { bookId: null, items: [], loaded: false, failed: false };
+  // Clean (mark-free) HTML of the chapter currently on screen + its index —
+  // the rebuild source for rerenderChapterHighlights(). Kept up to date in
+  // renderReaderContent right where `innerHTML` is set; reset per book entry.
+  let currentChapterCleanHtml = null;
+  let currentChapterIndex = -1;
+
+  async function loadHighlightsForBook(bookId) {
+    if (highlightsState.bookId !== bookId) {
+      highlightsState = { bookId, items: [], loaded: false, failed: false };
+    }
+    try {
+      const resp = await fetch(`/api/books/${encodeURIComponent(bookId)}/highlights`, {
+        credentials: "same-origin",
+      });
+      if (highlightsState.bookId !== bookId) return; // book switched mid-flight
+      if (!resp.ok) { highlightsState.failed = true; return; }
+      highlightsState.items = await resp.json();
+      highlightsState.loaded = true;
+      highlightsState.failed = false;
+    } catch {
+      if (highlightsState.bookId === bookId) highlightsState.failed = true;
+    }
+  }
+
+  // Drift fallback: exact offsets first; else nearest occurrence of the quoted
+  // text (strict < keeps the EARLIER occurrence on an exact distance tie).
+  // Display-only — never writes corrected offsets back.
+  function resolveHighlightRange(hl, chapterText) {
+    const s = hl.startOffset, e = hl.endOffset;
+    if (chapterText.slice(s, e) === hl.text) return { s, e };
+    if (!hl.text) return null;
+    let best = -1, bestDist = Infinity;
+    let idx = chapterText.indexOf(hl.text);
+    while (idx !== -1) {
+      const dist = Math.abs(idx - s);
+      if (dist < bestDist) { best = idx; bestDist = dist; }
+      idx = chapterText.indexOf(hl.text, idx + 1);
+    }
+    return best === -1 ? null : { s: best, e: best + hl.text.length };
+  }
+
+  // Frozen-snapshot two-pass renderer (spec §3): map everything against the
+  // pristine DOM first, then split every text node at the union of highlight
+  // boundaries (descending), then wrap immutable fragments. Crossing ranges can
+  // never invalidate frozen offsets because no wrap happens during mapping.
+  function applyChapterHighlights(contentEl, chapterIndex) {
+    const items = highlightsState.items.filter((h) => h.chapterIndex === chapterIndex);
+    if (items.length) {
+      // 1. Snapshot: text nodes + chapter plain text (UTF-16 code-unit basis).
+      const walker = document.createTreeWalker(contentEl, NodeFilter.SHOW_TEXT);
+      const entries = [];
+      let chapterText = "";
+      let node;
+      while ((node = walker.nextNode())) {
+        entries.push({ node, start: chapterText.length });
+        chapterText += node.nodeValue;
+      }
+      // 2. Resolve ranges (drift fallback), deterministic wrap order.
+      const resolved = [];
+      for (const hl of items) {
+        const r = resolveHighlightRange(hl, chapterText);
+        if (r && r.e > r.s) resolved.push({ hl, s: r.s, e: r.e });
+      }
+      resolved.sort((a, b) =>
+        a.s - b.s || a.e - b.e || (a.hl.id < b.hl.id ? -1 : a.hl.id > b.hl.id ? 1 : 0));
+      // 3. Partition pass: split each text node at every boundary inside it.
+      const fragments = [];
+      for (const { node: textNode, start } of entries) {
+        const end = start + textNode.nodeValue.length;
+        const bounds = new Set();
+        for (const { s, e } of resolved) {
+          if (s > start && s < end) bounds.add(s - start);
+          if (e > start && e < end) bounds.add(e - start);
+        }
+        const local = [...bounds].sort((x, y) => y - x); // descending
+        const tails = [];
+        for (const off of local) tails.push(textNode.splitText(off));
+        tails.reverse(); // ascending document order
+        let cursor = start;
+        for (const frag of [textNode, ...tails]) {
+          fragments.push({ node: frag, start: cursor, end: cursor + frag.nodeValue.length });
+          cursor += frag.nodeValue.length;
+        }
+      }
+      // 4. Wrap pass: REVERSE sorted order so the highest-sorted highlight wraps
+      // first and ends INNERMOST (deterministic tap target, spec §3).
+      const topWrapper = new Map(); // fragment node -> outermost wrapper so far
+      for (let i = resolved.length - 1; i >= 0; i--) {
+        const { hl, s, e } = resolved[i];
+        for (const frag of fragments) {
+          if (frag.start >= s && frag.end <= e && frag.node.nodeValue.length) {
+            const target = topWrapper.get(frag.node) || frag.node;
+            const mark = document.createElement("mark"); // DOM APIs only — no HTML strings
+            mark.className = "hl-mark";
+            mark.dataset.hlId = hl.id;
+            mark.style.backgroundColor = hl.color + "44";
+            target.parentNode.insertBefore(mark, target);
+            mark.appendChild(target);
+            topWrapper.set(frag.node, mark);
+          }
+        }
+      }
+    }
+    maybeConsumeHlJump(contentEl, chapterIndex);
+  }
+
+  // Placeholder until Task 9 (jump). Must exist so applyChapterHighlights can
+  // call it unconditionally.
+  function maybeConsumeHlJump(_contentEl, _chapterIndex) {}
+
+  // Full rebuild from clean HTML (spec §3 "never incremental") — used when
+  // highlight state changes after the chapter is already painted (e.g. the
+  // book-open GET resolving).
+  function rerenderChapterHighlights() {
+    const contentEl = document.getElementById("reader-content");
+    if (!contentEl || currentChapterCleanHtml === null) return;
+    const stage = document.getElementById("reader-stage");
+    const scrollTop = stage ? stage.scrollTop : 0; // preserve position across rebuild
+    contentEl.innerHTML = currentChapterCleanHtml;
+    applyChapterHighlights(contentEl, currentChapterIndex);
+    if (stage) stage.scrollTop = scrollTop;
   }
 
   async function renderReaderContent() {
@@ -4817,6 +4961,12 @@
         }
       }
       if (contentEl) contentEl.innerHTML = html;
+      // Highlights: remember this chapter's clean HTML (the rebuild source for
+      // rerenderChapterHighlights), then wrap stored highlights into the fresh
+      // DOM. We are inside the chapter-mode branch — page mode never gets here.
+      currentChapterCleanHtml = html;
+      currentChapterIndex = index;
+      if (contentEl) applyChapterHighlights(contentEl, index);
       renderChapterTurnAnimation(contentEl, index, isInitialRender);
       // K5: native Space/PageDown scrolling needs the scroll container focused.
       const stage = $("#reader-stage");
