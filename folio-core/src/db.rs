@@ -1908,6 +1908,22 @@ pub fn get_book_reading_stats(
 
 // --- Highlights CRUD ---
 
+fn row_to_highlight(row: &rusqlite::Row) -> rusqlite::Result<crate::models::Highlight> {
+    Ok(crate::models::Highlight {
+        id: row.get(0)?,
+        book_id: row.get(1)?,
+        chapter_index: row.get(2)?,
+        text: row.get(3)?,
+        color: row.get(4)?,
+        note: row.get(5)?,
+        start_offset: row.get(6)?,
+        end_offset: row.get(7)?,
+        created_at: row.get(8)?,
+        updated_at: row.get(9)?,
+        deleted_at: row.get(10)?,
+    })
+}
+
 pub fn insert_highlight(conn: &Connection, h: &crate::models::Highlight) -> Result<()> {
     conn.execute(
         "INSERT INTO highlights (id, book_id, chapter_index, text, color, note, start_offset, end_offset, created_at, updated_at, deleted_at)
@@ -1922,21 +1938,7 @@ pub fn list_highlights(conn: &Connection, book_id: &str) -> Result<Vec<crate::mo
         "SELECT id, book_id, chapter_index, text, color, note, start_offset, end_offset, created_at, updated_at, deleted_at
          FROM highlights WHERE book_id = ?1 AND deleted_at IS NULL ORDER BY chapter_index ASC, start_offset ASC",
     )?;
-    let rows = stmt.query_map(params![book_id], |row| {
-        Ok(crate::models::Highlight {
-            id: row.get(0)?,
-            book_id: row.get(1)?,
-            chapter_index: row.get(2)?,
-            text: row.get(3)?,
-            color: row.get(4)?,
-            note: row.get(5)?,
-            start_offset: row.get(6)?,
-            end_offset: row.get(7)?,
-            created_at: row.get(8)?,
-            updated_at: row.get(9)?,
-            deleted_at: row.get(10)?,
-        })
-    })?;
+    let rows = stmt.query_map(params![book_id], row_to_highlight)?;
     rows.collect()
 }
 
@@ -1949,21 +1951,7 @@ pub fn get_chapter_highlights(
         "SELECT id, book_id, chapter_index, text, color, note, start_offset, end_offset, created_at, updated_at, deleted_at
          FROM highlights WHERE book_id = ?1 AND chapter_index = ?2 AND deleted_at IS NULL ORDER BY start_offset ASC",
     )?;
-    let rows = stmt.query_map(params![book_id, chapter_index], |row| {
-        Ok(crate::models::Highlight {
-            id: row.get(0)?,
-            book_id: row.get(1)?,
-            chapter_index: row.get(2)?,
-            text: row.get(3)?,
-            color: row.get(4)?,
-            note: row.get(5)?,
-            start_offset: row.get(6)?,
-            end_offset: row.get(7)?,
-            created_at: row.get(8)?,
-            updated_at: row.get(9)?,
-            deleted_at: row.get(10)?,
-        })
-    })?;
+    let rows = stmt.query_map(params![book_id, chapter_index], row_to_highlight)?;
     rows.collect()
 }
 
@@ -1994,6 +1982,66 @@ pub fn soft_delete_highlight(conn: &Connection, id: &str) -> Result<()> {
         params![now, id],
     )?;
     Ok(())
+}
+
+/// Update a highlight's note and/or color only if it belongs to `book_id` and
+/// is still live. `note_change`: `None` = leave note untouched, `Some(None)` =
+/// clear, `Some(Some(v))` = set. Returns the updated row, or `None` if no live
+/// matching row exists (→ 404-eligible) or if neither field was requested (the
+/// web handler rejects that case with 400 before calling). `UPDATE … RETURNING`
+/// makes write-and-read one atomic statement (bookmark precedent:
+/// `update_bookmark_name_scoped`).
+pub fn update_highlight_scoped(
+    conn: &Connection,
+    book_id: &str,
+    id: &str,
+    note_change: Option<Option<&str>>,
+    color: Option<&str>,
+) -> Result<Option<crate::models::Highlight>> {
+    const RET: &str = "RETURNING id, book_id, chapter_index, text, color, note, start_offset, end_offset, created_at, updated_at, deleted_at";
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64;
+    let run =
+        |sql: String, p: &[&dyn rusqlite::ToSql]| -> Result<Option<crate::models::Highlight>> {
+            let mut stmt = conn.prepare(&sql)?;
+            let mut rows = stmt.query_map(p, row_to_highlight)?;
+            match rows.next() {
+                Some(row) => Ok(Some(row?)),
+                None => Ok(None),
+            }
+        };
+    match (note_change, color) {
+        (Some(note), Some(color)) => run(
+            format!("UPDATE highlights SET note = ?1, color = ?2, updated_at = ?3 WHERE id = ?4 AND book_id = ?5 AND deleted_at IS NULL {RET}"),
+            &[&note, &color, &now, &id, &book_id],
+        ),
+        (Some(note), None) => run(
+            format!("UPDATE highlights SET note = ?1, updated_at = ?2 WHERE id = ?3 AND book_id = ?4 AND deleted_at IS NULL {RET}"),
+            &[&note, &now, &id, &book_id],
+        ),
+        (None, Some(color)) => run(
+            format!("UPDATE highlights SET color = ?1, updated_at = ?2 WHERE id = ?3 AND book_id = ?4 AND deleted_at IS NULL {RET}"),
+            &[&color, &now, &id, &book_id],
+        ),
+        (None, None) => Ok(None),
+    }
+}
+
+/// Soft-delete a highlight only if it belongs to `book_id` and is still live.
+/// Returns rows affected (0 → unknown/foreign/already-deleted id — idempotent).
+pub fn soft_delete_highlight_scoped(conn: &Connection, book_id: &str, id: &str) -> Result<usize> {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64;
+    let n = conn.execute(
+        "UPDATE highlights SET deleted_at = ?1, updated_at = ?1 \
+         WHERE id = ?2 AND book_id = ?3 AND deleted_at IS NULL",
+        params![now, id, book_id],
+    )?;
+    Ok(n)
 }
 
 // --- Sync-inclusive queries ---
@@ -3778,6 +3826,102 @@ mod tests {
         soft_delete_bookmark_scoped(&conn, "book-A", "bm-2").unwrap();
         let r = update_bookmark_name_scoped(&conn, "book-A", "bm-2", Some("later")).unwrap();
         assert!(r.is_none());
+    }
+
+    fn test_highlight(book_id: &str, id: &str) -> crate::models::Highlight {
+        crate::models::Highlight {
+            id: id.into(),
+            book_id: book_id.into(),
+            chapter_index: 0,
+            text: "quoted text".into(),
+            color: "#f6c445".into(),
+            note: None,
+            start_offset: 10,
+            end_offset: 21,
+            created_at: 1,
+            updated_at: 1,
+            deleted_at: None,
+        }
+    }
+
+    #[test]
+    fn update_highlight_scoped_sets_and_clears_fields() {
+        let (_dir, conn) = setup();
+        insert_book(&conn, &sample_book("b1")).unwrap();
+        insert_highlight(&conn, &test_highlight("b1", "h1")).unwrap();
+
+        // set note only
+        let up = update_highlight_scoped(&conn, "b1", "h1", Some(Some("a note")), None)
+            .unwrap()
+            .unwrap();
+        assert_eq!(up.note.as_deref(), Some("a note"));
+        assert_eq!(up.color, "#f6c445"); // untouched
+        assert!(up.updated_at >= 1);
+
+        // set color only — note survives
+        let up = update_highlight_scoped(&conn, "b1", "h1", None, Some("#7bc47f"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(up.color, "#7bc47f");
+        assert_eq!(up.note.as_deref(), Some("a note"));
+
+        // clear note + set color in one call
+        let up = update_highlight_scoped(&conn, "b1", "h1", Some(None), Some("#6ba3d6"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(up.note, None);
+        assert_eq!(up.color, "#6ba3d6");
+    }
+
+    #[test]
+    fn update_highlight_scoped_misses_return_none() {
+        let (_dir, conn) = setup();
+        insert_book(&conn, &sample_book("b1")).unwrap();
+        insert_book(&conn, &sample_book_with_path("b2", "/tmp/test-b2.epub")).unwrap();
+        insert_highlight(&conn, &test_highlight("b1", "h1")).unwrap();
+
+        // wrong book
+        assert!(
+            update_highlight_scoped(&conn, "b2", "h1", Some(Some("x")), None)
+                .unwrap()
+                .is_none()
+        );
+        // unknown id
+        assert!(
+            update_highlight_scoped(&conn, "b1", "nope", Some(Some("x")), None)
+                .unwrap()
+                .is_none()
+        );
+        // soft-deleted row
+        soft_delete_highlight(&conn, "h1").unwrap();
+        assert!(
+            update_highlight_scoped(&conn, "b1", "h1", Some(Some("x")), None)
+                .unwrap()
+                .is_none()
+        );
+        // neither field requested → no-op None (handler 400s before calling)
+        let h2 = test_highlight("b1", "h2");
+        insert_highlight(&conn, &h2).unwrap();
+        assert!(update_highlight_scoped(&conn, "b1", "h2", None, None)
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn soft_delete_highlight_scoped_is_book_scoped_and_idempotent() {
+        let (_dir, conn) = setup();
+        insert_book(&conn, &sample_book("b1")).unwrap();
+        insert_book(&conn, &sample_book_with_path("b2", "/tmp/test-b2.epub")).unwrap();
+        insert_highlight(&conn, &test_highlight("b1", "h1")).unwrap();
+
+        // wrong book → 0 rows, row survives
+        assert_eq!(soft_delete_highlight_scoped(&conn, "b2", "h1").unwrap(), 0);
+        assert_eq!(list_highlights(&conn, "b1").unwrap().len(), 1);
+        // right book → 1 row
+        assert_eq!(soft_delete_highlight_scoped(&conn, "b1", "h1").unwrap(), 1);
+        assert_eq!(list_highlights(&conn, "b1").unwrap().len(), 0);
+        // repeat → 0 rows (idempotent)
+        assert_eq!(soft_delete_highlight_scoped(&conn, "b1", "h1").unwrap(), 0);
     }
 
     #[test]
