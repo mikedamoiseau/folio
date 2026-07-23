@@ -4769,7 +4769,11 @@
       });
       if (highlightsState.bookId !== bookId) return; // book switched mid-flight
       if (!resp.ok) { highlightsState.failed = true; return; }
-      highlightsState.items = await resp.json();
+      const items = await resp.json();
+      // Re-check AFTER the await too: a book switch during json() parsing
+      // must not let a stale Book A response overwrite Book B's state.
+      if (highlightsState.bookId !== bookId) return;
+      highlightsState.items = items;
       highlightsState.loaded = true;
       highlightsState.failed = false;
     } catch {
@@ -4869,6 +4873,11 @@
   function rerenderChapterHighlights() {
     const contentEl = document.getElementById("reader-content");
     if (!contentEl || currentChapterCleanHtml === null) return;
+    // A chapter turn may be in flight (readerState.index already advanced,
+    // new HTML not yet painted). Rebuilding now would flash the PREVIOUS
+    // chapter over the "Loading…" placeholder — skip; the in-flight
+    // renderReaderContent applies highlights itself when it lands.
+    if (currentChapterIndex !== readerState.index) return;
     const stage = document.getElementById("reader-stage");
     const scrollTop = stage ? stage.scrollTop : 0; // preserve position across rebuild
     contentEl.innerHTML = currentChapterCleanHtml;

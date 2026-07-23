@@ -87,6 +87,11 @@ test.describe("highlight rendering", () => {
       return inner.map((m) => (m as HTMLElement).dataset.hlId);
     });
     expect(nestedIds.length).toBeGreaterThan(0);
+    // Deterministic wrap order (spec §3): B sorts higher than A on
+    // (startOffset, endOffset, id) — B starts later — so B must be the
+    // INNERMOST mark on every shared fragment. If the wrap order ever
+    // reversed, these inner marks would carry A's id instead.
+    for (const id of nestedIds) expect(id).toBe(b.id);
   });
 
   test("marks survive chapter turn away and back", async ({ page }) => {
