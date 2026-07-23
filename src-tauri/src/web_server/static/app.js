@@ -4759,25 +4759,32 @@
   let currentChapterCleanHtml = null;
   let currentChapterIndex = -1;
 
+  // Monotonic fetch token: a bookId check alone cannot discriminate a stale
+  // fetch from a SAME-book reopen (close → reopen while request 1 is still in
+  // flight) — only the newest request may write state.
+  let hlFetchSeq = 0;
+
   async function loadHighlightsForBook(bookId) {
     if (highlightsState.bookId !== bookId) {
       highlightsState = { bookId, items: [], loaded: false, failed: false };
     }
+    const seq = ++hlFetchSeq;
+    const stale = () => highlightsState.bookId !== bookId || seq !== hlFetchSeq;
     try {
       const resp = await fetch(`/api/books/${encodeURIComponent(bookId)}/highlights`, {
         credentials: "same-origin",
       });
-      if (highlightsState.bookId !== bookId) return; // book switched mid-flight
+      if (stale()) return; // book switched or reader reopened mid-flight
       if (!resp.ok) { highlightsState.failed = true; return; }
       const items = await resp.json();
-      // Re-check AFTER the await too: a book switch during json() parsing
-      // must not let a stale Book A response overwrite Book B's state.
-      if (highlightsState.bookId !== bookId) return;
+      // Re-check AFTER the await too: a switch/reopen during json() parsing
+      // must not let a stale response overwrite the newer state.
+      if (stale()) return;
       highlightsState.items = items;
       highlightsState.loaded = true;
       highlightsState.failed = false;
     } catch {
-      if (highlightsState.bookId === bookId) highlightsState.failed = true;
+      if (!stale()) highlightsState.failed = true;
     }
   }
 
