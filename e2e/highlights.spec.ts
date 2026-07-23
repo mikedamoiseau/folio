@@ -88,4 +88,18 @@ test.describe("highlight rendering", () => {
     });
     expect(nestedIds.length).toBeGreaterThan(0);
   });
+
+  test("marks survive chapter turn away and back", async ({ page }) => {
+    await openEpubReader(page);
+    await seedHighlight(page, "quick brown fox");
+    await page.reload();
+    await openEpubReader(page);
+    await expect(page.locator("mark.hl-mark").first()).toBeVisible();
+    await page.locator("#next-btn").click();
+    await expect(page.locator("#reader-content")).toContainText("chapter one");
+    await expect(page.locator("mark.hl-mark")).toHaveCount(0); // chapter 1 has none
+    await page.locator("#prev-btn").click();
+    await expect(page.locator("#reader-content")).toContainText("chapter zero");
+    await expect(page.locator("mark.hl-mark").first()).toBeVisible();
+  });
 });
