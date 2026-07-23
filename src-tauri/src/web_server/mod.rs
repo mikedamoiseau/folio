@@ -2956,6 +2956,158 @@ mod tests {
         let _ = tx.send(());
     }
 
+    #[tokio::test]
+    async fn highlight_put_presence_aware_note_and_color() {
+        let state = test_state();
+        {
+            let conn = state.conn().unwrap();
+            crate::db::insert_book(&conn, &progress_test_book("hl-put", 50)).unwrap();
+        }
+        let (_state, port, tx) = spawn_progress_test_server(state).await;
+        let client = reqwest::Client::new();
+        let created: serde_json::Value = client
+            .post(format!("http://127.0.0.1:{port}/api/books/hl-put/highlights"))
+            .json(&serde_json::json!({"chapterIndex":0,"text":"abc","color":"#f6c445","startOffset":0,"endOffset":3}))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        let hid = created["id"].as_str().unwrap().to_string();
+        let base = format!("http://127.0.0.1:{port}/api/books/hl-put/highlights/{hid}");
+
+        // set note; color untouched; returns full Highlight
+        let up: serde_json::Value = client
+            .put(&base)
+            .json(&serde_json::json!({"note": "my note"}))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(up["note"], "my note");
+        assert_eq!(up["color"], "#f6c445");
+
+        // note ABSENT (color-only) — note must survive
+        let up: serde_json::Value = client
+            .put(&base)
+            .json(&serde_json::json!({"color": "#e88baf"}))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(up["note"], "my note");
+        assert_eq!(up["color"], "#e88baf");
+
+        // explicit null clears the note
+        let up: serde_json::Value = client
+            .put(&base)
+            .json(&serde_json::json!({"note": serde_json::Value::Null}))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(up["note"], serde_json::Value::Null);
+
+        // empty body → 400
+        let resp = client
+            .put(&base)
+            .json(&serde_json::json!({}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 400);
+        // bad color → 400
+        let resp = client
+            .put(&base)
+            .json(&serde_json::json!({"color":"red"}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 400);
+        // wrong type for note → 400
+        let resp = client
+            .put(&base)
+            .json(&serde_json::json!({"note": 5}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 400);
+        let _ = tx.send(());
+    }
+
+    #[tokio::test]
+    async fn highlight_delete_idempotent_and_scoped() {
+        let state = test_state();
+        {
+            let conn = state.conn().unwrap();
+            crate::db::insert_book(&conn, &progress_test_book("hl-A", 50)).unwrap();
+            // Distinct file_path — books.file_path is UNIQUE (see cr_test_book).
+            crate::db::insert_book(
+                &conn,
+                &crate::models::Book {
+                    file_path: "/nonexistent/hl-B.cbz".to_string(),
+                    ..progress_test_book("hl-B", 50)
+                },
+            )
+            .unwrap();
+        }
+        let (state, port, tx) = spawn_progress_test_server(state).await;
+        let client = reqwest::Client::new();
+        let created: serde_json::Value = client
+            .post(format!("http://127.0.0.1:{port}/api/books/hl-A/highlights"))
+            .json(&serde_json::json!({"chapterIndex":0,"text":"abc","color":"#f6c445","startOffset":0,"endOffset":3}))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        let hid = created["id"].as_str().unwrap().to_string();
+
+        // delete via the WRONG book: idempotent 204, A's row survives
+        let resp = client
+            .delete(format!(
+                "http://127.0.0.1:{port}/api/books/hl-B/highlights/{hid}"
+            ))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 204);
+        {
+            let conn = state.conn().unwrap();
+            assert_eq!(crate::db::list_highlights(&conn, "hl-A").unwrap().len(), 1);
+        }
+        // PUT via the wrong book → 404
+        let resp = client
+            .put(format!(
+                "http://127.0.0.1:{port}/api/books/hl-B/highlights/{hid}"
+            ))
+            .json(&serde_json::json!({"note":"x"}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 404);
+        // right book: 204, then repeat-delete still 204; PUT on deleted → 404
+        let base = format!("http://127.0.0.1:{port}/api/books/hl-A/highlights/{hid}");
+        assert_eq!(client.delete(&base).send().await.unwrap().status(), 204);
+        assert_eq!(client.delete(&base).send().await.unwrap().status(), 204);
+        let resp = client
+            .put(&base)
+            .json(&serde_json::json!({"note":"x"}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 404);
+        let _ = tx.send(());
+    }
+
     // ── Item 5: Continue Reading shelf ──────────────────────────────────────
 
     /// `progress_test_book` reuses one fixed `file_path` for every call — fine

@@ -163,6 +163,10 @@ pub fn routes(state: WebState) -> Router<WebState> {
             get(list_book_highlights).post(create_highlight),
         )
         .route(
+            "/books/{id}/highlights/{highlight_id}",
+            axum::routing::put(update_highlight).delete(delete_highlight_route),
+        )
+        .route(
             "/books/{id}/want-to-read",
             axum::routing::put(put_want_to_read),
         )
@@ -1378,6 +1382,86 @@ async fn create_highlight(
     });
 
     Ok((StatusCode::CREATED, Json(highlight)))
+}
+
+async fn update_highlight(
+    State(state): State<WebState>,
+    Path((id, highlight_id)): Path<(String, String)>,
+    body: Bytes,
+) -> Result<Json<crate::models::Highlight>, (StatusCode, String)> {
+    // Presence-aware manual parse: serde double-Option cannot distinguish an
+    // absent key from an explicit null, so inspect the JSON object directly.
+    let v: serde_json::Value = serde_json::from_slice(&body).map_err(|e| {
+        (
+            StatusCode::BAD_REQUEST,
+            format!("Invalid request body: {e}"),
+        )
+    })?;
+    let obj = v.as_object().ok_or((
+        StatusCode::BAD_REQUEST,
+        "Body must be a JSON object".to_string(),
+    ))?;
+    if !obj.contains_key("note") && !obj.contains_key("color") {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "Provide at least one of: note, color".into(),
+        ));
+    }
+    let note_change: Option<Option<String>> = match obj.get("note") {
+        None => None,                                // key absent → unchanged
+        Some(serde_json::Value::Null) => Some(None), // explicit null → clear
+        Some(serde_json::Value::String(s)) => Some(Some(s.clone())),
+        Some(_) => {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                "note must be a string or null".into(),
+            ))
+        }
+    };
+    if let Some(Some(n)) = &note_change {
+        validate_highlight_note(&Some(n.clone()))?;
+    }
+    let color: Option<String> = match obj.get("color") {
+        None => None,
+        Some(serde_json::Value::String(c)) if HIGHLIGHT_COLORS.contains(&c.as_str()) => {
+            Some(c.clone())
+        }
+        Some(_) => return Err((StatusCode::BAD_REQUEST, "Unknown highlight color".into())),
+    };
+
+    let conn = state.conn().map_err(folio_status)?;
+    // Atomic update-and-return (RETURNING): None => no live highlight with this
+    // id in this book => 404 (bookmark `rename_bookmark` precedent).
+    let updated = db::update_highlight_scoped(
+        &conn,
+        &id,
+        &highlight_id,
+        note_change.as_ref().map(|o| o.as_deref()),
+        color.as_deref(),
+    )
+    .map_err(folio_status)?
+    .ok_or_else(|| (StatusCode::NOT_FOUND, "Highlight not found".to_string()))?;
+
+    events::bus().emit(FolioEvent::HighlightUpdated {
+        highlight_id: updated.id.clone(),
+    });
+    Ok(Json(updated))
+}
+
+async fn delete_highlight_route(
+    State(state): State<WebState>,
+    Path((id, highlight_id)): Path<(String, String)>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    let conn = state.conn().map_err(folio_status)?;
+    // Idempotent: unknown/foreign/already-deleted ids affect 0 rows and still
+    // return 204. Emit the bus event only when a live row actually transitioned.
+    let n = db::soft_delete_highlight_scoped(&conn, &id, &highlight_id).map_err(folio_status)?;
+    if n > 0 {
+        events::bus().emit(FolioEvent::HighlightDeleted {
+            highlight_id: highlight_id.clone(),
+        });
+    }
+    Ok(StatusCode::NO_CONTENT)
 }
 
 /// Item 15: bulk progress rows for the library grid's progress badges.
