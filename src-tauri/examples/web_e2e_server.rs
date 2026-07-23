@@ -197,6 +197,12 @@ fn build_test_epub(path: &Path) -> Result<(), Box<dyn Error>> {
             "<p>Paragraph {i} — lorem ipsum dolor sit amet, consectetur adipiscing elit.</p>"
         ));
     }
+    // Highlight e2e (highlights.spec.ts): a paragraph whose highlightable
+    // region sits AFTER an entity (`&amp;` = 1 rendered char vs 5 raw) and a
+    // non-BMP char (🦀 = 2 UTF-16 code units), proving offsets are UTF-16
+    // code units of the rendered textContent. Additive — nothing above moves.
+    ch0_body
+        .push_str("<p>Fish &amp; chips 🦀 the quick brown fox jumps over the lazy dog again.</p>");
     zip.write_all(chapter("Ch0", &ch0_body).as_bytes())?;
     zip.start_file("OEBPS/ch1.xhtml", deflated)?;
     // Long enough that `#reader-stage` actually scrolls at the test viewport,
