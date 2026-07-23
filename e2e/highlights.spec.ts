@@ -42,6 +42,43 @@ test.beforeEach(async ({ request }) => {
   }
 });
 
+test.describe("highlight create (selection popover)", () => {
+  test("select text → popover → swatch creates a persisted highlight", async ({ page }) => {
+    await openEpubReader(page);
+    // Programmatic selection of "brown fox" inside #reader-content.
+    await page.evaluate(() => {
+      const el = document.querySelector("#reader-content")!;
+      const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+      let node: Node | null = null;
+      let off = -1;
+      while ((node = walker.nextNode())) {
+        off = node.nodeValue!.indexOf("brown fox");
+        if (off !== -1) break;
+      }
+      const range = document.createRange();
+      range.setStart(node!, off);
+      range.setEnd(node!, off + "brown fox".length);
+      const sel = window.getSelection()!;
+      sel.removeAllRanges();
+      sel.addRange(range);
+      document.dispatchEvent(new Event("selectionchange"));
+    });
+    const popover = page.locator("#hl-popover");
+    await expect(popover).toBeVisible();
+    await popover.locator('[data-color="#7bc47f"]').click();
+    const mark = page.locator("#reader-content mark.hl-mark").first();
+    await expect(mark).toHaveText("brown fox");
+    // persisted server-side
+    await expect
+      .poll(async () => (await (await page.request.get(`/api/books/${EPUB_ID}/highlights`)).json()).length)
+      .toBe(1);
+    const rows = await (await page.request.get(`/api/books/${EPUB_ID}/highlights`)).json();
+    expect(rows[0].color).toBe("#7bc47f");
+    // popover gone, selection cleared
+    await expect(popover).toBeHidden();
+  });
+});
+
 test.describe("highlight rendering", () => {
   test("stored highlight renders as a mark after entity and emoji", async ({ page }) => {
     await openEpubReader(page);

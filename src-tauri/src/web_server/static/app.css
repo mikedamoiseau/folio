@@ -917,3 +917,16 @@ body:not(:has(.header))::before {
 /* ── Highlights (spec 2026-07-23) ─────────────────────────────────────────
    Highlight marks: reset UA yellow; tint comes from the inline style. */
 .hl-mark { background-color: transparent; color: inherit; }
+
+/* Selection-create popover (fixed, edge-clamped by JS). */
+#hl-popover {
+  position: fixed; z-index: 60; display: flex; align-items: center; gap: 4px;
+  padding: 4px 6px; border-radius: 10px;
+  background: var(--surface); border: 1px solid var(--warm-border);
+  box-shadow: 0 4px 16px var(--shadow);
+}
+.hl-swatch {
+  min-width: 44px; min-height: 44px; padding: 9px; /* 24px dot, 44px hit area */
+  border: 2px solid var(--warm-border); border-radius: 50%; cursor: pointer;
+  background-clip: content-box; /* padding stays transparent — dot reads as a circle */
+}

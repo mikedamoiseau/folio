@@ -1332,6 +1332,14 @@
       return;
     }
 
+    // Esc closes an open highlight popover first — before the reader's
+    // Esc-goes-Back branch below.
+    if (e.key === "Escape" && hlPopoverEl) {
+      e.preventDefault();
+      closeHlPopover();
+      return;
+    }
+
     // Item 7: Esc closes an open filter dropdown panel first, even when
     // focus is inside its type-to-filter input (which is otherwise a
     // "typing target" the dispatcher ignores below).
@@ -4739,6 +4747,8 @@
       // A genuine user scroll wins over any deferred font-ready re-anchor from
       // a typography change still in flight.
       pendingReanchor = null;
+      // Highlight popovers are fixed-position — dismiss rather than drift.
+      dismissHlPopoversOnScroll(stage.scrollTop);
       const max = stage.scrollHeight - stage.clientHeight;
       readerState.scrollPosition = max > 0 ? clampScrollRatio(stage.scrollTop / max) : 0;
       scheduleProgressSave();
@@ -4890,6 +4900,156 @@
     contentEl.innerHTML = currentChapterCleanHtml;
     applyChapterHighlights(contentEl, currentChapterIndex);
     if (stage) stage.scrollTop = scrollTop;
+  }
+
+  // ── Selection capture → create popover (spec §2) ──
+  let hlPopoverEl = null;
+  let hlCaptured = null; // {text, startOffset, endOffset} frozen at open
+  let hlPopoverPointerDown = false;
+  let hlSelDebounce = 0;
+  let hlPopoverScrollTop = null; // stage.scrollTop at popover open
+
+  // Scroll events are dispatched asynchronously: a programmatic
+  // scroll-into-view that lands JUST BEFORE the tap that opens a popover
+  // delivers its scroll event AFTER the popover opens — dismissing it
+  // instantly. Only a scroll that MOVES the stage after open dismisses.
+  function recordHlPopoverScrollTop() {
+    const stage = document.getElementById("reader-stage");
+    hlPopoverScrollTop = stage ? stage.scrollTop : null;
+  }
+
+  function dismissHlPopoversOnScroll(scrollTop) {
+    if (!hlPopoverEl) return;
+    if (hlPopoverScrollTop !== null && scrollTop === hlPopoverScrollTop) return;
+    closeHlPopover();
+  }
+
+  // Offsets: UTF-16 code units into #reader-content's rendered textContent —
+  // same computation as desktop ReaderPane (preRange trick), with the leading-
+  // whitespace trim folded into startOffset.
+  function computeSelectionOffsets(contentEl) {
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return null;
+    const range = sel.getRangeAt(0);
+    if (!contentEl.contains(range.startContainer) || !contentEl.contains(range.endContainer)) {
+      return null;
+    }
+    const raw = range.toString();
+    const text = raw.trim();
+    if (text.length < 3) return null; // desktop parity
+    const pre = document.createRange();
+    pre.selectNodeContents(contentEl);
+    pre.setEnd(range.startContainer, range.startOffset);
+    const lead = raw.length - raw.replace(/^\s+/, "").length;
+    const startOffset = pre.toString().length + lead;
+    return {
+      text,
+      startOffset,
+      endOffset: startOffset + text.length,
+      rect: range.getBoundingClientRect(),
+    };
+  }
+
+  function bindHighlightSelection() {
+    document.addEventListener("selectionchange", () => {
+      // Suppress collapse-dismissal while a popover-originated pointer is
+      // down: on touch, tapping a swatch collapses the selection BEFORE
+      // click fires (spec §2 collapse-vs-tap guard).
+      if (hlPopoverPointerDown) return;
+      clearTimeout(hlSelDebounce);
+      hlSelDebounce = setTimeout(() => {
+        // Chapter-mode gate: #reader-content only exists in chapter mode.
+        const contentEl = document.getElementById("reader-content");
+        if (!contentEl || !navigator.onLine) { closeHlPopover(); return; } // online-only
+        const captured = computeSelectionOffsets(contentEl);
+        if (captured) openHlPopover(captured);
+        else closeHlPopover();
+      }, 250);
+    });
+    // Dismiss on outside tap. Pointer interactions that START inside the
+    // popover must never dismiss it (contains() check).
+    document.addEventListener("pointerdown", (e) => {
+      if (hlPopoverEl && !hlPopoverEl.contains(e.target)) closeHlPopover();
+    });
+  }
+  bindHighlightSelection();
+
+  function openHlPopover(captured) {
+    closeHlPopover();
+    hlCaptured = { text: captured.text, startOffset: captured.startOffset, endOffset: captured.endOffset };
+    const pop = document.createElement("div");
+    pop.id = "hl-popover";
+    pop.setAttribute("role", "toolbar");
+    pop.setAttribute("aria-label", "Highlight");
+    for (const color of HIGHLIGHT_COLORS) {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "hl-swatch";
+      btn.dataset.color = color;
+      btn.style.backgroundColor = color;
+      btn.setAttribute("aria-label", `Highlight ${color}`);
+      btn.addEventListener("click", () => {
+        createHighlightFromCapture(hlCaptured, color);
+      });
+      pop.appendChild(btn);
+    }
+    // Captured-range guard: pointer interactions inside the popover must not
+    // dismiss it before the click handler runs (spec §2).
+    pop.addEventListener("pointerdown", (e) => {
+      hlPopoverPointerDown = true;
+      e.preventDefault(); // keeps the selection alive on touch
+    });
+    document.addEventListener("pointerup", () => { hlPopoverPointerDown = false; }, { once: true });
+    document.body.appendChild(pop);
+    hlPopoverEl = pop;
+    recordHlPopoverScrollTop();
+    // Position: below the selection (clear of the iOS callout), edge-clamped.
+    const r = captured.rect;
+    const top = Math.min(r.bottom + 8, window.innerHeight - pop.offsetHeight - 8);
+    const left = Math.max(8, Math.min(r.left + r.width / 2 - pop.offsetWidth / 2,
+      window.innerWidth - pop.offsetWidth - 8));
+    pop.style.top = `${top}px`;
+    pop.style.left = `${left}px`;
+  }
+
+  function closeHlPopover() {
+    if (hlPopoverEl) { hlPopoverEl.remove(); hlPopoverEl = null; }
+    hlCaptured = null;
+  }
+
+  async function createHighlightFromCapture(captured, color) {
+    if (!captured) return;
+    const bookId = highlightsState.bookId;
+    const chapterIndex = currentChapterIndex;
+    closeHlPopover();
+    window.getSelection()?.removeAllRanges();
+    // Optimistic: temp id, full rebuild (never incremental — spec §3).
+    const temp = { id: `tmp-${Date.now()}`, bookId, chapterIndex,
+      text: captured.text, color, note: null,
+      startOffset: captured.startOffset, endOffset: captured.endOffset };
+    highlightsState.items.push(temp);
+    rerenderChapterHighlights();
+    try {
+      const resp = await fetch(`/api/books/${encodeURIComponent(bookId)}/highlights`, {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ chapterIndex, text: captured.text, color,
+          startOffset: captured.startOffset, endOffset: captured.endOffset }),
+      });
+      if (resp.status === 401) { showLogin(); return; }
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const saved = await resp.json();
+      if (highlightsState.bookId !== bookId) return; // book switched mid-flight
+      const i = highlightsState.items.indexOf(temp);
+      if (i !== -1) highlightsState.items[i] = saved;
+      rerenderChapterHighlights();
+    } catch {
+      const i = highlightsState.items.indexOf(temp);
+      if (i !== -1) highlightsState.items.splice(i, 1);
+      rerenderChapterHighlights();
+      showToast("Couldn't save highlight");
+    }
   }
 
   async function renderReaderContent() {
