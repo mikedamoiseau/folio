@@ -178,3 +178,51 @@ test.describe("highlight rendering", () => {
     await expect(page.locator("mark.hl-mark").first()).toBeVisible();
   });
 });
+
+test.describe("highlights drawer", () => {
+  test("trigger + empty state", async ({ page }) => {
+    await openEpubReader(page);
+    await page.locator("#hl-btn").click();
+    await expect(page.locator("#hl-panel")).toBeVisible();
+    await expect(page.locator(".hl-empty")).toContainText("Select text while reading");
+  });
+
+  test("lists rows with color dot, quote, chapter; delete removes", async ({ page }) => {
+    await openEpubReader(page);
+    await seedHighlight(page, "quick brown fox", "#6ba3d6");
+    await page.reload();
+    await openEpubReader(page);
+    await page.locator("#hl-btn").click();
+    const row = page.locator(".hl-entry");
+    await expect(row).toHaveCount(1);
+    await expect(row.first()).toContainText("quick brown fox");
+    await expect(row.first().locator(".hl-dot")).toBeVisible();
+    await expect(row.first().locator(".hl-entry-chapter")).toBeVisible();
+    await row.first().locator(".hl-entry-delete").click();
+    await expect(page.locator(".hl-entry")).toHaveCount(0);
+    await expect(page.locator("mark.hl-mark")).toHaveCount(0);
+  });
+
+  test("mutual exclusion with the bookmark panel, both directions", async ({ page }) => {
+    await openEpubReader(page);
+    await page.locator("#hl-btn").click();
+    await expect(page.locator("#hl-panel")).toBeVisible();
+    await page.locator("#bookmark-btn").click();
+    await expect(page.locator("#bookmark-panel")).toBeVisible();
+    await expect(page.locator("#hl-panel")).toBeHidden();
+    await page.locator("#hl-btn").click();
+    await expect(page.locator("#hl-panel")).toBeVisible();
+    await expect(page.locator("#bookmark-panel")).toBeHidden();
+  });
+
+  test("Esc closes the drawer", async ({ page }) => {
+    await openEpubReader(page);
+    await page.locator("#hl-btn").click();
+    await expect(page.locator("#hl-panel")).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(page.locator("#hl-panel")).toBeHidden();
+    // Esc was consumed by the panel — the reader itself stays open.
+    await expect(page.locator("#reader-content")).toBeVisible();
+  });
+});
+

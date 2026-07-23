@@ -121,6 +121,8 @@
   let tocPanelOpen = false;
   // Whether the bookmarks drawer is open. Same lifecycle as above.
   let bookmarkPanelOpen = false;
+  // Whether the highlights drawer is open. Same lifecycle as above.
+  let hlPanelOpen = false;
   // True while an inline rename input is focused/editing — opportunistic
   // re-renders (a late loadBookmarks/loadToc completion) must skip while this
   // is set, or they'd rebuild the list innerHTML and destroy the field mid-edit.
@@ -3305,6 +3307,7 @@
     if (readerState.chromeHidden && typoPanelOpen) closeTypoPanel(false);
     if (readerState.chromeHidden && tocPanelOpen) closeTocPanel(false);
     if (readerState.chromeHidden && bookmarkPanelOpen) closeBookmarkPanel(false);
+    if (readerState.chromeHidden && hlPanelOpen) closeHlPanel(false);
     // Showing/hiding the chrome rows resizes the stage without a window
     // resize event — re-clamp a zoomed pan against the new bounds so no
     // gap opens at an edge.
@@ -3990,6 +3993,7 @@
     if (!panel || !btn) return;
     if (tocPanelOpen) closeTocPanel(false); // only one bottom-chrome panel open
     if (bookmarkPanelOpen) closeBookmarkPanel(false);
+    if (hlPanelOpen) closeHlPanel(false);
     renderTypoPanelState();
     panel.hidden = false;
     btn.setAttribute("aria-expanded", "true");
@@ -4219,6 +4223,7 @@
     if (!panel || !btn || !readerState || readerState.tocStatus !== "ready") return;
     if (typoPanelOpen) closeTypoPanel(false); // only one bottom-chrome panel open
     if (bookmarkPanelOpen) closeBookmarkPanel(false);
+    if (hlPanelOpen) closeHlPanel(false);
     renderTocList();
     panel.classList.add("open");
     btn.setAttribute("aria-expanded", "true");
@@ -4382,6 +4387,7 @@
     // Mutual exclusion with the other bottom-chrome panels.
     if (typoPanelOpen) closeTypoPanel(false);
     if (tocPanelOpen) closeTocPanel(false);
+    if (hlPanelOpen) closeHlPanel(false);
     renderBookmarkList();
     panel.classList.add("open");
     btn.setAttribute("aria-expanded", "true");
@@ -4600,6 +4606,7 @@
     typoPanelOpen = false;
     tocPanelOpen = false;
     bookmarkPanelOpen = false;
+    hlPanelOpen = false;
     pendingReanchor = null;
     const { book, mode, count, index, fitMode } = readerState;
     const rootClass = mode === "page" ? `reader-page ${fitMode}` : "reader-chapter";
@@ -4621,6 +4628,12 @@
     const bookmarkBtn =
       `<button id="bookmark-btn" aria-label="Bookmarks" aria-haspopup="dialog" aria-expanded="false">&#128278;</button>`;
     const bookmarkPanel = bookmarkPanelHtml();
+    // Highlights control — chapter mode only (page-image formats have no
+    // selectable text, spec §5 format gating).
+    const hlBtn = mode === "page"
+      ? ""
+      : `<button id="hl-btn" aria-label="Highlights" aria-haspopup="dialog" aria-expanded="false">&#128397;</button>`;
+    const hlPanel = mode === "page" ? "" : hlPanelHtml();
 
     app().innerHTML = `
       <div class="${rootClass}" id="reader-root">
@@ -4642,10 +4655,12 @@
             ${typoBtn}
             ${fitToggleBtn}
             ${bookmarkBtn}
+            ${hlBtn}
           </div>
           ${typoPanel}
           ${tocPanel}
           ${bookmarkPanel}
+          ${hlPanel}
         </div>
         <button class="chrome-toggle-fab" id="chrome-toggle-btn" title="Toggle toolbar" aria-label="Toggle toolbar">&#8942;</button>
       </div>`;
@@ -4725,6 +4740,8 @@
     currentChapterCleanHtml = null;
     currentChapterIndex = -1;
     if (readerState.mode !== "page") {
+      wireHlControls();
+      buildHlTrigger();
       loadHighlightsForBook(readerState.id).then(() => {
         rerenderChapterHighlights();
       });
@@ -5181,6 +5198,7 @@
       if (removed && highlightsState === stateAtCall) {
         highlightsState.items.splice(i, 0, removed);
         rerenderChapterHighlights();
+        renderHlListIfOpen(); // restore the drawer row too
       }
       showToast("Couldn't delete highlight");
     }
@@ -5218,6 +5236,7 @@
         const i = highlightsState.items.findIndex((h) => h.id === hlId);
         if (i !== -1) highlightsState.items.splice(i, 1);
         rerenderChapterHighlights();
+        renderHlListIfOpen();
         showToast("Highlight no longer exists");
         return null;
       }
@@ -5228,11 +5247,150 @@
       const i = highlightsState.items.findIndex((h) => h.id === hlId);
       if (i !== -1) highlightsState.items[i] = saved;
       rerenderChapterHighlights();
+      renderHlListIfOpen();
       return saved;
     } catch {
       showToast("Couldn't update highlight");
       return null;
     }
+  }
+
+  // ── Highlights drawer (spec §4 — cloned from the bookmark panel) ──
+  function hlPanelHtml() {
+    return `
+      <div class="hl-panel" id="hl-panel" role="dialog" aria-label="Highlights">
+        <div class="hl-head">
+          <span class="hl-title">Highlights</span>
+          <button id="hl-close" class="hl-close" aria-label="Close">&times;</button>
+        </div>
+        <div class="hl-list" id="hl-list"></div>
+      </div>`;
+  }
+
+  function buildHlTrigger() {
+    const btn = $("#hl-btn");
+    if (!btn) return;
+    btn.addEventListener("keydown", containReaderKeys);
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      if (hlPanelOpen) closeHlPanel(true);
+      else openHlPanel();
+    });
+  }
+
+  // Chapter label for a drawer row: TOC title when known (same resolution as
+  // bookmarkLabel), else "Chapter N". Highlights are chapter-mode only, so no
+  // page-mode branch.
+  function hlChapterLabel(hl) {
+    if (readerState && Array.isArray(readerState.toc)) {
+      const entry = readerState.toc.find((e) => e.chapter_index === hl.chapterIndex);
+      if (entry && entry.label) return entry.label;
+    }
+    return `Chapter ${hl.chapterIndex + 1}`;
+  }
+
+  function renderHlList() {
+    const list = $("#hl-list");
+    if (!list) return;
+    // Offline / terminal GET failure (spec §5): highlights are online-only.
+    if (highlightsState.failed && !highlightsState.loaded) {
+      list.innerHTML = `<p class="hl-empty">Highlights need a connection.</p>`;
+      return;
+    }
+    const items = highlightsState.items;
+    if (!items.length) {
+      list.innerHTML = `<p class="hl-empty">Select text while reading to highlight it.</p>`;
+      return;
+    }
+    list.innerHTML = items
+      .map(
+        (hl) => `
+      <div class="hl-entry" data-id="${esc(hl.id)}" tabindex="0" role="button">
+        <span class="hl-dot" style="background-color: ${esc(hl.color)}"></span>
+        <span class="hl-entry-body">
+          <span class="hl-entry-quote">${esc(hl.text)}</span>
+          ${hl.note ? `<span class="hl-entry-note">${esc(hl.note)}</span>` : ""}
+          <span class="hl-entry-chapter">${esc(hlChapterLabel(hl))}</span>
+        </span>
+        <button class="hl-entry-delete" data-id="${esc(hl.id)}" aria-label="Delete highlight">&times;</button>
+      </div>`
+      )
+      .join("");
+  }
+
+  // Guarded drawer refresh for async reconciliation paths (create/update/
+  // delete responses): re-render only while the panel is actually open.
+  function renderHlListIfOpen() {
+    if (hlPanelOpen) renderHlList();
+  }
+
+  function closeHlPanel(restoreFocus) {
+    const panel = $("#hl-panel");
+    const btn = $("#hl-btn");
+    if (panel) panel.classList.remove("open");
+    if (btn) btn.setAttribute("aria-expanded", "false");
+    hlPanelOpen = false;
+    if (restoreFocus && btn) btn.focus();
+  }
+
+  function openHlPanel() {
+    const panel = $("#hl-panel");
+    const btn = $("#hl-btn");
+    if (!panel || !btn || !readerState) return;
+    // Mutual exclusion with the other bottom-chrome panels.
+    if (typoPanelOpen) closeTypoPanel(false);
+    if (tocPanelOpen) closeTocPanel(false);
+    if (bookmarkPanelOpen) closeBookmarkPanel(false);
+    renderHlList();
+    panel.classList.add("open");
+    btn.setAttribute("aria-expanded", "true");
+    hlPanelOpen = true;
+    refreshHlPanelData(); // lazy retry; re-renders on completion if still open
+  }
+
+  // The book-entry GET normally settles long before the drawer opens; this
+  // retries a failed (e.g. offline) fetch on open, with the same id-recheck
+  // race guards as loadBookmarks.
+  async function refreshHlPanelData() {
+    if (!readerState || readerState.mode === "page") return;
+    const bookId = readerState.id;
+    if (highlightsState.bookId === bookId && highlightsState.loaded) return;
+    await loadHighlightsForBook(bookId);
+    if (!readerState || readerState.id !== bookId) return;
+    renderHlListIfOpen();
+    rerenderChapterHighlights(); // marks may be renderable now
+  }
+
+  function wireHlControls() {
+    const closeBtn = $("#hl-close");
+    if (closeBtn) closeBtn.addEventListener("click", () => closeHlPanel(true));
+    const list = $("#hl-list");
+    if (list)
+      list.addEventListener("click", (e) => {
+        const del = e.target.closest(".hl-entry-delete");
+        if (del) {
+          e.stopPropagation();
+          deleteHighlight(del.getAttribute("data-id"));
+          renderHlList(); // optimistic removal is synchronous
+          return;
+        }
+        const entry = e.target.closest(".hl-entry");
+        if (!entry) return;
+        const hl = highlightsState.items.find((h) => h.id === entry.getAttribute("data-id"));
+        if (!hl) return;
+        closeHlPanel(false);
+        if (readerState && hl.chapterIndex !== readerState.index) {
+          gotoReaderIndex(hl.chapterIndex, { instant: true });
+        }
+      });
+    const panel = $("#hl-panel");
+    if (panel) panel.addEventListener("keydown", containReaderKeys);
+    wirePanelRootDismissal({
+      isOpen: () => hlPanelOpen,
+      close: closeHlPanel,
+      panelSel: "#hl-panel",
+      btnSel: "#hl-btn",
+    });
   }
 
   async function renderReaderContent() {
