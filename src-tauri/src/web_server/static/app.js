@@ -123,6 +123,9 @@
   let bookmarkPanelOpen = false;
   // Whether the highlights drawer is open. Same lifecycle as above.
   let hlPanelOpen = false;
+  // True while an inline note editor is open in the highlights drawer —
+  // opportunistic re-renders must skip while set (see bookmarkRenaming).
+  let hlNoteEditing = false;
   // True while an inline rename input is focused/editing — opportunistic
   // re-renders (a late loadBookmarks/loadToc completion) must skip while this
   // is set, or they'd rebuild the list innerHTML and destroy the field mid-edit.
@@ -3271,12 +3274,14 @@
   }
 
   function makeReaderHandlers(id) {
+    // Every ordinary navigation cancels a pending highlight jump (spec §4) —
+    // startHlJump's own navigation calls gotoReaderIndex directly, not these.
     return {
-      next: () => gotoReaderIndex(readerState.index + 1),
-      prev: () => gotoReaderIndex(readerState.index - 1),
-      first: () => gotoReaderIndex(0),
-      last: () => gotoReaderIndex(readerState.count - 1),
-      goBack: () => navigate("#/book/" + id),
+      next: () => { clearHlJump(); gotoReaderIndex(readerState.index + 1); },
+      prev: () => { clearHlJump(); gotoReaderIndex(readerState.index - 1); },
+      first: () => { clearHlJump(); gotoReaderIndex(0); },
+      last: () => { clearHlJump(); gotoReaderIndex(readerState.count - 1); },
+      goBack: () => { clearHlJump(); navigate("#/book/" + id); },
       toggleChrome: () => {
         readerState.chromeHidden = !readerState.chromeHidden;
         applyChromeVisibility();
@@ -4249,6 +4254,7 @@
         if (!Number.isFinite(idx)) return;
         idx = Math.min(Math.max(idx, 0), readerState.count - 1);
         closeTocPanel(false);
+        clearHlJump(); // a TOC jump supersedes any pending highlight jump
         gotoReaderIndex(idx, { instant: true });
       });
     // Arrow/Home/End/Space/f inside the open panel must not reach the global
@@ -4403,6 +4409,7 @@
     if (!readerState) return;
     const idx = Math.min(Math.max(chapterIndex, 0), readerState.count - 1);
     closeBookmarkPanel(false);
+    clearHlJump(); // a bookmark jump supersedes any pending highlight jump
     if (readerState.mode === "chapter" && idx === readerState.index) {
       restoreChapterScroll(scrollPosition);
     } else {
@@ -4739,6 +4746,7 @@
     highlightsState = { bookId: null, items: [], loaded: false, failed: false };
     currentChapterCleanHtml = null;
     currentChapterIndex = -1;
+    clearHlJump(); // book entry/switch: a stale pending jump must not survive
     if (readerState.mode !== "page") {
       wireHlControls();
       buildHlTrigger();
@@ -4799,6 +4807,7 @@
   async function loadHighlightsForBook(bookId) {
     if (highlightsState.bookId !== bookId) {
       highlightsState = { bookId, items: [], loaded: false, failed: false };
+      clearHlJump(); // book switch cancels any pending jump
     }
     const seq = ++hlFetchSeq;
     const stale = () => highlightsState.bookId !== bookId || seq !== hlFetchSeq;
@@ -4807,7 +4816,7 @@
         credentials: "same-origin",
       });
       if (stale()) return; // book switched or reader reopened mid-flight
-      if (!resp.ok) { highlightsState.failed = true; return; }
+      if (!resp.ok) { highlightsState.failed = true; clearHlJump(); return; } // terminal failure cancels a pending jump
       const items = await resp.json();
       // Re-check AFTER the await too: a switch/reopen during json() parsing
       // must not let a stale response overwrite the newer state.
@@ -4825,7 +4834,7 @@
       highlightsState.loaded = true;
       highlightsState.failed = false;
     } catch {
-      if (!stale()) highlightsState.failed = true;
+      if (!stale()) { highlightsState.failed = true; clearHlJump(); }
     }
   }
 
@@ -4911,9 +4920,66 @@
     maybeConsumeHlJump(contentEl, chapterIndex);
   }
 
-  // Placeholder until Task 9 (jump). Must exist so applyChapterHighlights can
-  // call it unconditionally.
-  function maybeConsumeHlJump(_contentEl, _chapterIndex) {}
+  // ── Highlight jump (navId token, spec §4) ──
+  // A drawer-row tap mints a single pending token; it is consumed only by a
+  // render that carries its navId (or a same-chapter tap), and cancelled by
+  // ANY superseding event — Prev/Next, TOC jump, bookmark jump, reader
+  // close, book switch, or a terminal highlights-GET failure.
+  let pendingHlJump = null; // {bookId, hlId, navId}
+  let hlNavCounter = 0;
+  // navId the CURRENT render was invoked with (set by startHlJump right
+  // before its navigation, consumed on the next render).
+  let hlJumpNavId = null;
+
+  // Test hook (cheap, no behavior): reflect pending state for e2e assertions.
+  function syncHlJumpTestHook() {
+    window.__hlJumpPendingForTest = pendingHlJump ? pendingHlJump.hlId : null;
+  }
+
+  function startHlJump(hl) {
+    pendingHlJump = { bookId: highlightsState.bookId, hlId: hl.id, navId: ++hlNavCounter };
+    syncHlJumpTestHook();
+    closeHlPanel(false);
+    if (hl.chapterIndex === currentChapterIndex && readerState && currentChapterIndex === readerState.index) {
+      // Same chapter: marks already injected — consume immediately.
+      maybeConsumeHlJump(document.getElementById("reader-content"), currentChapterIndex);
+    } else {
+      // Copy the navId into the navigation so the resulting render carries it.
+      hlJumpNavId = pendingHlJump.navId;
+      gotoReaderIndex(hl.chapterIndex, { instant: true });
+    }
+  }
+
+  function clearHlJump() {
+    pendingHlJump = null;
+    syncHlJumpTestHook();
+  }
+
+  // Called at the end of applyChapterHighlights. Consumes ONLY when: token
+  // exists, book matches, this render carries the token's navId
+  // (cross-chapter) or we're already on the right chapter, AND highlight
+  // data is loaded — a fast render before the GET resolves must leave the
+  // token alive; the post-GET rerender re-enters here and consumes it.
+  function maybeConsumeHlJump(contentEl, chapterIndex) {
+    const renderNavId = hlJumpNavId;
+    hlJumpNavId = null;
+    if (!pendingHlJump) return;
+    if (pendingHlJump.bookId !== highlightsState.bookId) { clearHlJump(); return; }
+    const hl = highlightsState.items.find((h) => h.id === pendingHlJump.hlId);
+    if (highlightsState.loaded && !hl) { clearHlJump(); return; } // deleted meanwhile
+    if (hl && hl.chapterIndex !== chapterIndex) {
+      // A render for a DIFFERENT chapter that doesn't carry our navId is a
+      // superseding navigation → cancel (spec §4). The render that DOES
+      // carry it is still in flight — keep waiting.
+      if (renderNavId !== pendingHlJump.navId) clearHlJump();
+      return;
+    }
+    if (!highlightsState.loaded) return; // wait for the GET; token survives
+    const mark = contentEl.querySelector(`mark[data-hl-id="${CSS.escape(pendingHlJump.hlId)}"]`);
+    clearHlJump();
+    if (mark) mark.scrollIntoView({ block: "center" });
+    // Unanchored (drift fallback failed): chapter navigation only — done.
+  }
 
   // Full rebuild from clean HTML (spec §3 "never incremental") — used when
   // highlight state changes after the chapter is already painted (e.g. the
@@ -5028,6 +5094,31 @@
       });
       pop.appendChild(btn);
     }
+    // Create-with-note (spec §2): create with the default color, then open
+    // the drawer's inline note editor on the saved highlight.
+    const createNoteBtn = document.createElement("button");
+    createNoteBtn.type = "button";
+    createNoteBtn.id = "hl-create-note-btn";
+    createNoteBtn.setAttribute("aria-label", "Highlight with note");
+    createNoteBtn.textContent = "✎";
+    createNoteBtn.addEventListener("click", async () => {
+      const captured = hlCaptured; // frozen before closeHlPopover clears it
+      await createHighlightFromCapture(captured, HIGHLIGHT_COLORS[0]); // default yellow
+      // The saved highlight is the NEWEST (last) item matching the captured
+      // range; tmp- means the POST failed to reconcile — nothing to edit.
+      let hl = null;
+      for (const h of highlightsState.items) {
+        if (h.chapterIndex === currentChapterIndex &&
+            h.startOffset === captured.startOffset && h.endOffset === captured.endOffset &&
+            !String(h.id).startsWith("tmp-")) hl = h;
+      }
+      if (hl) {
+        openHlPanel();
+        const row = rowFor(hl.id);
+        if (row) openHlNoteEditor(row, hl);
+      }
+    });
+    pop.appendChild(createNoteBtn);
     // Overlap-clear: when the captured range overlaps existing highlights,
     // offer a trash button that deletes all overlapped (desktop parity).
     const overlapped = highlightsState.items.filter((h) =>
@@ -5155,7 +5246,14 @@
     noteBtn.type = "button";
     noteBtn.id = "hl-note-btn";
     noteBtn.setAttribute("aria-label", "Edit note");
-    noteBtn.textContent = "✎"; // M4 (Task 10) wires the note editor
+    noteBtn.textContent = "✎";
+    noteBtn.addEventListener("click", () => {
+      // Note editing lives in the drawer: open it on this highlight's row.
+      closeHlEditPopover();
+      openHlPanel();
+      const row = rowFor(hlId);
+      if (row) openHlNoteEditor(row, hl);
+    });
     pop.appendChild(noteBtn);
     const delBtn = document.createElement("button");
     delBtn.type = "button";
@@ -5292,6 +5390,7 @@
   function renderHlList() {
     const list = $("#hl-list");
     if (!list) return;
+    hlNoteEditing = false; // a rebuild always destroys any inline editor
     // Offline / terminal GET failure (spec §5): highlights are online-only.
     if (highlightsState.failed && !highlightsState.loaded) {
       list.innerHTML = `<p class="hl-empty">Highlights need a connection.</p>`;
@@ -5312,6 +5411,7 @@
           ${hl.note ? `<span class="hl-entry-note">${esc(hl.note)}</span>` : ""}
           <span class="hl-entry-chapter">${esc(hlChapterLabel(hl))}</span>
         </span>
+        <button class="hl-entry-note-btn" data-id="${esc(hl.id)}" aria-label="Edit note">&#9998;</button>
         <button class="hl-entry-delete" data-id="${esc(hl.id)}" aria-label="Delete highlight">&times;</button>
       </div>`
       )
@@ -5319,9 +5419,10 @@
   }
 
   // Guarded drawer refresh for async reconciliation paths (create/update/
-  // delete responses): re-render only while the panel is actually open.
+  // delete responses): re-render only while the panel is actually open and
+  // no inline note editor would be destroyed mid-edit.
   function renderHlListIfOpen() {
-    if (hlPanelOpen) renderHlList();
+    if (hlPanelOpen && !hlNoteEditing) renderHlList();
   }
 
   function closeHlPanel(restoreFocus) {
@@ -5367,6 +5468,9 @@
     const list = $("#hl-list");
     if (list)
       list.addEventListener("click", (e) => {
+        // A click inside an active note editor must not be treated as a row
+        // tap (belt-and-suspenders with the editor's own stopPropagation).
+        if (e.target.closest(".hl-note-editor")) return;
         const del = e.target.closest(".hl-entry-delete");
         if (del) {
           e.stopPropagation();
@@ -5374,14 +5478,20 @@
           renderHlList(); // optimistic removal is synchronous
           return;
         }
+        const note = e.target.closest(".hl-entry-note-btn");
+        if (note) {
+          e.stopPropagation();
+          const en = note.closest(".hl-entry");
+          const hl = highlightsState.items.find((h) => h.id === note.getAttribute("data-id"));
+          // tmp- = optimistic create not yet reconciled — a PUT would 404.
+          if (en && hl && !String(hl.id).startsWith("tmp-")) openHlNoteEditor(en, hl);
+          return;
+        }
         const entry = e.target.closest(".hl-entry");
         if (!entry) return;
         const hl = highlightsState.items.find((h) => h.id === entry.getAttribute("data-id"));
         if (!hl) return;
-        closeHlPanel(false);
-        if (readerState && hl.chapterIndex !== readerState.index) {
-          gotoReaderIndex(hl.chapterIndex, { instant: true });
-        }
+        startHlJump(hl);
       });
     const panel = $("#hl-panel");
     if (panel) panel.addEventListener("keydown", containReaderKeys);
@@ -5391,6 +5501,48 @@
       panelSel: "#hl-panel",
       btnSel: "#hl-btn",
     });
+  }
+
+  // ── Inline note editor (drawer row — mirrors the bookmark inline rename) ──
+  function rowFor(hlId) {
+    return document.querySelector(`#hl-list .hl-entry[data-id="${CSS.escape(hlId)}"]`);
+  }
+
+  function openHlNoteEditor(rowEl, hl) {
+    const body = rowEl.querySelector(".hl-entry-body");
+    if (!body) return;
+    hlNoteEditing = true;
+    const wrap = document.createElement("div");
+    wrap.className = "hl-note-editor";
+    const input = document.createElement("textarea");
+    input.className = "hl-note-input";
+    input.maxLength = 2000; // server truncates too; cap the input to match
+    input.value = hl.note || "";
+    // Clicks placing the cursor must not bubble to the row-tap (jump) handler,
+    // and typing must not reach the reader shortcuts. Escape cancels the edit.
+    input.addEventListener("mousedown", (e) => e.stopPropagation());
+    input.addEventListener("click", (e) => e.stopPropagation());
+    input.addEventListener("keydown", (e) => {
+      e.stopPropagation();
+      if (e.key === "Escape") {
+        e.preventDefault();
+        renderHlList(); // discard the edit (also clears hlNoteEditing)
+      }
+    });
+    const save = document.createElement("button");
+    save.type = "button";
+    save.className = "hl-note-save";
+    save.textContent = "Save";
+    save.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      hlNoteEditing = false;
+      const v = input.value.trim();
+      await updateHighlight(hl.id, { note: v.length ? v : null }); // empty → clear (null)
+      renderHlList();
+    });
+    wrap.append(input, save);
+    body.replaceWith(wrap);
+    input.focus();
   }
 
   async function renderReaderContent() {

@@ -3,6 +3,13 @@ import { test, expect, Page } from "@playwright/test";
 const EPUB_ID = "e2e-book-050";
 test.use({ serviceWorkers: "block" });
 
+declare global {
+  interface Window {
+    // Test hook set by app.js: the pending highlight-jump's id, or null.
+    __hlJumpPendingForTest?: string | null;
+  }
+}
+
 async function openEpubReader(page: Page) {
   await page.goto(`/#/book/${EPUB_ID}/0/read`);
   const restart = page.locator("#resume-restart-btn");
@@ -223,6 +230,143 @@ test.describe("highlights drawer", () => {
     await expect(page.locator("#hl-panel")).toBeHidden();
     // Esc was consumed by the panel — the reader itself stays open.
     await expect(page.locator("#reader-content")).toBeVisible();
+  });
+});
+
+// Seed a highlight in chapter 1 ("chapter one" text) while chapter 1 is
+// rendered, then return to chapter 0 — the starting state for jump tests.
+async function seedChapterOneHighlight(page: Page) {
+  await page.locator("#next-btn").click();
+  await expect(page.locator("#reader-content")).toContainText("chapter one");
+  const { s, e } = await chapterOffsetsOf(page, "chapter one");
+  const resp = await page.request.post(`/api/books/${EPUB_ID}/highlights`, {
+    data: { chapterIndex: 1, text: "chapter one", color: "#f6c445", startOffset: s, endOffset: e },
+  });
+  expect(resp.status()).toBe(201);
+  await page.locator("#prev-btn").click();
+  await expect(page.locator("#reader-content")).toContainText("chapter zero");
+}
+
+test.describe("highlight jump (navId token)", () => {
+  test("drawer jump navigates cross-chapter and scrolls to the mark", async ({ page }) => {
+    await openEpubReader(page);
+    await seedChapterOneHighlight(page);
+    await page.reload();
+    await openEpubReader(page);
+    await page.locator("#hl-btn").click();
+    await page.locator(".hl-entry").first().click();
+    await expect(page.locator("#reader-content")).toContainText("chapter one");
+    await expect(page.locator("mark.hl-mark").first()).toBeVisible();
+    await expect(page.locator("#hl-panel")).toBeHidden();
+    // Token consumed by the render that carried its navId. The hook must
+    // EXIST (set by startHlJump) — `in` distinguishes "consumed" from
+    // "never minted".
+    const pending = await page.evaluate(() =>
+      "__hlJumpPendingForTest" in window ? window.__hlJumpPendingForTest : "hook-missing");
+    expect(pending).toBeNull();
+  });
+
+  test("immediate Prev/Next after a jump cancels the pending jump", async ({ page }) => {
+    await openEpubReader(page);
+    await seedChapterOneHighlight(page);
+    await page.reload();
+    await openEpubReader(page);
+    await page.locator("#hl-btn").click();
+    await page.locator(".hl-entry").first().click();
+    // Immediately navigate back — the pending jump must NOT hijack this render.
+    await page.locator("#prev-btn").click();
+    await expect(page.locator("#reader-content")).toContainText("chapter zero");
+    const pending = await page.evaluate(() =>
+      "__hlJumpPendingForTest" in window ? window.__hlJumpPendingForTest : "hook-missing");
+    expect(pending).toBeNull();
+  });
+});
+
+test.describe("highlight note editor", () => {
+  test("note round-trip via drawer", async ({ page }) => {
+    await openEpubReader(page);
+    await seedHighlight(page, "quick brown fox");
+    await page.reload();
+    await openEpubReader(page);
+    await page.locator("#hl-btn").click();
+    await page.locator(".hl-entry-note-btn").first().click();
+    await page.locator(".hl-note-input").fill("remember this");
+    await page.locator(".hl-note-save").click();
+    await expect
+      .poll(async () => (await (await page.request.get(`/api/books/${EPUB_ID}/highlights`)).json())[0].note)
+      .toBe("remember this");
+    await expect(page.locator(".hl-entry").first()).toContainText("remember this");
+  });
+
+  test("mark-tap popover note button opens the drawer row editor", async ({ page }) => {
+    await openEpubReader(page);
+    await seedHighlight(page, "quick brown fox");
+    await page.reload();
+    await openEpubReader(page);
+    await page.locator("mark.hl-mark").first().click();
+    await expect(page.locator("#hl-edit-popover")).toBeVisible();
+    await page.locator("#hl-note-btn").click();
+    await expect(page.locator("#hl-panel")).toBeVisible();
+    await expect(page.locator(".hl-note-input")).toBeVisible();
+    await page.locator(".hl-note-input").fill("from the popover");
+    await page.locator(".hl-note-save").click();
+    await expect
+      .poll(async () => (await (await page.request.get(`/api/books/${EPUB_ID}/highlights`)).json())[0].note)
+      .toBe("from the popover");
+  });
+
+  test("selection popover create-note button creates then opens the editor", async ({ page }) => {
+    await openEpubReader(page);
+    await page.evaluate(() => {
+      const el = document.querySelector("#reader-content")!;
+      const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+      let node: Node | null = null;
+      let off = -1;
+      while ((node = walker.nextNode())) {
+        off = node.nodeValue!.indexOf("lazy dog");
+        if (off !== -1) break;
+      }
+      const range = document.createRange();
+      range.setStart(node!, off);
+      range.setEnd(node!, off + "lazy dog".length);
+      const sel = window.getSelection()!;
+      sel.removeAllRanges();
+      sel.addRange(range);
+      document.dispatchEvent(new Event("selectionchange"));
+    });
+    await expect(page.locator("#hl-popover")).toBeVisible();
+    await page.locator("#hl-create-note-btn").click();
+    // Highlight created with the default color, drawer opens on its editor.
+    await expect(page.locator("#hl-panel")).toBeVisible();
+    await expect(page.locator(".hl-note-input")).toBeVisible();
+    await page.locator(".hl-note-input").fill("noted at creation");
+    await page.locator(".hl-note-save").click();
+    await expect
+      .poll(async () => {
+        const rows = await (await page.request.get(`/api/books/${EPUB_ID}/highlights`)).json();
+        return rows.length === 1 ? rows[0].note : null;
+      })
+      .toBe("noted at creation");
+    await expect(page.locator("mark.hl-mark").first()).toHaveText("lazy dog");
+  });
+
+  test("clearing the note saves null", async ({ page }) => {
+    await openEpubReader(page);
+    const hl = await seedHighlight(page, "quick brown fox");
+    const put = await page.request.put(`/api/books/${EPUB_ID}/highlights/${hl.id}`, {
+      data: { note: "to be cleared" },
+    });
+    expect(put.ok()).toBe(true);
+    await page.reload();
+    await openEpubReader(page);
+    await page.locator("#hl-btn").click();
+    await expect(page.locator(".hl-entry").first()).toContainText("to be cleared");
+    await page.locator(".hl-entry-note-btn").first().click();
+    await page.locator(".hl-note-input").fill("");
+    await page.locator(".hl-note-save").click();
+    await expect
+      .poll(async () => (await (await page.request.get(`/api/books/${EPUB_ID}/highlights`)).json())[0].note)
+      .toBeNull();
   });
 });
 

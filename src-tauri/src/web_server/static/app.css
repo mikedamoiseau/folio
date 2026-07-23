@@ -930,7 +930,7 @@ body:not(:has(.header))::before {
   border: 2px solid var(--warm-border); border-radius: 50%; cursor: pointer;
   background-clip: content-box; /* padding stays transparent — dot reads as a circle */
 }
-#hl-note-btn, #hl-delete-btn, #hl-clear-btn {
+#hl-note-btn, #hl-delete-btn, #hl-clear-btn, #hl-create-note-btn {
   min-width: 44px; min-height: 44px; background: none; border: none;
   color: var(--ink); font-size: 1.1rem; line-height: 1; cursor: pointer;
 }
@@ -981,4 +981,22 @@ body:not(:has(.header))::before {
   color: var(--ink-muted); font-size: 1.2rem; line-height: 1; cursor: pointer;
 }
 .hl-entry-delete:hover, .hl-entry-delete:focus-visible { color: var(--accent); }
+.hl-entry-note-btn {
+  flex: none; min-width: 32px; min-height: 32px; background: none; border: none;
+  color: var(--ink-muted); font-size: 1rem; line-height: 1; cursor: pointer;
+}
+.hl-entry-note-btn:hover, .hl-entry-note-btn:focus-visible { color: var(--accent); }
 .hl-empty { padding: 16px; color: var(--ink-muted); }
+
+/* Inline note editor (drawer row). */
+.hl-note-editor { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.hl-note-input {
+  width: 100%; min-height: 64px; padding: 4px 8px; resize: vertical;
+  background: var(--surface); border: 1px solid var(--accent); border-radius: var(--radius);
+  color: var(--ink); font: inherit;
+}
+.hl-note-save {
+  align-self: flex-start; padding: 6px 14px;
+  background: var(--accent-hover); color: var(--on-accent);
+  border: none; border-radius: var(--radius); cursor: pointer; font-weight: 600;
+}
