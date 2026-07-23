@@ -4795,10 +4795,15 @@
       // Re-check AFTER the await too: a switch/reopen during json() parsing
       // must not let a stale response overwrite the newer state.
       if (stale()) return;
-      // Preserve in-flight optimistic creates (tmp- ids): a raw replace would
-      // drop the temp object, and the POST's later indexOf(temp) reconciliation
-      // could never find it — persisted highlight invisible until reload.
-      const pending = highlightsState.items.filter((h) => String(h.id).startsWith("tmp-"));
+      // Merge, don't replace: preserve any local item missing from the fetched
+      // snapshot — in-flight optimistic creates (tmp- ids) AND creates that
+      // already reconciled to their real id while this (older) GET was in
+      // flight. At book entry the local list starts empty, so every such
+      // missing item is necessarily a just-created one, never a stale row.
+      // Dedupes by id: if the snapshot already includes a new row, the local
+      // copy is dropped.
+      const fetchedIds = new Set(items.map((h) => h.id));
+      const pending = highlightsState.items.filter((h) => !fetchedIds.has(h.id));
       highlightsState.items = items.concat(pending);
       highlightsState.loaded = true;
       highlightsState.failed = false;
@@ -5181,13 +5186,24 @@
     }
   }
 
-  // Per-highlight update sequence: rapid recolor taps issue concurrent PUTs
-  // whose responses can resolve out of order — only the LAST action's
-  // response may write local state (the server itself serializes writes, so
-  // its final state matches the last request).
+  // Per-highlight update serialization: rapid recolor taps must be
+  // last-ACTION-wins on the server too, not just locally — two in-flight
+  // PUTs on separate pooled connections can arrive reordered, letting an
+  // older request commit last. Chain requests per highlight so the wire
+  // order matches the tap order; the seq map additionally discards any
+  // superseded response before it writes local state.
   const hlUpdateSeq = new Map();
+  const hlUpdateChain = new Map();
 
-  async function updateHighlight(hlId, patch) {
+  function updateHighlight(hlId, patch) {
+    const prev = hlUpdateChain.get(hlId) || Promise.resolve();
+    const next = prev.then(() => doUpdateHighlight(hlId, patch));
+    // The chain must survive a failed link or every later update stalls.
+    hlUpdateChain.set(hlId, next.catch(() => {}));
+    return next;
+  }
+
+  async function doUpdateHighlight(hlId, patch) {
     const bookId = highlightsState.bookId;
     const seq = (hlUpdateSeq.get(hlId) || 0) + 1;
     hlUpdateSeq.set(hlId, seq);
