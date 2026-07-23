@@ -2828,6 +2828,134 @@ mod tests {
         let _ = tx.send(());
     }
 
+    // ── Highlights (spec 2026-07-23-web-highlighting-design.md §1) ──────────
+
+    #[tokio::test]
+    async fn highlight_create_and_list_roundtrip() {
+        let state = test_state();
+        {
+            let conn = state.conn().unwrap();
+            crate::db::insert_book(&conn, &progress_test_book("hl-1", 50)).unwrap();
+        }
+        let (state, port, tx) = spawn_progress_test_server(state).await;
+        let client = reqwest::Client::new();
+        let resp = client
+            .post(format!("http://127.0.0.1:{port}/api/books/hl-1/highlights"))
+            .json(&serde_json::json!({
+                "chapterIndex": 2, "text": "some quoted words",
+                "color": "#7bc47f", "startOffset": 100, "endOffset": 117
+            }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 201);
+        let created: serde_json::Value = resp.json().await.unwrap();
+        assert_eq!(created["color"], "#7bc47f");
+        assert_eq!(created["chapterIndex"], 2);
+        assert_eq!(created["note"], serde_json::Value::Null);
+        assert!(created["id"].as_str().unwrap().len() > 10);
+
+        let listed: serde_json::Value = client
+            .get(format!("http://127.0.0.1:{port}/api/books/hl-1/highlights"))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(listed.as_array().unwrap().len(), 1);
+        assert_eq!(listed[0]["startOffset"], 100);
+        // DB-side check
+        let conn = state.conn().unwrap();
+        assert_eq!(crate::db::list_highlights(&conn, "hl-1").unwrap().len(), 1);
+        let _ = tx.send(());
+    }
+
+    #[tokio::test]
+    async fn highlight_create_validation_rejects_bad_input() {
+        let state = test_state();
+        {
+            let conn = state.conn().unwrap();
+            crate::db::insert_book(&conn, &progress_test_book("hl-2", 50)).unwrap();
+        }
+        let (_state, port, tx) = spawn_progress_test_server(state).await;
+        let client = reqwest::Client::new();
+        let url = format!("http://127.0.0.1:{port}/api/books/hl-2/highlights");
+        let cases = [
+            // non-allowlisted color
+            serde_json::json!({"chapterIndex":0,"text":"abc","color":"#123456","startOffset":0,"endOffset":3}),
+            // end <= start
+            serde_json::json!({"chapterIndex":0,"text":"abc","color":"#f6c445","startOffset":5,"endOffset":5}),
+            // empty text after trim
+            serde_json::json!({"chapterIndex":0,"text":"   ","color":"#f6c445","startOffset":0,"endOffset":3}),
+            // over-long note
+            serde_json::json!({"chapterIndex":0,"text":"abc","color":"#f6c445","startOffset":0,"endOffset":3,"note":"x".repeat(2001)}),
+        ];
+        for body in cases {
+            let resp = client.post(&url).json(&body).send().await.unwrap();
+            assert_eq!(resp.status(), 400, "body: {body}");
+        }
+        // unknown book → 404
+        let resp = client
+            .post(format!("http://127.0.0.1:{port}/api/books/ghost/highlights"))
+            .json(&serde_json::json!({"chapterIndex":0,"text":"abc","color":"#f6c445","startOffset":0,"endOffset":3}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 404);
+        let _ = tx.send(());
+    }
+
+    #[tokio::test]
+    async fn highlight_persists_in_private_mode() {
+        let state = test_state();
+        state
+            .private_mode
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        {
+            let conn = state.conn().unwrap();
+            crate::db::insert_book(&conn, &progress_test_book("hl-priv", 50)).unwrap();
+        }
+        let (state, port, tx) = spawn_progress_test_server(state).await;
+        let client = reqwest::Client::new();
+        let resp = client
+            .post(format!(
+                "http://127.0.0.1:{port}/api/books/hl-priv/highlights"
+            ))
+            .json(&serde_json::json!({"chapterIndex":0,"text":"abc","color":"#f6c445","startOffset":0,"endOffset":3}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 201);
+        let conn = state.conn().unwrap();
+        assert_eq!(
+            crate::db::list_highlights(&conn, "hl-priv").unwrap().len(),
+            1
+        );
+        let _ = tx.send(());
+    }
+
+    #[tokio::test]
+    async fn highlight_routes_require_auth_when_pin_configured() {
+        let state = test_state();
+        *state.pin_hash.lock().unwrap() = Some(auth::hash_pin("4321"));
+        {
+            let conn = state.conn().unwrap();
+            crate::db::insert_book(&conn, &progress_test_book("hl-auth", 50)).unwrap();
+        }
+        let (_state, port, tx) = spawn_progress_test_server(state).await;
+        let client = reqwest::Client::new();
+        let resp = client
+            .get(format!(
+                "http://127.0.0.1:{port}/api/books/hl-auth/highlights"
+            ))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 401);
+        let _ = tx.send(());
+    }
+
     // ── Item 5: Continue Reading shelf ──────────────────────────────────────
 
     /// `progress_test_book` reuses one fixed `file_path` for every call — fine

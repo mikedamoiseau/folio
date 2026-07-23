@@ -159,6 +159,10 @@ pub fn routes(state: WebState) -> Router<WebState> {
             axum::routing::put(rename_bookmark).delete(delete_bookmark),
         )
         .route(
+            "/books/{id}/highlights",
+            get(list_book_highlights).post(create_highlight),
+        )
+        .route(
             "/books/{id}/want-to-read",
             axum::routing::put(put_want_to_read),
         )
@@ -1266,6 +1270,114 @@ async fn delete_bookmark(
     // return 204. The book_id scope prevents touching another book's row.
     db::soft_delete_bookmark_scoped(&conn, &id, &bookmark_id).map_err(folio_status)?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+// ── Highlights ────────────────────────────────────────────────────────────────
+
+/// The 5 canonical swatches (desktop `HighlightsPanel.tsx`). Server-validated
+/// so free-form colors can't enter the shared DB from the web surface.
+const HIGHLIGHT_COLORS: [&str; 5] = ["#f6c445", "#7bc47f", "#6ba3d6", "#e88baf", "#e8a55d"];
+const HIGHLIGHT_NOTE_MAX: usize = 2000;
+
+/// POST body. camelCase (matches the Highlight model's serialization; the
+/// web client sends camelCase — deliberate divergence from the snake_case
+/// bookmark bodies, per spec).
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct HighlightCreate {
+    chapter_index: u32,
+    text: String,
+    color: String,
+    #[serde(default)]
+    note: Option<String>,
+    start_offset: u32,
+    end_offset: u32,
+}
+
+fn validate_highlight_note(note: &Option<String>) -> Result<(), (StatusCode, String)> {
+    if let Some(n) = note {
+        if n.chars().count() > HIGHLIGHT_NOTE_MAX {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                format!("Note exceeds {HIGHLIGHT_NOTE_MAX} characters"),
+            ));
+        }
+    }
+    Ok(())
+}
+
+async fn list_book_highlights(
+    State(state): State<WebState>,
+    Path(id): Path<String>,
+) -> Result<Json<Vec<crate::models::Highlight>>, (StatusCode, String)> {
+    let conn = state.conn().map_err(folio_status)?;
+    db::get_book(&conn, &id)
+        .map_err(folio_status)?
+        .ok_or_else(|| (StatusCode::NOT_FOUND, "Book not found".to_string()))?;
+    let highlights = db::list_highlights(&conn, &id).map_err(folio_status)?;
+    Ok(Json(highlights))
+}
+
+async fn create_highlight(
+    State(state): State<WebState>,
+    Path(id): Path<String>,
+    body: Bytes,
+) -> Result<(StatusCode, Json<crate::models::Highlight>), (StatusCode, String)> {
+    // Manual parse (like `create_bookmark`) so malformed bodies map to 400.
+    let body: HighlightCreate = serde_json::from_slice(&body).map_err(|e| {
+        (
+            StatusCode::BAD_REQUEST,
+            format!("Invalid request body: {e}"),
+        )
+    })?;
+    if body.text.trim().is_empty() {
+        return Err((StatusCode::BAD_REQUEST, "Highlight text is empty".into()));
+    }
+    if body.end_offset <= body.start_offset {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "endOffset must be greater than startOffset".into(),
+        ));
+    }
+    if !HIGHLIGHT_COLORS.contains(&body.color.as_str()) {
+        return Err((StatusCode::BAD_REQUEST, "Unknown highlight color".into()));
+    }
+    validate_highlight_note(&body.note)?;
+
+    let conn = state.conn().map_err(folio_status)?;
+    db::get_book(&conn, &id)
+        .map_err(folio_status)?
+        .ok_or_else(|| (StatusCode::NOT_FOUND, "Book not found".to_string()))?;
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64;
+    // Highlights are explicit user actions: persisted regardless of private
+    // mode, matching desktop `add_highlight` (which does not check the flag).
+    let highlight = crate::models::Highlight {
+        id: uuid::Uuid::new_v4().to_string(),
+        book_id: id.clone(),
+        chapter_index: body.chapter_index,
+        text: body.text,
+        color: body.color,
+        note: body.note,
+        start_offset: body.start_offset,
+        end_offset: body.end_offset,
+        created_at: now,
+        updated_at: now,
+        deleted_at: None,
+    };
+    db::insert_highlight(&conn, &highlight).map_err(folio_status)?;
+
+    // Same bus event as desktop `add_highlight` so hooks/plugins fire for
+    // web-created highlights too (bookmark precedent).
+    events::bus().emit(FolioEvent::HighlightCreated {
+        book_id: highlight.book_id.clone(),
+        highlight_id: highlight.id.clone(),
+    });
+
+    Ok((StatusCode::CREATED, Json(highlight)))
 }
 
 /// Item 15: bulk progress rows for the library grid's progress badges.
