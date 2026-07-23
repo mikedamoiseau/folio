@@ -25,6 +25,7 @@ import OverflowMenu from "./OverflowMenu";
 import ReaderSkeleton from "./ReaderSkeleton";
 import { usePrivateMode } from "../hooks/usePrivateMode";
 import { getVolatilePosition, setVolatilePosition } from "../lib/volatileResume";
+import { sanitizeChapterHtml } from "../lib/sanitizeHtml";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { friendlyError, isBookFileMissing, toFolioError } from "../lib/errors";
 import { extractLookupWord, groupSensesByPos, POS_LABEL_KEYS, type DictionaryEntry, type DictionaryStatus } from "../lib/dictionary";
@@ -1575,6 +1576,18 @@ export default function ReaderPane({
     return result;
   }, [highlightedHtml, searchOpen, searchQuery]);
 
+  // Client-side sanitization (defense-in-depth behind server-side ammonia)
+  // applied just before injection via dangerouslySetInnerHTML. Memoized so the
+  // DOMPurify pass runs only when the underlying HTML changes.
+  const sanitizedChapterHtml = useMemo(
+    () => sanitizeChapterHtml(searchHighlightedHtml),
+    [searchHighlightedHtml],
+  );
+  const sanitizedChaptersHtml = useMemo(
+    () => allChaptersHtml.map(sanitizeChapterHtml),
+    [allChaptersHtml],
+  );
+
   const handleCreateHighlight = useCallback(async (color: string) => {
     if (!bookId || !selectionPopup) return;
     try {
@@ -3113,7 +3126,7 @@ export default function ReaderPane({
                 /* ── Continuous scroll: all chapters stacked ── */
                 allChaptersLoaded ? (
                   <div ref={contentRef} className="max-w-[680px] mx-auto py-10" style={{ paddingLeft: `${typography.pageMargins}px`, paddingRight: `${typography.pageMargins}px` }}>
-                    {allChaptersHtml.map((html, i) => {
+                    {sanitizedChaptersHtml.map((html, i) => {
                       const chapterTitle = toc.find((e) => e.chapter_index === i)?.label;
                       return (
                         <div
@@ -3151,7 +3164,7 @@ export default function ReaderPane({
                   ref={contentRef}
                   className="reader-content max-w-[680px] mx-auto py-10"
                   style={{ ...readerContentStyle, paddingLeft: `${typography.pageMargins}px`, paddingRight: `${typography.pageMargins}px` }}
-                  dangerouslySetInnerHTML={{ __html: searchHighlightedHtml }}
+                  dangerouslySetInnerHTML={{ __html: sanitizedChapterHtml }}
                 />
               )}
 
