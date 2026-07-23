@@ -1007,6 +1007,27 @@ fn replace_attr_value(tag: &str, attr: &str, old_val: &str, new_val: &str) -> St
     tag.replacen(&sq_old, &sq_new, 1)
 }
 
+/// Byte offset just past the `>` that closes the tag beginning at `from_tag[0]`,
+/// skipping any `>` that sits inside a single- or double-quoted attribute value.
+/// ammonia does not escape `>` in attribute values (e.g. `alt="a > b"`), so a
+/// naive `find('>')` would truncate the tag mid-attribute and miss its `src`.
+/// Falls back to the full length when no closing `>` is found.
+fn find_tag_end(from_tag: &str) -> usize {
+    let mut quote: Option<char> = None;
+    for (i, c) in from_tag.char_indices() {
+        match quote {
+            Some(q) if c == q => quote = None,
+            Some(_) => {}
+            None => match c {
+                '"' | '\'' => quote = Some(c),
+                '>' => return i + 1,
+                _ => {}
+            },
+        }
+    }
+    from_tag.len()
+}
+
 /// 16 hex chars (64 bits) of SHA-256 over a resolved zip path — enough to
 /// disambiguate every distinct image within a single EPUB chapter and
 /// deterministic so repeated reads resolve to the same storage key.
@@ -1074,7 +1095,7 @@ fn rewrite_img_srcs_to_asset_urls(
         result.push_str(&rest[..tag_start]);
         let from_tag = &rest[tag_start..];
 
-        let tag_end = from_tag.find('>').map(|i| i + 1).unwrap_or(from_tag.len());
+        let tag_end = find_tag_end(from_tag);
         let tag = &from_tag[..tag_end];
 
         let rewritten = match extract_attr_value(tag, "src") {
@@ -1839,6 +1860,117 @@ mod tests {
             "cached key should end with source basename, got: {}",
             keys[0]
         );
+    }
+
+    /// A `>` inside an earlier quoted attribute (ammonia leaves it literal, it
+    /// does not escape `>` in attribute values) must not fool the tag-boundary
+    /// scan: the `src` still has to be rewritten to an asset URL.
+    #[test]
+    fn test_rewrite_img_srcs_handles_gt_in_earlier_attribute() {
+        let tmp = tempfile::tempdir().unwrap();
+        let zip_path = create_test_zip_with_image(
+            tmp.path(),
+            "test.zip",
+            "OEBPS/images/photo.jpg",
+            &[0xFF, 0xD8, 0xFF, 0xE0],
+        );
+        let file = std::fs::File::open(&zip_path).unwrap();
+        let mut archive = ZipArchive::new(file).unwrap();
+        let storage = crate::storage::LocalStorage::new(tmp.path().join("images")).unwrap();
+
+        let html = r#"<img alt="a > b" src="../images/photo.jpg">"#;
+        let result =
+            rewrite_img_srcs_to_asset_urls(html, &mut archive, "OEBPS/Text/", &storage, "book1/0");
+
+        assert!(
+            result.contains("asset://localhost/"),
+            "src should be rewritten despite the `>` in alt, got: {result}"
+        );
+        assert!(
+            !result.contains(r#"src="../images/photo.jpg""#),
+            "relative src should be gone, got: {result}"
+        );
+        assert!(
+            result.contains(r#"alt="a > b""#),
+            "the alt attribute (with its literal >) must be preserved, got: {result}"
+        );
+    }
+
+    /// Same fragility via a single-quoted attribute value.
+    #[test]
+    fn test_rewrite_img_srcs_handles_gt_in_single_quoted_attribute() {
+        let tmp = tempfile::tempdir().unwrap();
+        let zip_path = create_test_zip_with_image(
+            tmp.path(),
+            "test.zip",
+            "OEBPS/images/photo.jpg",
+            &[0xFF, 0xD8, 0xFF, 0xE0],
+        );
+        let file = std::fs::File::open(&zip_path).unwrap();
+        let mut archive = ZipArchive::new(file).unwrap();
+        let storage = crate::storage::LocalStorage::new(tmp.path().join("images")).unwrap();
+
+        let html = r#"<img alt='a > b' src='../images/photo.jpg'>"#;
+        let result =
+            rewrite_img_srcs_to_asset_urls(html, &mut archive, "OEBPS/Text/", &storage, "book1/0");
+
+        assert!(
+            result.contains("asset://localhost/"),
+            "src should be rewritten despite the `>` in single-quoted alt, got: {result}"
+        );
+    }
+
+    /// Duplicate `src` (ammonia collapses these to one in production, so this
+    /// exercises the isolated rewriter as defense-in-depth): the first `src`
+    /// is rewritten to an asset URL and the tag stays well-formed.
+    #[test]
+    fn test_rewrite_img_srcs_handles_duplicate_src() {
+        let tmp = tempfile::tempdir().unwrap();
+        let zip_path = create_test_zip_with_image(
+            tmp.path(),
+            "test.zip",
+            "OEBPS/images/photo.jpg",
+            &[0xFF, 0xD8, 0xFF, 0xE0],
+        );
+        let file = std::fs::File::open(&zip_path).unwrap();
+        let mut archive = ZipArchive::new(file).unwrap();
+        let storage = crate::storage::LocalStorage::new(tmp.path().join("images")).unwrap();
+
+        let html = r#"<img src="../images/photo.jpg" src="other.jpg">"#;
+        let result =
+            rewrite_img_srcs_to_asset_urls(html, &mut archive, "OEBPS/Text/", &storage, "book1/0");
+
+        assert!(
+            result.contains("asset://localhost/"),
+            "the first src should be rewritten, got: {result}"
+        );
+        assert!(
+            !result.contains(r#"src="../images/photo.jpg""#),
+            "the first (relative) src should be gone, got: {result}"
+        );
+        assert!(
+            result.contains(r#"src="other.jpg""#),
+            "the second src should be left untouched, got: {result}"
+        );
+    }
+
+    #[test]
+    fn test_find_tag_end_respects_quotes_and_fallbacks() {
+        // Plain tag: index just past the first `>`.
+        assert_eq!(find_tag_end("<img src=\"x\">rest"), 13);
+        // `>` inside a double-quoted value is skipped.
+        assert_eq!(find_tag_end("<img alt=\"a > b\">"), 17);
+        // `>` inside a single-quoted value is skipped.
+        assert_eq!(find_tag_end("<img alt='a > b'>"), 17);
+        // No closing `>` at all: fall back to the full length.
+        let no_gt = "<img alt=\"unterminated";
+        assert_eq!(find_tag_end(no_gt), no_gt.len());
+        // A `>` before any quote closes the tag immediately.
+        assert_eq!(find_tag_end("<br>"), 4);
+        // Multibyte content before the closing `>` keeps byte offsets valid.
+        let mb = "<img alt=\"é 文\">x";
+        let end = find_tag_end(mb);
+        assert_eq!(&mb[..end], "<img alt=\"é 文\">");
     }
 
     #[test]
