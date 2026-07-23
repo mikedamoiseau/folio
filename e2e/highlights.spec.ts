@@ -79,6 +79,39 @@ test.describe("highlight create (selection popover)", () => {
   });
 });
 
+test.describe("highlight edit (mark-tap popover)", () => {
+  test("tapping a mark opens edit popover; delete unwraps", async ({ page }) => {
+    await openEpubReader(page);
+    await seedHighlight(page, "quick brown fox");
+    await page.reload();
+    await openEpubReader(page);
+    await page.locator("mark.hl-mark").first().click();
+    const edit = page.locator("#hl-edit-popover");
+    await expect(edit).toBeVisible();
+    await edit.locator("#hl-delete-btn").click();
+    await expect(page.locator("mark.hl-mark")).toHaveCount(0);
+    await expect
+      .poll(async () => (await (await page.request.get(`/api/books/${EPUB_ID}/highlights`)).json()).length)
+      .toBe(0);
+  });
+
+  test("recolor via mark-tap popover persists", async ({ page }) => {
+    await openEpubReader(page);
+    await seedHighlight(page, "quick brown fox", "#f6c445");
+    await page.reload();
+    await openEpubReader(page);
+    await page.locator("mark.hl-mark").first().click();
+    await page.locator('#hl-edit-popover [data-color="#e8a55d"]').click();
+    await expect
+      .poll(async () => (await (await page.request.get(`/api/books/${EPUB_ID}/highlights`)).json())[0].color)
+      .toBe("#e8a55d");
+    // mark re-tinted live
+    const bg = await page.locator("mark.hl-mark").first()
+      .evaluate((el) => (el as HTMLElement).style.backgroundColor !== "");
+    expect(bg).toBe(true);
+  });
+});
+
 test.describe("highlight rendering", () => {
   test("stored highlight renders as a mark after entity and emoji", async ({ page }) => {
     await openEpubReader(page);

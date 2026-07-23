@@ -1332,11 +1332,12 @@
       return;
     }
 
-    // Esc closes an open highlight popover first — before the reader's
-    // Esc-goes-Back branch below.
-    if (e.key === "Escape" && hlPopoverEl) {
+    // Esc closes an open highlight popover (selection or mark-edit) first —
+    // before the reader's Esc-goes-Back branch below.
+    if (e.key === "Escape" && (hlPopoverEl || hlEditPopoverEl)) {
       e.preventDefault();
       closeHlPopover();
+      closeHlEditPopover();
       return;
     }
 
@@ -4691,6 +4692,10 @@
       // book, so this listener stays bound across chapter turns — only the
       // stage's content is swapped by renderReaderContent().
       bindChapterScrollTracking($("#reader-stage"));
+      // Highlights: mark taps delegate on the stage (survives every chapter
+      // innerHTML rebuild); the stage node itself is rebuilt per book entry,
+      // so re-binding here is safe — no duplicate listeners.
+      bindHighlightMarkTaps();
       // Web typography: apply saved font/spacing/family/width to the chapter
       // column once here (inline styles persist across chapter-turn innerHTML
       // swaps). EPUB + MOBI both reach this branch (mode !== "page").
@@ -4904,6 +4909,7 @@
 
   // ── Selection capture → create popover (spec §2) ──
   let hlPopoverEl = null;
+  let hlEditPopoverEl = null;
   let hlCaptured = null; // {text, startOffset, endOffset} frozen at open
   let hlPopoverPointerDown = false;
   let hlSelDebounce = 0;
@@ -4919,9 +4925,10 @@
   }
 
   function dismissHlPopoversOnScroll(scrollTop) {
-    if (!hlPopoverEl) return;
+    if (!hlPopoverEl && !hlEditPopoverEl) return;
     if (hlPopoverScrollTop !== null && scrollTop === hlPopoverScrollTop) return;
     closeHlPopover();
+    closeHlEditPopover();
   }
 
   // Offsets: UTF-16 code units into #reader-content's rendered textContent —
@@ -4966,16 +4973,18 @@
         else closeHlPopover();
       }, 250);
     });
-    // Dismiss on outside tap. Pointer interactions that START inside the
-    // popover must never dismiss it (contains() check).
+    // Dismiss on outside tap — both popovers. Pointer interactions that
+    // START inside a popover must never dismiss it (contains() check).
     document.addEventListener("pointerdown", (e) => {
       if (hlPopoverEl && !hlPopoverEl.contains(e.target)) closeHlPopover();
+      if (hlEditPopoverEl && !hlEditPopoverEl.contains(e.target)) closeHlEditPopover();
     });
   }
   bindHighlightSelection();
 
   function openHlPopover(captured) {
     closeHlPopover();
+    closeHlEditPopover();
     hlCaptured = { text: captured.text, startOffset: captured.startOffset, endOffset: captured.endOffset };
     const pop = document.createElement("div");
     pop.id = "hl-popover";
@@ -4992,6 +5001,24 @@
         createHighlightFromCapture(hlCaptured, color);
       });
       pop.appendChild(btn);
+    }
+    // Overlap-clear: when the captured range overlaps existing highlights,
+    // offer a trash button that deletes all overlapped (desktop parity).
+    const overlapped = highlightsState.items.filter((h) =>
+      h.chapterIndex === currentChapterIndex &&
+      h.startOffset < captured.endOffset && captured.startOffset < h.endOffset);
+    if (overlapped.length) {
+      const clearBtn = document.createElement("button");
+      clearBtn.type = "button";
+      clearBtn.id = "hl-clear-btn";
+      clearBtn.setAttribute("aria-label", "Remove overlapping highlights");
+      clearBtn.textContent = "\u{1F5D1}";
+      clearBtn.addEventListener("click", () => {
+        for (const h of overlapped) deleteHighlight(h.id);
+        closeHlPopover();
+        window.getSelection()?.removeAllRanges();
+      });
+      pop.appendChild(clearBtn);
     }
     // Captured-range guard: pointer interactions inside the popover must not
     // dismiss it before the click handler runs (spec §2).
@@ -5049,6 +5076,110 @@
       if (i !== -1) highlightsState.items.splice(i, 1);
       rerenderChapterHighlights();
       showToast("Couldn't save highlight");
+    }
+  }
+
+  // ── Mark-tap edit popover (recolor / delete / note stub — spec §4) ──
+  // Event delegation on the reader stage survives every innerHTML rebuild.
+  function bindHighlightMarkTaps() {
+    const stage = document.getElementById("reader-stage");
+    if (!stage) return;
+    stage.addEventListener("click", (e) => {
+      const mark = e.target.closest("mark.hl-mark"); // closest() = innermost (spec §3)
+      if (!mark) return;
+      e.stopPropagation();
+      openHlEditPopover(mark.dataset.hlId, mark.getBoundingClientRect());
+    });
+  }
+
+  function openHlEditPopover(hlId, rect) {
+    closeHlPopover();
+    closeHlEditPopover();
+    const hl = highlightsState.items.find((h) => h.id === hlId);
+    if (!hl) return;
+    const pop = document.createElement("div");
+    pop.id = "hl-edit-popover";
+    pop.setAttribute("role", "toolbar");
+    pop.setAttribute("aria-label", "Edit highlight");
+    for (const color of HIGHLIGHT_COLORS) {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "hl-swatch";
+      btn.dataset.color = color;
+      btn.style.backgroundColor = color;
+      btn.setAttribute("aria-label", `Recolor ${color}`);
+      btn.addEventListener("click", () => updateHighlight(hlId, { color }));
+      pop.appendChild(btn);
+    }
+    const noteBtn = document.createElement("button");
+    noteBtn.type = "button";
+    noteBtn.id = "hl-note-btn";
+    noteBtn.setAttribute("aria-label", "Edit note");
+    noteBtn.textContent = "✎"; // M4 (Task 10) wires the note editor
+    pop.appendChild(noteBtn);
+    const delBtn = document.createElement("button");
+    delBtn.type = "button";
+    delBtn.id = "hl-delete-btn";
+    delBtn.setAttribute("aria-label", "Delete highlight");
+    delBtn.textContent = "\u{1F5D1}";
+    delBtn.addEventListener("click", () => { deleteHighlight(hlId); closeHlEditPopover(); });
+    pop.appendChild(delBtn);
+    document.body.appendChild(pop);
+    hlEditPopoverEl = pop;
+    recordHlPopoverScrollTop();
+    const top = Math.min(rect.bottom + 8, window.innerHeight - pop.offsetHeight - 8);
+    const left = Math.max(8, Math.min(rect.left, window.innerWidth - pop.offsetWidth - 8));
+    pop.style.top = `${top}px`;
+    pop.style.left = `${left}px`;
+  }
+
+  function closeHlEditPopover() {
+    if (hlEditPopoverEl) { hlEditPopoverEl.remove(); hlEditPopoverEl = null; }
+  }
+
+  async function deleteHighlight(hlId) {
+    const bookId = highlightsState.bookId;
+    const i = highlightsState.items.findIndex((h) => h.id === hlId);
+    const removed = i !== -1 ? highlightsState.items.splice(i, 1)[0] : null;
+    rerenderChapterHighlights();
+    try {
+      const resp = await fetch(
+        `/api/books/${encodeURIComponent(bookId)}/highlights/${encodeURIComponent(hlId)}`,
+        { method: "DELETE", credentials: "same-origin" });
+      if (resp.status === 401) { showLogin(); return; }
+      // Idempotent DELETE: 204 is success whether or not the row still existed.
+      if (!resp.ok && resp.status !== 204) throw new Error(`HTTP ${resp.status}`);
+    } catch {
+      if (removed) { highlightsState.items.splice(i, 0, removed); rerenderChapterHighlights(); }
+      showToast("Couldn't delete highlight");
+    }
+  }
+
+  async function updateHighlight(hlId, patch) {
+    const bookId = highlightsState.bookId;
+    try {
+      const resp = await fetch(
+        `/api/books/${encodeURIComponent(bookId)}/highlights/${encodeURIComponent(hlId)}`,
+        { method: "PUT", credentials: "same-origin",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(patch) });
+      if (resp.status === 401) { showLogin(); return null; }
+      if (resp.status === 404) { // deleted elsewhere (e.g. desktop): drop locally
+        const i = highlightsState.items.findIndex((h) => h.id === hlId);
+        if (i !== -1) highlightsState.items.splice(i, 1);
+        rerenderChapterHighlights();
+        showToast("Highlight no longer exists");
+        return null;
+      }
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const saved = await resp.json();
+      const i = highlightsState.items.findIndex((h) => h.id === hlId);
+      if (i !== -1) highlightsState.items[i] = saved;
+      rerenderChapterHighlights();
+      return saved;
+    } catch {
+      showToast("Couldn't update highlight");
+      return null;
     }
   }
 
