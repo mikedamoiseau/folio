@@ -426,6 +426,8 @@ clipboard (paste it into Messages, Slack, etc.) or **Save as PNG…** to write i
 to a file. Long quotes are trimmed to fit; books without a cover or author just
 omit those bits.
 
+**Web reader:** the phone/web reader supports highlighting too (EPUB and MOBI). Select text while reading to get the same five-color popup — tap a color to highlight, or the ✎ to highlight and start a note in one go. Tap an existing highlight in the text to recolor it, edit its note, or delete it. The 🖍 button in the reader toolbar opens a highlights drawer listing every highlight in the book with its color, note, and chapter — tap one to jump straight to it, ✎ to edit its note, ✕ to delete it. Highlights are shared with the desktop app: anything you highlight on either side shows up on both. They need a connection to your Folio server, so they're not available while reading an offline-saved book — the drawer says so, and your highlights reappear once you're back online.
+
 ### Cross-Book Highlight Search
 
 Search across all your highlights and notes from the library toolbar. Click the highlighter-search icon (between the tag filter and bulk select buttons) to open a search modal.
@@ -912,7 +914,7 @@ You can download individual books to a device so they open and read without a co
 
 **Saving a book.** Open a book's detail page and, from the **⋯ More** menu, tap **Save offline**. Folio downloads its chapters (or comic/PDF pages, stored at a reduced width to save space) with a progress counter; you can **Cancel** mid-save. When it finishes, the same menu shows **Saved · <size>** with a **Remove offline copy** button and your total offline storage use, and the book gets a small ⤓ badge on the library grid. (This is separate from the **Download** button, which exports the original full-size book file to your device.)
 
-**Reading offline.** When the server can't be reached, opening the installed app takes you straight to a library of just your downloaded books, with an *"Offline — showing downloaded books"* banner and a **Retry** button. Saved books open and read normally; a saved book's own URL also opens it directly. Ordinary navigation automatically returns to the full library once the connection is back.
+**Reading offline.** When the server can't be reached, opening the installed app takes you straight to a library of just your downloaded books, with an *"Offline — showing downloaded books"* banner and a **Retry** button. Saved books open and read normally; a saved book's own URL also opens it directly. Ordinary navigation automatically returns to the full library once the connection is back. One caveat: highlights (and the bookmarks list) live on the server and aren't stored with the offline copy, so they're not shown while offline — your text and reading position are unaffected, and highlights reappear as soon as you reconnect.
 
 **Reading progress** you make offline is remembered and synced back to your library when you reconnect. If you also read the same book on another device while you were offline, Folio keeps the more recent position rather than overwriting it.
 

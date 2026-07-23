@@ -6,6 +6,15 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- **Text highlighting in the web reader.** Select text while reading an EPUB
+  or MOBI to highlight it in one of 5 colors, add notes, and manage everything
+  from a new highlights drawer (🖍 in the reader toolbar): jump to a
+  highlight, recolor it, edit its note, or delete it — tapping a highlight in
+  the text offers the same actions. Highlights sync with the desktop app's
+  (each side sees the other's); online-only — not available while reading
+  offline-saved books. Backed by new web endpoints
+  (`GET`/`POST /api/books/:id/highlights`,
+  `PUT`/`DELETE /api/books/:id/highlights/:highlight_id`).
 - **Bookmarks in the web reader.** The phone/web reader now has a bookmark
   button (🔖) in its toolbar, in every format. It opens a slide-in drawer:
   **Add bookmark here** saves your current spot (and immediately lets you name
