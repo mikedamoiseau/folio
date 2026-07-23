@@ -4795,7 +4795,11 @@
       // Re-check AFTER the await too: a switch/reopen during json() parsing
       // must not let a stale response overwrite the newer state.
       if (stale()) return;
-      highlightsState.items = items;
+      // Preserve in-flight optimistic creates (tmp- ids): a raw replace would
+      // drop the temp object, and the POST's later indexOf(temp) reconciliation
+      // could never find it — persisted highlight invisible until reload.
+      const pending = highlightsState.items.filter((h) => String(h.id).startsWith("tmp-"));
+      highlightsState.items = items.concat(pending);
       highlightsState.loaded = true;
       highlightsState.failed = false;
     } catch {
@@ -5005,6 +5009,7 @@
     // Overlap-clear: when the captured range overlaps existing highlights,
     // offer a trash button that deletes all overlapped (desktop parity).
     const overlapped = highlightsState.items.filter((h) =>
+      !String(h.id).startsWith("tmp-") && // never mutate un-reconciled optimistic creates
       h.chapterIndex === currentChapterIndex &&
       h.startOffset < captured.endOffset && captured.startOffset < h.endOffset);
     if (overlapped.length) {
@@ -5021,12 +5026,22 @@
       pop.appendChild(clearBtn);
     }
     // Captured-range guard: pointer interactions inside the popover must not
-    // dismiss it before the click handler runs (spec §2).
+    // dismiss it before the click handler runs (spec §2). The clearing
+    // listeners are registered INSIDE pointerdown (paired per press) — an
+    // open-time once-listener could be consumed by the still-down selection
+    // finger lifting, leaving the flag stuck true and selection handling
+    // silently dead.
     pop.addEventListener("pointerdown", (e) => {
       hlPopoverPointerDown = true;
       e.preventDefault(); // keeps the selection alive on touch
+      const clear = () => {
+        hlPopoverPointerDown = false;
+        document.removeEventListener("pointerup", clear);
+        document.removeEventListener("pointercancel", clear);
+      };
+      document.addEventListener("pointerup", clear);
+      document.addEventListener("pointercancel", clear);
     });
-    document.addEventListener("pointerup", () => { hlPopoverPointerDown = false; }, { once: true });
     document.body.appendChild(pop);
     hlPopoverEl = pop;
     recordHlPopoverScrollTop();
@@ -5096,7 +5111,10 @@
     closeHlPopover();
     closeHlEditPopover();
     const hl = highlightsState.items.find((h) => h.id === hlId);
-    if (!hl) return;
+    // tmp- = optimistic create not yet reconciled with its server id: a PUT
+    // 404s and a DELETE resurrects as a ghost on next load. Untouchable until
+    // the POST settles (a round-trip); tapping again then works.
+    if (!hl || String(hl.id).startsWith("tmp-")) return;
     const pop = document.createElement("div");
     pop.id = "hl-edit-popover";
     pop.setAttribute("role", "toolbar");
@@ -5139,6 +5157,11 @@
 
   async function deleteHighlight(hlId) {
     const bookId = highlightsState.bookId;
+    // Identity token: renderReaderChrome/loadHighlightsForBook replace the
+    // whole state object on every book entry, so a failed delete resolving
+    // after a book switch must NOT splice its rollback into the new book's
+    // list — roll back only into the same state object it was removed from.
+    const stateAtCall = highlightsState;
     const i = highlightsState.items.findIndex((h) => h.id === hlId);
     const removed = i !== -1 ? highlightsState.items.splice(i, 1)[0] : null;
     rerenderChapterHighlights();
@@ -5150,13 +5173,24 @@
       // Idempotent DELETE: 204 is success whether or not the row still existed.
       if (!resp.ok && resp.status !== 204) throw new Error(`HTTP ${resp.status}`);
     } catch {
-      if (removed) { highlightsState.items.splice(i, 0, removed); rerenderChapterHighlights(); }
+      if (removed && highlightsState === stateAtCall) {
+        highlightsState.items.splice(i, 0, removed);
+        rerenderChapterHighlights();
+      }
       showToast("Couldn't delete highlight");
     }
   }
 
+  // Per-highlight update sequence: rapid recolor taps issue concurrent PUTs
+  // whose responses can resolve out of order — only the LAST action's
+  // response may write local state (the server itself serializes writes, so
+  // its final state matches the last request).
+  const hlUpdateSeq = new Map();
+
   async function updateHighlight(hlId, patch) {
     const bookId = highlightsState.bookId;
+    const seq = (hlUpdateSeq.get(hlId) || 0) + 1;
+    hlUpdateSeq.set(hlId, seq);
     try {
       const resp = await fetch(
         `/api/books/${encodeURIComponent(bookId)}/highlights/${encodeURIComponent(hlId)}`,
@@ -5173,6 +5207,8 @@
       }
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       const saved = await resp.json();
+      // Superseded by a later update to the same highlight — discard.
+      if (hlUpdateSeq.get(hlId) !== seq) return null;
       const i = highlightsState.items.findIndex((h) => h.id === hlId);
       if (i !== -1) highlightsState.items[i] = saved;
       rerenderChapterHighlights();
