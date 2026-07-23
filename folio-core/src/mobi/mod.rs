@@ -1,12 +1,45 @@
 //! MOBI / AZW / AZW3 (KF8) parser backed by libmobi.
 //!
-//! This module is gated behind the `mobi` cargo feature (opt-in). libmobi is
-//! dynamically linked (LGPL v3+); the library is located at build time via
-//! pkg-config or the `LIBMOBI_INCLUDE_DIR` / `LIBMOBI_LIB_DIR` env vars.
+//! This module is gated behind the `mobi` cargo feature (opt-in). libmobi
+//! (LGPL v3+) is linked dynamically by default and statically for the
+//! from-source release builds (Windows and the arm64-macOS release); the
+//! library is located at build time via pkg-config or the
+//! `LIBMOBI_INCLUDE_DIR` / `LIBMOBI_LIB_DIR` env vars.
 //!
 //! The public surface is shaped for the Folio BookFormat adapter
 //! (see ROADMAP #34): open a file, read metadata, reconstruct the rawml, walk
 //! markup/flow/resource parts, and extract the cover.
+//!
+//! ## Security / memory-safety
+//!
+//! libmobi is a C library called here through `unsafe extern "C"` FFI
+//! (`ffi.rs`) on **fully untrusted input**: an attacker-authored `.mobi` /
+//! `.azw` / `.azw3` is handed straight to libmobi's C parser. A malformed file
+//! that trips a heap overflow or out-of-bounds read inside libmobi is memory
+//! corruption in the app process — inherent to using a C parser and not fully
+//! fixable in this Rust wrapper, which limits its own exposure with `NonNull`
+//! handles, RAII `Drop` frees, and null / zero-size guards before every
+//! `slice::from_raw_parts`.
+//!
+//! Because of that exposure the libmobi version is pinned wherever Folio builds
+//! it from source: the Windows build (CI + release) and the arm64-macOS release
+//! build compile a pinned commit `LIBMOBI_VERSION`, kept identical across
+//! `.github/workflows/ci.yml` and `release.yml` — drift between the two files
+//! and non-SHA pins are rejected by `src-tauri/src/release_workflow_test.rs`.
+//! The workflows document the current pin as tag `v0.12`. The x86_64-macOS
+//! release disables MOBI entirely.
+//!
+//! The remaining paths link a package-manager build, so their libmobi version
+//! (and its security updates) is whatever that package provides, not the pin:
+//! Linux CI and release use `libmobi-dev` (apt), macOS PR CI uses
+//! `brew install libmobi`, and local dev links whatever pkg-config or the
+//! `LIBMOBI_*` env vars resolve to (Homebrew by default, or a from-source
+//! prefix built with `scripts/build-libmobi.sh`).
+//!
+//! To bump: watch <https://github.com/bfabiszewski/libmobi> releases and
+//! security advisories, update `LIBMOBI_VERSION` (the SHA *and* the `v0.xx` tag
+//! comment) in **both** workflow files — `release_workflow_test.rs` fails on
+//! drift — then re-run the `--features mobi` test matrix.
 
 mod adapter;
 mod ffi;

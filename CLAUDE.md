@@ -68,6 +68,7 @@ This is added to Mike's `~/.zshrc`. If builds fail with `fatal error: 'new' file
 - CSP configured in `tauri.conf.json`
 - Asset protocol scoped to `$APPDATA/**`
 - File deduplication uses SHA-256 hash (`file_hash` column in `books` table)
+- MOBI/AZW parsing uses libmobi (C) via `unsafe` FFI on untrusted input; the from-source builds (Windows + arm64-macOS release) pin `LIBMOBI_VERSION` (tag v0.12, drift-enforced by `release_workflow_test.rs`) while package-manager builds (Linux/macOS CI, local dev) track the distro version — see the security note atop `folio-core/src/mobi/mod.rs` for the trust boundary and bump process
 
 ## CI
 
