@@ -618,3 +618,97 @@ test.describe("offline mode — eviction integrity & reconciliation (M6)", () =>
       .toBe(false);
   });
 });
+
+// Highlights are online-only by design (spec 2026-07-23 §5): the SW excludes
+// /highlights from the saved-book fallback (never cached), no marks render
+// offline, the drawer degrades to a connection message, and the selection
+// popover is suppressed while offline.
+test.describe("offline mode — highlights are online-only", () => {
+  test("saved book offline: no marks, drawer shows connection message, no popover", async ({
+    page,
+    context,
+    request,
+  }) => {
+    // Seed a chapter-0 highlight ONLINE (offsets computed from the rendered
+    // chapter text, same as highlights.spec.ts).
+    await openReaderAtZero(page, EPUB_ID);
+    await expect(page.locator("#reader-content")).toContainText("chapter zero", {
+      timeout: 10_000,
+    });
+    const { s, e } = await page.evaluate(() => {
+      const text = document.querySelector("#reader-content")!.textContent!;
+      const start = text.indexOf("quick brown fox");
+      return { s: start, e: start + "quick brown fox".length };
+    });
+    expect(s).toBeGreaterThan(-1);
+    const created = await (
+      await request.post(`/api/books/${EPUB_ID}/highlights`, {
+        data: { chapterIndex: 0, text: "quick brown fox", color: "#f6c445", startOffset: s, endOffset: e },
+      })
+    ).json();
+
+    try {
+      await saveBookOffline(page, EPUB_ID);
+
+      // Read the saved book OFFLINE (boot offline like a real launch).
+      await page.goto("/#/");
+      await context.setOffline(true);
+      await reloadControlled(page);
+      await page.evaluate((id) => { location.hash = `#/book/${id}/0/read`; }, EPUB_ID);
+      const restart = page.locator("#resume-restart-btn");
+      const content = page.locator("#reader-content");
+      await expect(restart.or(content)).toBeVisible({ timeout: 15_000 });
+      if (await restart.isVisible().catch(() => false)) await restart.click();
+      await expect(content).toContainText("chapter zero", { timeout: 15_000 });
+
+      // No marks render offline (the highlights GET failed, live-only).
+      await expect(page.locator("mark.hl-mark")).toHaveCount(0);
+
+      // Drawer degrades to the connection message.
+      await page.locator("#hl-btn").click();
+      await expect(page.locator("#hl-panel")).toBeVisible();
+      await expect(page.locator("#hl-panel .hl-empty")).toContainText(
+        "Highlights need a connection.",
+      );
+      await page.keyboard.press("Escape");
+
+      // Selection popover is suppressed while offline.
+      await page.evaluate(() => {
+        const el = document.querySelector("#reader-content")!;
+        const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+        let node: Node | null = null;
+        let off = -1;
+        while ((node = walker.nextNode())) {
+          off = node.nodeValue!.indexOf("quick brown fox");
+          if (off !== -1) break;
+        }
+        const range = document.createRange();
+        range.setStart(node!, off);
+        range.setEnd(node!, off + "quick brown fox".length);
+        const sel = window.getSelection()!;
+        sel.removeAllRanges();
+        sel.addRange(range);
+        document.dispatchEvent(new Event("selectionchange"));
+      });
+      await page.waitForTimeout(500); // > the 250ms selection debounce
+      await expect(page.locator("#hl-popover")).toHaveCount(0);
+
+      // And nothing highlight-related ever entered a cache (SW exclusion).
+      const urls = await page.evaluate(async () => {
+        const out: string[] = [];
+        for (const name of await caches.keys()) {
+          const cache = await caches.open(name);
+          for (const req of await cache.keys()) out.push(req.url);
+        }
+        return out;
+      });
+      expect(urls.some((u) => u.includes(`/api/books/${EPUB_ID}`))).toBe(true); // non-vacuous
+      expect(urls.some((u) => /\/highlights(?:\/|\?|$)/.test(u))).toBe(false);
+    } finally {
+      await context.setOffline(false);
+      // Clean up the seeded highlight (the request fixture bypasses the
+      // browser context, so this works regardless of emulated offline state).
+      await request.delete(`/api/books/${EPUB_ID}/highlights/${created.id}`);
+    }
+  });
+});

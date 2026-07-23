@@ -122,9 +122,10 @@ self.addEventListener("fetch", (event) => {
     !url.pathname.includes("/download") &&
     // Anchor to the endpoint segment after the book id, so a book whose id
     // merely contains "bookmarks" (e.g. /api/books/bookmarks-x/chapters/0)
-    // still gets the offline fallback — only the real bookmarks endpoint is
-    // excluded (it's live-only, never cached).
-    !/^\/api\/books\/[^/]+\/bookmarks(?:\/|$)/.test(url.pathname) &&
+    // still gets the offline fallback — only the real bookmarks/highlights
+    // endpoints are excluded (live-only, never cached — annotations must
+    // never be served stale).
+    !/^\/api\/books\/[^/]+\/(?:bookmarks|highlights)(?:\/|$)/.test(url.pathname) &&
     url.pathname.match(/^\/api\/books\/([^/]+)(?:\/|$)/);
   if (bookMatch) {
     // Page images are cached with ?width=... but requested plain (or with a
