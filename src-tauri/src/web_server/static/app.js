@@ -1226,6 +1226,13 @@
     closeShortcutsOverlay();
     const gen = ++routeGen;
     const hash = rawHash();
+    // Highlight-jump backstop (spec §4): ANY navigation that isn't the jump's
+    // own — the one still carrying the active token's navId, which
+    // renderReaderContent hasn't captured yet at this point — supersedes and
+    // cancels the pending jump. The reader handlers (Prev/Next, TOC,
+    // bookmarks, close) clear it themselves; this catches history/back, nav
+    // icons, login round-trips, and direct hash edits.
+    if (pendingHlJump && hlJumpNavId !== pendingHlJump.navId) clearHlJump();
     // Offline: only a SAVED book's detail/reader work (their content is
     // served from the M2 cache). Everything else — a top-level destination
     // (library/stats/collections, none of which have offline data) OR a
@@ -4859,7 +4866,10 @@
   // pristine DOM first, then split every text node at the union of highlight
   // boundaries (descending), then wrap immutable fragments. Crossing ranges can
   // never invalidate frozen offsets because no wrap happens during mapping.
-  function applyChapterHighlights(contentEl, chapterIndex) {
+  // `renderNavId` (optional): the highlight-jump navId this render was
+  // invoked with — only renderReaderContent (via its captured token) and the
+  // same-chapter startHlJump path pass one; rebuilds pass none.
+  function applyChapterHighlights(contentEl, chapterIndex, renderNavId) {
     const items = highlightsState.items.filter((h) => h.chapterIndex === chapterIndex);
     if (items.length) {
       // 1. Snapshot: text nodes + chapter plain text (UTF-16 code-unit basis).
@@ -4917,18 +4927,25 @@
         }
       }
     }
-    maybeConsumeHlJump(contentEl, chapterIndex);
+    maybeConsumeHlJump(contentEl, chapterIndex, renderNavId !== undefined ? renderNavId : null);
   }
 
   // ── Highlight jump (navId token, spec §4) ──
   // A drawer-row tap mints a single pending token; it is consumed only by a
   // render that carries its navId (or a same-chapter tap), and cancelled by
   // ANY superseding event — Prev/Next, TOC jump, bookmark jump, reader
-  // close, book switch, or a terminal highlights-GET failure.
-  let pendingHlJump = null; // {bookId, hlId, navId}
+  // close, book switch, ANY other route() navigation (history/back, nav
+  // icons, direct hash edits — see the backstop in route()), or a terminal
+  // highlights-GET failure.
+  // `arrived` flips true once the token's OWN navigation has rendered —
+  // consumption is never allowed before that, so a later unrelated render of
+  // the target chapter (hash away-and-back) can't trigger a stale scroll.
+  let pendingHlJump = null; // {bookId, hlId, navId, arrived}
   let hlNavCounter = 0;
-  // navId the CURRENT render was invoked with (set by startHlJump right
-  // before its navigation, consumed on the next render).
+  // navId of a jump navigation just dispatched. renderReaderContent captures
+  // (and clears) it synchronously at its start, so it binds to exactly the
+  // render the navigation produced — a superseded render takes the navId to
+  // its grave instead of leaking it to the next unrelated render.
   let hlJumpNavId = null;
 
   // Test hook (cheap, no behavior): reflect pending state for e2e assertions.
@@ -4937,12 +4954,13 @@
   }
 
   function startHlJump(hl) {
-    pendingHlJump = { bookId: highlightsState.bookId, hlId: hl.id, navId: ++hlNavCounter };
+    pendingHlJump = { bookId: highlightsState.bookId, hlId: hl.id, navId: ++hlNavCounter, arrived: false };
     syncHlJumpTestHook();
     closeHlPanel(false);
     if (hl.chapterIndex === currentChapterIndex && readerState && currentChapterIndex === readerState.index) {
-      // Same chapter: marks already injected — consume immediately.
-      maybeConsumeHlJump(document.getElementById("reader-content"), currentChapterIndex);
+      // Same chapter: marks already injected — consume immediately (this
+      // call IS the token's navigation, so it carries the navId).
+      maybeConsumeHlJump(document.getElementById("reader-content"), currentChapterIndex, pendingHlJump.navId);
     } else {
       // Copy the navId into the navigation so the resulting render carries it.
       hlJumpNavId = pendingHlJump.navId;
@@ -4952,19 +4970,22 @@
 
   function clearHlJump() {
     pendingHlJump = null;
+    // Hygiene: a dispatched-but-never-rendered navId (navigation that fired
+    // no hashchange) must not linger for a later render to capture.
+    hlJumpNavId = null;
     syncHlJumpTestHook();
   }
 
-  // Called at the end of applyChapterHighlights. Consumes ONLY when: token
-  // exists, book matches, this render carries the token's navId
-  // (cross-chapter) or we're already on the right chapter, AND highlight
-  // data is loaded — a fast render before the GET resolves must leave the
-  // token alive; the post-GET rerender re-enters here and consumes it.
-  function maybeConsumeHlJump(contentEl, chapterIndex) {
-    const renderNavId = hlJumpNavId;
-    hlJumpNavId = null;
+  // Called at the end of applyChapterHighlights with the navId the render
+  // was invoked with (null for rebuilds). Consumes ONLY when: token exists,
+  // book matches, the token's own navigation has arrived (this render or an
+  // earlier one), we're on the target chapter, AND highlight data is loaded
+  // — a fast render before the GET resolves leaves the token alive; the
+  // post-GET rerender re-enters here and consumes it.
+  function maybeConsumeHlJump(contentEl, chapterIndex, renderNavId) {
     if (!pendingHlJump) return;
     if (pendingHlJump.bookId !== highlightsState.bookId) { clearHlJump(); return; }
+    if (renderNavId === pendingHlJump.navId) pendingHlJump.arrived = true;
     const hl = highlightsState.items.find((h) => h.id === pendingHlJump.hlId);
     if (highlightsState.loaded && !hl) { clearHlJump(); return; } // deleted meanwhile
     if (hl && hl.chapterIndex !== chapterIndex) {
@@ -4974,6 +4995,9 @@
       if (renderNavId !== pendingHlJump.navId) clearHlJump();
       return;
     }
+    // Target chapter (or target unknown while the GET is pending): a render
+    // that is NOT the token's own navigation must never scroll — cancel.
+    if (!pendingHlJump.arrived) { clearHlJump(); return; }
     if (!highlightsState.loaded) return; // wait for the GET; token survives
     const mark = contentEl.querySelector(`mark[data-hl-id="${CSS.escape(pendingHlJump.hlId)}"]`);
     clearHlJump();
@@ -5289,7 +5313,18 @@
       const resp = await fetch(
         `/api/books/${encodeURIComponent(bookId)}/highlights/${encodeURIComponent(hlId)}`,
         { method: "DELETE", credentials: "same-origin" });
-      if (resp.status === 401) { showLogin(); return; }
+      if (resp.status === 401) {
+        // Session expired: the delete did NOT happen — restore the
+        // optimistically-removed row (same identity guard as the failure
+        // path) before routing to login.
+        if (removed && highlightsState === stateAtCall) {
+          highlightsState.items.splice(i, 0, removed);
+          rerenderChapterHighlights();
+          renderHlListIfOpen();
+        }
+        showLogin();
+        return;
+      }
       // Idempotent DELETE: 204 is success whether or not the row still existed.
       if (!resp.ok && resp.status !== 204) throw new Error(`HTTP ${resp.status}`);
     } catch {
@@ -5312,15 +5347,23 @@
   const hlUpdateChain = new Map();
 
   function updateHighlight(hlId, patch) {
+    // Capture the book identity NOW, not at dequeue time: a book switch
+    // while this update sits queued behind an in-flight one must not send
+    // the PUT under the NEW book's id (the scoped route would 404 — edit
+    // silently lost plus a wrong-book "no longer exists" toast).
+    const bookId = highlightsState.bookId;
+    const stateAtCall = highlightsState;
     const prev = hlUpdateChain.get(hlId) || Promise.resolve();
-    const next = prev.then(() => doUpdateHighlight(hlId, patch));
+    const next = prev.then(() => doUpdateHighlight(hlId, patch, bookId, stateAtCall));
     // The chain must survive a failed link or every later update stalls.
     hlUpdateChain.set(hlId, next.catch(() => {}));
     return next;
   }
 
-  async function doUpdateHighlight(hlId, patch) {
-    const bookId = highlightsState.bookId;
+  async function doUpdateHighlight(hlId, patch, bookId, stateAtCall) {
+    // Dequeued after a book switch (state object replaced): nothing to
+    // update here — skip silently, no request, no toast.
+    if (highlightsState !== stateAtCall) return null;
     const seq = (hlUpdateSeq.get(hlId) || 0) + 1;
     hlUpdateSeq.set(hlId, seq);
     try {
@@ -5330,6 +5373,9 @@
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(patch) });
       if (resp.status === 401) { showLogin(); return null; }
+      // A book switch during the request: the response is about another
+      // book's highlight — never mutate the new book's state or toast.
+      if (highlightsState !== stateAtCall) return null;
       if (resp.status === 404) { // deleted elsewhere (e.g. desktop): drop locally
         const i = highlightsState.items.findIndex((h) => h.id === hlId);
         if (i !== -1) highlightsState.items.splice(i, 1);
@@ -5402,10 +5448,14 @@
       return;
     }
     list.innerHTML = items
-      .map(
-        (hl) => `
+      .map((hl) => {
+        // Never interpolate a stored color into a style attribute: legacy/
+        // desktop rows could hold free-form strings that smuggle extra CSS
+        // declarations past esc(). Off-palette values fall back to default.
+        const dot = HIGHLIGHT_COLORS.includes(hl.color) ? hl.color : HIGHLIGHT_COLORS[0];
+        return `
       <div class="hl-entry" data-id="${esc(hl.id)}" tabindex="0" role="button">
-        <span class="hl-dot" style="background-color: ${esc(hl.color)}"></span>
+        <span class="hl-dot" style="background-color: ${dot}"></span>
         <span class="hl-entry-body">
           <span class="hl-entry-quote">${esc(hl.text)}</span>
           ${hl.note ? `<span class="hl-entry-note">${esc(hl.note)}</span>` : ""}
@@ -5413,8 +5463,8 @@
         </span>
         <button class="hl-entry-note-btn" data-id="${esc(hl.id)}" aria-label="Edit note">&#9998;</button>
         <button class="hl-entry-delete" data-id="${esc(hl.id)}" aria-label="Delete highlight">&times;</button>
-      </div>`
-      )
+      </div>`;
+      })
       .join("");
   }
 
@@ -5547,6 +5597,11 @@
 
   async function renderReaderContent() {
     const { id, mode, index, count } = readerState;
+    // Highlight jump: bind the dispatched navId to THIS render, synchronously,
+    // before any await — if this render is later superseded (renderGen), the
+    // navId dies with it instead of leaking to the next unrelated render.
+    const renderHlNavId = hlJumpNavId;
+    hlJumpNavId = null;
     // F8: record the navigated-to index immediately, synchronously, before
     // any await below. Previously this only happened at the tail of this
     // function (after the chapter-content fetch resolved) or on a confirmed
@@ -5635,7 +5690,7 @@
       // DOM. We are inside the chapter-mode branch — page mode never gets here.
       currentChapterCleanHtml = html;
       currentChapterIndex = index;
-      if (contentEl) applyChapterHighlights(contentEl, index);
+      if (contentEl) applyChapterHighlights(contentEl, index, renderHlNavId);
       renderChapterTurnAnimation(contentEl, index, isInitialRender);
       // K5: native Space/PageDown scrolling needs the scroll container focused.
       const stage = $("#reader-stage");

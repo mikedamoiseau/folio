@@ -280,6 +280,31 @@ test.describe("highlight jump (navId token)", () => {
       "__hlJumpPendingForTest" in window ? window.__hlJumpPendingForTest : "hook-missing");
     expect(pending).toBeNull();
   });
+
+  test("raw hash navigation cancels the jump; returning later doesn't scroll-hijack", async ({ page }) => {
+    await openEpubReader(page);
+    await seedChapterOneHighlight(page);
+    await page.reload();
+    await openEpubReader(page);
+    await page.locator("#hl-btn").click();
+    await page.locator(".hl-entry").first().click();
+    // Navigate away via a raw hash edit — NO reader handler fires, so only
+    // the router backstop can cancel the pending jump.
+    await page.evaluate((id) => { location.hash = `#/book/${id}/0/read`; }, EPUB_ID);
+    await expect(page.locator("#reader-content")).toContainText("chapter zero");
+    const pending = await page.evaluate(() =>
+      "__hlJumpPendingForTest" in window ? window.__hlJumpPendingForTest : "hook-missing");
+    expect(pending).toBeNull();
+    // Returning to the target chapter later renders normally — the dead
+    // token must not scroll-hijack this unrelated render.
+    await page.evaluate((id) => { location.hash = `#/book/${id}/1/read`; }, EPUB_ID);
+    await expect(page.locator("#reader-content")).toContainText("chapter one");
+    await expect(page.locator("mark.hl-mark").first()).toBeVisible();
+    expect(
+      await page.evaluate(() =>
+        "__hlJumpPendingForTest" in window ? window.__hlJumpPendingForTest : "hook-missing"),
+    ).toBeNull();
+  });
 });
 
 test.describe("highlight note editor", () => {
