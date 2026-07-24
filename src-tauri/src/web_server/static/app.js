@@ -4927,7 +4927,10 @@
         }
       }
     }
-    maybeConsumeHlJump(contentEl, chapterIndex, renderNavId !== undefined ? renderNavId : null);
+    // Returns true if a pending jump was consumed with a scroll-to-mark, so a
+    // caller that saves/restores scroll (rerenderChapterHighlights) can skip
+    // the restore and let the jump's scroll stand.
+    return maybeConsumeHlJump(contentEl, chapterIndex, renderNavId !== undefined ? renderNavId : null);
   }
 
   // ── Highlight jump (navId token, spec §4) ──
@@ -4998,11 +5001,12 @@
     // Target chapter (or target unknown while the GET is pending): a render
     // that is NOT the token's own navigation must never scroll — cancel.
     if (!pendingHlJump.arrived) { clearHlJump(); return; }
-    if (!highlightsState.loaded) return; // wait for the GET; token survives
+    if (!highlightsState.loaded) return false; // wait for the GET; token survives
     const mark = contentEl.querySelector(`mark[data-hl-id="${CSS.escape(pendingHlJump.hlId)}"]`);
     clearHlJump();
-    if (mark) mark.scrollIntoView({ block: "center" });
+    if (mark) { mark.scrollIntoView({ block: "center" }); return true; }
     // Unanchored (drift fallback failed): chapter navigation only — done.
+    return false;
   }
 
   // Full rebuild from clean HTML (spec §3 "never incremental") — used when
@@ -5019,8 +5023,11 @@
     const stage = document.getElementById("reader-stage");
     const scrollTop = stage ? stage.scrollTop : 0; // preserve position across rebuild
     contentEl.innerHTML = currentChapterCleanHtml;
-    applyChapterHighlights(contentEl, currentChapterIndex);
-    if (stage) stage.scrollTop = scrollTop;
+    const jumped = applyChapterHighlights(contentEl, currentChapterIndex);
+    // A pending jump consumed here scrolled to its mark (e.g. the post-GET
+    // rerender in the fast-render-before-GET path) — keep that scroll; only
+    // restore the pre-rebuild position when no jump moved us.
+    if (stage && !jumped) stage.scrollTop = scrollTop;
   }
 
   // ── Selection capture → create popover (spec §2) ──

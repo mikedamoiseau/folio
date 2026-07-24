@@ -257,6 +257,9 @@ test.describe("highlight jump (navId token)", () => {
     await page.locator(".hl-entry").first().click();
     await expect(page.locator("#reader-content")).toContainText("chapter one");
     await expect(page.locator("mark.hl-mark").first()).toBeVisible();
+    // The jump must actually scroll the mark into view — not merely render it
+    // (guards against a scroll-restore undoing the jump's scrollIntoView).
+    await expect(page.locator("mark.hl-mark").first()).toBeInViewport();
     await expect(page.locator("#hl-panel")).toBeHidden();
     // Token consumed by the render that carried its navId. The hook must
     // EXIST (set by startHlJump) — `in` distinguishes "consumed" from
